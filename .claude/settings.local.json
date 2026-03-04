@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(openspec validate add-vehicle-control-system --strict)",
+      "Bash(openspec show add-vehicle-control-system)"
+    ]
+  }
+}
