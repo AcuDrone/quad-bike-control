@@ -130,20 +130,21 @@ struct SBusChannelConfig {
 // Servo PWM Parameters
 #define SERVO_PWM_FREQ        50     // Hz (20ms period)
 #define SERVO_PWM_RESOLUTION  16     // bits (0-65535)
-#define SERVO_MIN_US          500   // Minimum pulse width (microseconds)
-#define SERVO_MAX_US          2500   // Maximum pulse width (microseconds)
-#define SERVO_CENTER_US       1500   // Center pulse width
 
-// Steering Servo Limits
-#define STEERING_MIN_ANGLE    0      // degrees (full left)
-#define STEERING_MAX_ANGLE    180    // degrees (full right)
-#define STEERING_CENTER_ANGLE 90     // degrees (center)
-#define STEERING_MAX_RATE     200    // degrees per second (rate limiting)
+// Steering Servo Parameters
+#define STEERING_SERVO_MIN_US    500   // Minimum pulse width (microseconds)
+#define STEERING_SERVO_MAX_US    2500  // Maximum pulse width (microseconds)
+#define STEERING_SERVO_CENTER_US 1500  // Center pulse width (microseconds)
+#define STEERING_MIN_ANGLE       0     // degrees (full left)
+#define STEERING_MAX_ANGLE       180   // degrees (full right)
+#define STEERING_CENTER_ANGLE    90    // degrees (center)
 
-// Throttle Servo Limits
-#define THROTTLE_MIN_ANGLE    0      // degrees (idle)
-#define THROTTLE_MAX_ANGLE    180    // degrees (full throttle)
-#define THROTTLE_IDLE_ANGLE   0      // degrees (idle position)
+// Throttle Servo Parameters
+#define THROTTLE_SERVO_MIN_US    800   // Minimum pulse width (microseconds)
+#define THROTTLE_SERVO_MAX_US    2200  // Maximum pulse width (microseconds)
+#define THROTTLE_MIN_ANGLE       0     // degrees (idle)
+#define THROTTLE_MAX_ANGLE       180   // degrees (full throttle)
+#define THROTTLE_IDLE_ANGLE      0     // degrees (idle position)
 
 // ============================================================================
 // BTS7960 MOTOR DRIVER CONFIGURATION
@@ -306,5 +307,30 @@ enum class InputSource {
 #define INPUT_SOURCE_NAME_SBUS      "SBUS"
 #define INPUT_SOURCE_NAME_WEB       "WEB"
 #define INPUT_SOURCE_NAME_FAILSAFE  "FAILSAFE"
+
+// ============================================================================
+// CAN CONTROLLER CONFIGURATION
+// ============================================================================
+
+// CAN Controller Speed
+#define CAN_SPEED_500KBPS      0    // 500 kbps (standard automotive)
+
+// CAN Polling Intervals
+#define CAN_POLL_INTERVAL_RPM     100   // ms - RPM and speed polling rate
+#define CAN_POLL_INTERVAL_TEMP    1000  // ms - Temperature polling rate
+
+// CAN Timeouts
+#define CAN_RESPONSE_TIMEOUT      1000  // ms - OBD-II response timeout
+#define CAN_DATA_STALE_TIMEOUT    5000  // ms - Mark data invalid if not updated
+#define CAN_RETRY_ATTEMPTS        3     // Number of retry attempts on error
+
+// Transmission Safety (CAN-based)
+#define TRANS_SPEED_INTERLOCK_THRESHOLD  5     // km/h - Block gear changes above this speed
+#define TRANS_CAN_TIMEOUT                5000  // ms - Allow gear change if CAN fails this long
+
+// Throttle Boost During Gear Changes
+#define TRANS_THROTTLE_BOOST_PERCENT     20    // % - Throttle increase during gear change
+#define TRANS_THROTTLE_BOOST_DURATION    500   // ms - Maximum boost duration
+#define TRANS_THROTTLE_BOOST_BRAKE_THRESHOLD 10 // % - Disable boost if brake exceeds this
 
 #endif // CONSTANTS_H

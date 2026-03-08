@@ -411,7 +411,7 @@ bool WebPortal::validateCommand(const WebCommand& cmd, InputSource inputSource) 
 // ============================================================================
 
 String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
-    StaticJsonDocument<512> doc;
+    StaticJsonDocument<768> doc;  // Increased size for CAN data
 
     doc["timestamp"] = telemetry.timestamp;
     doc["gear"] = telemetry.gear;
@@ -421,6 +421,17 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["steering_angle"] = telemetry.steering_angle;
     doc["input_source"] = telemetry.input_source;
     doc["sbus_active"] = telemetry.sbus_active;
+
+    // CAN bus vehicle data
+    if (telemetry.can_status == "connected") {
+        doc["engine_rpm"] = telemetry.engine_rpm;
+        doc["vehicle_speed"] = telemetry.vehicle_speed;
+        doc["coolant_temp"] = telemetry.coolant_temp;
+        doc["oil_temp"] = telemetry.oil_temp;
+        doc["throttle_position"] = telemetry.throttle_position;
+    }
+    doc["can_status"] = telemetry.can_status;
+    doc["can_data_age"] = telemetry.can_data_age;
 
     String json;
     serializeJson(doc, json);

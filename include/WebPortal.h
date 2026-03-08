@@ -52,6 +52,15 @@ public:
         int steering_angle;       // Steering servo angle (degrees)
         String input_source;      // Current input source: "SBUS", "WEB", "FAILSAFE"
         bool sbus_active;         // True if S-bus signal is valid
+
+        // CAN bus vehicle data
+        uint16_t engine_rpm;      // Engine RPM (0-16383)
+        uint8_t vehicle_speed;    // Vehicle speed km/h (0-255)
+        int8_t coolant_temp;      // Coolant temperature °C (-40 to +215)
+        int8_t oil_temp;          // Oil temperature °C (-40 to +215)
+        uint8_t throttle_position; // Throttle position % (0-100)
+        String can_status;        // CAN status: "connected", "disconnected"
+        uint32_t can_data_age;    // Time since last CAN update (ms)
     };
 
     WebPortal();

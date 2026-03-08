@@ -14,7 +14,11 @@
       "Bash(openspec archive add-sbus-input-class --yes)",
       "Bash(openspec validate --strict)",
       "Bash(openspec validate --specs --strict)",
-      "Bash(openspec list --changes)"
+      "Bash(openspec list --changes)",
+      "Bash(openspec validate add-can-controller-class --strict)",
+      "Bash(openspec archive add-can-controller-class --yes)",
+      "Bash(openspec validate --all --strict)",
+      "Bash(openspec show can-controller --type spec)"
     ]
   }
 }

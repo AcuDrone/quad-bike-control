@@ -9,6 +9,7 @@
 #include "WebPortal.h"
 #include "SBusInput.h"
 #include "RelayController.h"
+#include "CANController.h"
 
 /**
  * @brief Vehicle control coordination layer
@@ -24,6 +25,12 @@ public:
                       BTS7960Controller& brake,
                       SBusInput& sbusInput,
                       RelayController& relayController);
+
+    /**
+     * @brief Initialize CAN controller
+     * @return true if initialization successful
+     */
+    bool initCAN();
 
     /**
      * @brief Update control loop - call every loop iteration
@@ -73,6 +80,12 @@ public:
      */
     bool isBrakeReleased() const { return digitalRead(PIN_BRAKE_SENSOR) == HIGH; }
 
+    /**
+     * @brief Get vehicle data from CAN bus
+     * @return VehicleData structure with engine RPM, speed, temperatures, etc.
+     */
+    CANController::VehicleData getVehicleData() const { return canController_.getVehicleData(); }
+
 private:
     // Actuator references
     ServoController& steering_;
@@ -83,6 +96,7 @@ private:
     // Input and output references
     SBusInput& sbusInput_;
     RelayController& relayController_;
+    CANController canController_;  // CAN bus controller (owned, not reference)
 
     // State tracking
     InputSource currentInputSource_;
@@ -93,6 +107,10 @@ private:
     float currentBrakePosition_;        // Estimated brake position (0-100)
     uint32_t brakeMovementStartTime_;   // Time when brake started moving
     bool brakeIsMoving_;
+
+    // Throttle boost tracking
+    uint32_t throttleBoostStartTime_;   // Time when throttle boost started
+    bool throttleBoostActive_;          // True if boost is currently active
 
     /**
      * @brief Apply fail-safe commands (center steering, idle throttle, stop actuators)
@@ -114,6 +132,12 @@ private:
      * @brief Update brake actuator control and tracking
      */
     void updateBrakeControl();
+
+    /**
+     * @brief Apply throttle boost during gear changes
+     * Temporarily increases throttle to maintain RPM
+     */
+    void applyThrottleBoost();
 
     /**
      * @brief Process gear change command

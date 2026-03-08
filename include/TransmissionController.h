@@ -5,6 +5,15 @@
 #include "Constants.h"
 
 /**
+ * @brief Vehicle data structure for transmission safety checks
+ */
+struct TransmissionVehicleData {
+    uint8_t vehicleSpeed;       // km/h (0-255)
+    uint32_t lastUpdateTime;    // millis() timestamp
+    bool dataValid;             // true if CAN communication is healthy
+};
+
+/**
  * @brief High-level transmission controller with gear selection
  *
  * Extends BTS7960Controller with gear-based interface.
@@ -83,8 +92,31 @@ public:
      */
     const char* getGearName(Gear gear) const;
 
+    /**
+     * @brief Set vehicle data from CAN bus for safety checks
+     *
+     * @param data Vehicle data (speed, validity, etc.)
+     */
+    void setVehicleData(const TransmissionVehicleData& data);
+
+    /**
+     * @brief Check if transmission needs throttle boost
+     *
+     * @return true if gear change is in progress and boost is needed
+     */
+    bool needsThrottleBoost() const;
+
 private:
     Gear targetGear_;  // Target gear for current move
+    TransmissionVehicleData vehicleData_;  // Vehicle data for safety checks
+
+    /**
+     * @brief Check if gear change is safe based on vehicle speed
+     *
+     * @param targetGear Target gear for change
+     * @return true if gear change is allowed, false if blocked
+     */
+    bool canChangeGear(Gear targetGear) const;
 };
 
 #endif // TRANSMISSION_CONTROLLER_H

@@ -17,10 +17,27 @@ VehicleController::VehicleController(ServoController& steering,
       currentBrakeTarget_(0.0f),
       currentBrakePosition_(0.0f),
       brakeMovementStartTime_(0),
-      brakeIsMoving_(false) {
+      brakeIsMoving_(false),
+      throttleBoostStartTime_(0),
+      throttleBoostActive_(false) {
+}
+
+bool VehicleController::initCAN() {
+    return canController_.begin();
 }
 
 void VehicleController::update() {
+    // Update CAN controller (read vehicle data from ECU)
+    canController_.update();
+
+    // Pass vehicle data to transmission for safety checks
+    CANController::VehicleData canData = canController_.getVehicleData();
+    TransmissionVehicleData transData;
+    transData.vehicleSpeed = canData.vehicleSpeed;
+    transData.lastUpdateTime = canData.lastUpdateTime;
+    transData.dataValid = canData.dataValid;
+    transmission_.setVehicleData(transData);
+
     // Process SBUS commands if SBUS is active
     if (currentInputSource_ == InputSource::SBUS) {
         processSBusCommands();
@@ -28,6 +45,11 @@ void VehicleController::update() {
 
     // Apply fail-safe if needed
     applyFailsafe();
+
+    // Check if throttle boost is needed for gear changes
+    if (transmission_.needsThrottleBoost()) {
+        applyThrottleBoost();
+    }
 
     // Update position control for transmission actuator
     transmission_.update();
@@ -282,4 +304,50 @@ void VehicleController::updateBrakeControl() {
         // Stop actuator
         brake_.stop();
     }
+}
+
+void VehicleController::applyThrottleBoost() {
+    // Safety check 1: disable boost if brake is applied
+    if (currentBrakeTarget_ > TRANS_THROTTLE_BOOST_BRAKE_THRESHOLD) {
+        if (throttleBoostActive_) {
+            Serial.println("[BOOST] Disabled due to brake application");
+            throttleBoostActive_ = false;
+        }
+        // Set throttle to idle when brake is applied
+        throttle_.setAngle(THROTTLE_IDLE_ANGLE);
+        return;
+    }
+
+    // Safety check 2: disable boost if SBUS is commanding throttle
+    if (currentInputSource_ == InputSource::SBUS && sbusInput_.isSignalValid()) {
+        float sbusThrottle = sbusInput_.getThrottle();
+        if (sbusThrottle > 5.0f) {  // SBUS commanding throttle, let it take priority
+            if (throttleBoostActive_) {
+                Serial.println("[BOOST] Disabled due to SBUS throttle command");
+                throttleBoostActive_ = false;
+            }
+            return;  // SBUS will set throttle, don't override
+        }
+    }
+
+    // Check if we need to start boost
+    if (!throttleBoostActive_) {
+        throttleBoostStartTime_ = millis();
+        throttleBoostActive_ = true;
+        Serial.printf("[BOOST] Activated at %d%%\n", TRANS_THROTTLE_BOOST_PERCENT);
+    }
+
+    // Check timeout
+    uint32_t boostDuration = millis() - throttleBoostStartTime_;
+    if (boostDuration > TRANS_THROTTLE_BOOST_DURATION) {
+        Serial.println("[BOOST] Timeout, releasing boost");
+        throttleBoostActive_ = false;
+        throttle_.setAngle(THROTTLE_IDLE_ANGLE);
+        return;
+    }
+
+    // Apply boost throttle
+    int boostAngle = map(TRANS_THROTTLE_BOOST_PERCENT, 0, 100,
+                        THROTTLE_MIN_ANGLE, THROTTLE_MAX_ANGLE);
+    throttle_.setAngle(boostAngle);
 }

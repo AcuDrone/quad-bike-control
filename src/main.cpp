@@ -61,12 +61,12 @@ void setup() {
     ESP_ERROR_CHECK(err);
 
     // Initialize servos
-    if (!steeringServo.begin(PIN_STEERING_PWM, LEDC_CH_STEERING, SERVO_MIN_US, SERVO_MAX_US)) {
+    if (!steeringServo.begin(PIN_STEERING_PWM, LEDC_CH_STEERING, STEERING_SERVO_MIN_US, STEERING_SERVO_MAX_US)) {
         Serial.println("ERROR: Steering servo failed");
     }
     steeringServo.setAngle(STEERING_CENTER_ANGLE);
 
-    if (!throttleServo.begin(PIN_THROTTLE_PWM, LEDC_CH_THROTTLE, SERVO_MIN_US, SERVO_MAX_US)) {
+    if (!throttleServo.begin(PIN_THROTTLE_PWM, LEDC_CH_THROTTLE, THROTTLE_SERVO_MIN_US, THROTTLE_SERVO_MAX_US)) {
         Serial.println("ERROR: Throttle servo failed");
     }
     throttleServo.setAngle(THROTTLE_IDLE_ANGLE);
@@ -111,6 +111,11 @@ void setup() {
     // Initialize relay controller
     if (!relayController.begin()) {
         Serial.println("ERROR: Relay controller failed");
+    }
+
+    // Initialize CAN controller
+    if (!vehicleController.initCAN()) {
+        Serial.println("WARNING: CAN controller failed (will continue without vehicle data)");
     }
 
     // Initialize web portal

@@ -4,15 +4,24 @@ TransmissionController::TransmissionController()
     : BTS7960Controller()
     , targetGear_(Gear::GEAR_NEUTRAL)
 {
+    // Initialize vehicle data to safe defaults
+    vehicleData_.vehicleSpeed = 0;
+    vehicleData_.lastUpdateTime = 0;
+    vehicleData_.dataValid = false;
 }
 
 TransmissionController::~TransmissionController() {
 }
 
 bool TransmissionController::setGear(TransmissionController::Gear gear, uint8_t speed) {
+    // Safety check: prevent gear changes when vehicle is moving
+    if (!canChangeGear(gear)) {
+        return false;  // Gear change blocked
+    }
+
     int32_t targetPosition = getGearPosition(gear);
 
-    Serial.printf("TransmissionController: Setting gear to %s (position %ld)\n",
+    Serial.printf("[TRANS] Setting gear to %s (position %ld)\n",
                   getGearName(gear), targetPosition);
 
     targetGear_ = gear;
@@ -77,4 +86,44 @@ const char* TransmissionController::getGearName(TransmissionController::Gear gea
         default:
             return "UNKNOWN";
     }
+}
+
+void TransmissionController::setVehicleData(const TransmissionVehicleData& data) {
+    vehicleData_ = data;
+}
+
+bool TransmissionController::canChangeGear(TransmissionController::Gear targetGear) const {
+    // Always allow changes to NEUTRAL (safety override)
+    if (targetGear == Gear::GEAR_NEUTRAL) {
+        return true;
+    }
+
+    // Check if CAN data is valid
+    if (vehicleData_.dataValid) {
+        // Block gear change if vehicle is moving above threshold
+        if (vehicleData_.vehicleSpeed > TRANS_SPEED_INTERLOCK_THRESHOLD) {
+            Serial.printf("[TRANS] Gear change blocked: vehicle moving at %d km/h\n",
+                         vehicleData_.vehicleSpeed);
+            return false;
+        }
+    } else {
+        // CAN data unavailable - check timeout
+        uint32_t dataAge = millis() - vehicleData_.lastUpdateTime;
+
+        if (vehicleData_.lastUpdateTime > 0 && dataAge < TRANS_CAN_TIMEOUT) {
+            // Data is recent but marked invalid - be cautious
+            Serial.println("[TRANS] WARNING: CAN data invalid, blocking gear change");
+            return false;
+        } else {
+            // CAN timeout exceeded or never had data - allow gear change (fail-safe)
+            Serial.printf("[TRANS] WARNING: CAN timeout (%lu ms), allowing gear change\n", dataAge);
+        }
+    }
+
+    return true;
+}
+
+bool TransmissionController::needsThrottleBoost() const {
+    // Check if we're moving to a gear (not stopped at target)
+    return !isStopped() && targetGear_ != Gear::GEAR_NEUTRAL;
 }
