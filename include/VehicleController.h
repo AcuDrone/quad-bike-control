@@ -7,6 +7,8 @@
 #include "BTS7960Controller.h"
 #include "TransmissionController.h"
 #include "WebPortal.h"
+#include "SBusInput.h"
+#include "RelayController.h"
 
 /**
  * @brief Vehicle control coordination layer
@@ -19,7 +21,9 @@ public:
     VehicleController(ServoController& steering,
                       ServoController& throttle,
                       TransmissionController& transmission,
-                      BTS7960Controller& brake);
+                      BTS7960Controller& brake,
+                      SBusInput& sbusInput,
+                      RelayController& relayController);
 
     /**
      * @brief Update control loop - call every loop iteration
@@ -63,6 +67,12 @@ public:
      */
     float getThrottleAngle() const { return throttle_.getAngle(); }
 
+    /**
+     * @brief Check brake sensor state
+     * @return true if brake is released (HIGH signal, no pressure)
+     */
+    bool isBrakeReleased() const { return digitalRead(PIN_BRAKE_SENSOR) == HIGH; }
+
 private:
     // Actuator references
     ServoController& steering_;
@@ -70,14 +80,40 @@ private:
     TransmissionController& transmission_;
     BTS7960Controller& brake_;
 
+    // Input and output references
+    SBusInput& sbusInput_;
+    RelayController& relayController_;
+
     // State tracking
     InputSource currentInputSource_;
     bool failsafeApplied_;
+
+    // Brake actuator tracking
+    float currentBrakeTarget_;          // Current brake percentage target (0-100)
+    float currentBrakePosition_;        // Estimated brake position (0-100)
+    uint32_t brakeMovementStartTime_;   // Time when brake started moving
+    bool brakeIsMoving_;
 
     /**
      * @brief Apply fail-safe commands (center steering, idle throttle, stop actuators)
      */
     void applyFailsafe();
+
+    /**
+     * @brief Process SBUS commands from ArduPilot
+     */
+    void processSBusCommands();
+
+    /**
+     * @brief Apply brake control with percentage (0-100%)
+     * @param brakePct Brake percentage (0 = released, 100 = fully applied)
+     */
+    void applyBrake(float brakePct);
+
+    /**
+     * @brief Update brake actuator control and tracking
+     */
+    void updateBrakeControl();
 
     /**
      * @brief Process gear change command

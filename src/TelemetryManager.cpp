@@ -2,10 +2,12 @@
 
 TelemetryManager::TelemetryManager(VehicleController& vehicleController,
                                    EncoderCounter& transmissionEncoder,
-                                   WebPortal& webPortal)
+                                   WebPortal& webPortal,
+                                   SBusInput& sbusInput)
     : vehicleController_(vehicleController),
       transmissionEncoder_(transmissionEncoder),
       webPortal_(webPortal),
+      sbusInput_(sbusInput),
       lastBroadcast_(0),
       broadcastInterval_(TELEMETRY_INTERVAL) {
 }
@@ -30,16 +32,17 @@ void TelemetryManager::forceBroadcast() {
 }
 
 InputSource TelemetryManager::determineInputSource() {
-    // S-bus has highest priority (if we had S-bus implementation)
-    // For now, assume S-bus is not implemented, so check web control
+    // Priority 1: SBUS (if signal valid)
+    if (sbusInput_.isSignalValid()) {
+        return InputSource::SBUS;
+    }
 
-    // If web clients are connected, allow web control
-    // This keeps web control active even between commands
+    // Priority 2: WEB (if clients connected)
     if (webPortal_.getClientCount() > 0) {
         return InputSource::WEB;
     }
 
-    // Default to failsafe
+    // Priority 3: FAILSAFE
     return InputSource::FAILSAFE;
 }
 
@@ -61,8 +64,8 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     // Brake status (TODO: implement brake position tracking)
     telemetry.brake_pct = 0.0f;
 
-    // S-bus status (TODO: implement when S-bus is added)
-    telemetry.sbus_active = false;
+    // S-bus status
+    telemetry.sbus_active = sbusInput_.isSignalValid();
 
     return telemetry;
 }

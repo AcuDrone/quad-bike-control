@@ -7,6 +7,8 @@
 #include "WebPortal.h"
 #include "VehicleController.h"
 #include "TelemetryManager.h"
+#include "SBusInput.h"
+#include "RelayController.h"
 #include "nvs_flash.h"
 
 // ============================================================================
@@ -24,14 +26,21 @@ BTS7960Controller brakeActuator;              // Brake control
 // Encoder for Transmission Position Feedback
 EncoderCounter transmissionEncoder;
 
+// SBUS Input from ArduPilot Rover
+SBusInput sbusInput;
+
+// Relay Controller for ignition and lights
+RelayController relayController;
+
 // Vehicle Controller (coordinates all actuators and input sources)
-VehicleController vehicleController(steeringServo, throttleServo, transmissionActuator, brakeActuator);
+VehicleController vehicleController(steeringServo, throttleServo, transmissionActuator, brakeActuator,
+                                     sbusInput, relayController);
 
 // Web Portal for telemetry and manual control
 WebPortal webPortal;
 
 // Telemetry Manager (collects and broadcasts telemetry data)
-TelemetryManager telemetryManager(vehicleController, transmissionEncoder, webPortal);
+TelemetryManager telemetryManager(vehicleController, transmissionEncoder, webPortal, sbusInput);
 
 // ============================================================================
 // SETUP
@@ -90,6 +99,20 @@ void setup() {
     }
     brakeActuator.stop();
 
+    // Initialize brake sensor (HIGH = no pressure, LOW = pressure detected)
+    pinMode(PIN_BRAKE_SENSOR, INPUT);
+    Serial.printf("Brake sensor: %s\n", digitalRead(PIN_BRAKE_SENSOR) ? "Released (HIGH)" : "Pressed (LOW)");
+
+    // Initialize SBUS input
+    if (!sbusInput.begin()) {
+        Serial.println("ERROR: SBUS input failed");
+    }
+
+    // Initialize relay controller
+    if (!relayController.begin()) {
+        Serial.println("ERROR: Relay controller failed");
+    }
+
     // Initialize web portal
     if (!webPortal.begin()) {
         Serial.println("ERROR: Web portal failed");
@@ -103,6 +126,9 @@ void setup() {
 // ============================================================================
 
 void loop() {
+    // Update SBUS receiver
+    sbusInput.update();
+
     // Update web portal (handles OTA, WebSocket cleanup, etc.)
     webPortal.update();
 

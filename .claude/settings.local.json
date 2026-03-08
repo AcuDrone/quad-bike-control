@@ -7,7 +7,14 @@
       "Bash(openspec list --specs)",
       "Bash(openspec show sbus-input --type spec)",
       "Bash(openspec show vehicle-actuators --type spec)",
-      "Bash(openspec show vehicle-systems --type spec)"
+      "Bash(openspec show vehicle-systems --type spec)",
+      "Bash(openspec validate add-sbus-input-class --strict)",
+      "Bash(pio run -e esp32-c6-devkitc-1)",
+      "Bash(pio run)",
+      "Bash(openspec archive add-sbus-input-class --yes)",
+      "Bash(openspec validate --strict)",
+      "Bash(openspec validate --specs --strict)",
+      "Bash(openspec list --changes)"
     ]
   }
 }

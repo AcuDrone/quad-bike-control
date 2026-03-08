@@ -55,12 +55,12 @@
 #define PIN_GEAR_LOW        GPIO_NUM_15  // HIGH when gear selector in LOW
 #define PIN_GEAR_HIGH       GPIO_NUM_16  // HIGH when gear selector in HIGH
 
-// Brake Position Sensor (analog or digital feedback)
-#define PIN_BRAKE_SENSOR    GPIO_NUM_21  // Brake position feedback (ADC capable)
+// Brake Position Sensor (digital feedback)
+#define PIN_BRAKE_SENSOR    GPIO_NUM_21  // Brake position feedback - HIGH = released (no pressure), LOW = pressed
 
 // Relay Control (power switching for accessories or safety systems)
-#define PIN_RELAY1          GPIO_NUM_12  // Relay 1 (e.g., main power control) (moved from GPIO 0 - boot pin)
-#define PIN_RELAY2          GPIO_NUM_19  // Relay 2 (e.g., accessory power) (moved from GPIO 8 - NeoPixel)
+#define PIN_RELAY1          GPIO_NUM_12  // Relay 1 (e.g., main power control)
+#define PIN_RELAY2          GPIO_NUM_19  // Relay 2 (e.g., accessory power)
 #define PIN_RELAY3          GPIO_NUM_9   // Relay 3 (e.g., safety system)
 
 // Available GPIO pins for future use: GPIO 17, 18
@@ -73,10 +73,20 @@
 // ============================================================================
 
 // S-bus Channel Assignments (1-16)
-#define SBUS_CH_STEERING      1   // Channel 1: Steering (-100% to +100%)
-#define SBUS_CH_THROTTLE      2   // Channel 2: Throttle (0% to 100%)
-#define SBUS_CH_TRANSMISSION  3   // Channel 3: Gear selector (4 positions)
-#define SBUS_CH_BRAKE         4   // Channel 4: Brake (0% to 100%)
+struct SBusChannelConfig {
+    static constexpr uint8_t STEERING = 1;      // Channel 1: Steering (-100% to +100%)
+    static constexpr uint8_t THROTTLE = 2;      // Channel 2: Throttle (0% to 100%)
+    static constexpr uint8_t TRANSMISSION = 3;  // Channel 3: Gear selector (3 positions: R/N/L)
+    static constexpr uint8_t BRAKE = 4;         // Channel 4: Brake (0% to 100%)
+    static constexpr uint8_t IGNITION = 5;      // Channel 5: Ignition state (OFF/ACC/IGNITION)
+    static constexpr uint8_t FRONT_LIGHT = 6;   // Channel 6: Front light (on/off)
+};
+
+// Legacy defines for backward compatibility
+#define SBUS_CH_STEERING      SBusChannelConfig::STEERING
+#define SBUS_CH_THROTTLE      SBusChannelConfig::THROTTLE
+#define SBUS_CH_TRANSMISSION  SBusChannelConfig::TRANSMISSION
+#define SBUS_CH_BRAKE         SBusChannelConfig::BRAKE
 
 // S-bus Protocol Parameters
 #define SBUS_MIN_VALUE        172   // Minimum S-bus raw value
@@ -88,7 +98,30 @@
 // S-bus to microseconds conversion (for compatibility)
 #define SBUS_US_MIN           880   // Microseconds equivalent
 #define SBUS_US_MAX           2160  // Microseconds equivalent
-#define SBUS_US_CENTER        1500  // Microseconds center point
+#define SBUS_US_CENTER        1520  // Microseconds center point (updated to match SBUS standard)
+
+// Deadband Configuration
+#define SBUS_STEERING_DEADBAND    2.0f   // % center deadband for steering
+#define SBUS_THROTTLE_DEADBAND    2.0f   // % idle deadband for throttle
+
+// Gear Selection Ranges (in microseconds) - 3-position switch: R/N/L
+#define SBUS_GEAR_REVERSE_MIN     880
+#define SBUS_GEAR_REVERSE_MAX     1200
+#define SBUS_GEAR_NEUTRAL_MIN     1201
+#define SBUS_GEAR_NEUTRAL_MAX     1520
+#define SBUS_GEAR_LOW_MIN         1521
+#define SBUS_GEAR_LOW_MAX         2160
+
+// Ignition State Ranges (in microseconds) - 3-position switch: OFF/ACC/IGNITION
+#define SBUS_IGNITION_OFF_MIN     880
+#define SBUS_IGNITION_OFF_MAX     1200
+#define SBUS_IGNITION_ACC_MIN     1201
+#define SBUS_IGNITION_ACC_MAX     1520
+#define SBUS_IGNITION_ON_MIN      1521
+#define SBUS_IGNITION_ON_MAX      2160
+
+// Front Light Threshold (in microseconds)
+#define SBUS_FRONT_LIGHT_THRESHOLD 1520  // >1520 = ON, <=1520 = OFF
 
 // ============================================================================
 // SERVO CONFIGURATION
@@ -171,9 +204,9 @@
 #define BRAKE_EMERGENCY       100    // 100% - emergency stop
 
 // Brake Movement Parameters
-#define BRAKE_MOVE_TIMEOUT    3000   // ms - maximum time for brake actuation
-#define BRAKE_APPLY_SPEED     150    // PWM value when applying brakes
-#define BRAKE_RELEASE_SPEED   100    // PWM value when releasing brakes
+#define BRAKE_FULL_TRAVEL_TIME 3000  // ms - estimated time for 0-100% brake travel
+#define BRAKE_TOLERANCE        5.0f  // % - position tolerance for "at target"
+#define BRAKE_MIN_SPEED        128.0f // PWM - minimum speed to overcome friction
 
 // ============================================================================
 // SAFETY PARAMETERS

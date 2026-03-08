@@ -6,6 +6,7 @@
 #include "VehicleController.h"
 #include "EncoderCounter.h"
 #include "WebPortal.h"
+#include "SBusInput.h"
 
 /**
  * @brief Telemetry collection and broadcasting manager
@@ -18,7 +19,8 @@ class TelemetryManager {
 public:
     TelemetryManager(VehicleController& vehicleController,
                      EncoderCounter& transmissionEncoder,
-                     WebPortal& webPortal);
+                     WebPortal& webPortal,
+                     SBusInput& sbusInput);
 
     /**
      * @brief Update telemetry broadcast - call every loop iteration
@@ -56,6 +58,7 @@ private:
     VehicleController& vehicleController_;
     EncoderCounter& transmissionEncoder_;
     WebPortal& webPortal_;
+    SBusInput& sbusInput_;
 
     // Timing
     uint32_t lastBroadcast_;
