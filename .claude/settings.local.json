@@ -2,7 +2,12 @@
   "permissions": {
     "allow": [
       "Bash(openspec validate add-vehicle-control-system --strict)",
-      "Bash(openspec show add-vehicle-control-system)"
+      "Bash(openspec show add-vehicle-control-system)",
+      "Bash(openspec list)",
+      "Bash(openspec list --specs)",
+      "Bash(openspec show sbus-input --type spec)",
+      "Bash(openspec show vehicle-actuators --type spec)",
+      "Bash(openspec show vehicle-systems --type spec)"
     ]
   }
 }

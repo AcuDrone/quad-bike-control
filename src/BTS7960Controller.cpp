@@ -316,7 +316,7 @@ void BTS7960Controller::update() {
 
     // Proportional speed control: reduce speed as we approach target
     int32_t absError = abs(error);
-    int16_t baseSpeed = 180;  // Base movement speed (increased for faster travel)
+    int16_t baseSpeed = 255;  // Base movement speed (increased for faster travel)
     int16_t adjustedSpeed;
 
     // Multi-stage speed ramping for smooth and precise positioning

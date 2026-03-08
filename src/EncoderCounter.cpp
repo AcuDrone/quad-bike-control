@@ -195,65 +195,6 @@ int32_t EncoderCounter::getDelta() {
     return delta;
 }
 
-bool EncoderCounter::loadFromNVS(const char* nvsKey) {
-    if (!initialized_) {
-        return false;
-    }
-
-    nvs_handle_t nvsHandle;
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvsHandle);
-    if (err != ESP_OK) {
-        Serial.printf("EncoderCounter: Failed to open NVS: %d\n", err);
-        return false;
-    }
-
-    int32_t savedPosition = 0;
-    err = nvs_get_i32(nvsHandle, nvsKey, &savedPosition);
-    nvs_close(nvsHandle);
-
-    if (err != ESP_OK) {
-        Serial.printf("EncoderCounter: Failed to read position from NVS: %d\n", err);
-        return false;
-    }
-
-    setPosition(savedPosition);
-    Serial.printf("EncoderCounter: Loaded position %ld from NVS key '%s'\n", savedPosition, nvsKey);
-    return true;
-}
-
-bool EncoderCounter::saveToNVS(const char* nvsKey) {
-    if (!initialized_) {
-        return false;
-    }
-
-    int32_t currentPos = getPosition();
-
-    nvs_handle_t nvsHandle;
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvsHandle);
-    if (err != ESP_OK) {
-        Serial.printf("EncoderCounter: Failed to open NVS: %d\n", err);
-        return false;
-    }
-
-    err = nvs_set_i32(nvsHandle, nvsKey, currentPos);
-    if (err != ESP_OK) {
-        nvs_close(nvsHandle);
-        Serial.printf("EncoderCounter: Failed to write position to NVS: %d\n", err);
-        return false;
-    }
-
-    err = nvs_commit(nvsHandle);
-    nvs_close(nvsHandle);
-
-    if (err != ESP_OK) {
-        Serial.printf("EncoderCounter: Failed to commit NVS: %d\n", err);
-        return false;
-    }
-
-    Serial.printf("EncoderCounter: Saved position %ld to NVS key '%s'\n", currentPos, nvsKey);
-    return true;
-}
-
 int EncoderCounter::readHardwareCounter() const {
     int count = 0;
     pcnt_unit_get_count(pcntUnit_, &count);

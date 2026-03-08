@@ -3,19 +3,15 @@
 
 #include <Arduino.h>
 #include "driver/pulse_cnt.h"
-#include "nvs_flash.h"
-#include "nvs.h"
 
 /**
  * @brief Incremental encoder counter using ESP32 PCNT peripheral
  *
  * Tracks position using hardware quadrature decoding via PCNT.
- * Supports position persistence via NVS (non-volatile storage).
  *
  * Features:
  * - Hardware quadrature decoding (no CPU overhead)
  * - Direction detection (up/down counting)
- * - Position persistence across reboots
  * - Zero/reset position
  * - Get absolute position
  */
@@ -52,22 +48,6 @@ public:
      * @brief Reset encoder to zero
      */
     void reset();
-
-    /**
-     * @brief Load encoder position from NVS
-     *
-     * @param nvsKey NVS key name for storage
-     * @return true if loaded successfully
-     */
-    bool loadFromNVS(const char* nvsKey);
-
-    /**
-     * @brief Save encoder position to NVS
-     *
-     * @param nvsKey NVS key name for storage
-     * @return true if saved successfully
-     */
-    bool saveToNVS(const char* nvsKey);
 
     /**
      * @brief Check if encoder is initialized

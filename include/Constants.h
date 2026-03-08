@@ -24,11 +24,11 @@
 #define LEDC_CH_TRANS_LPWM  3
 
 // Steering Servo (PWM via LEDC)
-#define PIN_STEERING_PWM    GPIO_NUM_8   // LEDC Channel 0
+#define PIN_STEERING_PWM    GPIO_NUM_13   // LEDC Channel 0
 #define LEDC_CH_STEERING    0
 
 // Throttle Servo (PWM via LEDC)
-#define PIN_THROTTLE_PWM    GPIO_NUM_9   // LEDC Channel 1
+#define PIN_THROTTLE_PWM    GPIO_NUM_1   // LEDC Channel 1
 #define LEDC_CH_THROTTLE    1
 
 // Brake Linear Actuator (BTS7960)
@@ -37,6 +37,36 @@
 #define PIN_BRAKE_LPWM      GPIO_NUM_7   // LEDC Channel 5
 #define LEDC_CH_BRAKE_RPWM  4
 #define LEDC_CH_BRAKE_LPWM  5
+
+// ============================================================================
+// FUTURE EXPANSION - RESERVED GPIO PINS
+// ============================================================================
+
+// SPI CAN Controller (for vehicle CAN bus communication)
+#define PIN_CAN_MOSI        GPIO_NUM_8   // SPI MOSI (using freed NeoPixel pin)
+#define PIN_CAN_MISO        GPIO_NUM_0   // SPI MISO (using freed boot pin - safe during runtime)
+#define PIN_CAN_SCK         GPIO_NUM_23  // SPI SCK
+#define PIN_CAN_CS          GPIO_NUM_22  // SPI Chip Select
+
+// Gear Selection Sensor (physical gear selector position feedback)
+// Each pin is pulled high when corresponding gear is selected
+#define PIN_GEAR_REVERSE    GPIO_NUM_10  // HIGH when gear selector in REVERSE
+#define PIN_GEAR_NEUTRAL    GPIO_NUM_11  // HIGH when gear selector in NEUTRAL
+#define PIN_GEAR_LOW        GPIO_NUM_15  // HIGH when gear selector in LOW
+#define PIN_GEAR_HIGH       GPIO_NUM_16  // HIGH when gear selector in HIGH
+
+// Brake Position Sensor (analog or digital feedback)
+#define PIN_BRAKE_SENSOR    GPIO_NUM_21  // Brake position feedback (ADC capable)
+
+// Relay Control (power switching for accessories or safety systems)
+#define PIN_RELAY1          GPIO_NUM_12  // Relay 1 (e.g., main power control) (moved from GPIO 0 - boot pin)
+#define PIN_RELAY2          GPIO_NUM_19  // Relay 2 (e.g., accessory power) (moved from GPIO 8 - NeoPixel)
+#define PIN_RELAY3          GPIO_NUM_9   // Relay 3 (e.g., safety system)
+
+// Available GPIO pins for future use: GPIO 17, 18
+// Note: GPIO 17 (UART0 TX) and GPIO 18 (UART0 RX) should be avoided for console/programming compatibility
+// Note: GPIO 14 does not exist on ESP32-C6 (valid pins are 0-23 excluding 14)
+// Note: GPIO 0 (boot pin) and GPIO 8 (NeoPixel) are now used for CAN controller (safe during runtime)
 
 // ============================================================================
 // S-BUS CONFIGURATION
@@ -67,8 +97,8 @@
 // Servo PWM Parameters
 #define SERVO_PWM_FREQ        50     // Hz (20ms period)
 #define SERVO_PWM_RESOLUTION  16     // bits (0-65535)
-#define SERVO_MIN_US          1000   // Minimum pulse width (microseconds)
-#define SERVO_MAX_US          2000   // Maximum pulse width (microseconds)
+#define SERVO_MIN_US          500   // Minimum pulse width (microseconds)
+#define SERVO_MAX_US          2500   // Maximum pulse width (microseconds)
 #define SERVO_CENTER_US       1500   // Center pulse width
 
 // Steering Servo Limits
@@ -197,5 +227,51 @@
 #define NVS_KEY_SERVO_MAX     "servo_max"
 #define NVS_KEY_BRAKE_MIN     "brake_min"
 #define NVS_KEY_BRAKE_MAX     "brake_max"
+
+// ============================================================================
+// WiFi ACCESS POINT CONFIGURATION
+// ============================================================================
+
+#define WIFI_AP_SSID          "QuadBike-Control"  // WiFi AP SSID
+#define WIFI_AP_PASSWORD      ""                  // No password (open network)
+#define WIFI_AP_CHANNEL       1                   // WiFi channel (1-13)
+#define WIFI_AP_MAX_CLIENTS   5                   // Maximum simultaneous clients
+#define WIFI_AP_IP            IPAddress(192, 168, 4, 1)     // ESP32 IP address
+#define WIFI_AP_GATEWAY       IPAddress(192, 168, 4, 1)     // Gateway IP
+#define WIFI_AP_SUBNET        IPAddress(255, 255, 255, 0)   // Subnet mask
+
+// ============================================================================
+// WEB SERVER CONFIGURATION
+// ============================================================================
+
+#define WEB_SERVER_PORT       80                  // HTTP server port
+#define WEBSOCKET_PATH        "/ws"               // WebSocket endpoint path
+#define TELEMETRY_INTERVAL    200                 // ms - telemetry broadcast interval (5 Hz)
+#define WEB_COMMAND_TIMEOUT   10000               // ms - web control session timeout
+#define WEB_COMMAND_RATE_LIMIT 100                // ms - minimum time between commands (10 Hz max)
+
+// ============================================================================
+// OTA UPDATE CONFIGURATION
+// ============================================================================
+
+#define OTA_HOSTNAME          "quadbike-control"  // OTA hostname for identification
+#define OTA_PASSWORD          ""                  // OTA password (empty = no password)
+#define OTA_PORT              3232                // OTA port (default Arduino OTA port)
+
+// ============================================================================
+// INPUT SOURCE PRIORITY
+// ============================================================================
+
+// Input source priority: SBUS > WEB > FAILSAFE
+enum class InputSource {
+    SBUS,       // S-bus control active (highest priority)
+    WEB,        // Web portal control active
+    FAILSAFE    // No control source active (safe state)
+};
+
+// Input source names for telemetry/debugging
+#define INPUT_SOURCE_NAME_SBUS      "SBUS"
+#define INPUT_SOURCE_NAME_WEB       "WEB"
+#define INPUT_SOURCE_NAME_FAILSAFE  "FAILSAFE"
 
 #endif // CONSTANTS_H
