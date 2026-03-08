@@ -3,6 +3,7 @@
 
 #include "BTS7960Controller.h"
 #include "Constants.h"
+#include <Preferences.h>
 
 /**
  * @brief Vehicle data structure for transmission safety checks
@@ -106,9 +107,116 @@ public:
      */
     bool needsThrottleBoost() const;
 
+    /**
+     * @brief Initialize gear position sensor GPIO pins
+     *
+     * Configures gear selector position sensor pins as inputs with internal pull-up resistors.
+     * Active-low configuration: pin reads LOW when gear is selected.
+     *
+     * Must be called during setup before using getPhysicalGear().
+     */
+    void initGearSensors();
+
+    /**
+     * @brief Read physical gear position from GPIO sensors
+     *
+     * Reads the gear selector position switches to determine which gear is physically selected.
+     * Uses active-low logic: the pin that reads LOW indicates the selected gear.
+     *
+     * @return Physical gear position based on switch state, or GEAR_NEUTRAL if no switch active or multiple active
+     */
+    Gear getPhysicalGear() const;
+
+    /**
+     * @brief Check if encoder position matches physical gear sensors
+     *
+     * Compares the encoder-based gear position with the physical switch position
+     * for safety verification and diagnostics.
+     *
+     * @return true if encoder gear matches physical switch gear, false if mismatch
+     */
+    bool isGearPositionValid() const;
+
+    /**
+     * @brief Update transmission position control with physical gear verification
+     *
+     * Extends BTS7960Controller::update() to add physical gear sensor verification.
+     * Checks that encoder position matches physical gear switches and logs warnings
+     * if mismatches are detected.
+     *
+     * Call this in main loop to handle position control and safety monitoring.
+     */
+    void update();
+
+    /**
+     * @brief Auto-calibrate all gear positions using physical sensors
+     *
+     * Moves actuator from HIGH through all gears to REVERSE, detecting each gear's
+     * entry and exit points using physical switches. Calculates center position
+     * for each gear as average of entry/exit encoder positions.
+     *
+     * This method automatically determines optimal encoder positions for all gears
+     * based on actual mechanical switch positions.
+     *
+     * @param calibrationSpeed Speed for calibration movement (0-255), default 100
+     * @param timeout Maximum time for full calibration (ms), default 60s
+     * @return true if calibration successful, false if timeout or error
+     */
+    bool calibrateAllGearPositions(uint8_t calibrationSpeed = 100, uint32_t timeout = 60000);
+
+    /**
+     * @brief Get calibrated encoder position for a gear
+     *
+     * Returns calibrated position if available, otherwise returns default position.
+     *
+     * @param gear Target gear
+     * @return Calibrated encoder position in counts
+     */
+    int32_t getCalibratedPosition(Gear gear) const;
+
+    /**
+     * @brief Check if calibration data is available (either from runtime or loaded from storage)
+     *
+     * @return true if calibrated positions are available
+     */
+    bool isCalibrated() const { return isCalibrated_; }
+
+    /**
+     * @brief Save calibrated positions to non-volatile storage
+     *
+     * Stores calibrated gear positions in ESP32 NVS (Preferences) so they persist
+     * across reboots. Call this after successful calibration.
+     *
+     * @return true if save successful, false on error
+     */
+    bool saveCalibration();
+
+    /**
+     * @brief Load calibrated positions from non-volatile storage
+     *
+     * Attempts to restore previously saved calibration from ESP32 NVS.
+     * Called automatically in constructor.
+     *
+     * @return true if calibration data was found and loaded, false otherwise
+     */
+    bool loadCalibration();
+
+    /**
+     * @brief Clear saved calibration from non-volatile storage
+     *
+     * Removes saved calibration data. Next boot will require recalibration.
+     */
+    void clearCalibration();
+
 private:
     Gear targetGear_;  // Target gear for current move
     TransmissionVehicleData vehicleData_;  // Vehicle data for safety checks
+    uint32_t lastGearCheckTime_;  // Timestamp of last physical gear check (ms)
+    bool lastGearMismatch_;  // Track if last check had a mismatch (avoid spam)
+
+    // Calibrated gear positions (runtime calibration)
+    int32_t calibratedPositions_[4];  // Calibrated encoder positions for each gear
+    bool isCalibrated_;  // True if calibrateAllGearPositions() has been run
 
     /**
      * @brief Check if gear change is safe based on vehicle speed

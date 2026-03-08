@@ -3,11 +3,27 @@
 TransmissionController::TransmissionController()
     : BTS7960Controller()
     , targetGear_(Gear::GEAR_NEUTRAL)
+    , lastGearCheckTime_(0)
+    , lastGearMismatch_(false)
+    , isCalibrated_(false)
 {
     // Initialize vehicle data to safe defaults
     vehicleData_.vehicleSpeed = 0;
     vehicleData_.lastUpdateTime = 0;
     vehicleData_.dataValid = false;
+
+    // Initialize calibrated positions to defaults (will be overwritten by calibration or load)
+    calibratedPositions_[(int)Gear::GEAR_HIGH] = TRANS_POSITION_HIGH;
+    calibratedPositions_[(int)Gear::GEAR_LOW] = TRANS_POSITION_LOW;
+    calibratedPositions_[(int)Gear::GEAR_NEUTRAL] = TRANS_POSITION_NEUTRAL;
+    calibratedPositions_[(int)Gear::GEAR_REVERSE] = TRANS_POSITION_REVERSE;
+
+    // Try to load saved calibration from NVS
+    if (loadCalibration()) {
+        Serial.println("[TRANS] Loaded saved calibration from storage");
+    } else {
+        Serial.println("[TRANS] No saved calibration found, using default positions");
+    }
 }
 
 TransmissionController::~TransmissionController() {
@@ -59,6 +75,12 @@ bool TransmissionController::isAtGear(TransmissionController::Gear gear) const {
 }
 
 int32_t TransmissionController::getGearPosition(TransmissionController::Gear gear) const {
+    // Use calibrated positions if available, otherwise use defaults
+    if (isCalibrated_) {
+        return calibratedPositions_[(int)gear];
+    }
+
+    // Fallback to default positions
     switch (gear) {
         case Gear::GEAR_HIGH:
             return TRANS_POSITION_HIGH;
@@ -71,6 +93,10 @@ int32_t TransmissionController::getGearPosition(TransmissionController::Gear gea
         default:
             return TRANS_POSITION_NEUTRAL;  // Safe default
     }
+}
+
+int32_t TransmissionController::getCalibratedPosition(TransmissionController::Gear gear) const {
+    return calibratedPositions_[(int)gear];
 }
 
 const char* TransmissionController::getGearName(TransmissionController::Gear gear) const {
@@ -126,4 +152,347 @@ bool TransmissionController::canChangeGear(TransmissionController::Gear targetGe
 bool TransmissionController::needsThrottleBoost() const {
     // Check if we're moving to a gear (not stopped at target)
     return !isStopped() && targetGear_ != Gear::GEAR_NEUTRAL;
+}
+
+void TransmissionController::initGearSensors() {
+    // Configure gear position sensor pins as inputs with internal pull-up resistors
+    // Active-low: pin reads LOW when gear is selected
+    pinMode(PIN_GEAR_REVERSE, INPUT);
+    pinMode(PIN_GEAR_NEUTRAL, INPUT);
+    pinMode(PIN_GEAR_LOW, INPUT);
+    pinMode(PIN_GEAR_HIGH, INPUT);
+
+    Serial.println("[TRANS] Gear position sensors initialized (active-low, pull-up)");
+}
+
+TransmissionController::Gear TransmissionController::getPhysicalGear() const {
+    // Read all gear sensor pins (active-low: LOW = selected)
+    bool reverseActive = (digitalRead(PIN_GEAR_REVERSE) == LOW);
+    bool neutralActive = (digitalRead(PIN_GEAR_NEUTRAL) == LOW);
+    bool lowActive = (digitalRead(PIN_GEAR_LOW) == LOW);
+    bool highActive = (digitalRead(PIN_GEAR_HIGH) == LOW);
+
+    // Count how many sensors are active (should be exactly 1)
+    uint8_t activeCount = reverseActive + neutralActive + lowActive + highActive;
+
+    if (activeCount == 0) {
+        // No gear selected (all pins HIGH) - return NEUTRAL as safe default
+        Serial.println("[TRANS] WARNING: No gear sensor active");
+        return Gear::GEAR_NEUTRAL;
+    }
+
+    if (activeCount > 1) {
+        // Multiple gears active - invalid state, return NEUTRAL for safety
+        Serial.printf("[TRANS] ERROR: Multiple gear sensors active (R:%d N:%d L:%d H:%d)\n",
+                     reverseActive, neutralActive, lowActive, highActive);
+        return Gear::GEAR_NEUTRAL;
+    }
+
+    // Exactly one sensor is active - return the corresponding gear
+    if (reverseActive) return Gear::GEAR_REVERSE;
+    if (neutralActive) return Gear::GEAR_NEUTRAL;
+    if (lowActive) return Gear::GEAR_LOW;
+    if (highActive) return Gear::GEAR_HIGH;
+
+    // Should never reach here, but return NEUTRAL for safety
+    return Gear::GEAR_NEUTRAL;
+}
+
+bool TransmissionController::isGearPositionValid() const {
+    // Compare encoder-based gear with physical sensor gear
+    Gear encoderGear = getCurrentGear();
+    Gear physicalGear = getPhysicalGear();
+
+    if (encoderGear != physicalGear) {
+        Serial.printf("[TRANS] WARNING: Gear mismatch - Encoder: %s, Physical: %s\n",
+                     getGearName(encoderGear), getGearName(physicalGear));
+        return false;
+    }
+
+    return true;
+}
+
+void TransmissionController::update() {
+    // Check physical gear position periodically
+    uint32_t now = millis();
+    if (now - lastGearCheckTime_ >= TRANS_GEAR_CHECK_INTERVAL) {
+        lastGearCheckTime_ = now;
+
+        // Read physical gear position (ground truth)
+        Gear physicalGear = getPhysicalGear();
+
+        // Check if physical gear matches target gear during position control
+        if (isPositionControlActive() && physicalGear == targetGear_) {
+            // Physical switch confirms we've reached target gear!
+            // Recalibrate encoder to match expected position for this gear
+            int32_t expectedPosition = getGearPosition(targetGear_);
+            int32_t currentPosition = getPosition();
+            int32_t positionError = abs(currentPosition - expectedPosition);
+
+            if (positionError > TRANS_POSITION_TOLERANCE) {
+                // Encoder position differs from expected - recalibrate
+                Serial.printf("[TRANS] Physical gear %s reached, recalibrating encoder\n",
+                             getGearName(targetGear_));
+                Serial.printf("[TRANS] Encoder: %ld -> %ld (error: %ld)\n",
+                             currentPosition, expectedPosition, positionError);
+
+                // Recalibrate encoder to expected position for this gear
+                recalibrateEncoder(expectedPosition);
+            }
+
+            // Stop position control - physical switch confirms arrival
+            stopPositionControl();
+            Serial.printf("[TRANS] Target gear %s confirmed by physical switch\n",
+                         getGearName(targetGear_));
+
+            // Clear any previous mismatch flag
+            lastGearMismatch_ = false;
+            return;
+        }
+
+        // Verify encoder consistency when stopped
+        if (isStopped()) {
+            Gear encoderGear = getCurrentGear();
+
+            if (encoderGear != physicalGear) {
+                // Mismatch detected while stopped
+                if (!lastGearMismatch_) {
+                    // First mismatch - log detailed warning
+                    Serial.printf("[TRANS] MISMATCH: Encoder reports %s, Physical switch shows %s\n",
+                                 getGearName(encoderGear), getGearName(physicalGear));
+                    Serial.printf("[TRANS] Encoder position: %ld, Expected: %ld\n",
+                                 getPosition(), getGearPosition(physicalGear));
+                    Serial.println("[TRANS] Possible causes: encoder drift, mechanical slippage, or wiring issue");
+                    lastGearMismatch_ = true;
+                }
+                // Subsequent mismatches are silent to avoid spam
+            } else {
+                // Position valid
+                if (lastGearMismatch_) {
+                    // Mismatch resolved
+                    Serial.printf("[TRANS] Position mismatch RESOLVED: Now at %s\n", getGearName(encoderGear));
+                    lastGearMismatch_ = false;
+                }
+            }
+        }
+    }
+
+    // Call parent update() to handle encoder-based position control loop
+    BTS7960Controller::update();
+}
+
+bool TransmissionController::calibrateAllGearPositions(uint8_t calibrationSpeed, uint32_t timeout) {
+    if (!hasEncoder()) {
+        Serial.println("[TRANS] ERROR: Cannot calibrate - no encoder attached");
+        return false;
+    }
+
+    Serial.println("[TRANS] ========================================");
+    Serial.println("[TRANS] Starting full gear calibration...");
+    Serial.println("[TRANS] ========================================");
+
+    uint32_t startTime = millis();
+
+    // Structure to store gear detection data
+    struct GearCalibration {
+        Gear gear;
+        gpio_num_t pin;
+        const char* name;
+        int32_t entryPosition;
+        int32_t exitPosition;
+        bool entryDetected;
+        bool exitDetected;
+    };
+
+    // Define gears to calibrate (in order of traversal: HIGH -> LOW -> NEUTRAL -> REVERSE)
+    GearCalibration gears[] = {
+        {Gear::GEAR_LOW, PIN_GEAR_LOW, "LOW", 0, 0, false, false},
+        {Gear::GEAR_NEUTRAL, PIN_GEAR_NEUTRAL, "NEUTRAL", 0, 0, false, false},
+        {Gear::GEAR_REVERSE, PIN_GEAR_REVERSE, "REVERSE", 0, 0, false, false}
+    };
+    const int numGears = 3;  // LOW, NEUTRAL, REVERSE (HIGH is at 0 by definition)
+
+    // Start moving backward from HIGH (position 0)
+    Serial.println("[TRANS] Moving backward from HIGH to detect all gears...");
+    setSpeed(-calibrationSpeed);
+
+    int currentGearIndex = 0;
+    bool allGearsCalibrated = false;
+
+    while (!allGearsCalibrated) {
+        // Check timeout
+        if (millis() - startTime >= timeout) {
+            Serial.println("[TRANS] ERROR: Calibration timeout!");
+            stop();
+            return false;
+        }
+
+        // Get current encoder position
+        int32_t currentPos = getPosition();
+
+        // Read current gear sensor
+        if (currentGearIndex < numGears) {
+            GearCalibration& gear = gears[currentGearIndex];
+            bool sensorActive = (digitalRead(gear.pin) == LOW);
+
+            if (!gear.entryDetected && sensorActive) {
+                // Gear entry detected
+                gear.entryPosition = currentPos;
+                gear.entryDetected = true;
+                Serial.printf("[TRANS] %s entry detected at position %ld\n",
+                             gear.name, gear.entryPosition);
+            }
+            else if (gear.entryDetected && !gear.exitDetected && !sensorActive) {
+                // Gear exit detected
+                gear.exitPosition = currentPos;
+                gear.exitDetected = true;
+
+                // Calculate center position
+                int32_t centerPosition = (gear.entryPosition + gear.exitPosition) / 2;
+                calibratedPositions_[(int)gear.gear] = centerPosition;
+
+                Serial.printf("[TRANS] %s exit detected at position %ld\n",
+                             gear.name, gear.exitPosition);
+                Serial.printf("[TRANS] %s calibrated to position %ld (center of %ld to %ld)\n",
+                             gear.name, centerPosition, gear.entryPosition, gear.exitPosition);
+
+                // Move to next gear
+                currentGearIndex++;
+
+                // Check if all gears calibrated
+                if (currentGearIndex >= numGears) {
+                    allGearsCalibrated = true;
+                }
+            }
+        }
+
+        delay(10);  // Small delay for stable readings
+    }
+
+    // Stop movement
+    stop();
+    Serial.println("[TRANS] Calibration movement complete");
+
+    // HIGH gear is always at position 0 (home position)
+    calibratedPositions_[(int)Gear::GEAR_HIGH] = 0;
+
+    // Display calibration results
+    Serial.println("[TRANS] ========================================");
+    Serial.println("[TRANS] Calibration Results:");
+    Serial.println("[TRANS] ========================================");
+    Serial.printf("[TRANS] HIGH:    %6ld (home position)\n", calibratedPositions_[(int)Gear::GEAR_HIGH]);
+    Serial.printf("[TRANS] LOW:     %6ld\n", calibratedPositions_[(int)Gear::GEAR_LOW]);
+    Serial.printf("[TRANS] NEUTRAL: %6ld\n", calibratedPositions_[(int)Gear::GEAR_NEUTRAL]);
+    Serial.printf("[TRANS] REVERSE: %6ld\n", calibratedPositions_[(int)Gear::GEAR_REVERSE]);
+    Serial.println("[TRANS] ========================================");
+
+    // Mark as calibrated
+    isCalibrated_ = true;
+
+    // Return to target gear position
+    int32_t targetPosition = getGearPosition(targetGear_);
+    Serial.printf("[TRANS] Returning to target gear %s (position %ld)...\n",
+                 getGearName(targetGear_), targetPosition);
+    if (moveToPosition(targetPosition, calibrationSpeed)) {
+        // Wait for movement to complete
+        uint32_t returnStart = millis();
+        while (isPositionControlActive() && (millis() - returnStart < 30000)) {
+            BTS7960Controller::update();
+            delay(10);
+        }
+    }
+
+    Serial.println("[TRANS] ========================================");
+    Serial.println("[TRANS] Gear calibration complete!");
+    Serial.println("[TRANS] ========================================");
+
+    // Save calibration to non-volatile storage
+    if (saveCalibration()) {
+        Serial.println("[TRANS] Calibration saved to storage");
+    } else {
+        Serial.println("[TRANS] WARNING: Failed to save calibration");
+    }
+
+    return true;
+}
+
+bool TransmissionController::saveCalibration() {
+    Preferences prefs;
+
+    // Open preferences in read-write mode
+    if (!prefs.begin("transmission", false)) {
+        Serial.println("[TRANS] ERROR: Failed to open preferences for write");
+        return false;
+    }
+
+    // Save each gear position
+    prefs.putInt("pos_high", calibratedPositions_[(int)Gear::GEAR_HIGH]);
+    prefs.putInt("pos_low", calibratedPositions_[(int)Gear::GEAR_LOW]);
+    prefs.putInt("pos_neutral", calibratedPositions_[(int)Gear::GEAR_NEUTRAL]);
+    prefs.putInt("pos_reverse", calibratedPositions_[(int)Gear::GEAR_REVERSE]);
+
+    // Save calibration flag
+    prefs.putBool("calibrated", true);
+
+    prefs.end();
+
+    Serial.println("[TRANS] Calibration saved:");
+    Serial.printf("[TRANS]   HIGH:    %ld\n", calibratedPositions_[(int)Gear::GEAR_HIGH]);
+    Serial.printf("[TRANS]   LOW:     %ld\n", calibratedPositions_[(int)Gear::GEAR_LOW]);
+    Serial.printf("[TRANS]   NEUTRAL: %ld\n", calibratedPositions_[(int)Gear::GEAR_NEUTRAL]);
+    Serial.printf("[TRANS]   REVERSE: %ld\n", calibratedPositions_[(int)Gear::GEAR_REVERSE]);
+
+    return true;
+}
+
+bool TransmissionController::loadCalibration() {
+    Preferences prefs;
+
+    // Open preferences in read-only mode
+    if (!prefs.begin("transmission", true)) {
+        Serial.println("[TRANS] Failed to open preferences for read");
+        return false;
+    }
+
+    // Check if calibration exists
+    if (!prefs.getBool("calibrated", false)) {
+        prefs.end();
+        return false;
+    }
+
+    // Load each gear position
+    calibratedPositions_[(int)Gear::GEAR_HIGH] = prefs.getInt("pos_high", TRANS_POSITION_HIGH);
+    calibratedPositions_[(int)Gear::GEAR_LOW] = prefs.getInt("pos_low", TRANS_POSITION_LOW);
+    calibratedPositions_[(int)Gear::GEAR_NEUTRAL] = prefs.getInt("pos_neutral", TRANS_POSITION_NEUTRAL);
+    calibratedPositions_[(int)Gear::GEAR_REVERSE] = prefs.getInt("pos_reverse", TRANS_POSITION_REVERSE);
+
+    prefs.end();
+
+    // Mark as calibrated
+    isCalibrated_ = true;
+
+    Serial.println("[TRANS] Calibration loaded:");
+    Serial.printf("[TRANS]   HIGH:    %ld\n", calibratedPositions_[(int)Gear::GEAR_HIGH]);
+    Serial.printf("[TRANS]   LOW:     %ld\n", calibratedPositions_[(int)Gear::GEAR_LOW]);
+    Serial.printf("[TRANS]   NEUTRAL: %ld\n", calibratedPositions_[(int)Gear::GEAR_NEUTRAL]);
+    Serial.printf("[TRANS]   REVERSE: %ld\n", calibratedPositions_[(int)Gear::GEAR_REVERSE]);
+
+    return true;
+}
+
+void TransmissionController::clearCalibration() {
+    Preferences prefs;
+
+    if (prefs.begin("transmission", false)) {
+        prefs.clear();  // Clear all keys in this namespace
+        prefs.end();
+        Serial.println("[TRANS] Calibration cleared from storage");
+    }
+
+    // Reset to defaults
+    calibratedPositions_[(int)Gear::GEAR_HIGH] = TRANS_POSITION_HIGH;
+    calibratedPositions_[(int)Gear::GEAR_LOW] = TRANS_POSITION_LOW;
+    calibratedPositions_[(int)Gear::GEAR_NEUTRAL] = TRANS_POSITION_NEUTRAL;
+    calibratedPositions_[(int)Gear::GEAR_REVERSE] = TRANS_POSITION_REVERSE;
+    isCalibrated_ = false;
 }

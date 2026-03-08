@@ -159,6 +159,25 @@ private:
      * @param webPortal Reference to web portal for sending responses
      */
     void processThrottleCommand(float value, WebPortal& webPortal);
+
+    /**
+     * @brief Process transmission calibration command
+     *
+     * Runs full transmission calibration using physical gear sensors.
+     * Uses max speed (255) and 20 second timeout.
+     *
+     * @param webPortal Reference to web portal for sending responses
+     */
+    void processCalibrationCommand(WebPortal& webPortal);
+
+    /**
+     * @brief Process clear calibration command
+     *
+     * Clears saved calibration data from NVS. Next boot will require recalibration.
+     *
+     * @param webPortal Reference to web portal for sending responses
+     */
+    void processClearCalibrationCommand(WebPortal& webPortal);
 };
 
 #endif // VEHICLE_CONTROLLER_H

@@ -381,6 +381,23 @@
                 </div>
             </div>
 
+            <!-- System Maintenance -->
+            <div class="card">
+                <h2>🔧 System Maintenance</h2>
+                <div class="slider-container">
+                    <button class="upload-btn" id="calibrate-btn" onclick="calibrateTransmission()" style="background: #2196f3; margin-bottom: 10px;">
+                        📍 Calibrate Transmission
+                    </button>
+                    <button class="upload-btn" id="clear-calibration-btn" onclick="clearCalibration()" style="background: #ff9800;">
+                        🗑️ Clear Calibration
+                    </button>
+                    <div id="calibration-status" style="margin-top: 15px; padding: 10px; border-radius: 8px; display: none; text-align: center;"></div>
+                </div>
+                <div class="warning" style="margin-top: 15px;">
+                    ℹ️ Calibration moves actuator through all gears to detect positions automatically (20s timeout).
+                </div>
+            </div>
+
             <!-- OTA Update -->
             <div class="card">
                 <h2>⬆️ Firmware Update</h2>
@@ -474,6 +491,7 @@
             // Handle response messages
             if (data.success !== undefined) {
                 console.log('Response:', data.message);
+                showCalibrationStatus(data.success, data.message);
             }
         }
 
@@ -681,6 +699,69 @@
             const progressFill = document.getElementById('progress-fill');
             progressFill.style.width = percent + '%';
             progressFill.textContent = Math.round(percent) + '%';
+        }
+
+        // Calibration functions
+        function calibrateTransmission() {
+            if (!wsConnected) {
+                alert('WebSocket not connected');
+                return;
+            }
+
+            if (!confirm('Start transmission calibration? This will move the actuator through all gears for ~20 seconds.')) {
+                return;
+            }
+
+            // Disable button and show status
+            document.getElementById('calibrate-btn').disabled = true;
+            document.getElementById('clear-calibration-btn').disabled = true;
+            showCalibrationStatus(true, 'Calibration in progress... Please wait (~20 seconds)');
+
+            // Send calibration command
+            const command = { cmd: 'calibrate_transmission' };
+            ws.send(JSON.stringify(command));
+
+            // Re-enable buttons after timeout
+            setTimeout(() => {
+                document.getElementById('calibrate-btn').disabled = false;
+                document.getElementById('clear-calibration-btn').disabled = false;
+            }, 25000);
+        }
+
+        function clearCalibration() {
+            if (!wsConnected) {
+                alert('WebSocket not connected');
+                return;
+            }
+
+            if (!confirm('Clear saved calibration? You will need to recalibrate after this.')) {
+                return;
+            }
+
+            // Send clear calibration command
+            const command = { cmd: 'clear_calibration' };
+            ws.send(JSON.stringify(command));
+        }
+
+        function showCalibrationStatus(success, message) {
+            const statusDiv = document.getElementById('calibration-status');
+            if (!statusDiv) return;
+
+            statusDiv.style.display = 'block';
+            statusDiv.textContent = message || 'No message';
+
+            if (success) {
+                statusDiv.style.background = 'rgba(76, 175, 80, 0.3)';
+                statusDiv.style.border = '2px solid #4caf50';
+            } else {
+                statusDiv.style.background = 'rgba(244, 67, 54, 0.3)';
+                statusDiv.style.border = '2px solid #f44336';
+            }
+
+            // Auto-hide after 5 seconds
+            setTimeout(() => {
+                statusDiv.style.display = 'none';
+            }, 5000);
         }
 
         // Initialize WebSocket connection on page load

@@ -134,6 +134,30 @@ public:
      */
     void update();
 
+    /**
+     * @brief Check if position control is currently active
+     *
+     * @return true if actively moving to target position
+     */
+    bool isPositionControlActive() const { return positionControlActive_; }
+
+    /**
+     * @brief Stop position control and clear target
+     *
+     * Stops the actuator and deactivates position control mode.
+     */
+    void stopPositionControl();
+
+    /**
+     * @brief Recalibrate encoder to expected position
+     *
+     * Adjusts encoder position to match expected value (used when physical
+     * sensors confirm position but encoder has drifted).
+     *
+     * @param expectedPosition The correct position in encoder counts
+     */
+    void recalibrateEncoder(int32_t expectedPosition);
+
 private:
     gpio_num_t rpwmPin_;
     gpio_num_t lpwmPin_;

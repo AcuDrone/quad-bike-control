@@ -72,16 +72,26 @@ void VehicleController::setInputSource(InputSource source) {
 }
 
 void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebPortal& webPortal) {
-    if (currentInputSource_ != InputSource::WEB) {
-        // Web control not active, ignore commands
-        return;
-    }
-
     if (!cmd.hasCommand) {
         return;
     }
 
-    // Process command based on type
+    // Special commands that work regardless of input source
+    if (cmd.cmd == "calibrate_transmission") {
+        processCalibrationCommand(webPortal);
+        return;
+    } else if (cmd.cmd == "clear_calibration") {
+        processClearCalibrationCommand(webPortal);
+        return;
+    }
+
+    // Normal control commands require WEB input source
+    if (currentInputSource_ != InputSource::WEB) {
+        // Web control not active, ignore control commands
+        return;
+    }
+
+    // Process control commands
     if (cmd.cmd == "set_gear") {
         processGearCommand(cmd.strValue, webPortal);
     } else if (cmd.cmd == "set_steering") {
@@ -202,6 +212,30 @@ void VehicleController::processThrottleCommand(float value, WebPortal& webPortal
     int angle = map((int)value, 0, 100, THROTTLE_MIN_ANGLE, THROTTLE_MAX_ANGLE);
     throttle_.setAngle(angle);
     webPortal.sendResponse(true, "Throttle set");
+}
+
+void VehicleController::processCalibrationCommand(WebPortal& webPortal) {
+    Serial.println("[WEB] Calibration command received");
+    webPortal.sendResponse(true, "Starting transmission calibration...");
+
+    // Run calibration with max speed (255) and 20 second timeout
+    bool success = transmission_.calibrateAllGearPositions(255, 20000);
+
+    if (success) {
+        Serial.println("[WEB] Calibration completed successfully");
+        webPortal.sendResponse(true, "Calibration completed successfully");
+    } else {
+        Serial.println("[WEB] Calibration failed");
+        webPortal.sendResponse(false, "Calibration failed - check serial output");
+    }
+}
+
+void VehicleController::processClearCalibrationCommand(WebPortal& webPortal) {
+    Serial.println("[WEB] Clear calibration command received");
+
+    transmission_.clearCalibration();
+
+    webPortal.sendResponse(true, "Calibration cleared - reboot to recalibrate");
 }
 
 void VehicleController::applyBrake(float brakePct) {

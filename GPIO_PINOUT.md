@@ -74,14 +74,14 @@
 | **23** | `PIN_CAN_SCK` | SPI SCK | CAN controller SPI clock |
 
 ### Gear Selection Sensors (4 pins)
-*Physical gear selector position feedback (boolean)*
+*Physical gear selector position feedback (active-low, pull-up)*
 
 | GPIO | Function | Type | Description |
 |------|----------|------|-------------|
-| **10** | `PIN_GEAR_REVERSE` | Digital In | HIGH when gear selector in REVERSE |
-| **11** | `PIN_GEAR_NEUTRAL` | Digital In | HIGH when gear selector in NEUTRAL |
-| **15** | `PIN_GEAR_LOW` | Digital In | HIGH when gear selector in LOW |
-| **16** | `PIN_GEAR_HIGH` | Digital In | HIGH when gear selector in HIGH |
+| **10** | `PIN_GEAR_REVERSE` | Digital In | LOW when gear selector in REVERSE (active-low) |
+| **11** | `PIN_GEAR_NEUTRAL` | Digital In | LOW when gear selector in NEUTRAL (active-low) |
+| **15** | `PIN_GEAR_LOW` | Digital In | LOW when gear selector in LOW (active-low) |
+| **16** | `PIN_GEAR_HIGH` | Digital In | LOW when gear selector in HIGH (active-low) |
 
 ### Brake Position Sensor (1 pin)
 *Brake actuator position feedback*

@@ -286,6 +286,34 @@ bool BTS7960Controller::autoHome(int8_t direction, uint8_t homingSpeed, uint32_t
     }
 }
 
+void BTS7960Controller::stopPositionControl() {
+    if (positionControlActive_) {
+        stop();
+        positionControlActive_ = false;
+    }
+}
+
+void BTS7960Controller::recalibrateEncoder(int32_t expectedPosition) {
+    if (encoder_ == nullptr) {
+        Serial.println("BTS7960: Cannot recalibrate - no encoder attached");
+        return;
+    }
+
+    int32_t currentPosition = encoder_->getPosition();
+    int32_t correction = expectedPosition - currentPosition;
+
+    Serial.printf("BTS7960: Recalibrating encoder: %ld -> %ld (correction: %+ld)\n",
+                  currentPosition, expectedPosition, correction);
+
+    // Reset encoder counter and set to expected position
+    encoder_->reset();
+    encoder_->setPosition(expectedPosition);
+
+    // Update stall detection tracking
+    lastEncoderPosition_ = expectedPosition;
+    lastEncoderChange_ = millis();
+}
+
 void BTS7960Controller::update() {
     if (!positionControlActive_ || encoder_ == nullptr) {
         return;

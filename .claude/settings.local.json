@@ -18,7 +18,8 @@
       "Bash(openspec validate add-can-controller-class --strict)",
       "Bash(openspec archive add-can-controller-class --yes)",
       "Bash(openspec validate --all --strict)",
-      "Bash(openspec show can-controller --type spec)"
+      "Bash(openspec show can-controller --type spec)",
+      "Bash(pio run --environment esp32-c6-devkitc-1)"
     ]
   }
 }

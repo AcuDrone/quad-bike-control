@@ -49,11 +49,11 @@
 #define PIN_CAN_CS          GPIO_NUM_22  // SPI Chip Select
 
 // Gear Selection Sensor (physical gear selector position feedback)
-// Each pin is pulled high when corresponding gear is selected
-#define PIN_GEAR_REVERSE    GPIO_NUM_10  // HIGH when gear selector in REVERSE
-#define PIN_GEAR_NEUTRAL    GPIO_NUM_11  // HIGH when gear selector in NEUTRAL
-#define PIN_GEAR_LOW        GPIO_NUM_15  // HIGH when gear selector in LOW
-#define PIN_GEAR_HIGH       GPIO_NUM_16  // HIGH when gear selector in HIGH
+// Active-low configuration: pin goes LOW when gear is selected (pull-up resistor)
+#define PIN_GEAR_REVERSE    GPIO_NUM_10  // LOW when gear selector in REVERSE (active-low)
+#define PIN_GEAR_NEUTRAL    GPIO_NUM_11  // LOW when gear selector in NEUTRAL (active-low)
+#define PIN_GEAR_LOW        GPIO_NUM_15  // LOW when gear selector in LOW (active-low)
+#define PIN_GEAR_HIGH       GPIO_NUM_16  // LOW when gear selector in HIGH (active-low)
 
 // Brake Position Sensor (digital feedback)
 #define PIN_BRAKE_SENSOR    GPIO_NUM_21  // Brake position feedback - HIGH = released (no pressure), LOW = pressed
@@ -81,12 +81,6 @@ struct SBusChannelConfig {
     static constexpr uint8_t IGNITION = 5;      // Channel 5: Ignition state (OFF/ACC/IGNITION)
     static constexpr uint8_t FRONT_LIGHT = 6;   // Channel 6: Front light (on/off)
 };
-
-// Legacy defines for backward compatibility
-#define SBUS_CH_STEERING      SBusChannelConfig::STEERING
-#define SBUS_CH_THROTTLE      SBusChannelConfig::THROTTLE
-#define SBUS_CH_TRANSMISSION  SBusChannelConfig::TRANSMISSION
-#define SBUS_CH_BRAKE         SBusChannelConfig::BRAKE
 
 // S-bus Protocol Parameters
 #define SBUS_MIN_VALUE        172   // Minimum S-bus raw value
@@ -184,6 +178,7 @@ struct SBusChannelConfig {
 #define TRANS_HOMING_TIMEOUT    60000 // ms - maximum time for homing
 #define TRANS_STALL_THRESHOLD   3    // Encoder counts - if no change for this time, assume stall
 #define TRANS_STALL_TIMEOUT     1000 // ms - time without encoder change = stall detected
+#define TRANS_GEAR_CHECK_INTERVAL 500 // ms - interval for physical gear position verification
 
 // Proportional Speed Control (implemented in BTS7960Controller::update())
 // Speed ramp thresholds for smooth positioning:

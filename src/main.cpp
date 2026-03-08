@@ -81,13 +81,36 @@ void setup() {
         transmissionActuator.attachEncoder(&transmissionEncoder);
         transmissionActuator.stop();
 
-        // Auto-home transmission
-        Serial.println("Homing transmission...");
-        if (transmissionActuator.autoHome(1, TRANS_HOMING_SPEED, TRANS_HOMING_TIMEOUT)) {
-            Serial.printf("Position: %ld\n", transmissionEncoder.getPosition());
+        // Initialize gear position sensors (GPIO switches)
+        transmissionActuator.initGearSensors();
+
+        // Check if calibration already exists
+        if (transmissionActuator.isCalibrated()) {
+            // Calibration loaded from storage - just home to HIGH position
+            Serial.println("[TRANS] Using saved calibration, homing to HIGH gear...");
+            if (transmissionActuator.autoHome(1, TRANS_HOMING_SPEED, TRANS_HOMING_TIMEOUT)) {
+                Serial.printf("[TRANS] Homed to HIGH gear at position %ld\n", transmissionEncoder.getPosition());
+            } else {
+                Serial.println("[TRANS] ERROR: Homing failed");
+            }
         } else {
-            Serial.println("ERROR: Homing failed");
+            // No saved calibration - run full calibration routine
+            Serial.println("[TRANS] No saved calibration found, running full calibration...");
+            if (transmissionActuator.calibrateAllGearPositions(TRANS_CALIBRATION_SPEED, TRANS_HOMING_TIMEOUT)) {
+                Serial.println("[TRANS] Calibration successful!");
+            } else {
+                Serial.println("[TRANS] ERROR: Calibration failed");
+                // Fallback to manual homing
+                Serial.println("[TRANS] Attempting manual homing...");
+                if (transmissionActuator.autoHome(1, TRANS_HOMING_SPEED, TRANS_HOMING_TIMEOUT)) {
+                    Serial.printf("[TRANS] Position: %ld\n", transmissionEncoder.getPosition());
+                } else {
+                    Serial.println("[TRANS] ERROR: Homing failed");
+                }
+            }
         }
+
+        // To force recalibration: transmissionActuator.clearCalibration() and reboot
     } else {
         Serial.println("ERROR: Transmission actuator failed");
     }
