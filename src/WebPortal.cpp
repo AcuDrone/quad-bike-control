@@ -411,7 +411,7 @@ bool WebPortal::validateCommand(const WebCommand& cmd, InputSource inputSource) 
 // ============================================================================
 
 String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
-    StaticJsonDocument<768> doc;  // Increased size for CAN data
+    StaticJsonDocument<1024> doc;  // Increased size for CAN data + SBUS channels
 
     doc["timestamp"] = telemetry.timestamp;
     doc["gear"] = telemetry.gear;
@@ -432,6 +432,18 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     }
     doc["can_status"] = telemetry.can_status;
     doc["can_data_age"] = telemetry.can_data_age;
+
+    // SBUS channel data
+    JsonArray sbusChannels = doc.createNestedArray("sbus_channels");
+    for (int i = 0; i < 16; i++) {
+        sbusChannels.add(telemetry.sbus_channels[i]);
+    }
+    doc["sbus_frame_rate"] = telemetry.sbus_frame_rate;
+    doc["sbus_error_rate"] = telemetry.sbus_error_rate;
+    doc["sbus_signal_age"] = telemetry.sbus_signal_age;
+
+    // Gear switching state
+    doc["gear_switching"] = telemetry.gear_switching;
 
     String json;
     serializeJson(doc, json);

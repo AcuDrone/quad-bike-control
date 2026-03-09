@@ -50,10 +50,12 @@
 
 // Gear Selection Sensor (physical gear selector position feedback)
 // Active-low configuration: pin goes LOW when gear is selected (pull-up resistor)
+// NOTE: GPIO 16/17 are UART0 TX/RX (breaks USB serial debugging) - cannot be used!
+// NOTE: GPIO 15 is strapping pin - requires proper ESP-IDF GPIO initialization with pull-up
 #define PIN_GEAR_REVERSE    GPIO_NUM_10  // LOW when gear selector in REVERSE (active-low)
 #define PIN_GEAR_NEUTRAL    GPIO_NUM_11  // LOW when gear selector in NEUTRAL (active-low)
-#define PIN_GEAR_LOW        GPIO_NUM_15  // LOW when gear selector in LOW (active-low)
-#define PIN_GEAR_HIGH       GPIO_NUM_16  // LOW when gear selector in HIGH (active-low)
+#define PIN_GEAR_LOW        GPIO_NUM_15  // LOW when gear selector in LOW (active-low) - strapping pin, use with care
+#define PIN_GEAR_HIGH       GPIO_NUM_18  // LOW when gear selector in HIGH (active-low) - changed from GPIO 16
 
 // Brake Position Sensor (digital feedback)
 #define PIN_BRAKE_SENSOR    GPIO_NUM_21  // Brake position feedback - HIGH = released (no pressure), LOW = pressed
@@ -62,6 +64,10 @@
 #define PIN_RELAY1          GPIO_NUM_12  // Relay 1 (e.g., main power control)
 #define PIN_RELAY2          GPIO_NUM_19  // Relay 2 (e.g., accessory power)
 #define PIN_RELAY3          GPIO_NUM_9   // Relay 3 (e.g., safety system)
+
+// Cranking Parameters
+#define CRANKING_TIMEOUT           5000  // ms - maximum cranking duration
+#define ENGINE_RUNNING_RPM_THRESHOLD 350  // RPM - engine considered running above this
 
 // Available GPIO pins for future use: GPIO 17, 18
 // Note: GPIO 17 (UART0 TX) and GPIO 18 (UART0 RX) should be avoided for console/programming compatibility
@@ -107,6 +113,7 @@ struct SBusChannelConfig {
 #define SBUS_GEAR_LOW_MAX         2160
 
 // Ignition State Ranges (in microseconds) - 3-position switch: OFF/ACC/IGNITION
+// Note: IGNITION automatically triggers cranking (max 5s, auto-stops when engine starts)
 #define SBUS_IGNITION_OFF_MIN     880
 #define SBUS_IGNITION_OFF_MAX     1200
 #define SBUS_IGNITION_ACC_MIN     1201
@@ -324,7 +331,7 @@ enum class InputSource {
 #define TRANS_CAN_TIMEOUT                5000  // ms - Allow gear change if CAN fails this long
 
 // Throttle Boost During Gear Changes
-#define TRANS_THROTTLE_BOOST_PERCENT     20    // % - Throttle increase during gear change
+#define TRANS_THROTTLE_BOOST_PERCENT     10    // % - Throttle increase during gear change
 #define TRANS_THROTTLE_BOOST_DURATION    500   // ms - Maximum boost duration
 #define TRANS_THROTTLE_BOOST_BRAKE_THRESHOLD 10 // % - Disable boost if brake exceeds this
 

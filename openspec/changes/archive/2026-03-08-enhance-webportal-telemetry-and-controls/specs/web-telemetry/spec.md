@@ -1,8 +1,7 @@
-# web-telemetry Specification
+# web-telemetry Spec Delta
 
-## Purpose
-TBD - created by archiving change add-web-portal. Update Purpose after archive.
-## Requirements
+## MODIFIED Requirements
+
 ### Requirement: Real-Time Telemetry Broadcasting
 The system SHALL broadcast vehicle telemetry data to connected web clients at 5 Hz.
 
@@ -82,4 +81,3 @@ The system SHALL ensure telemetry broadcasting does not degrade control loop per
 - **AND** JSON message size remains under 1KB
 - **AND** broadcast completes within 5ms for 5 concurrent clients
 - **AND** control loop timing remains <10ms average
-

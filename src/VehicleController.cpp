@@ -19,7 +19,8 @@ VehicleController::VehicleController(ServoController& steering,
       brakeMovementStartTime_(0),
       brakeIsMoving_(false),
       throttleBoostStartTime_(0),
-      throttleBoostActive_(false) {
+      throttleBoostActive_(false),
+      previousSBusIgnitionState_(SBusInput::IgnitionState::OFF) {
 }
 
 bool VehicleController::initCAN() {
@@ -38,6 +39,9 @@ void VehicleController::update() {
     transData.dataValid = canData.dataValid;
     transmission_.setVehicleData(transData);
 
+    // Update relay controller with engine RPM (for automatic cranking stop)
+    relayController_.update(canData.engineRPM);
+
     // Process SBUS commands if SBUS is active
     if (currentInputSource_ == InputSource::SBUS) {
         processSBusCommands();
@@ -47,8 +51,8 @@ void VehicleController::update() {
     applyFailsafe();
 
     // Check if throttle boost is needed for gear changes
-    if (transmission_.needsThrottleBoost()) {
-        applyThrottleBoost();
+    if (transmission_.needsThrottleBoost() || throttleBoostActive_) {
+        updateThrottleBoost();
     }
 
     // Update position control for transmission actuator
@@ -98,6 +102,8 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
         processSteeringCommand(cmd.floatValue, webPortal);
     } else if (cmd.cmd == "set_throttle") {
         processThrottleCommand(cmd.floatValue, webPortal);
+    } else if (cmd.cmd == "set_brake") {
+        processBrakeCommand(cmd.floatValue, webPortal);
     }
 }
 
@@ -120,6 +126,7 @@ void VehicleController::applyFailsafe() {
         brake_.stop();         // Stop brake actuator (hold position)
         transmission_.stop();  // Stop transmission actuator
         relayController_.allOff();  // Turn off ignition and lights
+        previousSBusIgnitionState_ = SBusInput::IgnitionState::OFF;  // Reset ignition tracking
         failsafeApplied_ = true;
     } else if (currentInputSource_ != InputSource::FAILSAFE && failsafeApplied_) {
         Serial.println("[FAILSAFE] Exiting safe state");
@@ -151,9 +158,10 @@ void VehicleController::processSBusCommands() {
     float brakePct = sbusInput_.getBrake();
     applyBrake(brakePct);
 
-    // Apply ignition state
+    // Apply ignition state with automatic cranking
     SBusInput::IgnitionState ignitionState = sbusInput_.getIgnitionState();
     RelayController::IgnitionState relayIgnitionState;
+
     switch (ignitionState) {
         case SBusInput::IgnitionState::OFF:
             relayIgnitionState = RelayController::IgnitionState::OFF;
@@ -162,10 +170,24 @@ void VehicleController::processSBusCommands() {
             relayIgnitionState = RelayController::IgnitionState::ACC;
             break;
         case SBusInput::IgnitionState::IGNITION:
-            relayIgnitionState = RelayController::IgnitionState::IGNITION;
+            // Check if this is a fresh transition to IGNITION (from OFF or ACC)
+            if (previousSBusIgnitionState_ != SBusInput::IgnitionState::IGNITION) {
+                // Fresh transition - start automatic cranking
+                relayIgnitionState = RelayController::IgnitionState::CRANKING;
+                Serial.println("[VEHICLE] IGNITION detected - starting automatic cranking");
+            } else {
+                // Already in IGNITION state - maintain current relay state
+                // (RelayController will auto-transition from CRANKING to IGNITION when ready)
+                relayIgnitionState = relayController_.getIgnitionState();
+            }
             break;
     }
+
+    // Update relay state
     relayController_.setIgnitionState(relayIgnitionState);
+
+    // Track state for next iteration
+    previousSBusIgnitionState_ = ignitionState;
 
     // Apply front light
     bool frontLightOn = sbusInput_.getFrontLight();
@@ -212,6 +234,18 @@ void VehicleController::processThrottleCommand(float value, WebPortal& webPortal
     int angle = map((int)value, 0, 100, THROTTLE_MIN_ANGLE, THROTTLE_MAX_ANGLE);
     throttle_.setAngle(angle);
     webPortal.sendResponse(true, "Throttle set");
+}
+
+void VehicleController::processBrakeCommand(float value, WebPortal& webPortal) {
+    // Validate brake percentage range
+    if (value < 0.0f || value > 100.0f) {
+        webPortal.sendResponse(false, "Invalid brake value (must be 0-100)");
+        return;
+    }
+
+    // Apply brake percentage (uses same mechanism as SBUS control)
+    applyBrake(value);
+    webPortal.sendResponse(true, "Brake set to " + String((int)value) + "%");
 }
 
 void VehicleController::processCalibrationCommand(WebPortal& webPortal) {
@@ -340,7 +374,7 @@ void VehicleController::updateBrakeControl() {
     }
 }
 
-void VehicleController::applyThrottleBoost() {
+void VehicleController::updateThrottleBoost() {
     // Safety check 1: disable boost if brake is applied
     if (currentBrakeTarget_ > TRANS_THROTTLE_BOOST_BRAKE_THRESHOLD) {
         if (throttleBoostActive_) {

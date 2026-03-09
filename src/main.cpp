@@ -82,8 +82,16 @@ void setup() {
         transmissionActuator.stop();
 
         // Initialize gear position sensors (GPIO switches)
+        // GPIO 15 (strapping pin) and GPIO 18 (safe) configured with ESP-IDF GPIO API
         transmissionActuator.initGearSensors();
 
+        // TEMPORARY: Skip calibration/homing when testing without hardware
+        // Comment out this block and uncomment the full calibration below when hardware is connected
+        Serial.println("[TRANS] Skipping calibration/homing (no hardware connected)");
+        Serial.println("[TRANS] WARNING: Gear changes will fail without calibration");
+        Serial.println("[TRANS] To calibrate: use web portal 'Calibrate' button when hardware connected");
+
+        /* FULL CALIBRATION - Uncomment when hardware is connected:
         // Check if calibration already exists
         if (transmissionActuator.isCalibrated()) {
             // Calibration loaded from storage - just home to HIGH position
@@ -109,6 +117,7 @@ void setup() {
                 }
             }
         }
+        */
 
         // To force recalibration: transmissionActuator.clearCalibration() and reboot
     } else {

@@ -61,6 +61,15 @@ public:
         uint8_t throttle_position; // Throttle position % (0-100)
         String can_status;        // CAN status: "connected", "disconnected"
         uint32_t can_data_age;    // Time since last CAN update (ms)
+
+        // SBUS channel data
+        uint16_t sbus_channels[16]; // Raw SBUS channel values in microseconds
+        float sbus_frame_rate;    // SBUS frame rate in Hz
+        float sbus_error_rate;    // SBUS error percentage (0-100)
+        uint32_t sbus_signal_age; // Time since last valid SBUS frame (ms)
+
+        // Gear transition state
+        bool gear_switching;      // True if gear change in progress
     };
 
     WebPortal();

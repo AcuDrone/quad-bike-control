@@ -325,6 +325,7 @@
                     <div class="telemetry-item">
                         <div class="telemetry-label">Current Gear</div>
                         <div class="telemetry-value gear-display" id="telemetry-gear">N</div>
+                        <div id="gear-switching-indicator" style="display: none; font-size: 0.6em; color: #ffa500; margin-top: 5px;">⚙️ Switching...</div>
                     </div>
                     <div class="telemetry-item">
                         <div class="telemetry-label">Hall Position</div>
@@ -379,6 +380,76 @@
                     </div>
                     <input type="range" min="0" max="100" value="0" class="slider" id="throttle-slider">
                 </div>
+
+                <div class="slider-container">
+                    <div class="slider-label">
+                        <span>Brake</span>
+                        <span id="brake-value">0%</span>
+                    </div>
+                    <input type="range" min="0" max="100" value="0" class="slider" id="brake-slider">
+                </div>
+            </div>
+
+            <!-- SBUS Channels -->
+            <div class="card">
+                <h2>📡 S-bus Channels</h2>
+                <div class="telemetry-grid" style="grid-template-columns: repeat(4, 1fr); font-size: 0.85em;">
+                    <div class="telemetry-item" style="grid-column: span 4;">
+                        <div class="telemetry-label">Signal Quality</div>
+                        <div style="font-size: 0.9em;">
+                            <span id="sbus-frame-rate">0</span> Hz |
+                            <span id="sbus-error-rate">0</span>% error |
+                            Age: <span id="sbus-signal-age">0</span>ms
+                        </div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label">Ch1 (Steer)</div>
+                        <div class="telemetry-value" id="sbus-ch1">1500</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label">Ch2 (Thr)</div>
+                        <div class="telemetry-value" id="sbus-ch2">1500</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label">Ch3 (Gear)</div>
+                        <div class="telemetry-value" id="sbus-ch3">1500</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label">Ch4 (Brake)</div>
+                        <div class="telemetry-value" id="sbus-ch4">1500</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Vehicle Data (CAN) -->
+            <div class="card">
+                <h2>🚗 Vehicle Data (CAN)</h2>
+                <div class="telemetry-grid">
+                    <div class="telemetry-item">
+                        <div class="telemetry-label">Engine RPM</div>
+                        <div class="telemetry-value" id="can-rpm">0</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label">Speed</div>
+                        <div class="telemetry-value" id="can-speed">0 km/h</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label">Coolant Temp</div>
+                        <div class="telemetry-value" id="can-coolant">--°C</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label">Oil Temp</div>
+                        <div class="telemetry-value" id="can-oil">--°C</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label">Throttle Pos</div>
+                        <div class="telemetry-value" id="can-throttle-pos">0%</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label">CAN Status</div>
+                        <div class="telemetry-value" id="can-status-text">disconnected</div>
+                    </div>
+                </div>
             </div>
 
             <!-- System Maintenance -->
@@ -429,7 +500,8 @@
         // Track which controls are being actively used
         let activeControls = {
             steering: false,
-            throttle: false
+            throttle: false,
+            brake: false
         };
 
         // WebSocket connection
@@ -514,6 +586,68 @@
             // Update S-bus status
             document.getElementById('telemetry-sbus').textContent = data.sbus_active ? 'Active' : 'Inactive';
 
+            // Update SBUS channels
+            if (data.sbus_channels && data.sbus_channels.length === 16) {
+                document.getElementById('sbus-ch1').textContent = data.sbus_channels[0];
+                document.getElementById('sbus-ch2').textContent = data.sbus_channels[1];
+                document.getElementById('sbus-ch3').textContent = data.sbus_channels[2];
+                document.getElementById('sbus-ch4').textContent = data.sbus_channels[3];
+            }
+            document.getElementById('sbus-frame-rate').textContent = (data.sbus_frame_rate || 0).toFixed(1);
+            document.getElementById('sbus-error-rate').textContent = (data.sbus_error_rate || 0).toFixed(1);
+            document.getElementById('sbus-signal-age').textContent = data.sbus_signal_age || 0;
+
+            // Update CAN data
+            if (data.can_status === 'connected') {
+                document.getElementById('can-rpm').textContent = data.engine_rpm || 0;
+                document.getElementById('can-speed').textContent = (data.vehicle_speed || 0) + ' km/h';
+                document.getElementById('can-throttle-pos').textContent = (data.throttle_position || 0) + '%';
+
+                // Coolant temperature with color coding
+                const coolantTemp = data.coolant_temp;
+                const coolantElem = document.getElementById('can-coolant');
+                coolantElem.textContent = coolantTemp + '°C';
+                if (coolantTemp > 105) {
+                    coolantElem.style.color = '#f44336';  // Red
+                } else if (coolantTemp > 90) {
+                    coolantElem.style.color = '#ff9800';  // Yellow
+                } else {
+                    coolantElem.style.color = '#4caf50';  // Green
+                }
+
+                // Oil temperature with color coding
+                const oilTemp = data.oil_temp;
+                const oilElem = document.getElementById('can-oil');
+                oilElem.textContent = oilTemp + '°C';
+                if (oilTemp > 130) {
+                    oilElem.style.color = '#f44336';  // Red
+                } else if (oilTemp > 110) {
+                    oilElem.style.color = '#ff9800';  // Yellow
+                } else {
+                    oilElem.style.color = '#4caf50';  // Green
+                }
+
+                document.getElementById('can-status-text').textContent = 'connected';
+                document.getElementById('can-status-text').style.color = '#4caf50';
+            } else {
+                document.getElementById('can-rpm').textContent = '--';
+                document.getElementById('can-speed').textContent = '-- km/h';
+                document.getElementById('can-coolant').textContent = '--°C';
+                document.getElementById('can-oil').textContent = '--°C';
+                document.getElementById('can-throttle-pos').textContent = '--%';
+                document.getElementById('can-status-text').textContent = 'disconnected';
+                document.getElementById('can-status-text').style.color = '#f44336';
+            }
+
+            // Update gear switching indicator
+            const switchingIndicator = document.getElementById('gear-switching-indicator');
+            if (data.gear_switching) {
+                switchingIndicator.style.display = 'block';
+                switchingIndicator.textContent = '⚙️ Switching to ' + (data.gear || 'N') + '...';
+            } else {
+                switchingIndicator.style.display = 'none';
+            }
+
             // Update input source
             currentInputSource = data.input_source || 'FAILSAFE';
             updateInputSourceDisplay();
@@ -572,6 +706,7 @@
             // Enable/disable sliders
             document.getElementById('steering-slider').disabled = !controlsEnabled;
             document.getElementById('throttle-slider').disabled = !controlsEnabled;
+            document.getElementById('brake-slider').disabled = !controlsEnabled;
         }
 
         function sendCommand(cmd, value) {
@@ -626,6 +761,24 @@
             clearTimeout(throttleTimeout);
             throttleTimeout = setTimeout(() => {
                 sendCommand('set_throttle', value);
+            }, 100);
+        });
+
+        let brakeTimeout;
+        const brakeSlider = document.getElementById('brake-slider');
+
+        brakeSlider.addEventListener('mousedown', () => { activeControls.brake = true; });
+        brakeSlider.addEventListener('mouseup', () => { activeControls.brake = false; });
+        brakeSlider.addEventListener('touchstart', () => { activeControls.brake = true; });
+        brakeSlider.addEventListener('touchend', () => { activeControls.brake = false; });
+
+        brakeSlider.addEventListener('input', function(e) {
+            const value = parseInt(e.target.value);
+            document.getElementById('brake-value').textContent = value + '%';
+
+            clearTimeout(brakeTimeout);
+            brakeTimeout = setTimeout(() => {
+                sendCommand('set_brake', value);
             }, 100);
         });
 

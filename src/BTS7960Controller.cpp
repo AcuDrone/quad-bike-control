@@ -2,6 +2,9 @@
 #include "Constants.h"
 #include "driver/ledc.h"
 
+// Static flag to track if motor timer has been configured
+static bool motorTimerConfigured = false;
+
 BTS7960Controller::BTS7960Controller()
     : rpwmPin_(GPIO_NUM_NC)
     , lpwmPin_(GPIO_NUM_NC)
@@ -32,19 +35,23 @@ bool BTS7960Controller::begin(gpio_num_t rpwmPin, gpio_num_t lpwmPin,
     rpwmChannel_ = rpwmChannel;
     lpwmChannel_ = lpwmChannel;
 
-    // Configure LEDC timer for motor PWM (10kHz)
-    ledc_timer_config_t timer_conf = {
-        .speed_mode = LEDC_LOW_SPEED_MODE,
-        .duty_resolution = LEDC_TIMER_8_BIT,
-        .timer_num = LEDC_TIMER_1,
-        .freq_hz = MOTOR_PWM_FREQ,
-        .clk_cfg = LEDC_AUTO_CLK
-    };
+    // Configure LEDC timer for motor PWM (10kHz) - only once for all BTS7960 instances
+    if (!motorTimerConfigured) {
+        ledc_timer_config_t timer_conf = {
+            .speed_mode = LEDC_LOW_SPEED_MODE,
+            .duty_resolution = LEDC_TIMER_8_BIT,
+            .timer_num = LEDC_TIMER_1,
+            .freq_hz = MOTOR_PWM_FREQ,
+            .clk_cfg = LEDC_AUTO_CLK
+        };
 
-    esp_err_t err = ledc_timer_config(&timer_conf);
-    if (err != ESP_OK) {
-        Serial.printf("BTS7960: Failed to configure timer: %d\n", err);
-        return false;
+        esp_err_t err = ledc_timer_config(&timer_conf);
+        if (err != ESP_OK) {
+            Serial.printf("BTS7960: Failed to configure timer: %d\n", err);
+            return false;
+        }
+        motorTimerConfigured = true;
+        Serial.println("BTS7960: Motor timer configured (shared by all instances)");
     }
 
     // Configure RPWM channel
@@ -61,7 +68,7 @@ bool BTS7960Controller::begin(gpio_num_t rpwmPin, gpio_num_t lpwmPin,
         }
     };
 
-    err = ledc_channel_config(&rpwm_conf);
+    esp_err_t err = ledc_channel_config(&rpwm_conf);
     if (err != ESP_OK) {
         Serial.printf("BTS7960: Failed to configure RPWM channel: %d\n", err);
         return false;

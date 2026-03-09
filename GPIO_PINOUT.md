@@ -74,14 +74,14 @@
 | **23** | `PIN_CAN_SCK` | SPI SCK | CAN controller SPI clock |
 
 ### Gear Selection Sensors (4 pins)
-*Physical gear selector position feedback (active-low, pull-up)*
+*Physical gear selector position feedback (active-low, external pull-up resistors)*
 
 | GPIO | Function | Type | Description |
 |------|----------|------|-------------|
 | **10** | `PIN_GEAR_REVERSE` | Digital In | LOW when gear selector in REVERSE (active-low) |
 | **11** | `PIN_GEAR_NEUTRAL` | Digital In | LOW when gear selector in NEUTRAL (active-low) |
-| **15** | `PIN_GEAR_LOW` | Digital In | LOW when gear selector in LOW (active-low) |
-| **16** | `PIN_GEAR_HIGH` | Digital In | LOW when gear selector in HIGH (active-low) |
+| **15** | `PIN_GEAR_LOW` | Digital In | LOW when gear selector in LOW (active-low) ⚠️ Strapping pin |
+| **18** | `PIN_GEAR_HIGH` | Digital In | LOW when gear selector in HIGH (active-low) |
 
 ### Brake Position Sensor (1 pin)
 *Brake actuator position feedback*
@@ -105,10 +105,11 @@
 
 | GPIO | Function | Reason to Avoid |
 |------|----------|-----------------|
-| **17** | UART0 TX | Console/programming - breaks USB serial debugging |
-| **18** | UART0 RX | Console/programming - breaks USB serial debugging |
+| **16** | UART0 TX | Console/programming - breaks USB serial debugging |
+| **17** | UART0 RX | Console/programming - breaks USB serial debugging |
 
 **Recommendation:** Keep these free for USB serial console compatibility during development.
+**Note:** GPIO 18 is now used for `PIN_GEAR_HIGH` (changed from GPIO 16 to avoid UART0 conflict).
 
 ---
 
@@ -139,7 +140,9 @@
 ### Strapping Pin (GPIO 15)
 - **Function:** Controls ROM boot message verbosity
 - **Current Use:** GEAR_LOW sensor (reserved)
-- **Safety:** ✅ Safe to use, no boot failure risk
+- **Safety:** ⚠️ Requires proper initialization - use ESP-IDF GPIO API with `GPIO_FLOATING` mode
+- **Hardware:** External pull-up resistor required for stable boot behavior
+- **Code:** Configured in `TransmissionController::initGearSensors()` using `gpio_set_direction()` and `gpio_set_pull_mode()`
 
 ---
 
@@ -165,10 +168,10 @@
 
 | UART | RX Pin | TX Pin | Baud Rate | Purpose | Status |
 |------|--------|--------|-----------|---------|--------|
-| **UART0** | 17* | 18* | 115200 | USB Serial Console | Reserved |
+| **UART0** | 17* | 16* | 115200 | USB Serial Console | Reserved |
 | **UART1** | 20 | N/A | 100000 | S-bus Receiver (inverted) | ✅ Active |
 
-*Default pins - not used in project to maintain USB serial compatibility
+*Default pins - kept free to maintain USB serial compatibility for programming and debugging
 
 ---
 
@@ -191,10 +194,10 @@
 | **12** | RELAY1 | Output | Digital | 🟡 Reserved |
 | **13** | STEERING_PWM | Output | LEDC Ch0 | Servo control |
 | **14** | — | — | — | ❌ Does not exist |
-| **15** | GEAR_LOW | Input | Digital | 🟡 Reserved |
-| **16** | GEAR_HIGH | Input | Digital | 🟡 Reserved |
-| **17** | UART0 TX | — | UART | ⚠️ Avoid - console |
-| **18** | UART0 RX | — | UART | ⚠️ Avoid - console |
+| **15** | GEAR_LOW | Input | Digital | 🟡 Reserved, ⚠️ Strapping pin |
+| **16** | UART0 TX | — | UART | ⚠️ Avoid - console |
+| **17** | UART0 RX | — | UART | ⚠️ Avoid - console |
+| **18** | GEAR_HIGH | Input | Digital | 🟡 Reserved |
 | **19** | RELAY2 | Output | Digital | 🟡 Reserved |
 | **20** | SBUS_RX | Input | UART1 | S-bus receiver |
 | **21** | BRAKE_SENSOR | Input | ADC | 🟡 Reserved |
@@ -217,7 +220,8 @@
 
 - ✅ No boot pin conflicts (GPIO 0 used for CAN - safe during runtime)
 - ✅ No NeoPixel interference (GPIO 8 used for CAN - LED may flash)
-- ✅ UART0 pins reserved (GPIO 17, 18 - debugging available)
+- ✅ UART0 pins reserved (GPIO 16, 17 - debugging available)
+- ⚠️ GPIO 15 strapping pin used for GEAR_LOW - requires external pull-up and proper ESP-IDF GPIO init
 - ✅ All critical controls on safe, non-strapping pins
 - ✅ ADC-capable pin used for analog sensor (GPIO 21)
 - ✅ Proper PCNT pins for quadrature encoder (GPIO 2, 3)
@@ -226,8 +230,9 @@
 
 1. **GPIO 0 (Boot Pin):** Do not pull LOW during power-up/reset
 2. **GPIO 8 (NeoPixel):** Onboard LED will flash when CAN SPI is active
-3. **GPIO 17, 18 (UART0):** Avoid using to maintain USB serial debugging
-4. **GPIO 14:** Does not exist - code will fail if referenced
+3. **GPIO 15 (Strapping Pin):** Requires external pull-up resistor and proper ESP-IDF GPIO initialization (see `TransmissionController.cpp`)
+4. **GPIO 16, 17 (UART0):** Avoid using to maintain USB serial debugging (TX/RX for console)
+5. **GPIO 14:** Does not exist - code will fail if referenced
 
 ---
 
@@ -257,6 +262,14 @@
 - **Data Format:** 25 bytes per frame
 - **Signal:** Inverted (requires hardware or software inversion)
 
+### Gear Selection Sensors
+- **Type:** Digital switches (active-low)
+- **Logic:** LOW = gear selected, HIGH = not selected
+- **Pull-up Resistors:** External hardware pull-ups required (typically 10kΩ)
+- **GPIO Configuration:** ESP-IDF API with `GPIO_FLOATING` mode (no internal pull-ups)
+- **Critical Note:** GPIO 15 is a strapping pin - external pull-up is mandatory for stable boot
+- **Code Reference:** `TransmissionController::initGearSensors()` in `src/TransmissionController.cpp`
+
 ---
 
 ## 📝 Reference Files
@@ -274,11 +287,12 @@
 
 | Date | Version | Changes |
 |------|---------|---------|
+| 2026-03-09 | 1.1 | Fixed UART0 pins (GPIO 16/17), moved GEAR_HIGH from GPIO 16→18, clarified GPIO 15 strapping pin requirements |
 | 2026-03-05 | 1.0 | Initial GPIO assignment with boot pin safety fixes |
 
 ---
 
-**Document Version:** 1.0
-**Last Updated:** March 5, 2026
+**Document Version:** 1.1
+**Last Updated:** March 9, 2026
 **Hardware:** ESP32-C6-DevKitC-1
 **Framework:** Arduino (PlatformIO)

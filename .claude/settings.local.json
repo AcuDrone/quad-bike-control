@@ -19,7 +19,12 @@
       "Bash(openspec archive add-can-controller-class --yes)",
       "Bash(openspec validate --all --strict)",
       "Bash(openspec show can-controller --type spec)",
-      "Bash(pio run --environment esp32-c6-devkitc-1)"
+      "Bash(pio run --environment esp32-c6-devkitc-1)",
+      "Bash(openspec validate enhance-webportal-telemetry-and-controls --strict)",
+      "Bash(openspec show enhance-webportal-telemetry-and-controls)",
+      "Bash(openspec archive enhance-webportal-telemetry-and-controls --yes)",
+      "Bash(openspec validate --all)",
+      "Bash(openspec show web-telemetry --type spec)"
     ]
   }
 }

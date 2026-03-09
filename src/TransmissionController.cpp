@@ -1,4 +1,5 @@
 #include "TransmissionController.h"
+#include "driver/gpio.h"
 
 TransmissionController::TransmissionController()
     : BTS7960Controller()
@@ -155,14 +156,24 @@ bool TransmissionController::needsThrottleBoost() const {
 }
 
 void TransmissionController::initGearSensors() {
-    // Configure gear position sensor pins as inputs with internal pull-up resistors
+    // Configure gear position sensor pins as inputs
     // Active-low: pin reads LOW when gear is selected
-    pinMode(PIN_GEAR_REVERSE, INPUT);
-    pinMode(PIN_GEAR_NEUTRAL, INPUT);
-    pinMode(PIN_GEAR_LOW, INPUT);
-    pinMode(PIN_GEAR_HIGH, INPUT);
+    // Hardware has external pull-up resistors - no internal pull-ups needed
+    // Using ESP-IDF GPIO API for proper configuration (required for GPIO 15 strapping pin)
 
-    Serial.println("[TRANS] Gear position sensors initialized (active-low, pull-up)");
+    gpio_set_direction(PIN_GEAR_REVERSE, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(PIN_GEAR_REVERSE, GPIO_FLOATING);    // External pull-up on hardware
+
+    gpio_set_direction(PIN_GEAR_NEUTRAL, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(PIN_GEAR_NEUTRAL, GPIO_FLOATING);    // External pull-up on hardware
+
+    gpio_set_direction(PIN_GEAR_LOW, GPIO_MODE_INPUT);      // GPIO 15 - strapping pin
+    gpio_set_pull_mode(PIN_GEAR_LOW, GPIO_FLOATING);        // External pull-up on hardware
+
+    gpio_set_direction(PIN_GEAR_HIGH, GPIO_MODE_INPUT);     // GPIO 18 - safe
+    gpio_set_pull_mode(PIN_GEAR_HIGH, GPIO_FLOATING);       // External pull-up on hardware
+
+    Serial.println("[TRANS] Gear position sensors initialized (active-low, external pull-ups)");
 }
 
 TransmissionController::Gear TransmissionController::getPhysicalGear() const {
@@ -237,7 +248,7 @@ void TransmissionController::update() {
                              currentPosition, expectedPosition, positionError);
 
                 // Recalibrate encoder to expected position for this gear
-                recalibrateEncoder(expectedPosition);
+                // recalibrateEncoder(expectedPosition);
             }
 
             // Stop position control - physical switch confirms arrival

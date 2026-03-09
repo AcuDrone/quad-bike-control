@@ -20,7 +20,7 @@ public:
     enum class IgnitionState {
         OFF,        // All power off
         ACC,        // Accessory power only
-        IGNITION    // Full ignition (accessory + main power)
+        IGNITION    // Full ignition (accessory + main power, triggers auto-cranking)
     };
 
     /**

@@ -88,6 +88,16 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
         telemetry.can_data_age = (vehicleData.lastUpdateTime == 0) ? 0 : (millis() - vehicleData.lastUpdateTime);
     }
 
+    // SBUS channel data
+    sbusInput_.getRawChannels(telemetry.sbus_channels);
+    SBusInput::SignalQuality sbusQuality = sbusInput_.getSignalQuality();
+    telemetry.sbus_frame_rate = sbusQuality.frameRate;
+    telemetry.sbus_error_rate = sbusQuality.errorRate;
+    telemetry.sbus_signal_age = sbusQuality.signalAge;
+
+    // Gear switching state
+    telemetry.gear_switching = vehicleController_.getTransmission().isPositionControlActive();
+
     return telemetry;
 }
 

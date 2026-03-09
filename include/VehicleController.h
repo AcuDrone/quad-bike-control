@@ -75,6 +75,13 @@ public:
     float getThrottleAngle() const { return throttle_.getAngle(); }
 
     /**
+     * @brief Get transmission controller reference
+     * @return Reference to transmission controller
+     */
+    TransmissionController& getTransmission() { return transmission_; }
+    const TransmissionController& getTransmission() const { return transmission_; }
+
+    /**
      * @brief Check brake sensor state
      * @return true if brake is released (HIGH signal, no pressure)
      */
@@ -112,6 +119,9 @@ private:
     uint32_t throttleBoostStartTime_;   // Time when throttle boost started
     bool throttleBoostActive_;          // True if boost is currently active
 
+    // Ignition state tracking
+    SBusInput::IgnitionState previousSBusIgnitionState_;  // Track previous state for transition detection
+
     /**
      * @brief Apply fail-safe commands (center steering, idle throttle, stop actuators)
      */
@@ -134,10 +144,10 @@ private:
     void updateBrakeControl();
 
     /**
-     * @brief Apply throttle boost during gear changes
+     * @brief Update throttle boost during gear changes
      * Temporarily increases throttle to maintain RPM
      */
-    void applyThrottleBoost();
+    void updateThrottleBoost();
 
     /**
      * @brief Process gear change command
@@ -159,6 +169,13 @@ private:
      * @param webPortal Reference to web portal for sending responses
      */
     void processThrottleCommand(float value, WebPortal& webPortal);
+
+    /**
+     * @brief Process brake command
+     * @param value Brake percentage (0 to 100, 0=released, 100=fully applied)
+     * @param webPortal Reference to web portal for sending responses
+     */
+    void processBrakeCommand(float value, WebPortal& webPortal);
 
     /**
      * @brief Process transmission calibration command

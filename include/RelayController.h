@@ -18,7 +18,8 @@ public:
     enum class IgnitionState {
         OFF,        // All power off (both relays LOW)
         ACC,        // Accessory power only (RELAY2 HIGH, RELAY1 LOW)
-        IGNITION    // Full ignition (both relays HIGH)
+        IGNITION,   // Full ignition (both relays HIGH)
+        CRANKING    // Cranking starter motor (same as IGNITION, auto-stops after 5s or when engine starts)
     };
 
     RelayController();
@@ -45,6 +46,18 @@ public:
      * @param on true to turn light ON, false for OFF
      */
     void setFrontLight(bool on);
+
+    /**
+     * @brief Update cranking state based on engine RPM
+     *
+     * Call this method periodically (every loop iteration) to monitor cranking.
+     * Automatically stops cranking if:
+     * - Engine RPM exceeds threshold (engine started)
+     * - 5 seconds elapsed without engine start
+     *
+     * @param engineRpm Current engine RPM from CAN bus
+     */
+    void update(uint16_t engineRpm);
 
     /**
      * @brief Get current ignition state
@@ -74,6 +87,10 @@ private:
     IgnitionState currentIgnitionState_;
     bool frontLightOn_;
 
+    // Cranking state tracking
+    uint32_t crankingStartTime_;   // Time when cranking started (milliseconds)
+    bool isCranking_;              // True if currently in cranking state
+
     // Helper methods
     void updateRelays();
 };
@@ -88,6 +105,7 @@ inline const char* getRelayIgnitionStateName(RelayController::IgnitionState stat
         case RelayController::IgnitionState::OFF: return "OFF";
         case RelayController::IgnitionState::ACC: return "ACC";
         case RelayController::IgnitionState::IGNITION: return "IGNITION";
+        case RelayController::IgnitionState::CRANKING: return "CRANKING";
         default: return "UNKNOWN";
     }
 }

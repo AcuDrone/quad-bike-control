@@ -5,7 +5,9 @@ RelayController::RelayController()
       relay2Pin_(0),
       relay3Pin_(0),
       currentIgnitionState_(IgnitionState::OFF),
-      frontLightOn_(false) {
+      frontLightOn_(false),
+      crankingStartTime_(0),
+      isCranking_(false) {
 }
 
 bool RelayController::begin(uint8_t relay1Pin, uint8_t relay2Pin, uint8_t relay3Pin) {
@@ -39,6 +41,17 @@ void RelayController::setIgnitionState(IgnitionState state) {
         Serial.printf("[RELAY] Ignition: %s -> %s\n",
                      getRelayIgnitionStateName(currentIgnitionState_),
                      getRelayIgnitionStateName(state));
+
+        // If entering CRANKING state, start timer
+        if (state == IgnitionState::CRANKING) {
+            crankingStartTime_ = millis();
+            isCranking_ = true;
+            Serial.println("[RELAY] Cranking started - monitoring RPM and timeout");
+        } else if (currentIgnitionState_ == IgnitionState::CRANKING) {
+            // Exiting CRANKING state
+            isCranking_ = false;
+        }
+
         currentIgnitionState_ = state;
         updateRelays();
     }
@@ -63,6 +76,31 @@ void RelayController::allOff() {
     // Update state
     currentIgnitionState_ = IgnitionState::OFF;
     frontLightOn_ = false;
+    isCranking_ = false;
+}
+
+void RelayController::update(uint16_t engineRpm) {
+    // Only monitor if currently cranking
+    if (!isCranking_ || currentIgnitionState_ != IgnitionState::CRANKING) {
+        return;
+    }
+
+    uint32_t crankingDuration = millis() - crankingStartTime_;
+
+    // Check if engine has started (RPM above threshold)
+    if (engineRpm >= ENGINE_RUNNING_RPM_THRESHOLD) {
+        Serial.printf("[RELAY] Engine started! RPM: %d - stopping cranking\n", engineRpm);
+        setIgnitionState(IgnitionState::IGNITION);
+        return;
+    }
+
+    // Check if cranking timeout exceeded
+    if (crankingDuration >= CRANKING_TIMEOUT) {
+        Serial.printf("[RELAY] Cranking timeout (%lu ms) - stopping cranking\n", crankingDuration);
+        Serial.println("[RELAY] WARNING: Engine did not start");
+        setIgnitionState(IgnitionState::IGNITION);
+        return;
+    }
 }
 
 void RelayController::updateRelays() {
@@ -81,6 +119,13 @@ void RelayController::updateRelays() {
 
         case IgnitionState::IGNITION:
             // Full power (both relays ON)
+            digitalWrite(relay1Pin_, HIGH);
+            digitalWrite(relay2Pin_, HIGH);
+            break;
+
+        case IgnitionState::CRANKING:
+            // Cranking: same as IGNITION (starter motor engaged via RELAY1)
+            // Note: Actual cranking control is in update() method
             digitalWrite(relay1Pin_, HIGH);
             digitalWrite(relay2Pin_, HIGH);
             break;

@@ -1,8 +1,7 @@
-# web-control Specification
+# web-control Spec Delta
 
-## Purpose
-TBD - created by archiving change add-web-portal. Update Purpose after archive.
-## Requirements
+## MODIFIED Requirements
+
 ### Requirement: Web-Based Manual Control
 The system SHALL accept manual control commands from the web interface when S-bus input is inactive.
 
@@ -26,30 +25,6 @@ The system SHALL accept manual control commands from the web interface when S-bu
 - **THEN** command is rejected
 - **AND** error response is sent with validation error message "Value must be 0-100"
 - **AND** no brake actuator state change occurs
-
-### Requirement: Input Source Priority Management
-The system SHALL enforce input source priority to prevent control conflicts.
-
-#### Scenario: Activate web control when S-bus inactive
-- **WHEN** S-bus signal is lost or times out (>500ms)
-- **AND** no recent S-bus frames received
-- **THEN** input source switches to WEB (if web control commands present) or FAILSAFE (if no commands)
-- **AND** web control commands are accepted
-- **AND** web interface enables manual control UI
-
-#### Scenario: Deactivate web control when S-bus reconnects
-- **WHEN** S-bus signal becomes valid after being inactive
-- **THEN** input source switches to SBUS immediately
-- **AND** web control commands are rejected
-- **AND** web interface disables manual control UI (read-only telemetry only)
-- **AND** S-bus commands take control of vehicle
-
-#### Scenario: Apply fail-safe when both sources inactive
-- **WHEN** S-bus signal is inactive (>500ms timeout)
-- **AND** no web control commands received for >1 second
-- **THEN** input source switches to FAILSAFE
-- **AND** fail-safe commands are applied (brakes on, neutral, center steering, idle throttle)
-- **AND** telemetry shows FAILSAFE input source
 
 ### Requirement: Web Control User Interface
 The system SHALL provide web interface controls for manual operation.
@@ -94,4 +69,3 @@ The system SHALL enforce safety constraints on web-based control commands.
 - **THEN** brake is released to 0% (fail-safe)
 - **AND** system switches to FAILSAFE input source
 - **AND** fail-safe brake state is applied (fully released unless emergency)
-
