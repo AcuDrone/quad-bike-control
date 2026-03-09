@@ -315,6 +315,9 @@
             <div class="status-item" id="input-source-status">
                 <strong>Control:</strong> <span id="input-source-text">N/A</span>
             </div>
+            <div class="status-item" id="fw-version">
+                <strong>Firmware:</strong> <span id="fw-version-text">Loading...</span>
+            </div>
         </div>
 
         <div class="main-grid">
@@ -646,6 +649,12 @@
                 switchingIndicator.textContent = '⚙️ Switching to ' + (data.gear || 'N') + '...';
             } else {
                 switchingIndicator.style.display = 'none';
+            }
+
+            // Update firmware version
+            const fwVersionElem = document.getElementById('fw-version-text');
+            if (fwVersionElem && data.firmware_version) {
+                fwVersionElem.textContent = data.firmware_version;
             }
 
             // Update input source

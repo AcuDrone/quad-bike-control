@@ -24,7 +24,13 @@
       "Bash(openspec show enhance-webportal-telemetry-and-controls)",
       "Bash(openspec archive enhance-webportal-telemetry-and-controls --yes)",
       "Bash(openspec validate --all)",
-      "Bash(openspec show web-telemetry --type spec)"
+      "Bash(openspec show web-telemetry --type spec)",
+      "Bash(openspec validate add-firmware-version-display --strict)",
+      "Bash(openspec show add-firmware-version-display)",
+      "Bash(pio run -t clean)",
+      "Bash(openspec archive add-firmware-version-display --yes)",
+      "Bash(openspec validate --specs)",
+      "Bash(openspec show ota-updates --type spec)"
     ]
   }
 }

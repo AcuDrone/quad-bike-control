@@ -70,6 +70,9 @@ public:
 
         // Gear transition state
         bool gear_switching;      // True if gear change in progress
+
+        // Firmware information
+        String firmware_version;  // Firmware version string (e.g., "1.0.0")
     };
 
     WebPortal();

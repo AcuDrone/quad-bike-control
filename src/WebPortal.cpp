@@ -445,6 +445,9 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // Gear switching state
     doc["gear_switching"] = telemetry.gear_switching;
 
+    // Firmware version
+    doc["firmware_version"] = telemetry.firmware_version;
+
     String json;
     serializeJson(doc, json);
     return json;

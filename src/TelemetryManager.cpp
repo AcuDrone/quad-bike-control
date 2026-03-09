@@ -98,6 +98,9 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     // Gear switching state
     telemetry.gear_switching = vehicleController_.getTransmission().isPositionControlActive();
 
+    // Firmware version
+    telemetry.firmware_version = FIRMWARE_VERSION;
+
     return telemetry;
 }
 
