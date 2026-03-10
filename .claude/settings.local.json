@@ -30,7 +30,8 @@
       "Bash(pio run -t clean)",
       "Bash(openspec archive add-firmware-version-display --yes)",
       "Bash(openspec validate --specs)",
-      "Bash(openspec show ota-updates --type spec)"
+      "Bash(openspec show ota-updates --type spec)",
+      "Bash(ls -lh .pio/build/esp32-c6-devkitc-1/*.bin)"
     ]
   }
 }

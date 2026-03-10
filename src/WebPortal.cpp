@@ -6,6 +6,7 @@ WebPortal::WebPortal()
       lastCommandTime(0),
       lastTelemetryTime(0),
       otaInProgress(false),
+      otaUpdateType(U_FLASH),
       lastActivityTime(0) {
     currentCommand.hasCommand = false;
 }
@@ -180,6 +181,120 @@ void WebPortal::setupWebServer() {
     server.on("/canonical.html", HTTP_GET, [](AsyncWebServerRequest* request) {
         request->redirect("/");
     });
+
+    // OTA firmware update endpoint
+    server.on("/update", HTTP_POST,
+        // Handler when upload finishes
+        [this](AsyncWebServerRequest* request) {
+            bool success = !Update.hasError();
+
+            if (success) {
+                Serial.println("[WEB OTA] Update successful, rebooting...");
+                request->send(200, "text/plain", "OK");
+
+                // Reboot after short delay to allow response to be sent
+                delay(1000);
+                ESP.restart();
+            } else {
+                String error = "Update failed: ";
+                error += Update.errorString();
+                Serial.printf("[WEB OTA] %s\n", error.c_str());
+                request->send(500, "text/plain", error);
+            }
+
+            otaInProgress = false;
+        },
+        // Upload handler for data chunks
+        [this](AsyncWebServerRequest* request, const String& filename, size_t index, uint8_t* data, size_t len, bool final) {
+            // Start of upload
+            if (index == 0) {
+                // Determine update type from query parameter or filename
+                otaUpdateType = U_FLASH;  // Default: firmware update
+                String updateTypeName = "firmware";
+
+                // Check for ?type=spiffs query parameter
+                if (request->hasParam("type")) {
+                    String type = request->getParam("type")->value();
+                    if (type == "spiffs" || type == "filesystem") {
+                        otaUpdateType = U_SPIFFS;
+                        updateTypeName = "SPIFFS";
+                        // Unmount filesystem before update
+                        FILESYSTEM.end();
+                    }
+                }
+                // Or detect from filename
+                else if (filename.indexOf("spiffs") >= 0 || filename.indexOf("filesystem") >= 0) {
+                    otaUpdateType = U_SPIFFS;
+                    updateTypeName = "SPIFFS";
+                    FILESYSTEM.end();
+                }
+
+                Serial.printf("[WEB OTA] Starting %s update: %s\n", updateTypeName.c_str(), filename.c_str());
+                Serial.printf("[WEB OTA] File size: %zu bytes\n", request->contentLength());
+                Serial.printf("[WEB OTA] Free heap before update: %u bytes\n", ESP.getFreeHeap());
+
+                otaInProgress = true;
+
+                // Begin OTA update with specified type and size
+                size_t updateSize;
+                if (otaUpdateType == U_SPIFFS) {
+                    // For SPIFFS, use UPDATE_SIZE_UNKNOWN to let Update library determine size
+                    updateSize = UPDATE_SIZE_UNKNOWN;
+                    Serial.println("[WEB OTA] Using UPDATE_SIZE_UNKNOWN for SPIFFS");
+                } else {
+                    // For firmware, use actual content length
+                    updateSize = request->contentLength();
+                    if (updateSize == 0) {
+                        updateSize = UPDATE_SIZE_UNKNOWN;
+                    }
+                }
+
+                if (!Update.begin(updateSize, otaUpdateType)) {
+                    Serial.printf("[WEB OTA] Begin failed: %s\n", Update.errorString());
+                    Serial.printf("[WEB OTA] Requested size: %zu, Update type: %d\n", updateSize, otaUpdateType);
+                    otaInProgress = false;
+
+                    // Remount SPIFFS if it was unmounted for failed SPIFFS update
+                    if (otaUpdateType == U_SPIFFS) {
+                        Serial.println("[WEB OTA] Remounting SPIFFS after failed update...");
+                        FILESYSTEM.begin(false);
+                    }
+                    return;
+                }
+            }
+
+            // Write firmware/filesystem chunk
+            if (len) {
+                size_t written = Update.write(data, len);
+                if (written != len) {
+                    Serial.printf("[WEB OTA] Write failed at %zu bytes (wrote %zu of %zu bytes)\n", index, written, len);
+                    Serial.printf("[WEB OTA] Error: %s\n", Update.errorString());
+                    Serial.printf("[WEB OTA] Free heap: %u bytes\n", ESP.getFreeHeap());
+                    return;
+                }
+
+                // Log progress every 64KB
+                if (index % (64 * 1024) == 0 && index > 0) {
+                    Serial.printf("[WEB OTA] Progress: %zu bytes written (free heap: %u)\n", index + len, ESP.getFreeHeap());
+                }
+            }
+
+            // End of upload
+            if (final) {
+                if (Update.end(true)) {
+                    Serial.printf("[WEB OTA] Update complete: %zu bytes\n", index + len);
+                } else {
+                    Serial.printf("[WEB OTA] End failed: %s\n", Update.errorString());
+
+                    // Remount SPIFFS if it was unmounted for failed SPIFFS update
+                    if (otaUpdateType == U_SPIFFS) {
+                        Serial.println("[WEB OTA] Remounting SPIFFS after failed update...");
+                        FILESYSTEM.begin(false);
+                    }
+                }
+            }
+        }
+    );
 
     // Serve static files from SPIFFS
     server.serveStatic("/", FILESYSTEM, "/");
@@ -462,4 +577,8 @@ String WebPortal::createResponseJSON(bool success, const String& message) {
     String json;
     serializeJson(doc, json);
     return json;
+}
+
+bool WebPortal::isOTAInProgress() {
+    return otaInProgress;
 }

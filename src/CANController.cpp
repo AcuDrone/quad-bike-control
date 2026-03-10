@@ -1,4 +1,5 @@
 #include "CANController.h"
+#include <SPI.h>
 
 CANController::CANController()
     : mcp_can_(nullptr),
@@ -25,6 +26,18 @@ CANController::~CANController() {
 
 bool CANController::begin(gpio_num_t csPin, gpio_num_t sckPin, gpio_num_t mosiPin, gpio_num_t misoPin) {
     Serial.println("[CAN] Initializing MCP2515 on SPI...");
+
+    // Initialize SPI pins before MCP_CAN tries to use them
+    pinMode(csPin, OUTPUT);
+    digitalWrite(csPin, HIGH);  // CS idle high
+    pinMode(sckPin, OUTPUT);
+    pinMode(mosiPin, OUTPUT);
+    pinMode(misoPin, INPUT);
+
+    // Explicitly initialize SPI with custom pins to prevent auto-configuration of default pins
+    // This prevents SPI library from trying to use GPIO 19 (which is used for RELAY2)
+    SPI.begin(sckPin, misoPin, mosiPin, csPin);
+    Serial.printf("[CAN] SPI initialized: SCK=%d, MISO=%d, MOSI=%d, CS=%d\n", sckPin, misoPin, mosiPin, csPin);
 
     // Create MCP_CAN object with CS pin
     mcp_can_ = new MCP_CAN(csPin);

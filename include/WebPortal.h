@@ -6,6 +6,7 @@
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <ArduinoOTA.h>
+#include <Update.h>
 #include <DNSServer.h>
 #include <FS.h>
 #include <SPIFFS.h>
@@ -138,6 +139,12 @@ public:
      */
     String getAPIP();
 
+    /**
+     * Check if OTA update is in progress
+     * @return true if OTA firmware update is ongoing
+     */
+    bool isOTAInProgress();
+
 private:
     AsyncWebServer server;           // Async HTTP web server
     AsyncWebSocket ws;               // WebSocket for real-time communication
@@ -148,6 +155,7 @@ private:
     uint32_t lastTelemetryTime;      // Time of last telemetry broadcast
 
     bool otaInProgress;              // True during OTA update
+    int otaUpdateType;               // Current OTA update type (U_FLASH or U_SPIFFS)
     uint32_t lastActivityTime;       // Last client activity timestamp
 
     /**
