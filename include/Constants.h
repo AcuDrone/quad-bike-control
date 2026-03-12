@@ -246,7 +246,7 @@ struct SBusChannelConfig {
 // ============================================================================
 
 #define SERIAL_BAUD_RATE      115200 // Serial monitor baud rate
-#define DEBUG_ENABLED         true   // Enable debug output
+#define DEBUG_ENABLED         true   // Default debug output state (runtime-toggleable via Debug utility or web portal)
 
 // ============================================================================
 // NVS (Non-Volatile Storage) KEYS

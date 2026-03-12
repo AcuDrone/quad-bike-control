@@ -1,4 +1,5 @@
 #include "SBusInput.h"
+#include "Debug.h"
 
 SBusInput::SBusInput()
     : sbus_(nullptr),
@@ -18,7 +19,7 @@ bool SBusInput::begin(uint8_t rxPin, uint8_t uartNum) {
     } else if (uartNum == UART_NUM_0) {
         serial = &Serial;
     } else {
-        Serial.println("[SBUS] ERROR: Invalid UART number (ESP32-C6 has UART0 and UART1 only)");
+        Debug::println("[SBUS] ERROR: Invalid UART number (ESP32-C6 has UART0 and UART1 only)");
         return false;
     }
 
@@ -34,7 +35,7 @@ bool SBusInput::begin(uint8_t rxPin, uint8_t uartNum) {
     errorFrames_ = 0;
     frameRateUpdateTime_ = millis();
 
-    Serial.printf("[SBUS] Initialized on UART%d, RX pin %d\n", uartNum, rxPin);
+    Debug::printf("[SBUS] Initialized on UART%d, RX pin %d\n", uartNum, rxPin);
     return true;
 }
 

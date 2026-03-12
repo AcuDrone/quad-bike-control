@@ -459,8 +459,11 @@
                     <button class="upload-btn" id="calibrate-btn" onclick="calibrateTransmission()" style="background: #2196f3; margin-bottom: 10px;">
                         📍 Calibrate Transmission
                     </button>
-                    <button class="upload-btn" id="clear-calibration-btn" onclick="clearCalibration()" style="background: #ff9800;">
+                    <button class="upload-btn" id="clear-calibration-btn" onclick="clearCalibration()" style="background: #ff9800; margin-bottom: 10px;">
                         🗑️ Clear Calibration
+                    </button>
+                    <button class="upload-btn" id="debug-toggle-btn" onclick="toggleDebug()" style="background: #9c27b0;">
+                        🐛 <span id="debug-toggle-text">Debug: Loading...</span>
                     </button>
                     <div id="calibration-status" style="margin-top: 15px; padding: 10px; border-radius: 8px; display: none; text-align: center;"></div>
                 </div>
@@ -923,9 +926,58 @@
             }, 5000);
         }
 
+        // Debug toggle functions
+        function loadDebugState() {
+            fetch('/api/debug')
+                .then(response => response.json())
+                .then(data => {
+                    updateDebugButton(data.enabled);
+                })
+                .catch(error => {
+                    console.error('Failed to load debug state:', error);
+                    document.getElementById('debug-toggle-text').textContent = 'Debug: Error';
+                });
+        }
+
+        function toggleDebug() {
+            const currentState = document.getElementById('debug-toggle-btn').dataset.state === 'true';
+            const newState = !currentState;
+
+            fetch('/api/debug', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ enabled: newState })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    updateDebugButton(data.enabled);
+                    showCalibrationStatus(true, data.message || `Debug ${data.enabled ? 'enabled' : 'disabled'}`);
+                } else {
+                    showCalibrationStatus(false, 'Failed to toggle debug');
+                }
+            })
+            .catch(error => {
+                console.error('Failed to toggle debug:', error);
+                showCalibrationStatus(false, 'Error toggling debug');
+            });
+        }
+
+        function updateDebugButton(enabled) {
+            const btn = document.getElementById('debug-toggle-btn');
+            const text = document.getElementById('debug-toggle-text');
+
+            btn.dataset.state = enabled;
+            text.textContent = enabled ? 'Debug: ON' : 'Debug: OFF';
+            btn.style.background = enabled ? '#4caf50' : '#9c27b0';
+        }
+
         // Initialize WebSocket connection on page load
         window.addEventListener('load', function() {
             connectWebSocket();
+            loadDebugState();
         });
     </script>
 </body>

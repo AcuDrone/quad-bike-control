@@ -1,4 +1,5 @@
 #include "WebPortal.h"
+#include "Debug.h"
 
 WebPortal::WebPortal()
     : server(WEB_SERVER_PORT),
@@ -16,17 +17,17 @@ WebPortal::~WebPortal() {
 }
 
 bool WebPortal::begin() {
-    Serial.println("\n=== Initializing Web Portal ===");
+    Debug::println("\n=== Initializing Web Portal ===");
 
     // Mount filesystem first
     if (!mountFilesystem()) {
-        Serial.println("  ✗ Filesystem mount failed");
+        Debug::println("  ✗ Filesystem mount failed");
         return false;
     }
 
     // Setup WiFi Access Point
     if (!setupWiFiAP()) {
-        Serial.println("  ✗ WiFi AP setup failed");
+        Debug::println("  ✗ WiFi AP setup failed");
         return false;
     }
 
@@ -44,9 +45,9 @@ bool WebPortal::begin() {
 
     // Start web server
     server.begin();
-    Serial.println("  ✓ Web server started");
-    Serial.printf("  ✓ Access portal at: http://%s\n", getAPIP().c_str());
-    Serial.println("=== Web Portal Initialization Complete ===\n");
+    Debug::println("  ✓ Web server started");
+    Debug::printf("  ✓ Access portal at: http://%s\n", getAPIP().c_str());
+    Debug::println("=== Web Portal Initialization Complete ===\n");
 
     return true;
 }
@@ -93,8 +94,19 @@ void WebPortal::broadcastTelemetry(const Telemetry& telemetry) {
         return;
     }
 
-    String json = createTelemetryJSON(telemetry);
-    ws.textAll(json);
+    // Skip if no clients connected
+    if (ws.count() == 0) {
+        lastTelemetryTime = millis();
+        return;
+    }
+
+    // Check if WebSocket queue has space (prevent overflow)
+    // AsyncWebSocket has internal queue limit, skip broadcast if clients are lagging
+    if (ws.availableForWriteAll()) {
+        String json = createTelemetryJSON(telemetry);
+        ws.textAll(json);
+    }
+
     lastTelemetryTime = millis();
 }
 
@@ -120,7 +132,7 @@ String WebPortal::getAPIP() {
 // ============================================================================
 
 bool WebPortal::setupWiFiAP() {
-    Serial.println("Setting up WiFi Access Point...");
+    Debug::println("Setting up WiFi Access Point...");
 
     // Configure Access Point
     WiFi.mode(WIFI_AP);
@@ -136,20 +148,20 @@ bool WebPortal::setupWiFiAP() {
     }
 
     if (!success) {
-        Serial.println("  ✗ Failed to start WiFi AP");
+        Debug::println("  ✗ Failed to start WiFi AP");
         return false;
     }
 
-    Serial.printf("  ✓ WiFi AP started\n");
-    Serial.printf("  ✓ SSID: %s\n", WIFI_AP_SSID);
-    Serial.printf("  ✓ IP: %s\n", WiFi.softAPIP().toString().c_str());
-    Serial.printf("  ✓ Max clients: %d\n", WIFI_AP_MAX_CLIENTS);
+    Debug::printf("  ✓ WiFi AP started\n");
+    Debug::printf("  ✓ SSID: %s\n", WIFI_AP_SSID);
+    Debug::printf("  ✓ IP: %s\n", WiFi.softAPIP().toString().c_str());
+    Debug::printf("  ✓ Max clients: %d\n", WIFI_AP_MAX_CLIENTS);
 
     return true;
 }
 
 void WebPortal::setupWebServer() {
-    Serial.println("Setting up web server...");
+    Debug::println("Setting up web server...");
 
     // Serve index.html from SPIFFS
     server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
@@ -182,6 +194,47 @@ void WebPortal::setupWebServer() {
         request->redirect("/");
     });
 
+    // Debug control API - GET current debug state
+    server.on("/api/debug", HTTP_GET, [](AsyncWebServerRequest* request) {
+        StaticJsonDocument<256> doc;
+        doc["enabled"] = Debug::isEnabled();
+
+        String response;
+        serializeJson(doc, response);
+        request->send(200, "application/json", response);
+    });
+
+    // Debug control API - POST to toggle debug state
+    server.on("/api/debug", HTTP_POST, [](AsyncWebServerRequest* request) {}, nullptr,
+        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+            // Parse JSON body
+            StaticJsonDocument<256> doc;
+            DeserializationError error = deserializeJson(doc, data, len);
+
+            if (error) {
+                request->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid JSON\"}");
+                return;
+            }
+
+            if (!doc.containsKey("enabled")) {
+                request->send(400, "application/json", "{\"success\":false,\"message\":\"Missing 'enabled' field\"}");
+                return;
+            }
+
+            bool enabled = doc["enabled"];
+            Debug::setEnabled(enabled);
+
+            StaticJsonDocument<256> response;
+            response["success"] = true;
+            response["enabled"] = enabled;
+            response["message"] = enabled ? "Debug output enabled" : "Debug output disabled";
+
+            String responseStr;
+            serializeJson(response, responseStr);
+            request->send(200, "application/json", responseStr);
+        }
+    );
+
     // OTA firmware update endpoint
     server.on("/update", HTTP_POST,
         // Handler when upload finishes
@@ -189,7 +242,7 @@ void WebPortal::setupWebServer() {
             bool success = !Update.hasError();
 
             if (success) {
-                Serial.println("[WEB OTA] Update successful, rebooting...");
+                Debug::println("[WEB OTA] Update successful, rebooting...");
                 request->send(200, "text/plain", "OK");
 
                 // Reboot after short delay to allow response to be sent
@@ -198,7 +251,7 @@ void WebPortal::setupWebServer() {
             } else {
                 String error = "Update failed: ";
                 error += Update.errorString();
-                Serial.printf("[WEB OTA] %s\n", error.c_str());
+                Debug::printf("[WEB OTA] %s\n", error.c_str());
                 request->send(500, "text/plain", error);
             }
 
@@ -229,9 +282,9 @@ void WebPortal::setupWebServer() {
                     FILESYSTEM.end();
                 }
 
-                Serial.printf("[WEB OTA] Starting %s update: %s\n", updateTypeName.c_str(), filename.c_str());
-                Serial.printf("[WEB OTA] File size: %zu bytes\n", request->contentLength());
-                Serial.printf("[WEB OTA] Free heap before update: %u bytes\n", ESP.getFreeHeap());
+                Debug::printf("[WEB OTA] Starting %s update: %s\n", updateTypeName.c_str(), filename.c_str());
+                Debug::printf("[WEB OTA] File size: %zu bytes\n", request->contentLength());
+                Debug::printf("[WEB OTA] Free heap before update: %u bytes\n", ESP.getFreeHeap());
 
                 otaInProgress = true;
 
@@ -240,7 +293,7 @@ void WebPortal::setupWebServer() {
                 if (otaUpdateType == U_SPIFFS) {
                     // For SPIFFS, use UPDATE_SIZE_UNKNOWN to let Update library determine size
                     updateSize = UPDATE_SIZE_UNKNOWN;
-                    Serial.println("[WEB OTA] Using UPDATE_SIZE_UNKNOWN for SPIFFS");
+                    Debug::println("[WEB OTA] Using UPDATE_SIZE_UNKNOWN for SPIFFS");
                 } else {
                     // For firmware, use actual content length
                     updateSize = request->contentLength();
@@ -250,13 +303,13 @@ void WebPortal::setupWebServer() {
                 }
 
                 if (!Update.begin(updateSize, otaUpdateType)) {
-                    Serial.printf("[WEB OTA] Begin failed: %s\n", Update.errorString());
-                    Serial.printf("[WEB OTA] Requested size: %zu, Update type: %d\n", updateSize, otaUpdateType);
+                    Debug::printf("[WEB OTA] Begin failed: %s\n", Update.errorString());
+                    Debug::printf("[WEB OTA] Requested size: %zu, Update type: %d\n", updateSize, otaUpdateType);
                     otaInProgress = false;
 
                     // Remount SPIFFS if it was unmounted for failed SPIFFS update
                     if (otaUpdateType == U_SPIFFS) {
-                        Serial.println("[WEB OTA] Remounting SPIFFS after failed update...");
+                        Debug::println("[WEB OTA] Remounting SPIFFS after failed update...");
                         FILESYSTEM.begin(false);
                     }
                     return;
@@ -267,28 +320,28 @@ void WebPortal::setupWebServer() {
             if (len) {
                 size_t written = Update.write(data, len);
                 if (written != len) {
-                    Serial.printf("[WEB OTA] Write failed at %zu bytes (wrote %zu of %zu bytes)\n", index, written, len);
-                    Serial.printf("[WEB OTA] Error: %s\n", Update.errorString());
-                    Serial.printf("[WEB OTA] Free heap: %u bytes\n", ESP.getFreeHeap());
+                    Debug::printf("[WEB OTA] Write failed at %zu bytes (wrote %zu of %zu bytes)\n", index, written, len);
+                    Debug::printf("[WEB OTA] Error: %s\n", Update.errorString());
+                    Debug::printf("[WEB OTA] Free heap: %u bytes\n", ESP.getFreeHeap());
                     return;
                 }
 
                 // Log progress every 64KB
                 if (index % (64 * 1024) == 0 && index > 0) {
-                    Serial.printf("[WEB OTA] Progress: %zu bytes written (free heap: %u)\n", index + len, ESP.getFreeHeap());
+                    Debug::printf("[WEB OTA] Progress: %zu bytes written (free heap: %u)\n", index + len, ESP.getFreeHeap());
                 }
             }
 
             // End of upload
             if (final) {
                 if (Update.end(true)) {
-                    Serial.printf("[WEB OTA] Update complete: %zu bytes\n", index + len);
+                    Debug::printf("[WEB OTA] Update complete: %zu bytes\n", index + len);
                 } else {
-                    Serial.printf("[WEB OTA] End failed: %s\n", Update.errorString());
+                    Debug::printf("[WEB OTA] End failed: %s\n", Update.errorString());
 
                     // Remount SPIFFS if it was unmounted for failed SPIFFS update
                     if (otaUpdateType == U_SPIFFS) {
-                        Serial.println("[WEB OTA] Remounting SPIFFS after failed update...");
+                        Debug::println("[WEB OTA] Remounting SPIFFS after failed update...");
                         FILESYSTEM.begin(false);
                     }
                 }
@@ -305,12 +358,12 @@ void WebPortal::setupWebServer() {
         request->redirect("/");
     });
 
-    Serial.println("  ✓ Web server configured");
-    Serial.println("  ✓ Captive portal endpoints added");
+    Debug::println("  ✓ Web server configured");
+    Debug::println("  ✓ Captive portal endpoints added");
 }
 
 void WebPortal::setupWebSocket() {
-    Serial.println("Setting up WebSocket...");
+    Debug::println("Setting up WebSocket...");
 
     // Attach WebSocket event handler (using lambda to call member function)
     ws.onEvent([this](AsyncWebSocket* server, AsyncWebSocketClient* client,
@@ -321,11 +374,11 @@ void WebPortal::setupWebSocket() {
     // Add WebSocket handler to server
     server.addHandler(&ws);
 
-    Serial.println("  ✓ WebSocket configured on /ws");
+    Debug::println("  ✓ WebSocket configured on /ws");
 }
 
 void WebPortal::setupOTA() {
-    Serial.println("Setting up OTA updates...");
+    Debug::println("Setting up OTA updates...");
 
     // Set OTA hostname
     ArduinoOTA.setHostname(OTA_HOSTNAME);
@@ -345,7 +398,7 @@ void WebPortal::setupOTA() {
             // Unmount filesystem before OTA
             FILESYSTEM.end();
         }
-        Serial.println("\n[OTA] Starting update: " + type);
+        Debug::println("\n[OTA] Starting update: " + type);
         otaInProgress = true;
 
         // Notify web clients
@@ -353,7 +406,7 @@ void WebPortal::setupOTA() {
     });
 
     ArduinoOTA.onEnd([this]() {
-        Serial.println("\n[OTA] Update complete");
+        Debug::println("\n[OTA] Update complete");
         otaInProgress = false;
     });
 
@@ -361,13 +414,13 @@ void WebPortal::setupOTA() {
         static unsigned int lastPercent = 0;
         unsigned int percent = (progress / (total / 100));
         if (percent != lastPercent && percent % 10 == 0) {
-            Serial.printf("[OTA] Progress: %u%%\n", percent);
+            Debug::printf("[OTA] Progress: %u%%\n", percent);
             lastPercent = percent;
         }
     });
 
     ArduinoOTA.onError([this](ota_error_t error) {
-        Serial.printf("[OTA] Error[%u]: ", error);
+        Debug::printf("[OTA] Error[%u]: ", error);
         String errorMsg;
         if (error == OTA_AUTH_ERROR) errorMsg = "Auth Failed";
         else if (error == OTA_BEGIN_ERROR) errorMsg = "Begin Failed";
@@ -376,7 +429,7 @@ void WebPortal::setupOTA() {
         else if (error == OTA_END_ERROR) errorMsg = "End Failed";
         else errorMsg = "Unknown Error";
 
-        Serial.println(errorMsg);
+        Debug::println(errorMsg);
         otaInProgress = false;
 
         // Notify web clients
@@ -384,33 +437,33 @@ void WebPortal::setupOTA() {
     });
 
     ArduinoOTA.begin();
-    Serial.printf("  ✓ OTA configured (hostname: %s)\n", OTA_HOSTNAME);
+    Debug::printf("  ✓ OTA configured (hostname: %s)\n", OTA_HOSTNAME);
 }
 
 void WebPortal::setupDNS() {
-    Serial.println("Setting up DNS server for captive portal...");
+    Debug::println("Setting up DNS server for captive portal...");
 
     // Start DNS server on port 53, redirect all requests to AP IP
     // This makes the captive portal work by catching all DNS queries
     dnsServer.start(53, "*", WiFi.softAPIP());
 
-    Serial.println("  ✓ DNS server started (captive portal enabled)");
+    Debug::println("  ✓ DNS server started (captive portal enabled)");
 }
 
 bool WebPortal::mountFilesystem() {
-    Serial.println("Mounting SPIFFS filesystem...");
+    Debug::println("Mounting SPIFFS filesystem...");
 
     if (!FILESYSTEM.begin(false)) {  // false = don't format on fail
-        Serial.println("  ✗ SPIFFS mount failed");
-        Serial.println("  ! Run 'pio run -t uploadfs' to upload filesystem");
+        Debug::println("  ✗ SPIFFS mount failed");
+        Debug::println("  ! Run 'pio run -t uploadfs' to upload filesystem");
         return false;
     }
 
-    Serial.println("  ✓ SPIFFS mounted");
+    Debug::println("  ✓ SPIFFS mounted");
 
     // Check if index.html exists
     if (!FILESYSTEM.exists("/index.html")) {
-        Serial.println("  ⚠ Warning: /index.html not found in filesystem");
+        Debug::println("  ⚠ Warning: /index.html not found in filesystem");
     }
 
     return true;
@@ -424,13 +477,13 @@ void WebPortal::onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* c
                                   AwsEventType type, void* arg, uint8_t* data, size_t len) {
     switch (type) {
         case WS_EVT_CONNECT:
-            Serial.printf("[WebSocket] Client #%u connected from %s\n",
+            Debug::printf("[WebSocket] Client #%     connected from %s\n",
                          client->id(), client->remoteIP().toString().c_str());
             lastActivityTime = millis();
             break;
 
         case WS_EVT_DISCONNECT:
-            Serial.printf("[WebSocket] Client #%u disconnected\n", client->id());
+            Debug::printf("[WebSocket] Client #%u disconnected\n", client->id());
             // If this was the controlling client, clear command
             currentCommand.hasCommand = false;
             break;
@@ -442,9 +495,9 @@ void WebPortal::onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* c
                 if (parseWebCommand(data, len)) {
                     lastCommandTime = millis();
                     lastActivityTime = millis();
-                    Serial.printf("[WebSocket] Command received: %s\n", currentCommand.cmd.c_str());
+                    Debug::printf("[WebSocket] Command received: %s\n", currentCommand.cmd.c_str());
                 } else {
-                    Serial.println("[WebSocket] Failed to parse command");
+                    Debug::println("[WebSocket] Failed to parse command");
                     sendResponse(false, "Invalid command format");
                 }
             }
@@ -463,7 +516,7 @@ bool WebPortal::parseWebCommand(uint8_t* data, size_t len) {
     DeserializationError error = deserializeJson(doc, data, len);
 
     if (error) {
-        Serial.printf("[WebSocket] JSON parse error: %s\n", error.c_str());
+        Debug::printf("[WebSocket] JSON parse error: %s\n", error.c_str());
         return false;
     }
 

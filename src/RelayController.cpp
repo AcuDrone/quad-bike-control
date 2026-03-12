@@ -1,4 +1,5 @@
 #include "RelayController.h"
+#include "Debug.h"
 
 RelayController::RelayController()
     : relay1Pin_(0),
@@ -30,7 +31,7 @@ bool RelayController::begin(uint8_t relay1Pin, uint8_t relay2Pin, uint8_t relay3
     currentIgnitionState_ = IgnitionState::OFF;
     frontLightOn_ = false;
 
-    Serial.printf("[RELAY] Initialized: RELAY1=%d, RELAY2=%d, RELAY3=%d\n",
+    Debug::printf("[RELAY] Initialized: RELAY1=%d, RELAY2=%d, RELAY3=%d\n",
                   relay1Pin_, relay2Pin_, relay3Pin_);
 
     return true;
@@ -38,7 +39,7 @@ bool RelayController::begin(uint8_t relay1Pin, uint8_t relay2Pin, uint8_t relay3
 
 void RelayController::setIgnitionState(IgnitionState state) {
     if (currentIgnitionState_ != state) {
-        Serial.printf("[RELAY] Ignition: %s -> %s\n",
+        Debug::printf("[RELAY] Ignition: %s -> %s\n",
                      getRelayIgnitionStateName(currentIgnitionState_),
                      getRelayIgnitionStateName(state));
 
@@ -46,7 +47,7 @@ void RelayController::setIgnitionState(IgnitionState state) {
         if (state == IgnitionState::CRANKING) {
             crankingStartTime_ = millis();
             isCranking_ = true;
-            Serial.println("[RELAY] Cranking started - monitoring RPM and timeout");
+            Debug::println("[RELAY] Cranking started - monitoring RPM and timeout");
         } else if (currentIgnitionState_ == IgnitionState::CRANKING) {
             // Exiting CRANKING state
             isCranking_ = false;
@@ -59,14 +60,14 @@ void RelayController::setIgnitionState(IgnitionState state) {
 
 void RelayController::setFrontLight(bool on) {
     if (frontLightOn_ != on) {
-        Serial.printf("[RELAY] Front Light: %s\n", on ? "ON" : "OFF");
+        Debug::printf("[RELAY] Front Light: %s\n", on ? "ON" : "OFF");
         frontLightOn_ = on;
         digitalWrite(relay3Pin_, on ? HIGH : LOW);
     }
 }
 
 void RelayController::allOff() {
-    Serial.println("[RELAY] Fail-safe: All relays OFF");
+    Debug::println("[RELAY] Fail-safe: All relays OFF");
 
     // Turn off all relays
     digitalWrite(relay1Pin_, LOW);
@@ -89,15 +90,15 @@ void RelayController::update(uint16_t engineRpm) {
 
     // Check if engine has started (RPM above threshold)
     if (engineRpm >= ENGINE_RUNNING_RPM_THRESHOLD) {
-        Serial.printf("[RELAY] Engine started! RPM: %d - stopping cranking\n", engineRpm);
+        Debug::printf("[RELAY] Engine started! RPM: %d - stopping cranking\n", engineRpm);
         setIgnitionState(IgnitionState::IGNITION);
         return;
     }
 
     // Check if cranking timeout exceeded
     if (crankingDuration >= CRANKING_TIMEOUT) {
-        Serial.printf("[RELAY] Cranking timeout (%lu ms) - stopping cranking\n", crankingDuration);
-        Serial.println("[RELAY] WARNING: Engine did not start");
+        Debug::printf("[RELAY] Cranking timeout (%lu ms) - stopping cranking\n", crankingDuration);
+        Debug::println("[RELAY] WARNING: Engine did not start");
         setIgnitionState(IgnitionState::IGNITION);
         return;
     }

@@ -1,4 +1,5 @@
 #include "VehicleController.h"
+#include "Debug.h"
 
 VehicleController::VehicleController(ServoController& steering,
                                      ServoController& throttle,
@@ -64,7 +65,7 @@ void VehicleController::update() {
 
 void VehicleController::setInputSource(InputSource source) {
     if (currentInputSource_ != source) {
-        Serial.printf("[INPUT] Source changed: %s -> %s\n",
+        Debug::printf("[INPUT] Source changed: %s -> %s\n",
                      (currentInputSource_ == InputSource::SBUS) ? INPUT_SOURCE_NAME_SBUS :
                      (currentInputSource_ == InputSource::WEB) ? INPUT_SOURCE_NAME_WEB :
                      INPUT_SOURCE_NAME_FAILSAFE,
@@ -120,7 +121,7 @@ String VehicleController::getCurrentGearString() const {
 
 void VehicleController::applyFailsafe() {
     if (currentInputSource_ == InputSource::FAILSAFE && !failsafeApplied_) {
-        Serial.println("[FAILSAFE] Entering safe state");
+        Debug::println("[FAILSAFE] Entering safe state");
         steering_.setAngle(STEERING_CENTER_ANGLE);
         throttle_.setAngle(THROTTLE_IDLE_ANGLE);
         brake_.stop();         // Stop brake actuator (hold position)
@@ -129,7 +130,7 @@ void VehicleController::applyFailsafe() {
         previousSBusIgnitionState_ = SBusInput::IgnitionState::OFF;  // Reset ignition tracking
         failsafeApplied_ = true;
     } else if (currentInputSource_ != InputSource::FAILSAFE && failsafeApplied_) {
-        Serial.println("[FAILSAFE] Exiting safe state");
+        Debug::println("[FAILSAFE] Exiting safe state");
         brake_.stop();  // Ensure brake is stopped before handing control
         failsafeApplied_ = false;
     }
@@ -174,7 +175,7 @@ void VehicleController::processSBusCommands() {
             if (previousSBusIgnitionState_ != SBusInput::IgnitionState::IGNITION) {
                 // Fresh transition - start automatic cranking
                 relayIgnitionState = RelayController::IgnitionState::CRANKING;
-                Serial.println("[VEHICLE] IGNITION detected - starting automatic cranking");
+                Debug::println("[VEHICLE] IGNITION detected - starting automatic cranking");
             } else {
                 // Already in IGNITION state - maintain current relay state
                 // (RelayController will auto-transition from CRANKING to IGNITION when ready)
@@ -249,23 +250,23 @@ void VehicleController::processBrakeCommand(float value, WebPortal& webPortal) {
 }
 
 void VehicleController::processCalibrationCommand(WebPortal& webPortal) {
-    Serial.println("[WEB] Calibration command received");
+    Debug::println("[WEB] Calibration command received");
     webPortal.sendResponse(true, "Starting transmission calibration...");
 
     // Run calibration with max speed (255) and 20 second timeout
     bool success = transmission_.calibrateAllGearPositions(255, 20000);
 
     if (success) {
-        Serial.println("[WEB] Calibration completed successfully");
+        Debug::println("[WEB] Calibration completed successfully");
         webPortal.sendResponse(true, "Calibration completed successfully");
     } else {
-        Serial.println("[WEB] Calibration failed");
+        Debug::println("[WEB] Calibration failed");
         webPortal.sendResponse(false, "Calibration failed - check serial output");
     }
 }
 
 void VehicleController::processClearCalibrationCommand(WebPortal& webPortal) {
-    Serial.println("[WEB] Clear calibration command received");
+    Debug::println("[WEB] Clear calibration command received");
 
     transmission_.clearCalibration();
 
@@ -286,14 +287,14 @@ void VehicleController::updateBrakeControl() {
     if (currentBrakeTarget_ == 0.0f && isBrakeReleased()) {
         // Sensor confirms brake is fully released
         if (currentBrakePosition_ != 0.0f) {
-            Serial.println("[BRAKE] Sensor confirms released, syncing position to 0%");
+            Debug::println("[BRAKE] Sensor confirms released, syncing position to 0%");
             currentBrakePosition_ = 0.0f;
         }
 
         // Stop actuator if moving
         if (brakeIsMoving_) {
             uint32_t movementDuration = millis() - brakeMovementStartTime_;
-            Serial.printf("[BRAKE] Stopped by sensor. Movement: %lums\n", movementDuration);
+            Debug::printf("[BRAKE] Stopped by sensor. Movement: %lums\n", movementDuration);
             brakeIsMoving_ = false;
         }
         brake_.stop();
@@ -365,7 +366,7 @@ void VehicleController::updateBrakeControl() {
         if (brakeIsMoving_) {
             // Just stopped moving
             uint32_t movementDuration = millis() - brakeMovementStartTime_;
-            Serial.printf("[BRAKE] Stopped. Movement: %lums\n", movementDuration);
+            Debug::printf("[BRAKE] Stopped. Movement: %lums\n", movementDuration);
             brakeIsMoving_ = false;
         }
 
@@ -378,7 +379,7 @@ void VehicleController::updateThrottleBoost() {
     // Safety check 1: disable boost if brake is applied
     if (currentBrakeTarget_ > TRANS_THROTTLE_BOOST_BRAKE_THRESHOLD) {
         if (throttleBoostActive_) {
-            Serial.println("[BOOST] Disabled due to brake application");
+            Debug::println("[BOOST] Disabled due to brake application");
             throttleBoostActive_ = false;
         }
         // Set throttle to idle when brake is applied
@@ -391,7 +392,7 @@ void VehicleController::updateThrottleBoost() {
         float sbusThrottle = sbusInput_.getThrottle();
         if (sbusThrottle > 5.0f) {  // SBUS commanding throttle, let it take priority
             if (throttleBoostActive_) {
-                Serial.println("[BOOST] Disabled due to SBUS throttle command");
+                Debug::println("[BOOST] Disabled due to SBUS throttle command");
                 throttleBoostActive_ = false;
             }
             return;  // SBUS will set throttle, don't override
@@ -402,13 +403,13 @@ void VehicleController::updateThrottleBoost() {
     if (!throttleBoostActive_) {
         throttleBoostStartTime_ = millis();
         throttleBoostActive_ = true;
-        Serial.printf("[BOOST] Activated at %d%%\n", TRANS_THROTTLE_BOOST_PERCENT);
+        Debug::printf("[BOOST] Activated at %d%%\n", TRANS_THROTTLE_BOOST_PERCENT);
     }
 
     // Check timeout
     uint32_t boostDuration = millis() - throttleBoostStartTime_;
     if (boostDuration > TRANS_THROTTLE_BOOST_DURATION) {
-        Serial.println("[BOOST] Timeout, releasing boost");
+        Debug::println("[BOOST] Timeout, releasing boost");
         throttleBoostActive_ = false;
         throttle_.setAngle(THROTTLE_IDLE_ANGLE);
         return;

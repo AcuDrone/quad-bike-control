@@ -1,4 +1,5 @@
 #include "CANController.h"
+#include "Debug.h"
 #include <SPI.h>
 
 CANController::CANController()
@@ -25,7 +26,7 @@ CANController::~CANController() {
 }
 
 bool CANController::begin(gpio_num_t csPin, gpio_num_t sckPin, gpio_num_t mosiPin, gpio_num_t misoPin) {
-    Serial.println("[CAN] Initializing MCP2515 on SPI...");
+    Debug::println("[CAN] Initializing MCP2515 on SPI...");
 
     // Initialize SPI pins before MCP_CAN tries to use them
     pinMode(csPin, OUTPUT);
@@ -37,14 +38,14 @@ bool CANController::begin(gpio_num_t csPin, gpio_num_t sckPin, gpio_num_t mosiPi
     // Explicitly initialize SPI with custom pins to prevent auto-configuration of default pins
     // This prevents SPI library from trying to use GPIO 19 (which is used for RELAY2)
     SPI.begin(sckPin, misoPin, mosiPin, csPin);
-    Serial.printf("[CAN] SPI initialized: SCK=%d, MISO=%d, MOSI=%d, CS=%d\n", sckPin, misoPin, mosiPin, csPin);
+    Debug::printf("[CAN] SPI initialized: SCK=%d, MISO=%d, MOSI=%d, CS=%d\n", sckPin, misoPin, mosiPin, csPin);
 
     // Create MCP_CAN object with CS pin
     mcp_can_ = new MCP_CAN(csPin);
 
     // Initialize MCP2515 at 500 kbps
     if (mcp_can_->begin(MCP_ANY, CAN_500KBPS, MCP_8MHZ) != CAN_OK) {
-        Serial.println("[CAN] ERROR: MCP2515 initialization failed");
+        Debug::println("[CAN] ERROR: MCP2515 initialization failed");
         delete mcp_can_;
         mcp_can_ = nullptr;
         return false;
@@ -54,8 +55,8 @@ bool CANController::begin(gpio_num_t csPin, gpio_num_t sckPin, gpio_num_t mosiPi
     mcp_can_->setMode(MCP_NORMAL);
 
     initialized_ = true;
-    Serial.println("[CAN] MCP2515 initialized at 500 kbps");
-    Serial.println("[CAN] Ready to read vehicle data");
+    Debug::println("[CAN] MCP2515 initialized at 500 kbps");
+    Debug::println("[CAN] Ready to read vehicle data");
 
     return true;
 }
@@ -80,7 +81,7 @@ void CANController::update() {
             retryCount_++;
             if (retryCount_ >= CAN_RETRY_ATTEMPTS) {
                 vehicleData_.dataValid = false;
-                Serial.println("[CAN] WARNING: RPM read failed after retries");
+                Debug::println("[CAN] WARNING: RPM read failed after retries");
             }
         }
 
@@ -148,7 +149,7 @@ bool CANController::sendOBDRequest(uint8_t pid) {
     byte result = mcp_can_->sendMsgBuf(0x7DF, 0, 8, requestData);
 
     if (result != CAN_OK) {
-        Serial.printf("[CAN] ERROR: Failed to send request for PID 0x%02X\n", pid);
+        Debug::printf("[CAN] ERROR: Failed to send request for PID 0x%02X\n", pid);
         return false;
     }
 
@@ -187,7 +188,7 @@ bool CANController::receiveOBDResponse(uint8_t pid, uint8_t* data, uint8_t& data
     }
 
     // Timeout
-    Serial.printf("[CAN] WARNING: Timeout waiting for PID 0x%02X response\n", pid);
+    Debug::printf("[CAN] WARNING: Timeout waiting for PID 0x%02X response\n", pid);
     return false;
 }
 
