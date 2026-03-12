@@ -67,7 +67,7 @@
 
 // Cranking Parameters
 #define CRANKING_TIMEOUT           5000  // ms - maximum cranking duration
-#define ENGINE_RUNNING_RPM_THRESHOLD 350  // RPM - engine considered running above this
+#define ENGINE_RUNNING_RPM_THRESHOLD 1100  // RPM - engine considered running above this
 
 // Available GPIO pins for future use: GPIO 17, 18
 // Note: GPIO 17 (UART0 TX) and GPIO 18 (UART0 RX) should be avoided for console/programming compatibility
@@ -143,9 +143,9 @@ struct SBusChannelConfig {
 // Throttle Servo Parameters
 #define THROTTLE_SERVO_MIN_US    800   // Minimum pulse width (microseconds)
 #define THROTTLE_SERVO_MAX_US    2200  // Maximum pulse width (microseconds)
-#define THROTTLE_MIN_ANGLE       0     // degrees (idle)
-#define THROTTLE_MAX_ANGLE       180   // degrees (full throttle)
-#define THROTTLE_IDLE_ANGLE      0     // degrees (idle position)
+#define THROTTLE_MIN_ANGLE       23    // degrees (idle) - measured 13% of full range
+#define THROTTLE_MAX_ANGLE       67    // degrees (full throttle) - measured 37% of full range
+#define THROTTLE_IDLE_ANGLE      23    // degrees (idle position)
 
 // ============================================================================
 // BTS7960 MOTOR DRIVER CONFIGURATION
@@ -341,6 +341,6 @@ enum class InputSource {
 
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions
-#define FIRMWARE_VERSION "1.0.2"
+#define FIRMWARE_VERSION "1.0.4"
 
 #endif // CONSTANTS_H
