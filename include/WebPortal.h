@@ -35,9 +35,10 @@ public:
      * Web command structure for JSON parsing
      */
     struct WebCommand {
-        String cmd;        // Command type: "set_gear", "set_steering", "set_throttle"
-        String strValue;   // String value (for gear: "R", "N", "L", "H")
-        float floatValue;  // Float value (for steering: -100 to +100, throttle: 0 to 100)
+        String cmd;        // Command type: "set_gear", "set_steering", "set_throttle", "set_ignition", "set_light"
+        String strValue;   // String value (for gear: "R", "N", "L", "H"; ignition: "OFF", "ACC", "IGNITION", "START")
+        float floatValue;  // Float value (for steering: -100 to +100, throttle: 0 to 100, brake: 0 to 100)
+        bool boolValue;    // Bool value (for light: true/false)
         bool hasCommand;   // True if valid command received
     };
 
@@ -71,6 +72,11 @@ public:
 
         // Gear transition state
         bool gear_switching;      // True if gear change in progress
+
+        // Ignition and lighting state
+        String ignition_state;    // Ignition state: "OFF", "ACC", "IGNITION", "CRANKING"
+        bool is_cranking;         // True if starter motor is cranking
+        bool front_light_on;      // True if front light is on
 
         // Firmware information
         String firmware_version;  // Firmware version string (e.g., "1.0.0")

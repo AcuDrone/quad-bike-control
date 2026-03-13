@@ -530,12 +530,18 @@ bool WebPortal::parseWebCommand(uint8_t* data, size_t len) {
 
     // Extract value based on command type
     if (doc.containsKey("value")) {
-        if (doc["value"].is<const char*>()) {
+        if (doc["value"].is<bool>()) {
+            currentCommand.boolValue = doc["value"].as<bool>();
+            currentCommand.strValue = "";
+            currentCommand.floatValue = 0.0f;
+        } else if (doc["value"].is<const char*>()) {
             currentCommand.strValue = doc["value"].as<String>();
             currentCommand.floatValue = 0.0f;
+            currentCommand.boolValue = false;
         } else if (doc["value"].is<float>() || doc["value"].is<int>()) {
             currentCommand.floatValue = doc["value"].as<float>();
             currentCommand.strValue = "";
+            currentCommand.boolValue = false;
         }
     } else {
         return false;
@@ -612,6 +618,11 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
 
     // Gear switching state
     doc["gear_switching"] = telemetry.gear_switching;
+
+    // Ignition and lighting state
+    doc["ignition_state"] = telemetry.ignition_state;
+    doc["is_cranking"] = telemetry.is_cranking;
+    doc["front_light_on"] = telemetry.front_light_on;
 
     // Firmware version
     doc["firmware_version"] = telemetry.firmware_version;

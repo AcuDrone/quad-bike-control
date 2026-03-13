@@ -390,6 +390,38 @@
                 </div>
             </div>
 
+            <!-- Ignition & Lighting Control -->
+            <div class="card">
+                <h2>🔑 Vehicle Ignition & Lighting</h2>
+
+                <h3 style="margin-top: 0; margin-bottom: 10px;">Ignition Control</h3>
+                <div class="gear-buttons" style="margin-bottom: 20px;">
+                    <button class="gear-btn" id="ignition-off" onclick="setIgnition('OFF')">OFF</button>
+                    <button class="gear-btn" id="ignition-acc" onclick="setIgnition('ACC')">ACC</button>
+                    <button class="gear-btn" id="ignition-ignition" onclick="setIgnition('IGNITION')">IGN</button>
+                    <button class="gear-btn" id="ignition-start" onclick="setIgnition('START')">START</button>
+                </div>
+
+                <h3 style="margin-bottom: 10px;">Front Light</h3>
+                <div style="margin-bottom: 20px;">
+                    <button class="upload-btn" id="light-toggle-btn" onclick="toggleLight()" style="background: #607d8b;">
+                        💡 Light: <span id="light-status">OFF</span>
+                    </button>
+                </div>
+
+                <h3 style="margin-bottom: 10px;">Telemetry</h3>
+                <div class="telemetry-grid" style="grid-template-columns: repeat(2, 1fr);">
+                    <div class="telemetry-item">
+                        <div class="telemetry-label">Ignition State</div>
+                        <div class="telemetry-value" id="telemetry-ignition" style="font-size: 1.3em;">OFF</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label">Cranking</div>
+                        <div class="telemetry-value" id="telemetry-cranking" style="font-size: 1.3em;">No</div>
+                    </div>
+                </div>
+            </div>
+
             <!-- SBUS Channels -->
             <div class="card">
                 <h2>📡 S-bus Channels</h2>
@@ -664,6 +696,24 @@
             // Update gear button active state
             updateGearButtons(data.gear);
 
+            // Update ignition state
+            if (data.ignition_state) {
+                document.getElementById('telemetry-ignition').textContent = data.ignition_state;
+                updateIgnitionButtons(data.ignition_state);
+            }
+
+            // Update cranking indicator
+            if (data.is_cranking !== undefined) {
+                document.getElementById('telemetry-cranking').textContent = data.is_cranking ? 'Yes' : 'No';
+                document.getElementById('telemetry-cranking').style.color = data.is_cranking ? '#ffa500' : '#4caf50';
+            }
+
+            // Update light state
+            if (data.front_light_on !== undefined) {
+                lightState = data.front_light_on;
+                updateLightButton(data.front_light_on);
+            }
+
             // Update control availability
             updateControlsAvailability();
         }
@@ -700,6 +750,37 @@
             });
         }
 
+        function updateIgnitionButtons(currentState) {
+            const states = ['off', 'acc', 'ignition', 'start'];
+            states.forEach(state => {
+                const btn = document.getElementById(`ignition-${state}`);
+                if (btn) {
+                    // Map CRANKING state to START button
+                    const btnState = state.toUpperCase();
+                    const activeState = (currentState === 'CRANKING' && btnState === 'START') ||
+                                       (currentState === btnState);
+                    if (activeState) {
+                        btn.classList.add('active');
+                    } else {
+                        btn.classList.remove('active');
+                    }
+                }
+            });
+        }
+
+        function updateLightButton(lightOn) {
+            const btn = document.getElementById('light-toggle-btn');
+            const status = document.getElementById('light-status');
+
+            if (lightOn) {
+                btn.style.background = '#ffa500';  // Orange when ON
+                status.textContent = 'ON';
+            } else {
+                btn.style.background = '#607d8b';  // Grey when OFF
+                status.textContent = 'OFF';
+            }
+        }
+
         function updateControlsAvailability() {
             const webControlActive = currentInputSource === 'WEB' || currentInputSource === 'FAILSAFE';
             controlsEnabled = webControlActive && wsConnected;
@@ -734,6 +815,16 @@
 
         function setGear(gear) {
             sendCommand('set_gear', gear);
+        }
+
+        function setIgnition(state) {
+            sendCommand('set_ignition', state);
+        }
+
+        let lightState = false;
+        function toggleLight() {
+            lightState = !lightState;
+            sendCommand('set_light', lightState);
         }
 
         // Slider event handlers with rate limiting and active tracking

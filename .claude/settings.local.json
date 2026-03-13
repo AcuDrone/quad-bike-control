@@ -33,7 +33,9 @@
       "Bash(openspec show ota-updates --type spec)",
       "Bash(ls -lh .pio/build/esp32-c6-devkitc-1/*.bin)",
       "Bash(openspec spec:*)",
-      "Bash(openspec validate:*)"
+      "Bash(openspec validate:*)",
+      "Bash(mkdir -p /Users/s.zalozniy/Documents/SourceCode/ESP32/QuadBikeControl/openspec/changes/add-ignition-light-web-controls/specs/web-control)",
+      "Bash(mkdir -p /Users/s.zalozniy/Documents/SourceCode/ESP32/QuadBikeControl/openspec/changes/add-ignition-light-web-controls/specs/vehicle-systems)"
     ]
   }
 }

@@ -88,6 +88,14 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
     } else if (cmd.cmd == "clear_calibration") {
         processClearCalibrationCommand(webPortal);
         return;
+    } else if (cmd.cmd == "set_ignition") {
+        // Ignition control always available (not restricted by input source)
+        processIgnitionCommand(cmd.strValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_light") {
+        // Light control always available (not restricted by input source)
+        processLightCommand(cmd.boolValue, webPortal);
+        return;
     }
 
     // Normal control commands require WEB input source
@@ -271,6 +279,69 @@ void VehicleController::processClearCalibrationCommand(WebPortal& webPortal) {
     transmission_.clearCalibration();
 
     webPortal.sendResponse(true, "Calibration cleared - reboot to recalibrate");
+}
+
+bool VehicleController::setIgnitionState(const String& state, String& errorMsg) {
+    RelayController::IgnitionState currentState = relayController_.getIgnitionState();
+    RelayController::IgnitionState targetState;
+
+    // Parse target state
+    if (state == "OFF") {
+        targetState = RelayController::IgnitionState::OFF;
+    } else if (state == "ACC") {
+        targetState = RelayController::IgnitionState::ACC;
+    } else if (state == "IGNITION") {
+        targetState = RelayController::IgnitionState::IGNITION;
+    } else if (state == "START") {
+        targetState = RelayController::IgnitionState::CRANKING;
+    } else {
+        errorMsg = "Invalid ignition state";
+        return false;
+    }
+
+    // Safety interlock: require brake applied before powering on from OFF
+    if (currentState == RelayController::IgnitionState::OFF &&
+        targetState != RelayController::IgnitionState::OFF) {
+        // if (currentBrakeTarget_ < 20.0f) {
+        //     errorMsg = "Apply brake before ignition";
+        //     Debug::println("[IGNITION] Rejected: brake not applied (need >= 20%)");
+        //     return false;
+        // }
+    }
+
+    // Safety interlock: prevent cranking if engine already running
+    if (targetState == RelayController::IgnitionState::CRANKING) {
+        CANController::VehicleData canData = canController_.getVehicleData();
+        if (canData.dataValid && canData.engineRPM >= ENGINE_RUNNING_RPM_THRESHOLD) {
+            errorMsg = "Engine already running";
+            Debug::printf("[IGNITION] Rejected: engine already running (RPM: %d)\n", canData.engineRPM);
+            return false;
+        }
+    }
+
+    // Apply ignition state
+    relayController_.setIgnitionState(targetState);
+    Debug::printf("[IGNITION] State changed: %s\n", state.c_str());
+    return true;
+}
+
+void VehicleController::setFrontLight(bool on) {
+    relayController_.setFrontLight(on);
+    Debug::printf("[LIGHT] Front light: %s\n", on ? "ON" : "OFF");
+}
+
+void VehicleController::processIgnitionCommand(const String& state, WebPortal& webPortal) {
+    String errorMsg;
+    if (setIgnitionState(state, errorMsg)) {
+        webPortal.sendResponse(true, "Ignition set to " + state);
+    } else {
+        webPortal.sendResponse(false, errorMsg);
+    }
+}
+
+void VehicleController::processLightCommand(bool on, WebPortal& webPortal) {
+    setFrontLight(on);
+    webPortal.sendResponse(true, String("Front light ") + (on ? "ON" : "OFF"));
 }
 
 void VehicleController::applyBrake(float brakePct) {

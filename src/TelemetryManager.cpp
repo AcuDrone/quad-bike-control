@@ -98,6 +98,12 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     // Gear switching state
     telemetry.gear_switching = vehicleController_.getTransmission().isPositionControlActive();
 
+    // Ignition and lighting state
+    RelayController::IgnitionState ignitionState = vehicleController_.getIgnitionState();
+    telemetry.ignition_state = getRelayIgnitionStateName(ignitionState);
+    telemetry.is_cranking = (ignitionState == RelayController::IgnitionState::CRANKING);
+    telemetry.front_light_on = vehicleController_.getFrontLight();
+
     // Firmware version
     telemetry.firmware_version = FIRMWARE_VERSION;
 

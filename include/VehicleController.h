@@ -93,6 +93,32 @@ public:
      */
     CANController::VehicleData getVehicleData() const { return canController_.getVehicleData(); }
 
+    /**
+     * @brief Set ignition state with safety interlocks
+     * @param state Ignition state string (OFF/ACC/IGNITION/START)
+     * @param errorMsg Output parameter for error message if operation fails
+     * @return true if ignition state changed successfully, false if rejected by safety interlock
+     */
+    bool setIgnitionState(const String& state, String& errorMsg);
+
+    /**
+     * @brief Get current ignition state
+     * @return Current ignition state (OFF/ACC/IGNITION/CRANKING)
+     */
+    RelayController::IgnitionState getIgnitionState() const { return relayController_.getIgnitionState(); }
+
+    /**
+     * @brief Set front light state
+     * @param on true to turn light on, false to turn off
+     */
+    void setFrontLight(bool on);
+
+    /**
+     * @brief Get current front light state
+     * @return true if light is on, false if off
+     */
+    bool getFrontLight() const { return relayController_.getFrontLight(); }
+
 private:
     // Actuator references
     ServoController& steering_;
@@ -176,6 +202,20 @@ private:
      * @param webPortal Reference to web portal for sending responses
      */
     void processBrakeCommand(float value, WebPortal& webPortal);
+
+    /**
+     * @brief Process ignition command
+     * @param state Ignition state string (OFF/ACC/IGNITION/START)
+     * @param webPortal Reference to web portal for sending responses
+     */
+    void processIgnitionCommand(const String& state, WebPortal& webPortal);
+
+    /**
+     * @brief Process light command
+     * @param on true to turn light on, false to turn off
+     * @param webPortal Reference to web portal for sending responses
+     */
+    void processLightCommand(bool on, WebPortal& webPortal);
 
     /**
      * @brief Process transmission calibration command
