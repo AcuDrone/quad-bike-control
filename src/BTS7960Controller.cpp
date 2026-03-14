@@ -48,11 +48,11 @@ bool BTS7960Controller::begin(gpio_num_t rpwmPin, gpio_num_t lpwmPin,
 
         esp_err_t err = ledc_timer_config(&timer_conf);
         if (err != ESP_OK) {
-            Debug::printf("BTS7960: Failed to configure timer: %d\n", err);
+            Debug::printfFeature(DebugFeature::BRAKE, "BTS7960: Failed to configure timer: %d\n", err);
             return false;
         }
         motorTimerConfigured = true;
-        Debug::println("BTS7960: Motor timer configured (shared by all instances)");
+        Debug::printlnFeature(DebugFeature::BRAKE, "BTS7960: Motor timer configured (shared by all instances)");
     }
 
     // Configure RPWM channel
@@ -71,7 +71,7 @@ bool BTS7960Controller::begin(gpio_num_t rpwmPin, gpio_num_t lpwmPin,
 
     esp_err_t err = ledc_channel_config(&rpwm_conf);
     if (err != ESP_OK) {
-        Debug::printf("BTS7960: Failed to configure RPWM channel: %d\n", err);
+        Debug::printfFeature(DebugFeature::BRAKE, "BTS7960: Failed to configure RPWM channel: %d\n", err);
         return false;
     }
 
@@ -91,7 +91,7 @@ bool BTS7960Controller::begin(gpio_num_t rpwmPin, gpio_num_t lpwmPin,
 
     err = ledc_channel_config(&lpwm_conf);
     if (err != ESP_OK) {
-        Debug::printf("BTS7960: Failed to configure LPWM channel: %d\n", err);
+        Debug::printfFeature(DebugFeature::BRAKE, "BTS7960: Failed to configure LPWM channel: %d\n", err);
         return false;
     }
 
@@ -100,15 +100,15 @@ bool BTS7960Controller::begin(gpio_num_t rpwmPin, gpio_num_t lpwmPin,
     // Ensure motor is stopped
     stop();
 
-    Debug::printf("BTS7960: Initialized RPWM pin %d ch %d, LPWM pin %d ch %d\n",
+    Debug::printfFeature(DebugFeature::BRAKE, "BTS7960: Initialized RPWM pin %d ch %d, LPWM pin %d ch %d\n",
                   rpwmPin_, rpwmChannel_, lpwmPin_, lpwmChannel_);
-    Debug::println("BTS7960: Note - Enable pins hardwired to 5V (always active)");
+    Debug::printlnFeature(DebugFeature::BRAKE, "BTS7960: Note - Enable pins hardwired to 5V (always active)");
     return true;
 }
 
 void BTS7960Controller::setSpeed(int16_t speed) {
     if (!initialized_) {
-        Debug::println("BTS7960: Not initialized");
+        Debug::printlnFeature(DebugFeature::BRAKE, "BTS7960: Not initialized");
         return;
     }
 
@@ -149,14 +149,14 @@ void BTS7960Controller::brake() {
     // Brake is an alias for stop() for API compatibility
     stop();
 
-    Debug::println("BTS7960: Brake called (coasting to stop - no electrical braking)");
+    Debug::printlnFeature(DebugFeature::BRAKE, "BTS7960: Brake called (coasting to stop - no electrical braking)");
 }
 
 void BTS7960Controller::setRPWM(uint8_t duty) {
     // SAFETY: Prevent simultaneous extend and retract
     // If setting RPWM (extend), automatically clear LPWM (retract)
     if (duty > 0 && currentLPWM_ > 0) {
-        Debug::println("BTS7960 SAFETY: Clearing LPWM (retract) before setting RPWM (extend)");
+        Debug::printlnFeature(DebugFeature::BRAKE, "BTS7960 SAFETY: Clearing LPWM (retract) before setting RPWM (extend)");
         ledc_set_duty(LEDC_LOW_SPEED_MODE, static_cast<ledc_channel_t>(lpwmChannel_), 0);
         ledc_update_duty(LEDC_LOW_SPEED_MODE, static_cast<ledc_channel_t>(lpwmChannel_));
         currentLPWM_ = 0;
@@ -171,7 +171,7 @@ void BTS7960Controller::setLPWM(uint8_t duty) {
     // SAFETY: Prevent simultaneous extend and retract
     // If setting LPWM (retract), automatically clear RPWM (extend)
     if (duty > 0 && currentRPWM_ > 0) {
-        Debug::println("BTS7960 SAFETY: Clearing RPWM (extend) before setting LPWM (retract)");
+        Debug::printlnFeature(DebugFeature::BRAKE, "BTS7960 SAFETY: Clearing RPWM (extend) before setting LPWM (retract)");
         ledc_set_duty(LEDC_LOW_SPEED_MODE, static_cast<ledc_channel_t>(rpwmChannel_), 0);
         ledc_update_duty(LEDC_LOW_SPEED_MODE, static_cast<ledc_channel_t>(rpwmChannel_));
         currentRPWM_ = 0;
@@ -191,7 +191,7 @@ void BTS7960Controller::attachEncoder(EncoderCounter* encoder) {
     if (encoder_ != nullptr) {
         lastEncoderPosition_ = encoder_->getPosition();
         lastEncoderChange_ = millis();
-        Debug::println("BTS7960: Encoder attached");
+        Debug::printlnFeature(DebugFeature::BRAKE, "BTS7960: Encoder attached");
     }
 }
 
@@ -204,7 +204,7 @@ int32_t BTS7960Controller::getPosition() const {
 
 bool BTS7960Controller::moveToPosition(int32_t targetPosition, uint8_t speed) {
     if (encoder_ == nullptr) {
-        Debug::println("BTS7960: No encoder attached for position control");
+        Debug::printlnFeature(DebugFeature::BRAKE, "BTS7960: No encoder attached for position control");
         return false;
     }
 
@@ -249,11 +249,11 @@ bool BTS7960Controller::isAtPosition(int32_t targetPosition, int32_t tolerance) 
 
 bool BTS7960Controller::autoHome(int8_t direction, uint8_t homingSpeed, uint32_t timeout) {
     if (encoder_ == nullptr) {
-        Debug::println("BTS7960: No encoder attached for auto-homing");
+        Debug::printlnFeature(DebugFeature::BRAKE, "BTS7960: No encoder attached for auto-homing");
         return false;
     }
 
-    Debug::println("BTS7960: Starting auto-homing sequence...");
+    Debug::printlnFeature(DebugFeature::BRAKE, "BTS7960: Starting auto-homing sequence...");
 
     // Start moving in specified direction
     int16_t speed = (direction > 0) ? homingSpeed : -homingSpeed;
@@ -275,17 +275,17 @@ bool BTS7960Controller::autoHome(int8_t direction, uint8_t homingSpeed, uint32_t
 
         // Check for stall (no movement for timeout period)
         if (millis() - lastChangeTime >= TRANS_STALL_TIMEOUT) {
-            Debug::println("BTS7960: Stall detected - setting zero position");
+            Debug::printlnFeature(DebugFeature::BRAKE, "BTS7960: Stall detected - setting zero position");
             stop();
             delay(100);  // Let actuator settle
             encoder_->reset();
-            Debug::println("BTS7960: Auto-homing complete!");
+            Debug::printlnFeature(DebugFeature::BRAKE, "BTS7960: Auto-homing complete!");
             return true;
         }
 
         // Check for overall timeout
         if (millis() - startTime >= timeout) {
-            Debug::println("BTS7960: Auto-homing timeout!");
+            Debug::printlnFeature(DebugFeature::BRAKE, "BTS7960: Auto-homing timeout!");
             stop();
             return false;
         }
@@ -303,14 +303,14 @@ void BTS7960Controller::stopPositionControl() {
 
 void BTS7960Controller::recalibrateEncoder(int32_t expectedPosition) {
     if (encoder_ == nullptr) {
-        Debug::println("BTS7960: Cannot recalibrate - no encoder attached");
+        Debug::printlnFeature(DebugFeature::BRAKE, "BTS7960: Cannot recalibrate - no encoder attached");
         return;
     }
 
     int32_t currentPosition = encoder_->getPosition();
     int32_t correction = expectedPosition - currentPosition;
 
-    Debug::printf("BTS7960: Recalibrating encoder: %ld -> %ld (correction: %+ld)\n",
+    Debug::printfFeature(DebugFeature::BRAKE, "BTS7960: Recalibrating encoder: %ld -> %ld (correction: %+ld)\n",
                   currentPosition, expectedPosition, correction);
 
     // Reset encoder counter and set to expected position
@@ -341,12 +341,12 @@ void BTS7960Controller::update() {
 
         if (settledError <= TRANS_POSITION_TOLERANCE) {
             positionControlActive_ = false;
-            Debug::printf("BTS7960: Reached target position %ld (actual: %ld, error: %ld)\n",
+            Debug::printfFeature(DebugFeature::BRAKE, "BTS7960: Reached target position %ld (actual: %ld, error: %ld)\n",
                           targetPosition_, settledPos, settledError);
             return;
         } else {
             // Position drifted during settling, continue control
-            Debug::printf("BTS7960: Position drift detected, continuing...\n");
+            Debug::printfFeature(DebugFeature::BRAKE, "BTS7960: Position drift detected, continuing...\n");
         }
     }
 
@@ -398,7 +398,7 @@ void BTS7960Controller::update() {
             // Stall detected during position control
             stop();
             positionControlActive_ = false;
-            Debug::printf("BTS7960: Stall detected at position %ld (target was %ld)\n",
+            Debug::printfFeature(DebugFeature::BRAKE, "BTS7960: Stall detected at position %ld (target was %ld)\n",
                           currentPos, targetPosition_);
         }
     } else {

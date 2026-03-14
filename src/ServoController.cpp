@@ -37,7 +37,7 @@ bool ServoController::begin(gpio_num_t pin, uint8_t channel, uint16_t minUs, uin
 
     esp_err_t err = ledc_timer_config(&timer_conf);
     if (err != ESP_OK) {
-        Debug::printf("ServoController: Failed to configure timer: %d\n", err);
+        Debug::printfFeature(DebugFeature::SERVO, "ServoController: Failed to configure timer: %d\n", err);
         return false;
     }
 
@@ -57,7 +57,7 @@ bool ServoController::begin(gpio_num_t pin, uint8_t channel, uint16_t minUs, uin
 
     err = ledc_channel_config(&channel_conf);
     if (err != ESP_OK) {
-        Debug::printf("ServoController: Failed to configure channel: %d\n", err);
+        Debug::printfFeature(DebugFeature::SERVO, "ServoController: Failed to configure channel: %d\n", err);
         return false;
     }
 
@@ -66,13 +66,13 @@ bool ServoController::begin(gpio_num_t pin, uint8_t channel, uint16_t minUs, uin
     // Set to center position
     setAngle(90.0f);
 
-    Debug::printf("ServoController: Initialized on pin %d, channel %d\n", pin_, channel_);
+    Debug::printfFeature(DebugFeature::SERVO, "ServoController: Initialized on pin %d, channel %d\n", pin_, channel_);
     return true;
 }
 
 void ServoController::setAngle(float degrees) {
     if (!initialized_) {
-        Debug::println("ServoController: Not initialized");
+        Debug::printlnFeature(DebugFeature::SERVO, "ServoController: Not initialized");
         return;
     }
 
@@ -87,7 +87,7 @@ void ServoController::setAngle(float degrees) {
 
 void ServoController::setMicroseconds(uint16_t us) {
     if (!initialized_) {
-        Debug::println("ServoController: Not initialized");
+        Debug::printlnFeature(DebugFeature::SERVO, "ServoController: Not initialized");
         return;
     }
 
@@ -107,7 +107,7 @@ void ServoController::disable() {
     }
 
     ledc_stop(LEDC_LOW_SPEED_MODE, static_cast<ledc_channel_t>(channel_), 0);
-    Debug::printf("ServoController: Disabled channel %d\n", channel_);
+    Debug::printfFeature(DebugFeature::SERVO, "ServoController: Disabled channel %d\n", channel_);
 }
 
 uint16_t ServoController::angleToPulseWidth(float degrees) const {

@@ -35,7 +35,7 @@ bool TransmissionController::setGear(TransmissionController::Gear gear, uint8_t 
 
     int32_t targetPosition = getGearPosition(gear);
 
-    Debug::printf("[TRANS] Setting gear to %s (position %ld)\n",
+    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] Setting gear to %s (position %ld)\n",
                   getGearName(gear), targetPosition);
 
     targetGear_ = gear;
@@ -126,7 +126,7 @@ bool TransmissionController::canChangeGear(TransmissionController::Gear targetGe
     if (vehicleData_.dataValid) {
         // Block gear change if vehicle is moving above threshold
         if (vehicleData_.vehicleSpeed > TRANS_SPEED_INTERLOCK_THRESHOLD) {
-            Debug::printf("[TRANS] Gear change blocked: vehicle moving at %d km/h\n",
+            Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] Gear change blocked: vehicle moving at %d km/h\n",
                          vehicleData_.vehicleSpeed);
             return false;
         }
@@ -136,11 +136,11 @@ bool TransmissionController::canChangeGear(TransmissionController::Gear targetGe
 
         if (vehicleData_.lastUpdateTime > 0 && dataAge < TRANS_CAN_TIMEOUT) {
             // Data is recent but marked invalid - be cautious
-            Debug::println("[TRANS] WARNING: CAN data invalid, blocking gear change");
+            Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] WARNING: CAN data invalid, blocking gear change");
             return false;
         } else {
             // CAN timeout exceeded or never had data - allow gear change (fail-safe)
-            Debug::printf("[TRANS] WARNING: CAN timeout (%lu ms), allowing gear change\n", dataAge);
+            Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] WARNING: CAN timeout (%lu ms), allowing gear change\n", dataAge);
         }
     }
 
@@ -170,7 +170,7 @@ void TransmissionController::initGearSensors() {
     gpio_set_direction(PIN_GEAR_HIGH, GPIO_MODE_INPUT);     // GPIO 18 - safe
     gpio_set_pull_mode(PIN_GEAR_HIGH, GPIO_FLOATING);       // External pull-up on hardware
 
-    Debug::println("[TRANS] Gear position sensors initialized (active-low, external pull-ups)");
+    Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] Gear position sensors initialized (active-low, external pull-ups)");
 }
 
 TransmissionController::Gear TransmissionController::getPhysicalGear() const {
@@ -185,13 +185,13 @@ TransmissionController::Gear TransmissionController::getPhysicalGear() const {
 
     if (activeCount == 0) {
         // No gear selected (all pins HIGH) - return NEUTRAL as safe default
-        Debug::println("[TRANS] WARNING: No gear sensor active");
+        Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] WARNING: No gear sensor active");
         return Gear::GEAR_NEUTRAL;
     }
 
     if (activeCount > 1) {
         // Multiple gears active - invalid state, return NEUTRAL for safety
-        Debug::printf("[TRANS] ERROR: Multiple gear sensors active (R:%d N:%d L:%d H:%d)\n",
+        Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] ERROR: Multiple gear sensors active (R:%d N:%d L:%d H:%d)\n",
                      reverseActive, neutralActive, lowActive, highActive);
         return Gear::GEAR_NEUTRAL;
     }
@@ -212,7 +212,7 @@ bool TransmissionController::isGearPositionValid() const {
     Gear physicalGear = getPhysicalGear();
 
     if (encoderGear != physicalGear) {
-        Debug::printf("[TRANS] WARNING: Gear mismatch - Encoder: %s, Physical: %s\n",
+        Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] WARNING: Gear mismatch - Encoder: %s, Physical: %s\n",
                      getGearName(encoderGear), getGearName(physicalGear));
         return false;
     }
@@ -239,9 +239,9 @@ void TransmissionController::update() {
 
             if (positionError > TRANS_POSITION_TOLERANCE) {
                 // Encoder position differs from expected - recalibrate
-                Debug::printf("[TRANS] Physical gear %s reached, recalibrating encoder\n",
+                Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] Physical gear %s reached, recalibrating encoder\n",
                              getGearName(targetGear_));
-                Debug::printf("[TRANS] Encoder: %ld -> %ld (error: %ld)\n",
+                Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] Encoder: %ld -> %ld (error: %ld)\n",
                              currentPosition, expectedPosition, positionError);
 
                 // Recalibrate encoder to expected position for this gear
@@ -250,7 +250,7 @@ void TransmissionController::update() {
 
             // Stop position control - physical switch confirms arrival
             stopPositionControl();
-            Debug::printf("[TRANS] Target gear %s confirmed by physical switch\n",
+            Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] Target gear %s confirmed by physical switch\n",
                          getGearName(targetGear_));
 
             // Clear any previous mismatch flag
@@ -266,11 +266,11 @@ void TransmissionController::update() {
                 // Mismatch detected while stopped
                 if (!lastGearMismatch_) {
                     // First mismatch - log detailed warning
-                    Debug::printf("[TRANS] MISMATCH: Encoder reports %s, Physical switch shows %s\n",
+                    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] MISMATCH: Encoder reports %s, Physical switch shows %s\n",
                                  getGearName(encoderGear), getGearName(physicalGear));
-                    Debug::printf("[TRANS] Encoder position: %ld, Expected: %ld\n",
+                    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] Encoder position: %ld, Expected: %ld\n",
                                  getPosition(), getGearPosition(physicalGear));
-                    Debug::println("[TRANS] Possible causes: encoder drift, mechanical slippage, or wiring issue");
+                    Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] Possible causes: encoder drift, mechanical slippage, or wiring issue");
                     lastGearMismatch_ = true;
                 }
                 // Subsequent mismatches are silent to avoid spam
@@ -278,7 +278,7 @@ void TransmissionController::update() {
                 // Position valid
                 if (lastGearMismatch_) {
                     // Mismatch resolved
-                    Debug::printf("[TRANS] Position mismatch RESOLVED: Now at %s\n", getGearName(encoderGear));
+                    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] Position mismatch RESOLVED: Now at %s\n", getGearName(encoderGear));
                     lastGearMismatch_ = false;
                 }
             }
@@ -291,13 +291,13 @@ void TransmissionController::update() {
 
 bool TransmissionController::calibrateAllGearPositions(uint8_t calibrationSpeed, uint32_t timeout) {
     if (!hasEncoder()) {
-        Debug::println("[TRANS] ERROR: Cannot calibrate - no encoder attached");
+        Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] ERROR: Cannot calibrate - no encoder attached");
         return false;
     }
 
-    Debug::println("[TRANS] ========================================");
-    Debug::println("[TRANS] Starting full gear calibration...");
-    Debug::println("[TRANS] ========================================");
+    Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] ========================================");
+    Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] Starting full gear calibration...");
+    Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] ========================================");
 
     uint32_t startTime = millis();
 
@@ -321,7 +321,7 @@ bool TransmissionController::calibrateAllGearPositions(uint8_t calibrationSpeed,
     const int numGears = 3;  // LOW, NEUTRAL, REVERSE (HIGH is at 0 by definition)
 
     // Start moving backward from HIGH (position 0)
-    Debug::println("[TRANS] Moving backward from HIGH to detect all gears...");
+    Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] Moving backward from HIGH to detect all gears...");
     setSpeed(-calibrationSpeed);
 
     int currentGearIndex = 0;
@@ -330,7 +330,7 @@ bool TransmissionController::calibrateAllGearPositions(uint8_t calibrationSpeed,
     while (!allGearsCalibrated) {
         // Check timeout
         if (millis() - startTime >= timeout) {
-            Debug::println("[TRANS] ERROR: Calibration timeout!");
+            Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] ERROR: Calibration timeout!");
             stop();
             return false;
         }
@@ -347,7 +347,7 @@ bool TransmissionController::calibrateAllGearPositions(uint8_t calibrationSpeed,
                 // Gear entry detected
                 gear.entryPosition = currentPos;
                 gear.entryDetected = true;
-                Debug::printf("[TRANS] %s entry detected at position %ld\n",
+                Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] %s entry detected at position %ld\n",
                              gear.name, gear.entryPosition);
             }
             else if (gear.entryDetected && !gear.exitDetected && !sensorActive) {
@@ -359,9 +359,9 @@ bool TransmissionController::calibrateAllGearPositions(uint8_t calibrationSpeed,
                 int32_t centerPosition = (gear.entryPosition + gear.exitPosition) / 2;
                 calibratedPositions_[(int)gear.gear] = centerPosition;
 
-                Debug::printf("[TRANS] %s exit detected at position %ld\n",
+                Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] %s exit detected at position %ld\n",
                              gear.name, gear.exitPosition);
-                Debug::printf("[TRANS] %s calibrated to position %ld (center of %ld to %ld)\n",
+                Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] %s calibrated to position %ld (center of %ld to %ld)\n",
                              gear.name, centerPosition, gear.entryPosition, gear.exitPosition);
 
                 // Move to next gear
@@ -379,27 +379,27 @@ bool TransmissionController::calibrateAllGearPositions(uint8_t calibrationSpeed,
 
     // Stop movement
     stop();
-    Debug::println("[TRANS] Calibration movement complete");
+    Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] Calibration movement complete");
 
     // HIGH gear is always at position 0 (home position)
     calibratedPositions_[(int)Gear::GEAR_HIGH] = 0;
 
     // Display calibration results
-    Debug::println("[TRANS] ========================================");
-    Debug::println("[TRANS] Calibration Results:");
-    Debug::println("[TRANS] ========================================");
-    Debug::printf("[TRANS] HIGH:    %6ld (home position)\n", calibratedPositions_[(int)Gear::GEAR_HIGH]);
-    Debug::printf("[TRANS] LOW:     %6ld\n", calibratedPositions_[(int)Gear::GEAR_LOW]);
-    Debug::printf("[TRANS] NEUTRAL: %6ld\n", calibratedPositions_[(int)Gear::GEAR_NEUTRAL]);
-    Debug::printf("[TRANS] REVERSE: %6ld\n", calibratedPositions_[(int)Gear::GEAR_REVERSE]);
-    Debug::println("[TRANS] ========================================");
+    Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] ========================================");
+    Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] Calibration Results:");
+    Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] ========================================");
+    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] HIGH:    %6ld (home position)\n", calibratedPositions_[(int)Gear::GEAR_HIGH]);
+    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] LOW:     %6ld\n", calibratedPositions_[(int)Gear::GEAR_LOW]);
+    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] NEUTRAL: %6ld\n", calibratedPositions_[(int)Gear::GEAR_NEUTRAL]);
+    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] REVERSE: %6ld\n", calibratedPositions_[(int)Gear::GEAR_REVERSE]);
+    Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] ========================================");
 
     // Mark as calibrated
     isCalibrated_ = true;
 
     // Return to target gear position
     int32_t targetPosition = getGearPosition(targetGear_);
-    Debug::printf("[TRANS] Returning to target gear %s (position %ld)...\n",
+    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] Returning to target gear %s (position %ld)...\n",
                  getGearName(targetGear_), targetPosition);
     if (moveToPosition(targetPosition, calibrationSpeed)) {
         // Wait for movement to complete
@@ -410,15 +410,15 @@ bool TransmissionController::calibrateAllGearPositions(uint8_t calibrationSpeed,
         }
     }
 
-    Debug::println("[TRANS] ========================================");
-    Debug::println("[TRANS] Gear calibration complete!");
-    Debug::println("[TRANS] ========================================");
+    Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] ========================================");
+    Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] Gear calibration complete!");
+    Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] ========================================");
 
     // Save calibration to non-volatile storage
     if (saveCalibration()) {
-        Debug::println("[TRANS] Calibration saved to storage");
+        Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] Calibration saved to storage");
     } else {
-        Debug::println("[TRANS] WARNING: Failed to save calibration");
+        Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] WARNING: Failed to save calibration");
     }
 
     return true;
@@ -429,7 +429,7 @@ bool TransmissionController::saveCalibration() {
 
     // Open preferences in read-write mode
     if (!prefs.begin("transmission", false)) {
-        Debug::println("[TRANS] ERROR: Failed to open preferences for write");
+        Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] ERROR: Failed to open preferences for write");
         return false;
     }
 
@@ -444,11 +444,11 @@ bool TransmissionController::saveCalibration() {
 
     prefs.end();
 
-    Debug::println("[TRANS] Calibration saved:");
-    Debug::printf("[TRANS]   HIGH:    %ld\n", calibratedPositions_[(int)Gear::GEAR_HIGH]);
-    Debug::printf("[TRANS]   LOW:     %ld\n", calibratedPositions_[(int)Gear::GEAR_LOW]);
-    Debug::printf("[TRANS]   NEUTRAL: %ld\n", calibratedPositions_[(int)Gear::GEAR_NEUTRAL]);
-    Debug::printf("[TRANS]   REVERSE: %ld\n", calibratedPositions_[(int)Gear::GEAR_REVERSE]);
+    Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] Calibration saved:");
+    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS]   HIGH:    %ld\n", calibratedPositions_[(int)Gear::GEAR_HIGH]);
+    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS]   LOW:     %ld\n", calibratedPositions_[(int)Gear::GEAR_LOW]);
+    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS]   NEUTRAL: %ld\n", calibratedPositions_[(int)Gear::GEAR_NEUTRAL]);
+    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS]   REVERSE: %ld\n", calibratedPositions_[(int)Gear::GEAR_REVERSE]);
 
     return true;
 }
@@ -458,7 +458,7 @@ bool TransmissionController::loadCalibration() {
 
     // Open preferences in read-only mode
     if (!prefs.begin("transmission", true)) {
-        Debug::println("[TRANS] Failed to open preferences for read");
+        Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] Failed to open preferences for read");
         return false;
     }
 
@@ -479,11 +479,11 @@ bool TransmissionController::loadCalibration() {
     // Mark as calibrated
     isCalibrated_ = true;
 
-    Debug::println("[TRANS] Calibration loaded:");
-    Debug::printf("[TRANS]   HIGH:    %ld\n", calibratedPositions_[(int)Gear::GEAR_HIGH]);
-    Debug::printf("[TRANS]   LOW:     %ld\n", calibratedPositions_[(int)Gear::GEAR_LOW]);
-    Debug::printf("[TRANS]   NEUTRAL: %ld\n", calibratedPositions_[(int)Gear::GEAR_NEUTRAL]);
-    Debug::printf("[TRANS]   REVERSE: %ld\n", calibratedPositions_[(int)Gear::GEAR_REVERSE]);
+    Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] Calibration loaded:");
+    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS]   HIGH:    %ld\n", calibratedPositions_[(int)Gear::GEAR_HIGH]);
+    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS]   LOW:     %ld\n", calibratedPositions_[(int)Gear::GEAR_LOW]);
+    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS]   NEUTRAL: %ld\n", calibratedPositions_[(int)Gear::GEAR_NEUTRAL]);
+    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS]   REVERSE: %ld\n", calibratedPositions_[(int)Gear::GEAR_REVERSE]);
 
     return true;
 }
@@ -494,7 +494,7 @@ void TransmissionController::clearCalibration() {
     if (prefs.begin("transmission", false)) {
         prefs.clear();  // Clear all keys in this namespace
         prefs.end();
-        Debug::println("[TRANS] Calibration cleared from storage");
+        Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] Calibration cleared from storage");
     }
 
     // Reset to defaults

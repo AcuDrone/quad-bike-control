@@ -248,6 +248,13 @@ struct SBusChannelConfig {
 #define SERIAL_BAUD_RATE      115200 // Serial monitor baud rate
 #define DEBUG_ENABLED         true   // Default debug output state (runtime-toggleable via Debug utility or web portal)
 
+// Feature-specific debug flags (code-only control, persisted to NVS)
+// Two-tier logging: Master debug (DEBUG_ENABLED) AND feature flag must both be ON
+// Features: TRANSMISSION, CAN, SBUS, SERVO, BRAKE, RELAY, WEB, VEHICLE, TELEMETRY
+// Enable programmatically: Debug::setFeatureEnabled(DebugFeature::TRANSMISSION, true)
+// Or via NVS: preferences.putBool("feat_trans", true) in "debug" namespace
+#define DEBUG_FEATURE_DEFAULT_STATE  false  // All features default to OFF
+
 // ============================================================================
 // NVS (Non-Volatile Storage) KEYS
 // ============================================================================

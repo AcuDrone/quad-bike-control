@@ -37,7 +37,7 @@ bool EncoderCounter::begin(gpio_num_t channelA, gpio_num_t channelB, int unitId)
     gpio_set_direction(channelB_, GPIO_MODE_INPUT);
     gpio_set_pull_mode(channelB_, GPIO_PULLUP_ONLY);
 
-    Debug::println("EncoderCounter: GPIO pins configured with pull-ups");
+    Debug::printlnFeature(DebugFeature::TRANSMISSION, "EncoderCounter: GPIO pins configured with pull-ups");
 
     // Configure PCNT unit
     pcnt_unit_config_t unit_config = {
@@ -50,7 +50,7 @@ bool EncoderCounter::begin(gpio_num_t channelA, gpio_num_t channelB, int unitId)
 
     esp_err_t err = pcnt_new_unit(&unit_config, &pcntUnit_);
     if (err != ESP_OK) {
-        Debug::printf("EncoderCounter: Failed to create PCNT unit: %d\n", err);
+        Debug::printfFeature(DebugFeature::TRANSMISSION, "EncoderCounter: Failed to create PCNT unit: %d\n", err);
         return false;
     }
 
@@ -60,7 +60,7 @@ bool EncoderCounter::begin(gpio_num_t channelA, gpio_num_t channelB, int unitId)
     };
     err = pcnt_unit_set_glitch_filter(pcntUnit_, &filter_config);
     if (err != ESP_OK) {
-        Debug::printf("EncoderCounter: Failed to set glitch filter: %d\n", err);
+        Debug::printfFeature(DebugFeature::TRANSMISSION, "EncoderCounter: Failed to set glitch filter: %d\n", err);
         pcnt_del_unit(pcntUnit_);
         return false;
     }
@@ -73,7 +73,7 @@ bool EncoderCounter::begin(gpio_num_t channelA, gpio_num_t channelB, int unitId)
     };
     err = pcnt_new_channel(pcntUnit_, &chan_a_config, &pcntChannelA_);
     if (err != ESP_OK) {
-        Debug::printf("EncoderCounter: Failed to create channel A: %d\n", err);
+        Debug::printfFeature(DebugFeature::TRANSMISSION, "EncoderCounter: Failed to create channel A: %d\n", err);
         pcnt_del_unit(pcntUnit_);
         return false;
     }
@@ -84,7 +84,7 @@ bool EncoderCounter::begin(gpio_num_t channelA, gpio_num_t channelB, int unitId)
                                        PCNT_CHANNEL_EDGE_ACTION_DECREASE,  // Rising A edge
                                        PCNT_CHANNEL_EDGE_ACTION_INCREASE); // Falling A edge
     if (err != ESP_OK) {
-        Debug::printf("EncoderCounter: Failed to set channel A edge action: %d\n", err);
+        Debug::printfFeature(DebugFeature::TRANSMISSION, "EncoderCounter: Failed to set channel A edge action: %d\n", err);
         pcnt_del_channel(pcntChannelA_);
         pcnt_del_unit(pcntUnit_);
         return false;
@@ -94,7 +94,7 @@ bool EncoderCounter::begin(gpio_num_t channelA, gpio_num_t channelB, int unitId)
                                         PCNT_CHANNEL_LEVEL_ACTION_INVERSE,  // Invert when B is low
                                         PCNT_CHANNEL_LEVEL_ACTION_KEEP);    // Keep when B is high
     if (err != ESP_OK) {
-        Debug::printf("EncoderCounter: Failed to set channel A level action: %d\n", err);
+        Debug::printfFeature(DebugFeature::TRANSMISSION, "EncoderCounter: Failed to set channel A level action: %d\n", err);
         pcnt_del_channel(pcntChannelA_);
         pcnt_del_unit(pcntUnit_);
         return false;
@@ -108,7 +108,7 @@ bool EncoderCounter::begin(gpio_num_t channelA, gpio_num_t channelB, int unitId)
     };
     err = pcnt_new_channel(pcntUnit_, &chan_b_config, &pcntChannelB_);
     if (err != ESP_OK) {
-        Debug::printf("EncoderCounter: Failed to create channel B: %d\n", err);
+        Debug::printfFeature(DebugFeature::TRANSMISSION, "EncoderCounter: Failed to create channel B: %d\n", err);
         pcnt_del_channel(pcntChannelA_);
         pcnt_del_unit(pcntUnit_);
         return false;
@@ -120,7 +120,7 @@ bool EncoderCounter::begin(gpio_num_t channelA, gpio_num_t channelB, int unitId)
                                        PCNT_CHANNEL_EDGE_ACTION_INCREASE,  // Rising B edge
                                        PCNT_CHANNEL_EDGE_ACTION_DECREASE); // Falling B edge
     if (err != ESP_OK) {
-        Debug::printf("EncoderCounter: Failed to set channel B edge action: %d\n", err);
+        Debug::printfFeature(DebugFeature::TRANSMISSION, "EncoderCounter: Failed to set channel B edge action: %d\n", err);
         pcnt_del_channel(pcntChannelA_);
         pcnt_del_channel(pcntChannelB_);
         pcnt_del_unit(pcntUnit_);
@@ -131,7 +131,7 @@ bool EncoderCounter::begin(gpio_num_t channelA, gpio_num_t channelB, int unitId)
                                         PCNT_CHANNEL_LEVEL_ACTION_INVERSE,  // Invert when A is low
                                         PCNT_CHANNEL_LEVEL_ACTION_KEEP);    // Keep when A is high
     if (err != ESP_OK) {
-        Debug::printf("EncoderCounter: Failed to set channel B level action: %d\n", err);
+        Debug::printfFeature(DebugFeature::TRANSMISSION, "EncoderCounter: Failed to set channel B level action: %d\n", err);
         pcnt_del_channel(pcntChannelA_);
         pcnt_del_channel(pcntChannelB_);
         pcnt_del_unit(pcntUnit_);
@@ -141,7 +141,7 @@ bool EncoderCounter::begin(gpio_num_t channelA, gpio_num_t channelB, int unitId)
     // Enable the PCNT unit
     err = pcnt_unit_enable(pcntUnit_);
     if (err != ESP_OK) {
-        Debug::printf("EncoderCounter: Failed to enable PCNT unit: %d\n", err);
+        Debug::printfFeature(DebugFeature::TRANSMISSION, "EncoderCounter: Failed to enable PCNT unit: %d\n", err);
         pcnt_del_channel(pcntChannelA_);
         pcnt_del_channel(pcntChannelB_);
         pcnt_del_unit(pcntUnit_);
@@ -154,7 +154,7 @@ bool EncoderCounter::begin(gpio_num_t channelA, gpio_num_t channelB, int unitId)
 
     initialized_ = true;
 
-    Debug::printf("EncoderCounter: Initialized on unit %d, A=%d, B=%d\n",
+    Debug::printfFeature(DebugFeature::TRANSMISSION, "EncoderCounter: Initialized on unit %d, A=%d, B=%d\n",
                   unitId, channelA_, channelB_);
     return true;
 }
@@ -178,7 +178,7 @@ void EncoderCounter::setPosition(int32_t position) {
     offsetPosition_ = position;
     lastPosition_ = position;
 
-    Debug::printf("EncoderCounter: Position set to %ld\n", position);
+    Debug::printfFeature(DebugFeature::TRANSMISSION, "EncoderCounter: Position set to %ld\n", position);
 }
 
 void EncoderCounter::reset() {
