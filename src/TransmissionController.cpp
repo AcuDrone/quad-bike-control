@@ -224,7 +224,7 @@ bool TransmissionController::isGearPositionValid() const {
 void TransmissionController::update() {
     // Log current state if moving (throttled to reduce spam)
     uint32_t now = millis();
-    if (isPositionControlActive() && (now - lastMovementLogTime_ >= 250)) {
+    if (isPositionControlActive() && (now - lastMovementLogTime_ >= 500)) {
         lastMovementLogTime_ = now;
         int32_t currentPos = getPosition();
         int32_t targetPos = getTargetPosition();

@@ -447,7 +447,7 @@ void VehicleController::updateBrakeControl() {
 }
 
 void VehicleController::updateThrottleBoost() {
-    // Safety check 2: disable boost if SBUS is commanding throttle
+    // Safety check: disable boost if SBUS is commanding throttle
     if (currentInputSource_ == InputSource::SBUS && sbusInput_.isSignalValid()) {
         float sbusThrottle = sbusInput_.getThrottle();
         if (sbusThrottle > 5.0f) {  // SBUS commanding throttle, let it take priority
