@@ -338,9 +338,8 @@ enum class InputSource {
 #define TRANS_CAN_TIMEOUT                5000  // ms - Allow gear change if CAN fails this long
 
 // Throttle Boost During Gear Changes
-#define TRANS_THROTTLE_BOOST_PERCENT     20    // % - Throttle increase during gear change
-#define TRANS_THROTTLE_BOOST_DURATION    500   // ms - Maximum boost duration
-#define TRANS_THROTTLE_BOOST_BRAKE_THRESHOLD 10 // % - Disable boost if brake exceeds this
+#define TRANS_THROTTLE_BOOST_PERCENT     10    // % - Throttle increase during gear change
+#define TRANS_THROTTLE_BOOST_DURATION    5000   // ms - Maximum boost duration
 
 // ============================================================================
 // FIRMWARE VERSION

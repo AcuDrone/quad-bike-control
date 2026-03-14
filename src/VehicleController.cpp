@@ -447,17 +447,6 @@ void VehicleController::updateBrakeControl() {
 }
 
 void VehicleController::updateThrottleBoost() {
-    // Safety check 1: disable boost if brake is applied
-    if (currentBrakeTarget_ > TRANS_THROTTLE_BOOST_BRAKE_THRESHOLD) {
-        if (throttleBoostActive_) {
-            Debug::printlnFeature(DebugFeature::VEHICLE, "[BOOST] Disabled due to brake application");
-            throttleBoostActive_ = false;
-        }
-        // Set throttle to idle when brake is applied
-        throttle_.setAngle(THROTTLE_IDLE_ANGLE);
-        return;
-    }
-
     // Safety check 2: disable boost if SBUS is commanding throttle
     if (currentInputSource_ == InputSource::SBUS && sbusInput_.isSignalValid()) {
         float sbusThrottle = sbusInput_.getThrottle();
