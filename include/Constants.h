@@ -172,10 +172,10 @@ struct SBusChannelConfig {
 #define TRANS_POSITION_TOLERANCE      10     // +/- encoder counts for position match (±2.5% of revolution)
 
 // Transmission Gear Positions (encoder counts - calibrated)
-#define TRANS_POSITION_HIGH      0      // Encoder count for HIGH (home position)
-#define TRANS_POSITION_LOW       -1300  // Encoder count for LOW
-#define TRANS_POSITION_NEUTRAL   -5000  // Encoder count for NEUTRAL
-#define TRANS_POSITION_REVERSE   -10000 // Encoder count for REVERSE
+#define TRANS_POSITION_REVERSE   0      // Encoder count for REVERSE (home position)
+#define TRANS_POSITION_NEUTRAL   2000   // Encoder count for NEUTRAL
+#define TRANS_POSITION_LOW       4000   // Encoder count for LOW
+#define TRANS_POSITION_HIGH      6000  // Encoder count for HIGH
 
 // Transmission Movement Parameters
 #define TRANS_MOVE_TIMEOUT    15000   // ms - maximum time for gear change

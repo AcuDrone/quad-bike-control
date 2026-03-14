@@ -142,6 +142,13 @@ public:
     bool isPositionControlActive() const { return positionControlActive_; }
 
     /**
+     * @brief Get current target position
+     *
+     * @return Target position in encoder counts (only valid if position control is active)
+     */
+    int32_t getTargetPosition() const { return targetPosition_; }
+
+    /**
      * @brief Stop position control and clear target
      *
      * Stops the actuator and deactivates position control mode.

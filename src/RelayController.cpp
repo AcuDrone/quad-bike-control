@@ -114,18 +114,17 @@ void RelayController::updateRelays() {
 
         case IgnitionState::ACC:
             // Accessory power only (RELAY2 ON, RELAY1 OFF)
-            digitalWrite(relay1Pin_, LOW);
-            digitalWrite(relay2Pin_, HIGH);
+            digitalWrite(relay1Pin_, HIGH);
+            digitalWrite(relay2Pin_, LOW);
             break;
 
         case IgnitionState::IGNITION:
             // Full power (both relays ON)
             digitalWrite(relay1Pin_, HIGH);
-            digitalWrite(relay2Pin_, HIGH);
+            digitalWrite(relay2Pin_, LOW);
             break;
 
         case IgnitionState::CRANKING:
-            // Cranking: same as IGNITION (starter motor engaged via RELAY1)
             // Note: Actual cranking control is in update() method
             digitalWrite(relay1Pin_, HIGH);
             digitalWrite(relay2Pin_, HIGH);

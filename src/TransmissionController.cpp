@@ -6,6 +6,7 @@ TransmissionController::TransmissionController()
     : BTS7960Controller()
     , targetGear_(Gear::GEAR_NEUTRAL)
     , lastGearCheckTime_(0)
+    , lastMovementLogTime_(0)
     , lastGearMismatch_(false)
     , isCalibrated_(false)
 {
@@ -221,8 +222,18 @@ bool TransmissionController::isGearPositionValid() const {
 }
 
 void TransmissionController::update() {
-    // Check physical gear position periodically
+    // Log current state if moving (throttled to reduce spam)
     uint32_t now = millis();
+    if (isPositionControlActive() && (now - lastMovementLogTime_ >= 250)) {
+        lastMovementLogTime_ = now;
+        int32_t currentPos = getPosition();
+        int32_t targetPos = getTargetPosition();
+        Debug::printfFeature(DebugFeature::TRANSMISSION,
+            "[TRANS] Moving: Current=%ld, Target=%ld, Error=%ld\n",
+            currentPos, targetPos, abs(targetPos - currentPos));
+    }
+
+    // Check physical gear position periodically
     if (now - lastGearCheckTime_ >= TRANS_GEAR_CHECK_INTERVAL) {
         lastGearCheckTime_ = now;
 
@@ -299,6 +310,14 @@ bool TransmissionController::calibrateAllGearPositions(uint8_t calibrationSpeed,
     Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] Starting full gear calibration...");
     Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] ========================================");
 
+    // First, home to REVERSE position (physical stop, position 0)
+    Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] Step 1: Homing to REVERSE position...");
+    if (!autoHome(-1, TRANS_HOMING_SPEED, timeout)) {
+        Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] ERROR: Failed to home to REVERSE");
+        return false;
+    }
+    Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] Homed to REVERSE at position 0");
+
     uint32_t startTime = millis();
 
     // Structure to store gear detection data
@@ -312,17 +331,17 @@ bool TransmissionController::calibrateAllGearPositions(uint8_t calibrationSpeed,
         bool exitDetected;
     };
 
-    // Define gears to calibrate (in order of traversal: HIGH -> LOW -> NEUTRAL -> REVERSE)
+    // Define gears to calibrate (in order of traversal: REVERSE -> NEUTRAL -> LOW -> HIGH)
     GearCalibration gears[] = {
-        {Gear::GEAR_LOW, PIN_GEAR_LOW, "LOW", 0, 0, false, false},
         {Gear::GEAR_NEUTRAL, PIN_GEAR_NEUTRAL, "NEUTRAL", 0, 0, false, false},
-        {Gear::GEAR_REVERSE, PIN_GEAR_REVERSE, "REVERSE", 0, 0, false, false}
+        {Gear::GEAR_LOW, PIN_GEAR_LOW, "LOW", 0, 0, false, false},
+        {Gear::GEAR_HIGH, PIN_GEAR_HIGH, "HIGH", 0, 0, false, false}
     };
-    const int numGears = 3;  // LOW, NEUTRAL, REVERSE (HIGH is at 0 by definition)
+    const int numGears = 3;  // NEUTRAL, LOW, HIGH (REVERSE is at 0 by definition)
 
-    // Start moving backward from HIGH (position 0)
-    Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] Moving backward from HIGH to detect all gears...");
-    setSpeed(-calibrationSpeed);
+    // Step 2: Start moving forward from REVERSE (position 0)
+    Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] Step 2: Moving forward from REVERSE to detect all gears...");
+    setSpeed(calibrationSpeed);
 
     int currentGearIndex = 0;
     bool allGearsCalibrated = false;
@@ -381,17 +400,17 @@ bool TransmissionController::calibrateAllGearPositions(uint8_t calibrationSpeed,
     stop();
     Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] Calibration movement complete");
 
-    // HIGH gear is always at position 0 (home position)
-    calibratedPositions_[(int)Gear::GEAR_HIGH] = 0;
+    // REVERSE gear is always at position 0 (home position)
+    calibratedPositions_[(int)Gear::GEAR_REVERSE] = 0;
 
     // Display calibration results
     Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] ========================================");
     Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] Calibration Results:");
     Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] ========================================");
-    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] HIGH:    %6ld (home position)\n", calibratedPositions_[(int)Gear::GEAR_HIGH]);
-    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] LOW:     %6ld\n", calibratedPositions_[(int)Gear::GEAR_LOW]);
+    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] REVERSE: %6ld (home position)\n", calibratedPositions_[(int)Gear::GEAR_REVERSE]);
     Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] NEUTRAL: %6ld\n", calibratedPositions_[(int)Gear::GEAR_NEUTRAL]);
-    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] REVERSE: %6ld\n", calibratedPositions_[(int)Gear::GEAR_REVERSE]);
+    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] LOW:     %6ld\n", calibratedPositions_[(int)Gear::GEAR_LOW]);
+    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] HIGH:    %6ld\n", calibratedPositions_[(int)Gear::GEAR_HIGH]);
     Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] ========================================");
 
     // Mark as calibrated

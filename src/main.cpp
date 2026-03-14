@@ -97,7 +97,6 @@ void setup() {
         transmissionActuator.stop();
 
         // Initialize gear position sensors (GPIO switches)
-        // GPIO 15 (strapping pin) and GPIO 18 (safe) configured with ESP-IDF GPIO API
         transmissionActuator.initGearSensors();
 
         // Load saved calibration from NVS (now that NVS is initialized)
@@ -113,35 +112,20 @@ void setup() {
         Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] WARNING: Gear changes will fail without calibration");
         Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] To calibrate: use web portal 'Calibrate' button when hardware connected");
 
-        /* FULL CALIBRATION - Uncomment when hardware is connected:
         // Check if calibration already exists
         if (transmissionActuator.isCalibrated()) {
-            // Calibration loaded from storage - just home to HIGH position
-            Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Using saved calibration, homing to HIGH gear...");
-            if (transmissionActuator.autoHome(1, TRANS_HOMING_SPEED, TRANS_HOMING_TIMEOUT)) {
-                Debug::printfFeature(DebugFeature::TRANSMISSION, "[TRANS] Homed to HIGH gear at position %ld\n", transmissionEncoder.getPosition());
-            } else {
-                Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] ERROR: Homing failed");
-            }
+            // Calibration loaded from storage - just home to REVERSE position
+            Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Using saved calibration, homing to REVERSE gear...");
         } else {
             // No saved calibration - run full calibration routine
-            Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] No saved calibration found, running full calibration...");
-            if (transmissionActuator.calibrateAllGearPositions(TRANS_CALIBRATION_SPEED, TRANS_HOMING_TIMEOUT)) {
-                Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Calibration successful!");
-            } else {
-                Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] ERROR: Calibration failed");
-                // Fallback to manual homing
-                Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Attempting manual homing...");
-                if (transmissionActuator.autoHome(1, TRANS_HOMING_SPEED, TRANS_HOMING_TIMEOUT)) {
-                    Debug::printfFeature(DebugFeature::TRANSMISSION, "[TRANS] Position: %ld\n", transmissionEncoder.getPosition());
-                } else {
-                    Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] ERROR: Homing failed");
-                }
-            }
+            Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] No saved calibration found");
         }
-        */
 
-        // To force recalibration: transmissionActuator.clearCalibration() and reboot
+        if (transmissionActuator.autoHome(-1, TRANS_HOMING_SPEED, TRANS_HOMING_TIMEOUT)) {
+            Debug::printfFeature(DebugFeature::TRANSMISSION, "[TRANS] Homed to REVERSE gear at position %ld\n", transmissionEncoder.getPosition());
+        } else {
+            Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] ERROR: Homing failed");
+        }
     } else {
         Debug::printlnFeature(DebugFeature::TRANSMISSION, "ERROR: Transmission actuator failed");
     }

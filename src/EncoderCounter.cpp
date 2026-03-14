@@ -81,8 +81,8 @@ bool EncoderCounter::begin(gpio_num_t channelA, gpio_num_t channelB, int unitId)
     // Set edge and level actions for channel A
     // Standard quadrature: count up when A edges with B low, count down when A edges with B high
     err = pcnt_channel_set_edge_action(pcntChannelA_,
-                                       PCNT_CHANNEL_EDGE_ACTION_DECREASE,  // Rising A edge
-                                       PCNT_CHANNEL_EDGE_ACTION_INCREASE); // Falling A edge
+                                       PCNT_CHANNEL_EDGE_ACTION_INCREASE,  // Rising A edge
+                                       PCNT_CHANNEL_EDGE_ACTION_DECREASE); // Falling A edge
     if (err != ESP_OK) {
         Debug::printfFeature(DebugFeature::TRANSMISSION, "EncoderCounter: Failed to set channel A edge action: %d\n", err);
         pcnt_del_channel(pcntChannelA_);
@@ -117,8 +117,8 @@ bool EncoderCounter::begin(gpio_num_t channelA, gpio_num_t channelB, int unitId)
     // Set edge and level actions for channel B
     // Standard quadrature: count up when B edges with A low, count down when B edges with A high
     err = pcnt_channel_set_edge_action(pcntChannelB_,
-                                       PCNT_CHANNEL_EDGE_ACTION_INCREASE,  // Rising B edge
-                                       PCNT_CHANNEL_EDGE_ACTION_DECREASE); // Falling B edge
+                                       PCNT_CHANNEL_EDGE_ACTION_DECREASE,  // Rising B edge
+                                       PCNT_CHANNEL_EDGE_ACTION_INCREASE); // Falling B edge
     if (err != ESP_OK) {
         Debug::printfFeature(DebugFeature::TRANSMISSION, "EncoderCounter: Failed to set channel B edge action: %d\n", err);
         pcnt_del_channel(pcntChannelA_);

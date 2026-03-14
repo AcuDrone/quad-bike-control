@@ -32,16 +32,16 @@ public:
      * @brief Transmission gear selection enumeration
      *
      * Four gears with calibrated encoder positions:
-     * - GEAR_HIGH (H): 0 counts (home position)
-     * - GEAR_LOW (L): -300 counts
-     * - GEAR_NEUTRAL (N): -5000 counts
-     * - GEAR_REVERSE (R): -10000 counts
+     * - GEAR_REVERSE (R): 0 counts (home position)
+     * - GEAR_NEUTRAL (N): ~5000 counts
+     * - GEAR_LOW (L): ~9000 counts
+     * - GEAR_HIGH (H): ~10000 counts
      */
     enum class Gear {
-        GEAR_HIGH = 0,      // H gear at encoder position 0
-        GEAR_LOW = 1,       // L gear at encoder position -300
-        GEAR_NEUTRAL = 2,   // N gear at encoder position -5000
-        GEAR_REVERSE = 3    // R gear at encoder position -10000
+        GEAR_HIGH = 0,      // H gear at encoder position ~10000
+        GEAR_LOW = 1,       // L gear at encoder position ~9000
+        GEAR_NEUTRAL = 2,   // N gear at encoder position ~5000
+        GEAR_REVERSE = 3    // R gear at encoder position 0 (home)
     };
 
     TransmissionController();
@@ -54,10 +54,10 @@ public:
      * Uses encoder feedback for closed-loop position control.
      *
      * @param gear Target gear (HIGH, LOW, NEUTRAL, REVERSE)
-     * @param speed Movement speed (0-255), default 150
+     * @param speed Movement speed (0-255), default 255 (full speed)
      * @return true if gear change initiated, false if already at target or error
      */
-    bool setGear(Gear gear, uint8_t speed = 150);
+    bool setGear(Gear gear, uint8_t speed = 255);
 
     /**
      * @brief Get current gear based on encoder position
@@ -212,6 +212,7 @@ private:
     Gear targetGear_;  // Target gear for current move
     TransmissionVehicleData vehicleData_;  // Vehicle data for safety checks
     uint32_t lastGearCheckTime_;  // Timestamp of last physical gear check (ms)
+    uint32_t lastMovementLogTime_;  // Timestamp of last movement log (ms)
     bool lastGearMismatch_;  // Track if last check had a mismatch (avoid spam)
 
     // Calibrated gear positions (runtime calibration)
