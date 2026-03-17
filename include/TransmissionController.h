@@ -36,12 +36,14 @@ public:
      * - GEAR_NEUTRAL (N): ~5000 counts
      * - GEAR_LOW (L): ~9000 counts
      * - GEAR_HIGH (H): ~10000 counts
+     * - GEAR_UNKNOWN: Invalid/unclear gear state
      */
     enum class Gear {
         GEAR_HIGH = 0,      // H gear at encoder position ~10000
         GEAR_LOW = 1,       // L gear at encoder position ~9000
         GEAR_NEUTRAL = 2,   // N gear at encoder position ~5000
-        GEAR_REVERSE = 3    // R gear at encoder position 0 (home)
+        GEAR_REVERSE = 3,   // R gear at encoder position 0 (home)
+        GEAR_UNKNOWN = 4    // Invalid or unclear gear state
     };
 
     TransmissionController();
@@ -213,6 +215,7 @@ private:
     TransmissionVehicleData vehicleData_;  // Vehicle data for safety checks
     uint32_t lastGearCheckTime_;  // Timestamp of last physical gear check (ms)
     uint32_t lastMovementLogTime_;  // Timestamp of last movement log (ms)
+    uint32_t lastStatusLogTime_;  // Timestamp of last status log (ms)
     bool lastGearMismatch_;  // Track if last check had a mismatch (avoid spam)
 
     // Calibrated gear positions (runtime calibration)

@@ -7,6 +7,7 @@ TransmissionController::TransmissionController()
     , targetGear_(Gear::GEAR_NEUTRAL)
     , lastGearCheckTime_(0)
     , lastMovementLogTime_(0)
+    , lastStatusLogTime_(0)
     , lastGearMismatch_(false)
     , isCalibrated_(false)
 {
@@ -29,6 +30,12 @@ TransmissionController::~TransmissionController() {
 }
 
 bool TransmissionController::setGear(TransmissionController::Gear gear, uint8_t speed) {
+    // Reject invalid gear
+    if (gear == Gear::GEAR_UNKNOWN) {
+        Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] ERROR: Cannot set to UNKNOWN gear");
+        return false;
+    }
+
     // Safety check: prevent gear changes when vehicle is moving
     if (!canChangeGear(gear)) {
         return false;  // Gear change blocked
@@ -74,6 +81,11 @@ bool TransmissionController::isAtGear(TransmissionController::Gear gear) const {
 }
 
 int32_t TransmissionController::getGearPosition(TransmissionController::Gear gear) const {
+    // GEAR_UNKNOWN has no valid position
+    if (gear == Gear::GEAR_UNKNOWN) {
+        return 0;
+    }
+
     // Use calibrated positions if available, otherwise use defaults
     if (isCalibrated_) {
         return calibratedPositions_[(int)gear];
@@ -90,11 +102,15 @@ int32_t TransmissionController::getGearPosition(TransmissionController::Gear gea
         case Gear::GEAR_REVERSE:
             return TRANS_POSITION_REVERSE;
         default:
-            return TRANS_POSITION_NEUTRAL;  // Safe default
+            return 0;  // Unknown gear
     }
 }
 
 int32_t TransmissionController::getCalibratedPosition(TransmissionController::Gear gear) const {
+    // GEAR_UNKNOWN has no valid position
+    if (gear == Gear::GEAR_UNKNOWN) {
+        return 0;
+    }
     return calibratedPositions_[(int)gear];
 }
 
@@ -108,6 +124,8 @@ const char* TransmissionController::getGearName(TransmissionController::Gear gea
             return "NEUTRAL";
         case Gear::GEAR_REVERSE:
             return "REVERSE";
+        case Gear::GEAR_UNKNOWN:
+            return "UNKNOWN";
         default:
             return "UNKNOWN";
     }
@@ -185,16 +203,16 @@ TransmissionController::Gear TransmissionController::getPhysicalGear() const {
     uint8_t activeCount = reverseActive + neutralActive + lowActive + highActive;
 
     if (activeCount == 0) {
-        // No gear selected (all pins HIGH) - return NEUTRAL as safe default
+        // No gear selected (all pins HIGH) - return UNKNOWN
         Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] WARNING: No gear sensor active");
-        return Gear::GEAR_NEUTRAL;
+        return Gear::GEAR_UNKNOWN;
     }
 
     if (activeCount > 1) {
-        // Multiple gears active - invalid state, return NEUTRAL for safety
+        // Multiple gears active - invalid state, return UNKNOWN
         Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] ERROR: Multiple gear sensors active (R:%d N:%d L:%d H:%d)\n",
                      reverseActive, neutralActive, lowActive, highActive);
-        return Gear::GEAR_NEUTRAL;
+        return Gear::GEAR_UNKNOWN;
     }
 
     // Exactly one sensor is active - return the corresponding gear
@@ -203,8 +221,8 @@ TransmissionController::Gear TransmissionController::getPhysicalGear() const {
     if (lowActive) return Gear::GEAR_LOW;
     if (highActive) return Gear::GEAR_HIGH;
 
-    // Should never reach here, but return NEUTRAL for safety
-    return Gear::GEAR_NEUTRAL;
+    // Should never reach here, but return UNKNOWN for safety
+    return Gear::GEAR_UNKNOWN;
 }
 
 bool TransmissionController::isGearPositionValid() const {
@@ -222,8 +240,21 @@ bool TransmissionController::isGearPositionValid() const {
 }
 
 void TransmissionController::update() {
-    // Log current state if moving (throttled to reduce spam)
     uint32_t now = millis();
+
+    // Periodic status log every 2 seconds
+    if (now - lastStatusLogTime_ >= 2000) {
+        lastStatusLogTime_ = now;
+        Gear encoderGear = getCurrentGear();
+        Gear physicalGear = getPhysicalGear();
+        int32_t currentPos = getPosition();
+        Debug::printfFeature(DebugFeature::TRANSMISSION,
+            "[TRANS] Status: Encoder=%s (%ld), Physical=%s, Moving=%s\n",
+            getGearName(encoderGear), currentPos, getGearName(physicalGear),
+            isPositionControlActive() ? "YES" : "NO");
+    }
+
+    // Log current state if moving (throttled to reduce spam)
     if (isPositionControlActive() && (now - lastMovementLogTime_ >= 500)) {
         lastMovementLogTime_ = now;
         int32_t currentPos = getPosition();
@@ -269,8 +300,8 @@ void TransmissionController::update() {
             return;
         }
 
-        // Verify encoder consistency when stopped
-        if (isStopped()) {
+        // Verify encoder consistency when stopped (skip if physical gear is unknown)
+        if (isStopped() && physicalGear != Gear::GEAR_UNKNOWN) {
             Gear encoderGear = getCurrentGear();
 
             if (encoderGear != physicalGear) {
