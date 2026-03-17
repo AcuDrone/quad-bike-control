@@ -31,18 +31,20 @@ public:
     /**
      * @brief Transmission gear selection enumeration
      *
-     * Four gears with calibrated encoder positions:
-     * - GEAR_REVERSE (R): 0 counts (home position)
-     * - GEAR_NEUTRAL (N): ~5000 counts
-     * - GEAR_LOW (L): ~9000 counts
-     * - GEAR_HIGH (H): ~10000 counts
+     * Four gears with calibrated encoder positions (relative to physical stop at 0):
+     * - GEAR_REVERSE (R): ~50 counts
+     * - GEAR_NEUTRAL (N): ~2000 counts
+     * - GEAR_LOW (L): ~4000 counts
+     * - GEAR_HIGH (H): ~6000 counts
      * - GEAR_UNKNOWN: Invalid/unclear gear state
+     *
+     * All positions are auto-calibrated during startup by detecting physical sensors.
      */
     enum class Gear {
-        GEAR_HIGH = 0,      // H gear at encoder position ~10000
-        GEAR_LOW = 1,       // L gear at encoder position ~9000
-        GEAR_NEUTRAL = 2,   // N gear at encoder position ~5000
-        GEAR_REVERSE = 3,   // R gear at encoder position 0 (home)
+        GEAR_HIGH = 0,      // H gear
+        GEAR_LOW = 1,       // L gear
+        GEAR_NEUTRAL = 2,   // N gear
+        GEAR_REVERSE = 3,   // R gear
         GEAR_UNKNOWN = 4    // Invalid or unclear gear state
     };
 

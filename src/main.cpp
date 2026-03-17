@@ -116,15 +116,24 @@ void setup() {
 
         // Check if calibration already exists
         if (transmissionActuator.isCalibrated()) {
-            // Calibration loaded from storage - just home to REVERSE position
-            Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Using saved calibration, homing to REVERSE gear...");
+            // Calibration loaded from storage - home to physical stop then move to REVERSE
+            Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Using saved calibration, homing to physical stop...");
         } else {
             // No saved calibration - run full calibration routine
             Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] No saved calibration found");
         }
 
         if (transmissionActuator.autoHome(-1, TRANS_HOMING_SPEED, TRANS_HOMING_TIMEOUT)) {
-            Debug::printfFeature(DebugFeature::TRANSMISSION, "[TRANS] Homed to REVERSE gear at position %ld\n", transmissionEncoder.getPosition());
+            Debug::printfFeature(DebugFeature::TRANSMISSION, "[TRANS] Homed to physical stop at position %ld\n", transmissionEncoder.getPosition());
+
+            // Move to REVERSE gear position if calibrated
+            if (transmissionActuator.isCalibrated()) {
+                Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Moving to NEUTRAL gear...");
+                transmissionActuator.setGear(TransmissionController::Gear::GEAR_NEUTRAL);
+            } else {
+                Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Moving to REVERSE gear...");
+                transmissionActuator.setGear(TransmissionController::Gear::GEAR_REVERSE);
+            }
         } else {
             Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] ERROR: Homing failed");
         }
