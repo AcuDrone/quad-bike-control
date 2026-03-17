@@ -219,6 +219,8 @@ private:
     uint32_t lastMovementLogTime_;  // Timestamp of last movement log (ms)
     uint32_t lastStatusLogTime_;  // Timestamp of last status log (ms)
     bool lastGearMismatch_;  // Track if last check had a mismatch (avoid spam)
+    Gear lastLoggedGear_;  // Last logged gear (to detect changes)
+    bool lastLoggedMoving_;  // Last logged movement state (to detect changes)
 
     // Calibrated gear positions (runtime calibration)
     int32_t calibratedPositions_[4];  // Calibrated encoder positions for each gear

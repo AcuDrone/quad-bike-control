@@ -16,6 +16,10 @@ TransmissionController::TransmissionController()
     vehicleData_.lastUpdateTime = 0;
     vehicleData_.dataValid = false;
 
+    // Initialize logging state tracking
+    lastLoggedGear_ = Gear::GEAR_UNKNOWN;
+    lastLoggedMoving_ = false;
+
     // Initialize calibrated positions to defaults (will be overwritten by calibration or load)
     calibratedPositions_[(int)Gear::GEAR_HIGH] = TRANS_POSITION_HIGH;
     calibratedPositions_[(int)Gear::GEAR_LOW] = TRANS_POSITION_LOW;
@@ -57,22 +61,22 @@ TransmissionController::Gear TransmissionController::getCurrentGear() const {
 
     int32_t currentPos = getPosition();
 
-    // Check each gear position (within tolerance)
-    if (abs(currentPos - TRANS_POSITION_HIGH) <= TRANS_POSITION_TOLERANCE) {
-        return Gear::GEAR_HIGH;
-    }
-    if (abs(currentPos - TRANS_POSITION_LOW) <= TRANS_POSITION_TOLERANCE) {
-        return Gear::GEAR_LOW;
-    }
-    if (abs(currentPos - TRANS_POSITION_NEUTRAL) <= TRANS_POSITION_TOLERANCE) {
-        return Gear::GEAR_NEUTRAL;
-    }
-    if (abs(currentPos - TRANS_POSITION_REVERSE) <= TRANS_POSITION_TOLERANCE) {
+    // Check each gear position using calibrated positions (within tolerance)
+    if (abs(currentPos - getGearPosition(Gear::GEAR_REVERSE)) <= TRANS_POSITION_TOLERANCE) {
         return Gear::GEAR_REVERSE;
     }
+    if (abs(currentPos - getGearPosition(Gear::GEAR_NEUTRAL)) <= TRANS_POSITION_TOLERANCE) {
+        return Gear::GEAR_NEUTRAL;
+    }
+    if (abs(currentPos - getGearPosition(Gear::GEAR_LOW)) <= TRANS_POSITION_TOLERANCE) {
+        return Gear::GEAR_LOW;
+    }
+    if (abs(currentPos - getGearPosition(Gear::GEAR_HIGH)) <= TRANS_POSITION_TOLERANCE) {
+        return Gear::GEAR_HIGH;
+    }
 
-    // If not at any known gear position, return NEUTRAL as safe default
-    return Gear::GEAR_NEUTRAL;
+    // If not at any known gear position, return UNKNOWN
+    return Gear::GEAR_UNKNOWN;
 }
 
 bool TransmissionController::isAtGear(TransmissionController::Gear gear) const {
@@ -242,16 +246,24 @@ bool TransmissionController::isGearPositionValid() const {
 void TransmissionController::update() {
     uint32_t now = millis();
 
-    // Periodic status log every 2 seconds
-    if (now - lastStatusLogTime_ >= 2000) {
+    // Periodic status log every 2 seconds, or when state changes
+    Gear physicalGear = getPhysicalGear();
+    bool currentlyMoving = isPositionControlActive();
+
+    if (now - lastStatusLogTime_ >= 2000 ||
+        physicalGear != lastLoggedGear_ ||
+        currentlyMoving != lastLoggedMoving_) {
+
         lastStatusLogTime_ = now;
+        lastLoggedGear_ = physicalGear;
+        lastLoggedMoving_ = currentlyMoving;
+
         Gear encoderGear = getCurrentGear();
-        Gear physicalGear = getPhysicalGear();
         int32_t currentPos = getPosition();
         Debug::printfFeature(DebugFeature::TRANSMISSION,
             "[TRANS] Status: Encoder=%s (%ld), Physical=%s, Moving=%s\n",
             getGearName(encoderGear), currentPos, getGearName(physicalGear),
-            isPositionControlActive() ? "YES" : "NO");
+            currentlyMoving ? "YES" : "NO");
     }
 
     // Log current state if moving (throttled to reduce spam)
@@ -291,7 +303,7 @@ void TransmissionController::update() {
             }
 
             // Stop position control - physical switch confirms arrival
-            stopPositionControl();
+            // stopPositionControl();
             Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] Target gear %s confirmed by physical switch\n",
                          getGearName(targetGear_));
 
