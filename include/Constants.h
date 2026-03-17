@@ -208,8 +208,8 @@ struct SBusChannelConfig {
 
 // Brake Movement Parameters
 #define BRAKE_FULL_TRAVEL_TIME 3000  // ms - estimated time for 0-100% brake travel
-#define BRAKE_TOLERANCE        5.0f  // % - position tolerance for "at target"
-#define BRAKE_MIN_SPEED        128.0f // PWM - minimum speed to overcome friction
+#define BRAKE_TOLERANCE        100  // ms - position tolerance for "at target"
+#define BRAKE_SENSOR_OVERRUN_TIME 500  // ms - continue moving after sensor triggers (full retraction)
 
 // ============================================================================
 // SAFETY PARAMETERS

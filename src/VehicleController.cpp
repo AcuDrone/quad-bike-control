@@ -18,6 +18,8 @@ VehicleController::VehicleController(ServoController& steering,
       currentBrakeTarget_(0.0f),
       currentBrakePosition_(0.0f),
       brakeMovementStartTime_(0),
+      lastBrakeUpdateTime_(0),
+      brakeSensorTriggerTime_(0),
       brakeIsMoving_(false),
       throttleBoostStartTime_(0),
       throttleBoostActive_(false),
@@ -133,6 +135,8 @@ void VehicleController::applyFailsafe() {
         steering_.setAngle(STEERING_CENTER_ANGLE);
         throttle_.setAngle(THROTTLE_IDLE_ANGLE);
         brake_.stop();         // Stop brake actuator (hold position)
+        brakeIsMoving_ = false;
+        brakeSensorTriggerTime_ = 0;  // Reset sensor trigger
         transmission_.stop();  // Stop transmission actuator
         relayController_.allOff();  // Turn off ignition and lights
         previousSBusIgnitionState_ = SBusInput::IgnitionState::OFF;  // Reset ignition tracking
@@ -354,22 +358,53 @@ void VehicleController::applyBrake(float brakePct) {
 }
 
 void VehicleController::updateBrakeControl() {
-    // Special case: If target is 0 (released), check sensor for confirmation
+    // Special case: If target is 0% (released), check sensor for confirmation with overrun
     if (currentBrakeTarget_ == 0.0f && isBrakeReleased()) {
-        // Sensor confirms brake is fully released
-        if (currentBrakePosition_ != 0.0f) {
-            Debug::printlnFeature(DebugFeature::VEHICLE, "[BRAKE] Sensor confirms released, syncing position to 0%");
-            currentBrakePosition_ = 0.0f;
+        // Sensor detected release
+        if (brakeSensorTriggerTime_ == 0) {
+            // First detection - start overrun timer
+            brakeSensorTriggerTime_ = millis();
+            Debug::printfFeature(DebugFeature::BRAKE,
+                "[BRAKE] Sensor triggered at %.1f%%, continuing for %dms overrun\n",
+                currentBrakePosition_, BRAKE_SENSOR_OVERRUN_TIME);
         }
 
-        // Stop actuator if moving
-        if (brakeIsMoving_) {
-            uint32_t movementDuration = millis() - brakeMovementStartTime_;
-            Debug::printfFeature(DebugFeature::VEHICLE, "[BRAKE] Stopped by sensor. Movement: %lums\n", movementDuration);
-            brakeIsMoving_ = false;
+        // Check if overrun period has elapsed
+        uint32_t now = millis();
+        uint32_t overrunDuration = now - brakeSensorTriggerTime_;
+
+        if (overrunDuration >= BRAKE_SENSOR_OVERRUN_TIME) {
+            // Overrun complete - stop and sync position
+            if (currentBrakePosition_ != 0.0f) {
+                Debug::printfFeature(DebugFeature::BRAKE,
+                    "[BRAKE] Overrun complete (%lums), syncing position to 0%%\n", overrunDuration);
+                currentBrakePosition_ = 0.0f;
+            }
+
+            // Stop actuator if moving
+            if (brakeIsMoving_) {
+                uint32_t movementDuration = millis() - brakeMovementStartTime_;
+                Debug::printfFeature(DebugFeature::BRAKE,
+                    "[BRAKE] Stopped by sensor. Movement: %lums\n", movementDuration);
+                brakeIsMoving_ = false;
+                lastBrakeUpdateTime_ = 0;
+                brakeSensorTriggerTime_ = 0;  // Reset trigger time
+            }
+            brake_.stop();
+            return;  // Exit early
+        } else {
+            // Still in overrun period - continue moving (fall through to normal control)
+            static uint32_t lastOverrunLog = 0;
+            if (now - lastOverrunLog > 100) {  // Log every 100ms during overrun
+                Debug::printfFeature(DebugFeature::BRAKE,
+                    "[BRAKE] Sensor overrun: %lums / %ldms remaining\n",
+                    overrunDuration, (long)(BRAKE_SENSOR_OVERRUN_TIME - overrunDuration));
+                lastOverrunLog = now;
+            }
         }
-        brake_.stop();
-        return;  // Exit early, brake is confirmed released
+    } else {
+        // Not releasing or sensor not triggered - reset trigger time
+        brakeSensorTriggerTime_ = 0;
     }
 
     // Calculate position error
@@ -381,24 +416,14 @@ void VehicleController::updateBrakeControl() {
         if (!brakeIsMoving_) {
             // Just started moving
             brakeMovementStartTime_ = millis();
+            lastBrakeUpdateTime_ = brakeMovementStartTime_;  // Reset position tracking baseline
             brakeIsMoving_ = true;
+            Debug::printfFeature(DebugFeature::BRAKE,
+                "[BRAKE] Starting movement: %.1f%% -> %.1f%% (error: %.1f%%)\n",
+                currentBrakePosition_, currentBrakeTarget_, positionError);
         }
 
-        // Calculate speed based on error magnitude
-        // Map 0-100% error to 0-255 speed
-        float speedFloat = abs(positionError) * 2.55f;  // Convert % to 0-255 scale
-
-        // Apply minimum speed to overcome friction
-        if (speedFloat < BRAKE_MIN_SPEED) {
-            speedFloat = BRAKE_MIN_SPEED;
-        }
-
-        // Clamp to motor limits
-        if (speedFloat > 255.0f) {
-            speedFloat = 255.0f;
-        }
-
-        int16_t speed = (int16_t)speedFloat;
+        int16_t speed = 255;  // Cast to int16_t for motor controller
 
         // Determine direction
         // Positive = extend (apply brake)
@@ -410,35 +435,58 @@ void VehicleController::updateBrakeControl() {
         // Apply speed to actuator
         brake_.setSpeed(speed);
 
-        // Estimate position based on time and speed
-        // This is a rough estimate - in reality you'd need position feedback
-        // Assume actuator takes ~3 seconds to go from 0 to 100%
-        const float FULL_TRAVEL_TIME = BRAKE_FULL_TRAVEL_TIME;  // ms for 0-100%
-        float movementRate = (100.0f / FULL_TRAVEL_TIME) * abs(speed) / 255.0f;  // %/ms
-
-        // Update estimated position
-        static uint32_t lastUpdateTime = millis();
+        // Update estimated position based on time and speed
         uint32_t now = millis();
-        uint32_t dt = now - lastUpdateTime;
-        lastUpdateTime = now;
+        uint32_t dt = min(now - lastBrakeUpdateTime_, 100UL);  // Cap at 100ms
 
+        float oldPosition = currentBrakePosition_;
+
+        // Calculate movement rate based on speed
+        float speedFraction = abs(speed) / 255.0f;
+        float movementRate = (100.0f / BRAKE_FULL_TRAVEL_TIME) * speedFraction;  // %/ms
+        float expectedMovement = movementRate * dt;
+
+        // Update position based on error direction
         if (positionError > 0.0f) {
-            currentBrakePosition_ += movementRate * dt;
+            // Need higher % (release) - position increases
+            currentBrakePosition_ += expectedMovement;
         } else {
-            currentBrakePosition_ -= movementRate * dt;
+            // Need lower % (press) - position decreases
+            currentBrakePosition_ -= expectedMovement;
         }
 
-        // Clamp position
+        // Clamp to valid range
         if (currentBrakePosition_ < 0.0f) currentBrakePosition_ = 0.0f;
         if (currentBrakePosition_ > 100.0f) currentBrakePosition_ = 100.0f;
+
+        // Detailed logging every 500ms
+        static uint32_t lastProgressLog = 0;
+        if (now - lastProgressLog > 500) {
+            float actualMovement = currentBrakePosition_ - oldPosition;
+            Debug::printfFeature(DebugFeature::BRAKE,
+                "[BRAKE] Progress: %.1f%%→%.1f%% (Δ%.2f%% in %lums, rate=%.3f%%/ms)\n",
+                oldPosition, currentBrakePosition_, actualMovement, dt, movementRate);
+            Debug::printfFeature(DebugFeature::BRAKE,
+                "[BRAKE] Target: %.1f%%, Error: %.1f%%, Duration: %lums, Speed: %d PWM, Dir: %s\n",
+                currentBrakeTarget_, positionError, now - brakeMovementStartTime_, speed,
+                positionError > 0 ? "RELEASE" : "PRESS");
+            lastProgressLog = now;
+        }
+
+        // Update timestamp
+        lastBrakeUpdateTime_ = now;
 
     } else {
         // Brake is at target position (within tolerance)
         if (brakeIsMoving_) {
             // Just stopped moving
             uint32_t movementDuration = millis() - brakeMovementStartTime_;
-            Debug::printfFeature(DebugFeature::VEHICLE, "[BRAKE] Stopped. Movement: %lums\n", movementDuration);
+            Debug::printfFeature(DebugFeature::BRAKE,
+                "[BRAKE] Stopped at %.1f%%. Movement: %lums\n",
+                currentBrakePosition_, movementDuration);
             brakeIsMoving_ = false;
+            lastBrakeUpdateTime_ = 0;
+            brakeSensorTriggerTime_ = 0;  // Reset sensor trigger
         }
 
         // Stop actuator

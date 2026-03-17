@@ -139,6 +139,8 @@ private:
     float currentBrakeTarget_;          // Current brake percentage target (0-100)
     float currentBrakePosition_;        // Estimated brake position (0-100)
     uint32_t brakeMovementStartTime_;   // Time when brake started moving
+    uint32_t lastBrakeUpdateTime_;      // Last position update timestamp
+    uint32_t brakeSensorTriggerTime_;   // Time when brake sensor detected release (0 = not triggered)
     bool brakeIsMoving_;
 
     // Throttle boost tracking
