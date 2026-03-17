@@ -91,8 +91,8 @@ bool EncoderCounter::begin(gpio_num_t channelA, gpio_num_t channelB, int unitId)
     }
 
     err = pcnt_channel_set_level_action(pcntChannelA_,
-                                        PCNT_CHANNEL_LEVEL_ACTION_INVERSE,  // Invert when B is low
-                                        PCNT_CHANNEL_LEVEL_ACTION_KEEP);    // Keep when B is high
+                                        PCNT_CHANNEL_LEVEL_ACTION_KEEP,     // Keep when B is low
+                                        PCNT_CHANNEL_LEVEL_ACTION_INVERSE); // Invert when B is high
     if (err != ESP_OK) {
         Debug::printfFeature(DebugFeature::TRANSMISSION, "EncoderCounter: Failed to set channel A level action: %d\n", err);
         pcnt_del_channel(pcntChannelA_);
@@ -128,8 +128,8 @@ bool EncoderCounter::begin(gpio_num_t channelA, gpio_num_t channelB, int unitId)
     }
 
     err = pcnt_channel_set_level_action(pcntChannelB_,
-                                        PCNT_CHANNEL_LEVEL_ACTION_INVERSE,  // Invert when A is low
-                                        PCNT_CHANNEL_LEVEL_ACTION_KEEP);    // Keep when A is high
+                                        PCNT_CHANNEL_LEVEL_ACTION_KEEP,     // Keep when A is low
+                                        PCNT_CHANNEL_LEVEL_ACTION_INVERSE); // Invert when A is high
     if (err != ESP_OK) {
         Debug::printfFeature(DebugFeature::TRANSMISSION, "EncoderCounter: Failed to set channel B level action: %d\n", err);
         pcnt_del_channel(pcntChannelA_);

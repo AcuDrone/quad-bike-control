@@ -52,6 +52,8 @@ void setup() {
     Serial.begin(SERIAL_BAUD_RATE);
     delay(1000);
 
+    Debug::setFeatureEnabled(DebugFeature::TRANSMISSION, true);
+
     // Initialize NVS first (required by Debug utility)
     Serial.println("[INIT] Initializing NVS...");
     esp_err_t err = nvs_flash_init();
