@@ -33,8 +33,8 @@
 
 // Brake Linear Actuator (BTS7960)
 // Note: R_EN and L_EN hardwired to 5V (always enabled)
-#define PIN_BRAKE_RPWM      GPIO_NUM_6   // LEDC Channel 4
-#define PIN_BRAKE_LPWM      GPIO_NUM_7   // LEDC Channel 5
+#define PIN_BRAKE_RPWM      GPIO_NUM_7   // LEDC Channel 4
+#define PIN_BRAKE_LPWM      GPIO_NUM_6   // LEDC Channel 5
 #define LEDC_CH_BRAKE_RPWM  4
 #define LEDC_CH_BRAKE_LPWM  5
 
@@ -208,8 +208,8 @@ struct SBusChannelConfig {
 
 // Brake Movement Parameters
 #define BRAKE_FULL_TRAVEL_TIME 3000  // ms - estimated time for 0-100% brake travel
-#define BRAKE_TOLERANCE        100  // ms - position tolerance for "at target"
-#define BRAKE_SENSOR_OVERRUN_TIME 500  // ms - continue moving after sensor triggers (full retraction)
+#define BRAKE_TOLERANCE        5  // % - position tolerance for "at target"
+#define BRAKE_SENSOR_OVERRUN_TIME 1000  // ms - continue moving after sensor triggers (full retraction)
 
 // ============================================================================
 // SAFETY PARAMETERS

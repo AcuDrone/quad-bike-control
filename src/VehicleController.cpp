@@ -355,6 +355,8 @@ void VehicleController::applyBrake(float brakePct) {
 
     // Update target
     currentBrakeTarget_ = brakePct;
+    Debug::printfFeature(DebugFeature::BRAKE,
+    "[BRAKE] SET brake: %lu%%\n", (unsigned long)currentBrakeTarget_);
 }
 
 void VehicleController::updateBrakeControl() {
@@ -476,7 +478,7 @@ void VehicleController::updateBrakeControl() {
         // Update timestamp
         lastBrakeUpdateTime_ = now;
 
-    } else {
+    } else if (currentBrakeTarget_ != 0.0f) {
         // Brake is at target position (within tolerance)
         if (brakeIsMoving_) {
             // Just stopped moving
