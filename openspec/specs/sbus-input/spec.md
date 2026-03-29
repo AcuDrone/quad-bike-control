@@ -41,11 +41,10 @@ The system SHALL provide configurable mapping of S-bus channels to vehicle contr
 - **WHEN** system initializes
 - **THEN** channel mapping is loaded from SBusChannelConfig constants:
   - Channel 1 → Steering
-  - Channel 2 → Throttle
+  - Channel 2 → Throttle/Brake (combined: above center = throttle, below center = brake)
   - Channel 3 → Transmission selector
-  - Channel 4 → Brake control
-  - Channel 5 → Ignition state (OFF/ACC/IGNITION)
-  - Channel 6 → Front light (on/off)
+  - Channel 4 → Ignition state (OFF/ACC/IGNITION)
+  - Channel 5 → Front light (on/off)
 - **AND** mapping is immutable at runtime (compile-time only)
 
 #### Scenario: Convert channel to vehicle command
@@ -55,10 +54,18 @@ The system SHALL provide configurable mapping of S-bus channels to vehicle contr
 - **AND** resulting command is within valid range
 
 #### Scenario: Convert channel to throttle command
-- **WHEN** mapChannelToThrottle(value) or getThrottle() is called with S-bus value
-- **THEN** value is converted to throttle percentage (0% to 100%)
-- **AND** idle deadband is applied at low end (configurable via SBUS_THROTTLE_DEADBAND constant)
-- **AND** resulting command is within valid range
+- **WHEN** getThrottle() is called
+- **THEN** combined throttle/brake channel (CH2) value is read
+- **AND** if value is above center (1500μs), it is mapped to throttle percentage (0% to 100%) where 1500μs=0% and 2000μs=100%
+- **AND** if value is at or below center, throttle returns 0%
+- **AND** throttle deadband is applied near center
+
+#### Scenario: Convert channel to brake command
+- **WHEN** getBrake() is called
+- **THEN** combined throttle/brake channel (CH2) value is read
+- **AND** if value is below center (1500μs), it is mapped to brake percentage (0% to 100%) where 1500μs=0% and 1000μs=100%
+- **AND** if value is at or above center, brake returns 0%
+- **AND** brake deadband is applied near center
 
 #### Scenario: Convert channel to gear selection
 - **WHEN** mapChannelToGear(value) or getGear() is called with S-bus value
@@ -68,11 +75,6 @@ The system SHALL provide configurable mapping of S-bus channels to vehicle contr
   - SBUS_GEAR_LOW_MIN to SBUS_GEAR_LOW_MAX → LOW
 - **AND** gear enum is returned
 - **AND** default gear is NEUTRAL if value is out of all ranges
-
-#### Scenario: Convert channel to brake command
-- **WHEN** mapChannelToBrake(value) or getBrake() is called with S-bus value
-- **THEN** value is converted to brake percentage (0% to 100%)
-- **AND** resulting command is within valid range
 
 ### Requirement: Signal Loss Detection and Fail-Safe
 The system SHALL detect S-bus signal loss and activate fail-safe mode.
@@ -220,76 +222,64 @@ The system SHALL provide a SBusInput class that wraps the SBUS library and provi
 - **AND** signal validity is checked based on timeout
 
 ### Requirement: Channel Configuration Structure
-The system SHALL define channel mapping configuration as compile-time constants in Constants.h.
+The system SHALL define channel-to-function mapping via a compile-time SBusChannelConfig structure in Constants.h.
 
 #### Scenario: Define channel assignments
-- **WHEN** code references channel assignments
-- **THEN** SBusChannelConfig struct provides named constants:
-  - STEERING = 1
-  - THROTTLE = 2
-  - TRANSMISSION = 3
-  - BRAKE = 4
-  - IGNITION = 5
-  - FRONT_LIGHT = 6
-- **AND** constants are used throughout codebase instead of magic numbers
+- **WHEN** SBusChannelConfig is defined
+- **THEN** the following constants are available:
+  - STEERING = 1 (steering servo)
+  - THROTTLE = 2 (combined throttle/brake)
+  - TRANSMISSION = 3 (gear selector)
+  - IGNITION = 4 (ignition state)
+  - FRONT_LIGHT = 5 (front light toggle)
+- **AND** BRAKE channel constant is removed (brake reads from THROTTLE channel)
 
 #### Scenario: Define mapping parameters
-- **WHEN** channel values are mapped to vehicle commands
-- **THEN** deadband constants are defined (STEERING_DEADBAND, THROTTLE_DEADBAND)
-- **AND** gear selection range constants are defined (min/max for each gear)
-- **AND** ignition state range constants are defined (OFF: 880-1200μs, ACC: 1201-1520μs, IGNITION: 1521-2160μs)
-- **AND** front light threshold constant is defined (1520μs)
-- **AND** constants are documented with units and purpose
+- **WHEN** mapping parameters are defined
+- **THEN** the following constants are available:
+  - SBUS_US_MIN = 1000 (minimum microseconds)
+  - SBUS_US_MAX = 2000 (maximum microseconds)
+  - SBUS_US_CENTER = 1500 (center point — split between throttle and brake)
+  - SBUS_STEERING_DEADBAND = 2.0 (percent)
+  - SBUS_THROTTLE_DEADBAND = 2.0 (percent)
 
 ### Requirement: Mapped Vehicle Command Methods
-The system SHALL convert raw SBUS channel values to vehicle-specific commands with appropriate scaling and deadzones.
+The system SHALL provide methods that read S-bus channels and return typed vehicle commands.
 
 #### Scenario: Map steering channel to percentage
 - **WHEN** getSteering() is called
-- **THEN** STEERING channel value is read (880-2160μs)
-- **AND** value is mapped to -100 to +100 percentage
-- **AND** center deadband (±2%) is applied around 1520μs center point
-- **AND** resulting percentage is clamped to valid range
+- **THEN** channel value from SBusChannelConfig::STEERING is read
+- **AND** value is converted using bidirectional mapping (center = 0%, min = -100%, max = +100%)
+- **AND** deadband of SBUS_STEERING_DEADBAND is applied around center
 
-#### Scenario: Map throttle channel to percentage
+#### Scenario: Map throttle from combined channel
 - **WHEN** getThrottle() is called
-- **THEN** THROTTLE channel value is read (880-2160μs)
-- **AND** value is mapped to 0 to 100 percentage
-- **AND** idle deadband (2%) is applied at low end
-- **AND** resulting percentage is clamped to valid range
+- **THEN** channel value from SBusChannelConfig::THROTTLE is read
+- **AND** only the upper half (above SBUS_US_CENTER) is mapped to 0–100%
+- **AND** values at or below center return 0%
+- **AND** deadband of SBUS_THROTTLE_DEADBAND is applied near 0%
+
+#### Scenario: Map brake from combined channel
+- **WHEN** getBrake() is called
+- **THEN** channel value from SBusChannelConfig::THROTTLE (same channel) is read
+- **AND** only the lower half (below SBUS_US_CENTER) is mapped to 0–100%
+- **AND** values at or above center return 0%
 
 #### Scenario: Map transmission channel to gear enum
 - **WHEN** getGear() is called
-- **THEN** TRANSMISSION channel value is read (880-2160μs)
-- **AND** value is compared against gear range constants:
-  - 880-1200μs → Gear::REVERSE
-  - 1201-1520μs → Gear::NEUTRAL
-  - 1521-2160μs → Gear::LOW
-- **AND** corresponding gear enum is returned
-- **AND** default is NEUTRAL if value is invalid
-
-#### Scenario: Map brake channel to percentage
-- **WHEN** getBrake() is called
-- **THEN** BRAKE channel value is read (880-2160μs)
-- **AND** value is mapped to 0 to 100 percentage linearly
-- **AND** resulting percentage is clamped to valid range
+- **THEN** channel value from SBusChannelConfig::TRANSMISSION is read
+- **AND** value is mapped to TransmissionController::Gear enum based on defined ranges
 
 #### Scenario: Map ignition channel to state enum
 - **WHEN** getIgnitionState() is called
-- **THEN** IGNITION channel value is read (880-2160μs)
-- **AND** value is compared against ignition range constants:
-  - 880-1200μs → IgnitionState::OFF
-  - 1201-1520μs → IgnitionState::ACC (accessory power)
-  - 1521-2160μs → IgnitionState::IGNITION (full ignition)
-- **AND** corresponding ignition state enum is returned
-- **AND** default is OFF if value is invalid
+- **THEN** channel value from SBusChannelConfig::IGNITION is read
+- **AND** value is mapped to IgnitionState enum (OFF/ACC/IGNITION) based on defined ranges
 
 #### Scenario: Map front light channel to boolean
 - **WHEN** getFrontLight() is called
-- **THEN** FRONT_LIGHT channel value is read (880-2160μs)
-- **AND** value is compared against threshold (1520μs)
-- **AND** true is returned if value > 1520μs (ON)
-- **AND** false is returned if value <= 1520μs (OFF)
+- **THEN** channel value from SBusChannelConfig::FRONT_LIGHT is read
+- **AND** value above SBUS_FRONT_LIGHT_THRESHOLD returns true (ON)
+- **AND** value at or below threshold returns false (OFF)
 
 ### Requirement: Relay Controller for Ignition and Lights
 The system SHALL provide a RelayController class to manage relay outputs for ignition states and front light control.

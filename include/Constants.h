@@ -81,11 +81,10 @@
 // S-bus Channel Assignments (1-16)
 struct SBusChannelConfig {
     static constexpr uint8_t STEERING = 1;      // Channel 1: Steering (-100% to +100%)
-    static constexpr uint8_t THROTTLE = 2;      // Channel 2: Throttle (0% to 100%)
+    static constexpr uint8_t THROTTLE = 2;      // Channel 2: Throttle/Brake combined (above center=throttle, below=brake)
     static constexpr uint8_t TRANSMISSION = 3;  // Channel 3: Gear selector (3 positions: R/N/L)
-    static constexpr uint8_t BRAKE = 4;         // Channel 4: Brake (0% to 100%)
-    static constexpr uint8_t IGNITION = 5;      // Channel 5: Ignition state (OFF/ACC/IGNITION)
-    static constexpr uint8_t FRONT_LIGHT = 6;   // Channel 6: Front light (on/off)
+    static constexpr uint8_t IGNITION = 4;      // Channel 4: Ignition state (OFF/ACC/IGNITION)
+    static constexpr uint8_t FRONT_LIGHT = 5;   // Channel 5: Front light (on/off)
 };
 
 // S-bus Protocol Parameters

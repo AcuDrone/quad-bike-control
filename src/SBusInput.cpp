@@ -123,10 +123,14 @@ float SBusInput::getSteering() const {
 float SBusInput::getThrottle() const {
     uint16_t valueUs = getChannel(SBusChannelConfig::THROTTLE);
 
-    // Map to 0 to 100
-    float percentage = mapToPercentage(valueUs, SBUS_US_MIN, SBUS_US_MAX);
+    // Combined channel: above center = throttle (0-100%)
+    if (valueUs <= SBUS_US_CENTER) {
+        return 0.0f;
+    }
 
-    // Apply idle deadband at low end
+    float percentage = mapToPercentage(valueUs, SBUS_US_CENTER, SBUS_US_MAX);
+
+    // Apply idle deadband near center
     if (percentage < SBUS_THROTTLE_DEADBAND) {
         percentage = 0.0f;
     }
@@ -151,10 +155,16 @@ TransmissionController::Gear SBusInput::getGear() const {
 }
 
 float SBusInput::getBrake() const {
-    uint16_t valueUs = getChannel(SBusChannelConfig::BRAKE);
+    uint16_t valueUs = getChannel(SBusChannelConfig::THROTTLE);
 
-    // Map to 0 to 100
-    return mapToPercentage(valueUs, SBUS_US_MIN, SBUS_US_MAX);
+    // Combined channel: below center = brake (0-100%), 1500μs=0%, 1000μs=100%
+    if (valueUs >= SBUS_US_CENTER) {
+        return 0.0f;
+    }
+
+    // Invert: 1500μs→0%, 1000μs→100%
+    uint16_t inverted = SBUS_US_CENTER - (valueUs - SBUS_US_MIN);
+    return mapToPercentage(inverted, SBUS_US_MIN, SBUS_US_CENTER);
 }
 
 SBusInput::IgnitionState SBusInput::getIgnitionState() const {
@@ -235,12 +245,6 @@ float SBusInput::applyDeadband(float value, float center, float deadband) const 
 }
 
 uint16_t SBusInput::rawToMicroseconds(uint16_t rawValue) const {
-    // Bolder Flight SBUS library outputs raw values in range 172-1811
-    // Map to standard 1000-2000μs range
-    // Linear mapping: y = mx + b
-    // m = (2000 - 1000) / (1811 - 172) = 1000 / 1639 ≈ 0.610
-    // b = 1000 - 172 * m
-
     constexpr float slope =
         (float)(SBUS_US_MAX - SBUS_US_MIN) /
         (float)(SBUS_RAW_MAX - SBUS_RAW_MIN);
