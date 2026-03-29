@@ -52,8 +52,11 @@ void setup() {
     Serial.begin(SERIAL_BAUD_RATE);
     delay(1000);
 
-    Debug::setFeatureEnabled(DebugFeature::TRANSMISSION, false);
-    Debug::setFeatureEnabled(DebugFeature::BRAKE, true);
+    Debug::setFeatureEnabled(DebugFeature::SBUS, true);
+    // Debug::setFeatureEnabled(DebugFeature::VEHICLE, true);
+    // Debug::setFeatureEnabled(DebugFeature::BRAKE, true);
+    // Debug::setFeatureEnabled(DebugFeature::SERVO, true);
+    
 
     // Initialize NVS first (required by Debug utility)
     Serial.println("[INIT] Initializing NVS...");

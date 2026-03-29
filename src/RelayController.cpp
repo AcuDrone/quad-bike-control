@@ -113,13 +113,13 @@ void RelayController::updateRelays() {
             break;
 
         case IgnitionState::ACC:
-            // Accessory power only (RELAY2 ON, RELAY1 OFF)
+            // Accessory power only (RELAY1 ON, RELAY2 OFF)
             digitalWrite(relay1Pin_, HIGH);
             digitalWrite(relay2Pin_, LOW);
             break;
 
         case IgnitionState::IGNITION:
-            // Full power (both relays ON)
+            // Accessory power only (RELAY1 ON, RELAY2 OFF)
             digitalWrite(relay1Pin_, HIGH);
             digitalWrite(relay2Pin_, LOW);
             break;

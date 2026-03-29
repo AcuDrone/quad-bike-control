@@ -22,11 +22,8 @@ bool SBusInput::begin(uint8_t rxPin, uint8_t uartNum) {
         Debug::printlnFeature(DebugFeature::SBUS,"[SBUS] ERROR: Invalid UART number (ESP32-C6 has UART0 and UART1 only)");
         return false;
     }
-
-    // Create SBUS receiver object with HardwareSerial, rx pin, tx pin (-1 = not used), inverted signal
-    sbus_ = new bfs::SbusRx(serial, rxPin, -1, false);
-
-    // Initialize SBUS receiver
+    
+    sbus_ = new bfs::SbusRx(serial, rxPin, -1, true);
     sbus_->Begin();
 
     // Reset statistics
@@ -57,6 +54,31 @@ void SBusInput::update() {
         if (sbusData_.lost_frame || sbusData_.failsafe) {
             errorFrames_++;
         }
+    }
+
+    // Log all channels every 1 second
+    static uint32_t lastLogTime = 0;
+    static uint32_t byteCount = 0;
+    uint32_t now = millis();
+
+    // Count raw bytes available on the UART (bypass SBUS library)
+    HardwareSerial* serial = (SBUS_UART_NUM == UART_NUM_1) ? &Serial1 : &Serial;
+    byteCount += serial->available();
+
+    if (now - lastLogTime >= 1000) {
+        lastLogTime = now;
+        Debug::printfFeature(DebugFeature::SBUS,
+            "[SBUS] frames:%lu errors:%lu age:%lums valid:%s uartBytes:%lu\n",
+            totalFrames_, errorFrames_, getSignalAge(), isSignalValid() ? "Y" : "N", byteCount);
+        Debug::printfFeature(DebugFeature::SBUS,
+            "[SBUS] raw: %u %u %u %u %u %u %u %u\n",
+            sbusData_.ch[0], sbusData_.ch[1], sbusData_.ch[2], sbusData_.ch[3],
+            sbusData_.ch[4], sbusData_.ch[5], sbusData_.ch[6], sbusData_.ch[7]);
+        Debug::printfFeature(DebugFeature::SBUS,
+            "[SBUS] CH1:%4u CH2:%4u CH3:%4u CH4:%4u CH5:%4u CH6:%4u CH7:%4u CH8:%4u\n",
+            getChannel(1), getChannel(2), getChannel(3), getChannel(4),
+            getChannel(5), getChannel(6), getChannel(7), getChannel(8));
+        byteCount = 0;
     }
 }
 
@@ -214,15 +236,19 @@ float SBusInput::applyDeadband(float value, float center, float deadband) const 
 
 uint16_t SBusInput::rawToMicroseconds(uint16_t rawValue) const {
     // Bolder Flight SBUS library outputs raw values in range 172-1811
-    // Map to standard 880-2160μs range
+    // Map to standard 1000-2000μs range
     // Linear mapping: y = mx + b
-    // m = (2160 - 880) / (1811 - 172) = 1280 / 1639 ≈ 0.781
-    // b = 880 - 172 * m
+    // m = (2000 - 1000) / (1811 - 172) = 1000 / 1639 ≈ 0.610
+    // b = 1000 - 172 * m
 
-    constexpr float slope = 1280.0f / 1639.0f;
-    constexpr float intercept = 880.0f - 172.0f * slope;
+    constexpr float slope =
+        (float)(SBUS_US_MAX - SBUS_US_MIN) /
+        (float)(SBUS_RAW_MAX - SBUS_RAW_MIN);
 
-    uint16_t valueUs = (uint16_t)(rawValue * slope + intercept);
+    constexpr float intercept =
+        (float)SBUS_US_MIN - (float)SBUS_RAW_MIN * slope;
+
+    uint16_t valueUs = static_cast<uint16_t>(rawValue * slope + intercept + 0.5f);
 
     // Clamp to valid range
     if (valueUs < SBUS_US_MIN) valueUs = SBUS_US_MIN;

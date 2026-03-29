@@ -89,16 +89,15 @@ struct SBusChannelConfig {
 };
 
 // S-bus Protocol Parameters
-#define SBUS_MIN_VALUE        172   // Minimum S-bus raw value
-#define SBUS_MAX_VALUE        1811  // Maximum S-bus raw value
-#define SBUS_CENTER_VALUE     992   // Center point for bidirectional channels
+#define SBUS_RAW_MIN        201   // Minimum S-bus raw value (ArduPilot: (1000-875)*1600/1000+1)
+#define SBUS_RAW_MAX        1801  // Maximum S-bus raw value (ArduPilot: (2000-875)*1600/1000+1)
 #define SBUS_SIGNAL_TIMEOUT   500   // ms before fail-safe activates
 #define SBUS_MIN_RECOVERY_FRAMES 3  // Consecutive good frames to exit fail-safe
 
 // S-bus to microseconds conversion (for compatibility)
-#define SBUS_US_MIN           880   // Microseconds equivalent
-#define SBUS_US_MAX           2160  // Microseconds equivalent
-#define SBUS_US_CENTER        1520  // Microseconds center point (updated to match SBUS standard)
+#define SBUS_US_MIN           1000   // Microseconds equivalent
+#define SBUS_US_MAX           2000  // Microseconds equivalent
+#define SBUS_US_CENTER        1500  // Microseconds center point (updated to match SBUS standard)
 
 // Deadband Configuration
 #define SBUS_STEERING_DEADBAND    2.0f   // % center deadband for steering

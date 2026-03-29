@@ -35,7 +35,12 @@
       "Bash(openspec spec:*)",
       "Bash(openspec validate:*)",
       "Bash(mkdir -p /Users/s.zalozniy/Documents/SourceCode/ESP32/QuadBikeControl/openspec/changes/add-ignition-light-web-controls/specs/web-control)",
-      "Bash(mkdir -p /Users/s.zalozniy/Documents/SourceCode/ESP32/QuadBikeControl/openspec/changes/add-ignition-light-web-controls/specs/vehicle-systems)"
+      "Bash(mkdir -p /Users/s.zalozniy/Documents/SourceCode/ESP32/QuadBikeControl/openspec/changes/add-ignition-light-web-controls/specs/vehicle-systems)",
+      "WebFetch(domain:github.com)",
+      "Bash(curl -s \"https://raw.githubusercontent.com/ArduPilot/ardupilot/master/libraries/AP_SBusOut/AP_SBusOut.cpp\")",
+      "Bash(curl -s \"https://api.github.com/search/code?q=sbus+pwm+repo:ArduPilot/ardupilot+filename:SBusOut\")",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebSearch"
     ]
   }
 }

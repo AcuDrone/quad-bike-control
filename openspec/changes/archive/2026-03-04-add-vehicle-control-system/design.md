@@ -118,7 +118,6 @@ Define default channel mappings in Constants.h:
 
 // S-bus Parameters
 #define SBUS_SIGNAL_TIMEOUT   500  // ms before fail-safe activates
-#define SBUS_CENTER_VALUE     1500 // Center point for bidirectional channels
 #define SBUS_MIN_VALUE        880  // Minimum S-bus channel value
 #define SBUS_MAX_VALUE        2160 // Maximum S-bus channel value
 ```
