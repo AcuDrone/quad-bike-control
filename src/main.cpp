@@ -10,6 +10,7 @@
 #include "TelemetryManager.h"
 #include "SBusInput.h"
 #include "RelayController.h"
+#include "MCP23017Controller.h"
 #include "nvs_flash.h"
 
 // ============================================================================
@@ -33,9 +34,12 @@ SBusInput sbusInput;
 // Relay Controller for ignition and lights
 RelayController relayController;
 
+// MCP23017 I2C GPIO Expander
+MCP23017Controller mcpExpander;
+
 // Vehicle Controller (coordinates all actuators and input sources)
 VehicleController vehicleController(steeringServo, throttleServo, transmissionActuator, brakeActuator,
-                                     sbusInput, relayController);
+                                     sbusInput, relayController, mcpExpander);
 
 // Web Portal for telemetry and manual control
 WebPortal webPortal;
@@ -81,6 +85,11 @@ void setup() {
 
     Debug::println("\n=== ESP32-C6 Quad Bike Control ===");
 
+    // Initialize MCP23017 I2C GPIO expander (must be before relay and gear sensor init)
+    if (!mcpExpander.begin(PIN_I2C_SDA, PIN_I2C_SCL, MCP23017_ADDRESS)) {
+        Debug::printlnFeature(DebugFeature::RELAY, "ERROR: MCP23017 not detected - relays and sensors will not work");
+    }
+
     // Initialize servos
     if (!steeringServo.begin(PIN_STEERING_PWM, LEDC_CH_STEERING, STEERING_SERVO_MIN_US, STEERING_SERVO_MAX_US)) {
         Debug::printlnFeature(DebugFeature::SERVO, "ERROR: Steering servo failed");
@@ -102,8 +111,8 @@ void setup() {
         transmissionActuator.attachEncoder(&transmissionEncoder);
         transmissionActuator.stop();
 
-        // Initialize gear position sensors (GPIO switches)
-        transmissionActuator.initGearSensors();
+        // Initialize gear position sensors on MCP23017
+        transmissionActuator.initGearSensors(mcpExpander);
 
         // Load saved calibration from NVS (now that NVS is initialized)
         if (transmissionActuator.loadCalibration()) {
@@ -152,17 +161,18 @@ void setup() {
     }
     brakeActuator.stop();
 
-    // Initialize brake sensor (HIGH = no pressure, LOW = pressure detected)
-    pinMode(PIN_BRAKE_SENSOR, INPUT);
-    Debug::printfFeature(DebugFeature::BRAKE, "Brake sensor: %s\n", digitalRead(PIN_BRAKE_SENSOR) ? "Released (HIGH)" : "Pressed (LOW)");
+    // Brake sensor is on MCP23017 (initialized via mcpExpander above)
+    mcpExpander.pinMode(MCP_PIN_BRAKE_SENSOR, INPUT);
+    Debug::printfFeature(DebugFeature::BRAKE, "Brake sensor (MCP23017): %s\n",
+        mcpExpander.digitalRead(MCP_PIN_BRAKE_SENSOR) ? "Released (HIGH)" : "Pressed (LOW)");
 
     // Initialize SBUS input
     if (!sbusInput.begin()) {
         Debug::printlnFeature(DebugFeature::SBUS, "ERROR: SBUS input failed");
     }
 
-    // Initialize relay controller
-    if (!relayController.begin()) {
+    // Initialize relay controller on MCP23017
+    if (!relayController.begin(mcpExpander)) {
         Debug::printlnFeature(DebugFeature::RELAY, "ERROR: Relay controller failed");
     }
 

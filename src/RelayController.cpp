@@ -2,37 +2,37 @@
 #include "Debug.h"
 
 RelayController::RelayController()
-    : relay1Pin_(0),
-      relay2Pin_(0),
-      relay3Pin_(0),
+    : mcp_(nullptr),
       currentIgnitionState_(IgnitionState::OFF),
       frontLightOn_(false),
       crankingStartTime_(0),
       isCranking_(false) {
 }
 
-bool RelayController::begin(uint8_t relay1Pin, uint8_t relay2Pin, uint8_t relay3Pin) {
-    // Store pin assignments
-    relay1Pin_ = relay1Pin;
-    relay2Pin_ = relay2Pin;
-    relay3Pin_ = relay3Pin;
+bool RelayController::begin(MCP23017Controller& mcp) {
+    mcp_ = &mcp;
 
-    // Configure pins as outputs
-    pinMode(relay1Pin_, OUTPUT);
-    pinMode(relay2Pin_, OUTPUT);
-    pinMode(relay3Pin_, OUTPUT);
+    if (!mcp_->isInitialized()) {
+        Debug::printlnFeature(DebugFeature::RELAY, "[RELAY] ERROR: MCP23017 not initialized");
+        return false;
+    }
+
+    // Configure relay pins as outputs on MCP23017
+    mcp_->pinMode(MCP_PIN_RELAY1, OUTPUT);
+    mcp_->pinMode(MCP_PIN_RELAY2, OUTPUT);
+    mcp_->pinMode(MCP_PIN_RELAY3, OUTPUT);
 
     // Initialize all relays to OFF (safe state)
-    digitalWrite(relay1Pin_, LOW);
-    digitalWrite(relay2Pin_, LOW);
-    digitalWrite(relay3Pin_, LOW);
+    mcp_->digitalWrite(MCP_PIN_RELAY1, LOW);
+    mcp_->digitalWrite(MCP_PIN_RELAY2, LOW);
+    mcp_->digitalWrite(MCP_PIN_RELAY3, LOW);
 
     // Set initial state
     currentIgnitionState_ = IgnitionState::OFF;
     frontLightOn_ = false;
 
-    Debug::printfFeature(DebugFeature::RELAY, "[RELAY] Initialized: RELAY1=%d, RELAY2=%d, RELAY3=%d\n",
-                  relay1Pin_, relay2Pin_, relay3Pin_);
+    Debug::printfFeature(DebugFeature::RELAY, "[RELAY] Initialized on MCP23017: RELAY1=%d, RELAY2=%d, RELAY3=%d\n",
+                  MCP_PIN_RELAY1, MCP_PIN_RELAY2, MCP_PIN_RELAY3);
 
     return true;
 }
@@ -62,7 +62,7 @@ void RelayController::setFrontLight(bool on) {
     if (frontLightOn_ != on) {
         Debug::printfFeature(DebugFeature::RELAY, "[RELAY] Front Light: %s\n", on ? "ON" : "OFF");
         frontLightOn_ = on;
-        digitalWrite(relay3Pin_, on ? HIGH : LOW);
+        if (mcp_) mcp_->digitalWrite(MCP_PIN_RELAY3, on ? HIGH : LOW);
     }
 }
 
@@ -70,9 +70,11 @@ void RelayController::allOff() {
     Debug::printlnFeature(DebugFeature::RELAY, "[RELAY] Fail-safe: All relays OFF");
 
     // Turn off all relays
-    digitalWrite(relay1Pin_, LOW);
-    digitalWrite(relay2Pin_, LOW);
-    digitalWrite(relay3Pin_, LOW);
+    if (mcp_) {
+        mcp_->digitalWrite(MCP_PIN_RELAY1, LOW);
+        mcp_->digitalWrite(MCP_PIN_RELAY2, LOW);
+        mcp_->digitalWrite(MCP_PIN_RELAY3, LOW);
+    }
 
     // Update state
     currentIgnitionState_ = IgnitionState::OFF;
@@ -105,29 +107,27 @@ void RelayController::update(uint16_t engineRpm) {
 }
 
 void RelayController::updateRelays() {
+    if (!mcp_) return;
+
     switch (currentIgnitionState_) {
         case IgnitionState::OFF:
-            // Both relays OFF
-            digitalWrite(relay1Pin_, LOW);
-            digitalWrite(relay2Pin_, LOW);
+            mcp_->digitalWrite(MCP_PIN_RELAY1, LOW);
+            mcp_->digitalWrite(MCP_PIN_RELAY2, LOW);
             break;
 
         case IgnitionState::ACC:
-            // Accessory power only (RELAY1 ON, RELAY2 OFF)
-            digitalWrite(relay1Pin_, HIGH);
-            digitalWrite(relay2Pin_, LOW);
+            mcp_->digitalWrite(MCP_PIN_RELAY1, HIGH);
+            mcp_->digitalWrite(MCP_PIN_RELAY2, LOW);
             break;
 
         case IgnitionState::IGNITION:
-            // Accessory power only (RELAY1 ON, RELAY2 OFF)
-            digitalWrite(relay1Pin_, HIGH);
-            digitalWrite(relay2Pin_, LOW);
+            mcp_->digitalWrite(MCP_PIN_RELAY1, HIGH);
+            mcp_->digitalWrite(MCP_PIN_RELAY2, LOW);
             break;
 
         case IgnitionState::CRANKING:
-            // Note: Actual cranking control is in update() method
-            digitalWrite(relay1Pin_, HIGH);
-            digitalWrite(relay2Pin_, HIGH);
+            mcp_->digitalWrite(MCP_PIN_RELAY1, HIGH);
+            mcp_->digitalWrite(MCP_PIN_RELAY2, HIGH);
             break;
     }
 }

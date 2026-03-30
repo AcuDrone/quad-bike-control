@@ -1,9 +1,9 @@
 #include "TransmissionController.h"
 #include "Debug.h"
-#include "driver/gpio.h"
 
 TransmissionController::TransmissionController()
     : BTS7960Controller()
+    , mcp_(nullptr)
     , targetGear_(Gear::GEAR_NEUTRAL)
     , lastGearCheckTime_(0)
     , lastMovementLogTime_(0)
@@ -175,57 +175,52 @@ bool TransmissionController::needsThrottleBoost() const {
     return !isStopped() && targetGear_ != Gear::GEAR_NEUTRAL;
 }
 
-void TransmissionController::initGearSensors() {
-    // Configure gear position sensor pins as inputs
-    // Active-low: pin reads LOW when gear is selected
-    // Hardware has external pull-up resistors - no internal pull-ups needed
-    // Using ESP-IDF GPIO API for proper configuration (required for GPIO 15 strapping pin)
+void TransmissionController::initGearSensors(MCP23017Controller& mcp) {
+    mcp_ = &mcp;
 
-    gpio_set_direction(PIN_GEAR_REVERSE, GPIO_MODE_INPUT);
-    gpio_set_pull_mode(PIN_GEAR_REVERSE, GPIO_FLOATING);    // External pull-up on hardware
+    // Configure gear sensor pins as inputs with pull-ups on MCP23017 Port B
+    mcp_->pinMode(MCP_PIN_GEAR_REVERSE, INPUT);
+    mcp_->pinMode(MCP_PIN_GEAR_NEUTRAL, INPUT);
+    mcp_->pinMode(MCP_PIN_GEAR_LOW, INPUT);
+    mcp_->pinMode(MCP_PIN_GEAR_HIGH, INPUT);
 
-    gpio_set_direction(PIN_GEAR_NEUTRAL, GPIO_MODE_INPUT);
-    gpio_set_pull_mode(PIN_GEAR_NEUTRAL, GPIO_FLOATING);    // External pull-up on hardware
-
-    gpio_set_direction(PIN_GEAR_LOW, GPIO_MODE_INPUT);      // GPIO 15 - strapping pin
-    gpio_set_pull_mode(PIN_GEAR_LOW, GPIO_FLOATING);        // External pull-up on hardware
-
-    gpio_set_direction(PIN_GEAR_HIGH, GPIO_MODE_INPUT);     // GPIO 18 - safe
-    gpio_set_pull_mode(PIN_GEAR_HIGH, GPIO_FLOATING);       // External pull-up on hardware
-
-    Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] Gear position sensors initialized (active-low, external pull-ups)");
+    Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Gear sensors initialized on MCP23017 Port B (active-low, pull-ups)");
 }
 
 TransmissionController::Gear TransmissionController::getPhysicalGear() const {
-    // Read all gear sensor pins (active-low: LOW = selected)
-    bool reverseActive = (digitalRead(PIN_GEAR_REVERSE) == LOW);
-    bool neutralActive = (digitalRead(PIN_GEAR_NEUTRAL) == LOW);
-    bool lowActive = (digitalRead(PIN_GEAR_LOW) == LOW);
-    bool highActive = (digitalRead(PIN_GEAR_HIGH) == LOW);
+    if (!mcp_ || !mcp_->isInitialized()) {
+        return Gear::GEAR_UNKNOWN;
+    }
+
+    // Bulk read Port B in a single I2C transaction
+    uint8_t portB = mcp_->readPort(1);
+    uint8_t gearBits = portB & MCP_PORTB_GEAR_MASK;
+
+    // Active-low: bit is 0 when gear is selected
+    bool reverseActive = !(gearBits & 0x01);  // GPB0
+    bool neutralActive = !(gearBits & 0x02);  // GPB1
+    bool lowActive     = !(gearBits & 0x04);  // GPB2
+    bool highActive    = !(gearBits & 0x08);  // GPB3
 
     // Count how many sensors are active (should be exactly 1)
     uint8_t activeCount = reverseActive + neutralActive + lowActive + highActive;
 
     if (activeCount == 0) {
-        // No gear selected (all pins HIGH) - return UNKNOWN
-        Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] WARNING: No gear sensor active");
+        Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] WARNING: No gear sensor active");
         return Gear::GEAR_UNKNOWN;
     }
 
     if (activeCount > 1) {
-        // Multiple gears active - invalid state, return UNKNOWN
-        Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] ERROR: Multiple gear sensors active (R:%d N:%d L:%d H:%d)\n",
+        Debug::printfFeature(DebugFeature::TRANSMISSION, "[TRANS] ERROR: Multiple gear sensors active (R:%d N:%d L:%d H:%d)\n",
                      reverseActive, neutralActive, lowActive, highActive);
         return Gear::GEAR_UNKNOWN;
     }
 
-    // Exactly one sensor is active - return the corresponding gear
     if (reverseActive) return Gear::GEAR_REVERSE;
     if (neutralActive) return Gear::GEAR_NEUTRAL;
     if (lowActive) return Gear::GEAR_LOW;
     if (highActive) return Gear::GEAR_HIGH;
 
-    // Should never reach here, but return UNKNOWN for safety
     return Gear::GEAR_UNKNOWN;
 }
 
@@ -366,7 +361,7 @@ bool TransmissionController::calibrateAllGearPositions(uint8_t calibrationSpeed,
     // Structure to store gear detection data
     struct GearCalibration {
         Gear gear;
-        gpio_num_t pin;
+        uint8_t pin;  // MCP23017 pin number
         const char* name;
         int32_t entryPosition;
         int32_t exitPosition;
@@ -376,10 +371,10 @@ bool TransmissionController::calibrateAllGearPositions(uint8_t calibrationSpeed,
 
     // Define gears to calibrate (in order of traversal: REVERSE -> NEUTRAL -> LOW -> HIGH)
     GearCalibration gears[] = {
-        {Gear::GEAR_REVERSE, PIN_GEAR_REVERSE, "REVERSE", 0, 0, false, false},
-        {Gear::GEAR_NEUTRAL, PIN_GEAR_NEUTRAL, "NEUTRAL", 0, 0, false, false},
-        {Gear::GEAR_LOW, PIN_GEAR_LOW, "LOW", 0, 0, false, false},
-        {Gear::GEAR_HIGH, PIN_GEAR_HIGH, "HIGH", 0, 0, false, false}
+        {Gear::GEAR_REVERSE, MCP_PIN_GEAR_REVERSE, "REVERSE", 0, 0, false, false},
+        {Gear::GEAR_NEUTRAL, MCP_PIN_GEAR_NEUTRAL, "NEUTRAL", 0, 0, false, false},
+        {Gear::GEAR_LOW, MCP_PIN_GEAR_LOW, "LOW", 0, 0, false, false},
+        {Gear::GEAR_HIGH, MCP_PIN_GEAR_HIGH, "HIGH", 0, 0, false, false}
     };
     const int numGears = 4;  // All 4 gears will be calibrated
 
@@ -404,7 +399,7 @@ bool TransmissionController::calibrateAllGearPositions(uint8_t calibrationSpeed,
         // Read current gear sensor
         if (currentGearIndex < numGears) {
             GearCalibration& gear = gears[currentGearIndex];
-            bool sensorActive = (digitalRead(gear.pin) == LOW);
+            bool sensorActive = (mcp_ && mcp_->digitalRead(gear.pin) == LOW);
 
             if (!gear.entryDetected && sensorActive) {
                 // Gear entry detected

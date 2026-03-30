@@ -10,6 +10,7 @@
 #include "SBusInput.h"
 #include "RelayController.h"
 #include "CANController.h"
+#include "MCP23017Controller.h"
 
 /**
  * @brief Vehicle control coordination layer
@@ -24,7 +25,8 @@ public:
                       TransmissionController& transmission,
                       BTS7960Controller& brake,
                       SBusInput& sbusInput,
-                      RelayController& relayController);
+                      RelayController& relayController,
+                      MCP23017Controller& mcp);
 
     /**
      * @brief Initialize CAN controller
@@ -85,7 +87,7 @@ public:
      * @brief Check brake sensor state
      * @return true if brake is released (HIGH signal, no pressure)
      */
-    bool isBrakeReleased() const { return digitalRead(PIN_BRAKE_SENSOR) == HIGH; }
+    bool isBrakeReleased() const { return mcp_.digitalRead(MCP_PIN_BRAKE_SENSOR) == HIGH; }
 
     /**
      * @brief Get vehicle data from CAN bus
@@ -129,6 +131,7 @@ private:
     // Input and output references
     SBusInput& sbusInput_;
     RelayController& relayController_;
+    MCP23017Controller& mcp_;
     CANController canController_;  // CAN bus controller (owned, not reference)
 
     // State tracking

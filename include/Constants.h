@@ -48,31 +48,38 @@
 #define PIN_CAN_SCK         GPIO_NUM_23  // SPI SCK
 #define PIN_CAN_CS          GPIO_NUM_22  // SPI Chip Select
 
-// Gear Selection Sensor (physical gear selector position feedback)
-// Active-low configuration: pin goes LOW when gear is selected (pull-up resistor)
-// NOTE: GPIO 16/17 are UART0 TX/RX (breaks USB serial debugging) - cannot be used!
-// NOTE: GPIO 15 is strapping pin - requires proper ESP-IDF GPIO initialization with pull-up
-#define PIN_GEAR_REVERSE    GPIO_NUM_10  // LOW when gear selector in REVERSE (active-low)
-#define PIN_GEAR_NEUTRAL    GPIO_NUM_11  // LOW when gear selector in NEUTRAL (active-low)
-#define PIN_GEAR_LOW        GPIO_NUM_15  // LOW when gear selector in LOW (active-low) - strapping pin, use with care
-#define PIN_GEAR_HIGH       GPIO_NUM_18  // LOW when gear selector in HIGH (active-low) - changed from GPIO 16
+// ============================================================================
+// MCP23017 I2C GPIO EXPANDER
+// ============================================================================
 
-// Brake Position Sensor (digital feedback)
-#define PIN_BRAKE_SENSOR    GPIO_NUM_21  // Brake position feedback - HIGH = released (no pressure), LOW = pressed
+// I2C pins for MCP23017 (TODO: assign final GPIO pins)
+#define PIN_I2C_SDA         GPIO_NUM_18  // I2C SDA
+#define PIN_I2C_SCL         GPIO_NUM_19  // I2C SCL
+#define MCP23017_ADDRESS    0x20         // Default address (A0=A1=A2=GND)
 
-// Relay Control (power switching for accessories or safety systems)
-#define PIN_RELAY1          GPIO_NUM_12  // Relay 1 (e.g., main power control)
-#define PIN_RELAY2          GPIO_NUM_19  // Relay 2 (e.g., accessory power)
-#define PIN_RELAY3          GPIO_NUM_9   // Relay 3 (e.g., safety system)
+// MCP23017 Port A - Outputs (relays)
+#define MCP_PIN_RELAY1      0   // GPA0 - Relay 1 (main power control)
+#define MCP_PIN_RELAY2      1   // GPA1 - Relay 2 (accessory power)
+#define MCP_PIN_RELAY3      2   // GPA2 - Relay 3 (front light / safety)
+
+// MCP23017 Port B - Inputs (sensors, active-low with pull-ups)
+#define MCP_PIN_GEAR_REVERSE  8   // GPB0 - Gear selector REVERSE
+#define MCP_PIN_GEAR_NEUTRAL  9   // GPB1 - Gear selector NEUTRAL
+#define MCP_PIN_GEAR_LOW      10  // GPB2 - Gear selector LOW
+#define MCP_PIN_GEAR_HIGH     11  // GPB3 - Gear selector HIGH
+#define MCP_PIN_BRAKE_SENSOR  12  // GPB4 - Brake position sensor
+
+// Bit masks for bulk Port B reading
+#define MCP_PORTB_GEAR_MASK   0x0F  // GPB0-GPB3 (bits 0-3)
+#define MCP_PORTB_BRAKE_BIT   4     // GPB4 (bit 4)
 
 // Cranking Parameters
 #define CRANKING_TIMEOUT           5000  // ms - maximum cranking duration
 #define ENGINE_RUNNING_RPM_THRESHOLD 1100  // RPM - engine considered running above this
 
-// Available GPIO pins for future use: GPIO 17, 18
-// Note: GPIO 17 (UART0 TX) and GPIO 18 (UART0 RX) should be avoided for console/programming compatibility
 // Note: GPIO 14 does not exist on ESP32-C6 (valid pins are 0-23 excluding 14)
 // Note: GPIO 0 (boot pin) and GPIO 8 (NeoPixel) are now used for CAN controller (safe during runtime)
+// Note: GPIO 18 (SDA) and GPIO 19 (SCL) are now used for MCP23017 I2C bus
 
 // ============================================================================
 // S-BUS CONFIGURATION

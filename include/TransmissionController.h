@@ -3,6 +3,7 @@
 
 #include "BTS7960Controller.h"
 #include "Constants.h"
+#include "MCP23017Controller.h"
 #include <Preferences.h>
 
 /**
@@ -112,14 +113,14 @@ public:
     bool needsThrottleBoost() const;
 
     /**
-     * @brief Initialize gear position sensor GPIO pins
+     * @brief Initialize gear position sensors on MCP23017
      *
-     * Configures gear selector position sensor pins as inputs with internal pull-up resistors.
+     * Configures gear selector input pins on MCP23017 Port B with pull-ups.
      * Active-low configuration: pin reads LOW when gear is selected.
      *
-     * Must be called during setup before using getPhysicalGear().
+     * @param mcp Reference to initialized MCP23017Controller
      */
-    void initGearSensors();
+    void initGearSensors(MCP23017Controller& mcp);
 
     /**
      * @brief Read physical gear position from GPIO sensors
@@ -213,6 +214,7 @@ public:
     void clearCalibration();
 
 private:
+    MCP23017Controller* mcp_;  // MCP23017 for gear sensor reading
     Gear targetGear_;  // Target gear for current move
     TransmissionVehicleData vehicleData_;  // Vehicle data for safety checks
     uint32_t lastGearCheckTime_;  // Timestamp of last physical gear check (ms)

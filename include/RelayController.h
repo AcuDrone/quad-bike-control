@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include "Constants.h"
+#include "MCP23017Controller.h"
 
 /**
  * @brief Relay controller for ignition and lighting systems
@@ -25,15 +26,11 @@ public:
     RelayController();
 
     /**
-     * @brief Initialize relay controller
-     * @param relay1Pin GPIO pin for ignition main power (default: PIN_RELAY1)
-     * @param relay2Pin GPIO pin for accessory power (default: PIN_RELAY2)
-     * @param relay3Pin GPIO pin for front light (default: PIN_RELAY3)
+     * @brief Initialize relay controller with MCP23017 GPIO expander
+     * @param mcp Reference to initialized MCP23017Controller
      * @return true if initialization successful
      */
-    bool begin(uint8_t relay1Pin = PIN_RELAY1,
-               uint8_t relay2Pin = PIN_RELAY2,
-               uint8_t relay3Pin = PIN_RELAY3);
+    bool begin(MCP23017Controller& mcp);
 
     /**
      * @brief Set ignition state
@@ -78,10 +75,8 @@ public:
     void allOff();
 
 private:
-    // Pin assignments
-    uint8_t relay1Pin_;  // Ignition main power
-    uint8_t relay2Pin_;  // Accessory power
-    uint8_t relay3Pin_;  // Front light
+    // MCP23017 reference
+    MCP23017Controller* mcp_;
 
     // State tracking
     IgnitionState currentIgnitionState_;
