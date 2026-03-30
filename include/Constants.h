@@ -323,11 +323,11 @@ enum class InputSource {
 #define CAN_SPEED_500KBPS      0    // 500 kbps (standard automotive)
 
 // CAN Polling Intervals
-#define CAN_POLL_INTERVAL_RPM     100   // ms - RPM and speed polling rate
+#define CAN_POLL_INTERVAL_RPM     200   // ms - RPM and speed polling rate
 #define CAN_POLL_INTERVAL_TEMP    1000  // ms - Temperature polling rate
 
 // CAN Timeouts
-#define CAN_RESPONSE_TIMEOUT      1000  // ms - OBD-II response timeout
+#define CAN_RESPONSE_TIMEOUT      200   // ms - OBD-II response timeout (non-blocking, healthy ECU responds in ~50ms)
 #define CAN_DATA_STALE_TIMEOUT    5000  // ms - Mark data invalid if not updated
 #define CAN_RETRY_ATTEMPTS        3     // Number of retry attempts on error
 

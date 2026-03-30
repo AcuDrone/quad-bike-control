@@ -61,6 +61,7 @@ public:
         int8_t coolant_temp;      // Coolant temperature °C (-40 to +215)
         int8_t oil_temp;          // Oil temperature °C (-40 to +215)
         uint8_t throttle_position; // Throttle position % (0-100)
+        uint8_t fuel_level;       // Fuel tank level % (0-100)
         String can_status;        // CAN status: "connected", "disconnected"
         uint32_t can_data_age;    // Time since last CAN update (ms)
 

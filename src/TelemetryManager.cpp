@@ -75,6 +75,7 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
         telemetry.coolant_temp = vehicleData.coolantTemp;
         telemetry.oil_temp = vehicleData.oilTemp;
         telemetry.throttle_position = vehicleData.throttlePosition;
+        telemetry.fuel_level = vehicleData.fuelLevel;
         telemetry.can_status = "connected";
         telemetry.can_data_age = millis() - vehicleData.lastUpdateTime;
     } else {
@@ -84,6 +85,7 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
         telemetry.coolant_temp = 0;
         telemetry.oil_temp = 0;
         telemetry.throttle_position = 0;
+        telemetry.fuel_level = 0;
         telemetry.can_status = "disconnected";
         telemetry.can_data_age = (vehicleData.lastUpdateTime == 0) ? 0 : (millis() - vehicleData.lastUpdateTime);
     }

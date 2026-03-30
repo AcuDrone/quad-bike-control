@@ -5,17 +5,27 @@
 CANController::CANController()
     : mcp_can_(nullptr),
       initialized_(false),
-      lastRPMPoll_(0),
-      lastTempPoll_(0),
-      retryCount_(0) {
+      state_(OBDState::IDLE),
+      activePIDIndex_(0),
+      requestSentTime_(0),
+      responseLen_(0) {
     // Initialize vehicle data to safe defaults
     vehicleData_.engineRPM = 0;
     vehicleData_.vehicleSpeed = 0;
     vehicleData_.coolantTemp = 0;
     vehicleData_.oilTemp = 0;
     vehicleData_.throttlePosition = 0;
+    vehicleData_.fuelLevel = 0;
     vehicleData_.lastUpdateTime = 0;
     vehicleData_.dataValid = false;
+
+    // Initialize PID scheduling table
+    pidTable_[0] = {PID_ENGINE_RPM,    CAN_POLL_INTERVAL_RPM,  0, 0};
+    pidTable_[1] = {PID_VEHICLE_SPEED, CAN_POLL_INTERVAL_RPM,  0, 0};
+    pidTable_[2] = {PID_COOLANT_TEMP,  CAN_POLL_INTERVAL_TEMP, 0, 0};
+    pidTable_[3] = {PID_OIL_TEMP,      CAN_POLL_INTERVAL_TEMP, 0, 0};
+    pidTable_[4] = {PID_THROTTLE_POS,  CAN_POLL_INTERVAL_TEMP, 0, 0};
+    pidTable_[5] = {PID_FUEL_LEVEL,    CAN_POLL_INTERVAL_TEMP, 0, 0};
 }
 
 CANController::~CANController() {
@@ -63,47 +73,65 @@ bool CANController::begin(gpio_num_t csPin, gpio_num_t sckPin, gpio_num_t mosiPi
 
 void CANController::update() {
     if (!initialized_) {
-        return;  // Not initialized, nothing to do
+        return;
     }
 
-    uint32_t now = millis();
-
-    // Poll RPM and speed at higher frequency (100ms)
-    if (now - lastRPMPoll_ >= CAN_POLL_INTERVAL_RPM) {
-        lastRPMPoll_ = now;
-
-        // Try to read RPM
-        if (readEngineRPM()) {
-            vehicleData_.lastUpdateTime = now;
-            vehicleData_.dataValid = true;
-            retryCount_ = 0;  // Reset retry count on success
-        } else {
-            retryCount_++;
-            if (retryCount_ >= CAN_RETRY_ATTEMPTS) {
-                vehicleData_.dataValid = false;
-                Debug::printlnFeature(DebugFeature::CAN,"[CAN] WARNING: RPM read failed after retries");
+    switch (state_) {
+        case OBDState::IDLE: {
+            int8_t index = selectNextPID();
+            if (index < 0) {
+                break;  // Nothing due yet
             }
+
+            if (sendOBDRequest(pidTable_[index].pid)) {
+                activePIDIndex_ = index;
+                requestSentTime_ = millis();
+                state_ = OBDState::WAITING_RESPONSE;
+            } else {
+                // Send failed, skip and reschedule
+                pidTable_[index].nextPollTime = millis() + pidTable_[index].interval;
+                pidTable_[index].retryCount++;
+            }
+            break;
         }
 
-        // Try to read speed
-        if (readVehicleSpeed()) {
-            vehicleData_.lastUpdateTime = now;
-            vehicleData_.dataValid = true;
+        case OBDState::WAITING_RESPONSE: {
+            if (tryReceiveResponse()) {
+                // Got valid response
+                parseAndStore(activePIDIndex_, responseData_, responseLen_);
+                pidTable_[activePIDIndex_].nextPollTime = millis() + pidTable_[activePIDIndex_].interval;
+                pidTable_[activePIDIndex_].retryCount = 0;
+                vehicleData_.lastUpdateTime = millis();
+                vehicleData_.dataValid = true;
+                state_ = OBDState::IDLE;
+            } else if (millis() - requestSentTime_ >= CAN_RESPONSE_TIMEOUT) {
+                // Timeout
+                pidTable_[activePIDIndex_].retryCount++;
+                pidTable_[activePIDIndex_].nextPollTime = millis() + pidTable_[activePIDIndex_].interval;
+
+                if (pidTable_[activePIDIndex_].retryCount >= CAN_RETRY_ATTEMPTS) {
+                    Debug::printfFeature(DebugFeature::CAN,
+                        "[CAN] WARNING: Timeout for PID 0x%02X after %d retries\n",
+                        pidTable_[activePIDIndex_].pid, CAN_RETRY_ATTEMPTS);
+                }
+
+                // Check if all PIDs have failed
+                bool allFailed = true;
+                for (uint8_t i = 0; i < PID_COUNT; i++) {
+                    if (pidTable_[i].retryCount < CAN_RETRY_ATTEMPTS) {
+                        allFailed = false;
+                        break;
+                    }
+                }
+                if (allFailed) {
+                    vehicleData_.dataValid = false;
+                }
+
+                state_ = OBDState::IDLE;
+            }
+            // else: no response yet, return immediately — try next loop iteration
+            break;
         }
-    }
-
-    // Poll temperatures at lower frequency (1000ms)
-    if (now - lastTempPoll_ >= CAN_POLL_INTERVAL_TEMP) {
-        lastTempPoll_ = now;
-
-        // Try to read coolant temperature
-        readCoolantTemp();
-
-        // Try to read oil temperature
-        readOilTemp();
-
-        // Try to read throttle position
-        readThrottlePosition();
     }
 
     // Check if data has become stale
@@ -156,136 +184,92 @@ bool CANController::sendOBDRequest(uint8_t pid) {
     return true;
 }
 
-bool CANController::receiveOBDResponse(uint8_t pid, uint8_t* data, uint8_t& dataLen) {
-    if (!initialized_ || mcp_can_ == nullptr) {
+bool CANController::tryReceiveResponse() {
+    if (mcp_can_ == nullptr) {
         return false;
     }
 
-    uint32_t startTime = millis();
+    uint8_t expectedPid = pidTable_[activePIDIndex_].pid;
     unsigned long canId;
     uint8_t len = 0;
     uint8_t rxBuf[8];
 
-    // Wait for response with timeout
-    while (millis() - startTime < CAN_RESPONSE_TIMEOUT) {
-        if (mcp_can_->checkReceive() == CAN_MSGAVAIL) {
-            mcp_can_->readMsgBuf(&canId, &len, rxBuf);
+    // Drain up to 5 messages to prevent MCP2515 RX buffer overflow
+    for (uint8_t i = 0; i < 5; i++) {
+        if (mcp_can_->checkReceive() != CAN_MSGAVAIL) {
+            break;  // No more messages
+        }
 
-            // OBD-II responses are from 0x7E8 to 0x7EF (ECU response IDs)
-            if (canId >= 0x7E8 && canId <= 0x7EF) {
-                // Verify this is a Mode 01 response (0x41) for our PID
-                if (len >= 3 && rxBuf[1] == 0x41 && rxBuf[2] == pid) {
-                    // Copy data payload (skip length, mode, and PID bytes)
-                    dataLen = len - 3;
-                    for (uint8_t i = 0; i < dataLen && i < 5; i++) {
-                        data[i] = rxBuf[3 + i];
-                    }
-                    return true;
+        mcp_can_->readMsgBuf(&canId, &len, rxBuf);
+
+        // OBD-II responses are from 0x7E8 to 0x7EF (ECU response IDs)
+        if (canId >= 0x7E8 && canId <= 0x7EF) {
+            // Verify this is a Mode 01 response (0x41) for our PID
+            if (len >= 3 && rxBuf[1] == 0x41 && rxBuf[2] == expectedPid) {
+                // Copy data payload (skip length, mode, and PID bytes)
+                responseLen_ = len - 3;
+                for (uint8_t j = 0; j < responseLen_ && j < 5; j++) {
+                    responseData_[j] = rxBuf[3 + j];
                 }
+                return true;
             }
         }
-        delay(10);  // Small delay to avoid tight loop
-    }
-
-    // Timeout
-    Debug::printfFeature(DebugFeature::CAN,"[CAN] WARNING: Timeout waiting for PID 0x%02X response\n", pid);
-    return false;
-}
-
-bool CANController::readEngineRPM() {
-    if (!sendOBDRequest(PID_ENGINE_RPM)) {
-        return false;
-    }
-
-    uint8_t data[5];
-    uint8_t dataLen;
-
-    if (receiveOBDResponse(PID_ENGINE_RPM, data, dataLen)) {
-        if (dataLen >= 2) {
-            // RPM formula: ((A*256)+B)/4
-            uint16_t rpm = ((data[0] * 256) + data[1]) / 4;
-            vehicleData_.engineRPM = rpm;
-            return true;
-        }
+        // Non-matching message — discard and continue draining
     }
 
     return false;
 }
 
-bool CANController::readVehicleSpeed() {
-    if (!sendOBDRequest(PID_VEHICLE_SPEED)) {
-        return false;
-    }
+int8_t CANController::selectNextPID() {
+    uint32_t now = millis();
+    int8_t bestIndex = -1;
+    uint32_t mostOverdue = 0;
 
-    uint8_t data[5];
-    uint8_t dataLen;
-
-    if (receiveOBDResponse(PID_VEHICLE_SPEED, data, dataLen)) {
-        if (dataLen >= 1) {
-            // Speed formula: A (direct value in km/h)
-            vehicleData_.vehicleSpeed = data[0];
-            return true;
+    for (uint8_t i = 0; i < PID_COUNT; i++) {
+        if (now >= pidTable_[i].nextPollTime) {
+            uint32_t overdue = now - pidTable_[i].nextPollTime;
+            if (overdue >= mostOverdue) {
+                mostOverdue = overdue;
+                bestIndex = i;
+            }
         }
     }
-
-    return false;
+    return bestIndex;
 }
 
-bool CANController::readCoolantTemp() {
-    if (!sendOBDRequest(PID_COOLANT_TEMP)) {
-        return false;
+void CANController::parseAndStore(uint8_t index, const uint8_t* data, uint8_t len) {
+    switch (pidTable_[index].pid) {
+        case PID_ENGINE_RPM:
+            if (len >= 2) {
+                vehicleData_.engineRPM = ((data[0] * 256) + data[1]) / 4;
+            }
+            break;
+        case PID_VEHICLE_SPEED:
+            if (len >= 1) {
+                vehicleData_.vehicleSpeed = data[0];
+            }
+            break;
+        case PID_COOLANT_TEMP:
+            if (len >= 1) {
+                vehicleData_.coolantTemp = data[0] - 40;
+            }
+            break;
+        case PID_OIL_TEMP:
+            if (len >= 1) {
+                vehicleData_.oilTemp = data[0] - 40;
+            }
+            break;
+        case PID_THROTTLE_POS:
+            if (len >= 1) {
+                vehicleData_.throttlePosition = (data[0] * 100) / 255;
+            }
+            break;
+        case PID_FUEL_LEVEL:
+            if (len >= 1) {
+                vehicleData_.fuelLevel = (data[0] * 100) / 255;
+            }
+            break;
     }
-
-    uint8_t data[5];
-    uint8_t dataLen;
-
-    if (receiveOBDResponse(PID_COOLANT_TEMP, data, dataLen)) {
-        if (dataLen >= 1) {
-            // Temperature formula: A - 40 (°C)
-            vehicleData_.coolantTemp = data[0] - 40;
-            return true;
-        }
-    }
-
-    return false;
-}
-
-bool CANController::readOilTemp() {
-    if (!sendOBDRequest(PID_OIL_TEMP)) {
-        return false;
-    }
-
-    uint8_t data[5];
-    uint8_t dataLen;
-
-    if (receiveOBDResponse(PID_OIL_TEMP, data, dataLen)) {
-        if (dataLen >= 1) {
-            // Temperature formula: A - 40 (°C)
-            vehicleData_.oilTemp = data[0] - 40;
-            return true;
-        }
-    }
-
-    return false;
-}
-
-bool CANController::readThrottlePosition() {
-    if (!sendOBDRequest(PID_THROTTLE_POS)) {
-        return false;
-    }
-
-    uint8_t data[5];
-    uint8_t dataLen;
-
-    if (receiveOBDResponse(PID_THROTTLE_POS, data, dataLen)) {
-        if (dataLen >= 1) {
-            // Throttle position formula: A * 100/255 (percentage)
-            vehicleData_.throttlePosition = (data[0] * 100) / 255;
-            return true;
-        }
-    }
-
-    return false;
 }
 
 bool CANController::isDataStale() const {

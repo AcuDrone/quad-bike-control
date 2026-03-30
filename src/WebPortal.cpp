@@ -603,6 +603,7 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
         doc["coolant_temp"] = telemetry.coolant_temp;
         doc["oil_temp"] = telemetry.oil_temp;
         doc["throttle_position"] = telemetry.throttle_position;
+        doc["fuel_level"] = telemetry.fuel_level;
     }
     doc["can_status"] = telemetry.can_status;
     doc["can_data_age"] = telemetry.can_data_age;

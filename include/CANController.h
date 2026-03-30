@@ -10,6 +10,7 @@
  *
  * Interfaces with MCP2515 SPI CAN controller to read standard OBD-II diagnostic data
  * from vehicle ECU (engine RPM, speed, coolant temperature, etc.).
+ * Uses a non-blocking state machine to avoid stalling the main loop.
  */
 class CANController {
 public:
@@ -22,6 +23,7 @@ public:
         int8_t coolantTemp;         // °C (-40 to +215)
         int8_t oilTemp;             // °C (-40 to +215)
         uint8_t throttlePosition;   // % (0-100)
+        uint8_t fuelLevel;          // % (0-100)
         uint32_t lastUpdateTime;    // millis() timestamp of last successful update
         bool dataValid;             // true if CAN communication is healthy
     };
@@ -45,7 +47,7 @@ public:
 
     /**
      * @brief Update CAN controller - call every loop iteration
-     * Polls OBD-II data based on configured intervals
+     * Non-blocking state machine: sends one request or checks one response per call
      */
     void update();
 
@@ -68,12 +70,21 @@ public:
     String getStatusString() const;
 
 private:
-    MCP_CAN* mcp_can_;              // MCP2515 CAN controller object
-    VehicleData vehicleData_;       // Current vehicle data
-    bool initialized_;              // Initialization status
-    uint32_t lastRPMPoll_;          // Last RPM/speed poll time
-    uint32_t lastTempPoll_;         // Last temperature poll time
-    uint8_t retryCount_;            // Current retry count for failed requests
+    // State machine states
+    enum class OBDState : uint8_t {
+        IDLE,               // Ready to send next PID request
+        WAITING_RESPONSE    // Request sent, polling for response
+    };
+
+    // PID scheduling entry
+    struct PIDEntry {
+        uint8_t pid;
+        uint32_t interval;       // ms between polls
+        uint32_t nextPollTime;   // millis() when next poll is due
+        uint8_t retryCount;
+    };
+
+    static constexpr uint8_t PID_COUNT = 6;
 
     // OBD-II PIDs (Mode 01 - Current Data)
     static constexpr uint8_t PID_ENGINE_RPM = 0x0C;
@@ -81,57 +92,28 @@ private:
     static constexpr uint8_t PID_COOLANT_TEMP = 0x05;
     static constexpr uint8_t PID_OIL_TEMP = 0x5C;
     static constexpr uint8_t PID_THROTTLE_POS = 0x11;
+    static constexpr uint8_t PID_FUEL_LEVEL = 0x2F;
 
-    /**
-     * @brief Send OBD-II Mode 01 request
-     * @param pid Parameter ID to request
-     * @return true if request sent successfully
-     */
+    MCP_CAN* mcp_can_;              // MCP2515 CAN controller object
+    VehicleData vehicleData_;       // Current vehicle data
+    bool initialized_;              // Initialization status
+
+    // State machine
+    OBDState state_;
+    uint8_t activePIDIndex_;        // Index into pidTable_ of current request
+    uint32_t requestSentTime_;      // millis() when current request was sent
+
+    // PID scheduling table
+    PIDEntry pidTable_[PID_COUNT];
+
+    // Response buffer
+    uint8_t responseData_[5];
+    uint8_t responseLen_;
+
     bool sendOBDRequest(uint8_t pid);
-
-    /**
-     * @brief Receive OBD-II response
-     * @param pid Expected PID in response
-     * @param data Buffer to store response data (up to 8 bytes)
-     * @param dataLen Length of received data
-     * @return true if valid response received
-     */
-    bool receiveOBDResponse(uint8_t pid, uint8_t* data, uint8_t& dataLen);
-
-    /**
-     * @brief Read engine RPM (PID 0x0C)
-     * @return true if successful
-     */
-    bool readEngineRPM();
-
-    /**
-     * @brief Read vehicle speed (PID 0x0D)
-     * @return true if successful
-     */
-    bool readVehicleSpeed();
-
-    /**
-     * @brief Read coolant temperature (PID 0x05)
-     * @return true if successful
-     */
-    bool readCoolantTemp();
-
-    /**
-     * @brief Read oil temperature (PID 0x5C)
-     * @return true if successful
-     */
-    bool readOilTemp();
-
-    /**
-     * @brief Read throttle position (PID 0x11)
-     * @return true if successful
-     */
-    bool readThrottlePosition();
-
-    /**
-     * @brief Check if CAN data is stale
-     * @return true if data should be marked invalid
-     */
+    bool tryReceiveResponse();
+    int8_t selectNextPID();
+    void parseAndStore(uint8_t index, const uint8_t* data, uint8_t len);
     bool isDataStale() const;
 };
 
