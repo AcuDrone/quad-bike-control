@@ -478,6 +478,10 @@
                         <div class="telemetry-value" id="can-throttle-pos">0%</div>
                     </div>
                     <div class="telemetry-item">
+                        <div class="telemetry-label">Fuel Level</div>
+                        <div class="telemetry-value" id="can-fuel">--%</div>
+                    </div>
+                    <div class="telemetry-item">
                         <div class="telemetry-label">CAN Status</div>
                         <div class="telemetry-value" id="can-status-text">disconnected</div>
                     </div>
@@ -662,6 +666,8 @@
                     oilElem.style.color = '#4caf50';  // Green
                 }
 
+                document.getElementById('can-fuel').textContent = (data.fuel_level || 0) + '%';
+
                 document.getElementById('can-status-text').textContent = 'connected';
                 document.getElementById('can-status-text').style.color = '#4caf50';
             } else {
@@ -670,6 +676,7 @@
                 document.getElementById('can-coolant').textContent = '--°C';
                 document.getElementById('can-oil').textContent = '--°C';
                 document.getElementById('can-throttle-pos').textContent = '--%';
+                document.getElementById('can-fuel').textContent = '--%';
                 document.getElementById('can-status-text').textContent = 'disconnected';
                 document.getElementById('can-status-text').style.color = '#f44336';
             }
