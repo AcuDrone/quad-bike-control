@@ -2,7 +2,7 @@
 
 **Hardware:** ESP32-C6-DevKitC-1
 **Valid GPIO Pins:** 0-23 (excluding GPIO 14 which doesn't exist)
-**Total ESP32 Pins Used:** 15 of 23 (65% utilization)
+**Total ESP32 Pins Used:** 19 of 23 (83% utilization)
 **MCP23017 Pins Used:** 8 of 16 (50% utilization)
 
 ---
@@ -11,9 +11,9 @@
 
 | Category | Pins Used | Status |
 |----------|-----------|--------|
-| **Active ESP32** | 15 | Implemented |
+| **Active ESP32** | 19 | Implemented |
 | **Active MCP23017** | 8 | Implemented |
-| **Freed ESP32** | 6 (GPIO 9-12, 15, 21) | Available for expansion |
+| **Freed ESP32** | 2 (GPIO 15, 21) | Available for expansion |
 | **Available MCP23017** | 8 (GPA3-7, GPB5-7) | Available for expansion |
 | **UART0** | 2 | Avoid for compatibility |
 | **Invalid** | 1 | GPIO 14 doesn't exist |
@@ -37,11 +37,14 @@
 | **4** | `PIN_TRANS_RPWM` | LEDC Ch2 | Transmission actuator forward (BTS7960) |
 | **5** | `PIN_TRANS_LPWM` | LEDC Ch3 | Transmission actuator reverse (BTS7960) |
 
-### Steering Control
+### Steering System (BTS7960 + Hall Sensor Encoder)
 
 | GPIO | Function | Type | Description |
 |------|----------|------|-------------|
-| **13** | `PIN_STEERING_PWM` | LEDC Ch0 | Steering servo (0-180, 50Hz) |
+| **9** | `PIN_STEER_RPWM` | Digital Out | Steering actuator right (BTS7960, full speed) |
+| **10** | `PIN_STEER_LPWM` | Digital Out | Steering actuator left (BTS7960, full speed) |
+| **11** | `PIN_STEER_ENCODER_A` | PCNT Unit 1 | Steering hall sensor channel A |
+| **12** | `PIN_STEER_ENCODER_B` | PCNT Unit 1 | Steering hall sensor channel B |
 
 ### Throttle Control
 
@@ -100,14 +103,9 @@
 
 ## FREED ESP32 PINS (Available for expansion)
 
-*These GPIOs were freed by migrating relays, gear sensors, and brake sensor to MCP23017.*
-
 | GPIO | Previously | Notes |
 |------|-----------|-------|
-| **9** | RELAY3 | General purpose digital I/O |
-| **10** | GEAR_REVERSE | General purpose digital I/O |
-| **11** | GEAR_NEUTRAL | General purpose digital I/O |
-| **12** | RELAY1 | General purpose digital I/O |
+| **13** | STEERING_PWM | Freed by steering BTS7960 migration (was LEDC Ch0) |
 | **15** | GEAR_LOW | Strapping pin - use with care |
 | **21** | BRAKE_SENSOR | ADC-capable, general purpose |
 
@@ -149,18 +147,18 @@
 ## LEDC PWM Channel Allocation
 
 **Total Channels:** 6 (ESP32-C6 limitation)
-**Channels Used:** 6 of 6 (100% allocated)
+**Channels Used:** 5 of 6 (83% allocated)
 
 | Channel | GPIO | Function | Frequency | Resolution | Duty Range |
 |---------|------|----------|-----------|------------|------------|
-| **0** | 13 | Steering Servo | 50 Hz | 16-bit | 500-2500 us |
+| **0** | -- | (freed) | -- | -- | -- |
 | **1** | 1 | Throttle Servo | 50 Hz | 16-bit | 500-2500 us |
 | **2** | 4 | Transmission RPWM | 10 kHz | 8-bit | 0-255 |
 | **3** | 5 | Transmission LPWM | 10 kHz | 8-bit | 0-255 |
 | **4** | 6 | Brake RPWM | 10 kHz | 8-bit | 0-255 |
 | **5** | 7 | Brake LPWM | 10 kHz | 8-bit | 0-255 |
 
-**Note:** No additional LEDC channels available for expansion.
+**Note:** Channel 0 freed by steering BTS7960 migration (uses GPIO digital write, no LEDC). Steering BTS7960 uses GPIO 9/10 with full-speed digital output.
 
 ---
 
@@ -188,11 +186,11 @@
 | **6** | BRAKE_RPWM | Output | LEDC Ch4 | BTS7960 forward |
 | **7** | BRAKE_LPWM | Output | LEDC Ch5 | BTS7960 reverse |
 | **8** | CAN_MOSI | Output | SPI | NeoPixel pin |
-| **9** | -- | -- | -- | Freed (was RELAY3) |
-| **10** | -- | -- | -- | Freed (was GEAR_REVERSE) |
-| **11** | -- | -- | -- | Freed (was GEAR_NEUTRAL) |
-| **12** | -- | -- | -- | Freed (was RELAY1) |
-| **13** | STEERING_PWM | Output | LEDC Ch0 | Servo control |
+| **9** | STEER_RPWM | Output | Digital | BTS7960 steering right (full speed) |
+| **10** | STEER_LPWM | Output | Digital | BTS7960 steering left (full speed) |
+| **11** | STEER_ENCODER_A | Input | PCNT Unit 1 | Steering hall sensor channel A |
+| **12** | STEER_ENCODER_B | Input | PCNT Unit 1 | Steering hall sensor channel B |
+| **13** | -- | -- | -- | Freed (was STEERING_PWM) |
 | **14** | -- | -- | -- | Does not exist |
 | **15** | -- | -- | -- | Freed (was GEAR_LOW), strapping pin |
 | **16** | UART0 TX | -- | UART | Avoid - console |

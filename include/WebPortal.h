@@ -51,7 +51,7 @@ public:
         int32_t hall_position;    // Transmission encoder position
         float brake_pct;          // Brake position percentage (0-100)
         int throttle_angle;       // Throttle servo angle (degrees)
-        int steering_angle;       // Steering servo angle (degrees)
+        int steering_pct;         // Steering percentage (-100 to +100)
         String input_source;      // Current input source: "SBUS", "WEB", "FAILSAFE"
         bool sbus_active;         // True if S-bus signal is valid
 

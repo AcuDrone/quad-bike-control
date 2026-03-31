@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include "Constants.h"
 #include "ServoController.h"
+#include "SteeringController.h"
 #include "BTS7960Controller.h"
 #include "TransmissionController.h"
 #include "WebPortal.h"
@@ -20,7 +21,7 @@
  */
 class VehicleController {
 public:
-    VehicleController(ServoController& steering,
+    VehicleController(SteeringController& steering,
                       ServoController& throttle,
                       TransmissionController& transmission,
                       BTS7960Controller& brake,
@@ -65,10 +66,15 @@ public:
     String getCurrentGearString() const;
 
     /**
-     * @brief Get steering angle
-     * @return Steering angle in degrees
+     * @brief Get steering percentage
+     * @return Steering percentage (-100 to +100)
      */
-    float getSteeringAngle() const { return steering_.getAngle(); }
+    float getSteeringPercent() const { return steering_.getSteeringPercent(); }
+
+    /**
+     * @brief Get steering controller reference
+     */
+    SteeringController& getSteering() { return steering_; }
 
     /**
      * @brief Get throttle angle
@@ -123,7 +129,7 @@ public:
 
 private:
     // Actuator references
-    ServoController& steering_;
+    SteeringController& steering_;
     ServoController& throttle_;
     TransmissionController& transmission_;
     BTS7960Controller& brake_;

@@ -2,6 +2,7 @@
 #include "Constants.h"
 #include "Debug.h"
 #include "ServoController.h"
+#include "SteeringController.h"
 #include "BTS7960Controller.h"
 #include "TransmissionController.h"
 #include "EncoderCounter.h"
@@ -17,8 +18,11 @@
 // ACTUATOR INSTANCES
 // ============================================================================
 
-// Servo Controllers
-ServoController steeringServo;
+// Steering Actuator (BTS7960 full speed + encoder)
+SteeringController steeringActuator;
+EncoderCounter steeringEncoder;
+
+// Throttle Servo
 ServoController throttleServo;
 
 // Linear Actuator Controllers (BTS7960)
@@ -38,7 +42,7 @@ RelayController relayController;
 MCP23017Controller mcpExpander;
 
 // Vehicle Controller (coordinates all actuators and input sources)
-VehicleController vehicleController(steeringServo, throttleServo, transmissionActuator, brakeActuator,
+VehicleController vehicleController(steeringActuator, throttleServo, transmissionActuator, brakeActuator,
                                      sbusInput, relayController, mcpExpander);
 
 // Web Portal for telemetry and manual control
@@ -90,12 +94,27 @@ void setup() {
         Debug::printlnFeature(DebugFeature::RELAY, "ERROR: MCP23017 not detected - relays and sensors will not work");
     }
 
-    // Initialize servos
-    if (!steeringServo.begin(PIN_STEERING_PWM, LEDC_CH_STEERING, STEERING_SERVO_MIN_US, STEERING_SERVO_MAX_US)) {
-        Debug::printlnFeature(DebugFeature::SERVO, "ERROR: Steering servo failed");
+    // Initialize steering actuator (BTS7960 + encoder)
+    if (!steeringEncoder.begin(PIN_STEER_ENCODER_A, PIN_STEER_ENCODER_B, PCNT_UNIT_STEER)) {
+        Debug::printlnFeature(DebugFeature::SERVO, "ERROR: Steering encoder failed");
     }
-    steeringServo.setAngle(STEERING_CENTER_ANGLE);
 
+    if (steeringActuator.begin(PIN_STEER_RPWM, PIN_STEER_LPWM)) {
+        steeringActuator.attachEncoder(&steeringEncoder);
+
+        // Auto-home to left limit, then move to center
+        if (steeringActuator.autoHome()) {
+            Debug::printlnFeature(DebugFeature::SERVO, "[STEER] Homed to left limit");
+            Debug::printfFeature(DebugFeature::SERVO, "[STEER] Moving to center (%d)\n", STEER_CENTER_POSITION);
+            steeringActuator.setPosition(STEER_CENTER_POSITION);
+        } else {
+            Debug::printlnFeature(DebugFeature::SERVO, "[STEER] ERROR: Auto-home failed");
+        }
+    } else {
+        Debug::printlnFeature(DebugFeature::SERVO, "ERROR: Steering actuator failed");
+    }
+
+    // Initialize throttle servo
     if (!throttleServo.begin(PIN_THROTTLE_PWM, LEDC_CH_THROTTLE, THROTTLE_SERVO_MIN_US, THROTTLE_SERVO_MAX_US)) {
         Debug::printlnFeature(DebugFeature::SERVO, "ERROR: Throttle servo failed");
     }

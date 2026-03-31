@@ -23,9 +23,15 @@
 #define LEDC_CH_TRANS_RPWM  2
 #define LEDC_CH_TRANS_LPWM  3
 
-// Steering Servo (PWM via LEDC)
-#define PIN_STEERING_PWM    GPIO_NUM_13   // LEDC Channel 0
-#define LEDC_CH_STEERING    0
+// Steering Actuator (BTS7960 — full speed, no PWM needed, uses GPIO digital write)
+// Note: R_EN and L_EN hardwired to 5V (always enabled)
+#define PIN_STEER_RPWM      GPIO_NUM_9    // Digital out — move right
+#define PIN_STEER_LPWM      GPIO_NUM_10   // Digital out — move left
+
+// Steering Hall Sensor (Incremental Encoder - Quadrature)
+#define PIN_STEER_ENCODER_A GPIO_NUM_11   // Hall sensor channel A (PCNT)
+#define PIN_STEER_ENCODER_B GPIO_NUM_12   // Hall sensor channel B (PCNT)
+#define PCNT_UNIT_STEER     1             // PCNT unit ID for steering encoder
 
 // Throttle Servo (PWM via LEDC)
 #define PIN_THROTTLE_PWM    GPIO_NUM_1   // LEDC Channel 1
@@ -137,13 +143,14 @@ struct SBusChannelConfig {
 #define SERVO_PWM_FREQ        50     // Hz (20ms period)
 #define SERVO_PWM_RESOLUTION  16     // bits (0-65535)
 
-// Steering Servo Parameters
-#define STEERING_SERVO_MIN_US    500   // Minimum pulse width (microseconds)
-#define STEERING_SERVO_MAX_US    2500  // Maximum pulse width (microseconds)
-#define STEERING_SERVO_CENTER_US 1500  // Center pulse width (microseconds)
-#define STEERING_MIN_ANGLE       0     // degrees (full left)
-#define STEERING_MAX_ANGLE       180   // degrees (full right)
-#define STEERING_CENTER_ANGLE    90    // degrees (center)
+// Steering Actuator Parameters
+#define STEER_CENTER_POSITION     500   // Encoder counts — center position (from left home)
+#define STEER_RIGHT_LIMIT         1000  // Encoder counts — maximum right travel (from left home)
+#define STEER_POSITION_TOLERANCE  15    // +/- encoder counts for position match
+#define STEER_HOMING_TIMEOUT      30000 // ms - maximum time for auto-home
+#define STEER_MOVE_TIMEOUT        15000 // ms - maximum time for any movement
+#define STEER_STALL_THRESHOLD     3     // Encoder counts - stall detection threshold
+#define STEER_STALL_TIMEOUT       500   // ms - time without encoder change = stall
 
 // Throttle Servo Parameters
 #define THROTTLE_SERVO_MIN_US    800   // Minimum pulse width (microseconds)
@@ -271,8 +278,6 @@ struct SBusChannelConfig {
 #define NVS_KEY_TRANS_N       "trans_n"      // NEUTRAL gear encoder position
 #define NVS_KEY_TRANS_H       "trans_h"      // HIGH gear encoder position
 #define NVS_KEY_TRANS_L       "trans_l"      // LOW gear encoder position
-#define NVS_KEY_SERVO_MIN     "servo_min"
-#define NVS_KEY_SERVO_MAX     "servo_max"
 #define NVS_KEY_BRAKE_MIN     "brake_min"
 #define NVS_KEY_BRAKE_MAX     "brake_max"
 

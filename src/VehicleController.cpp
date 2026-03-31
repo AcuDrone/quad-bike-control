@@ -1,7 +1,7 @@
 #include "VehicleController.h"
 #include "Debug.h"
 
-VehicleController::VehicleController(ServoController& steering,
+VehicleController::VehicleController(SteeringController& steering,
                                      ServoController& throttle,
                                      TransmissionController& transmission,
                                      BTS7960Controller& brake,
@@ -59,6 +59,9 @@ void VehicleController::update() {
     if (transmission_.needsThrottleBoost() || throttleBoostActive_) {
         updateThrottleBoost();
     }
+
+    // Update steering position control
+    steering_.update();
 
     // Update position control for transmission actuator
     transmission_.update();
@@ -134,7 +137,7 @@ String VehicleController::getCurrentGearString() const {
 void VehicleController::applyFailsafe() {
     if (currentInputSource_ == InputSource::FAILSAFE && !failsafeApplied_) {
         Debug::printlnFeature(DebugFeature::VEHICLE, "[FAILSAFE] Entering safe state");
-        steering_.setAngle(STEERING_CENTER_ANGLE);
+        steering_.setSteeringPercent(0.0f);
         throttle_.setAngle(THROTTLE_IDLE_ANGLE);
         brake_.stop();         // Stop brake actuator (hold position)
         brakeIsMoving_ = false;
@@ -157,8 +160,7 @@ void VehicleController::processSBusCommands() {
 
     // Apply steering
     float steeringPct = sbusInput_.getSteering();
-    int steeringAngle = map((int)steeringPct, -100, 100, STEERING_MIN_ANGLE, STEERING_MAX_ANGLE);
-    steering_.setAngle(steeringAngle);
+    steering_.setSteeringPercent(steeringPct);
 
     // Apply throttle
     float throttlePct = sbusInput_.getThrottle();
@@ -238,9 +240,7 @@ void VehicleController::processGearCommand(const String& gearStr, WebPortal& web
 }
 
 void VehicleController::processSteeringCommand(float value, WebPortal& webPortal) {
-    // Convert -100 to +100 percentage to servo angle (0-180 degrees)
-    int angle = map((int)value, -100, 100, STEERING_MIN_ANGLE, STEERING_MAX_ANGLE);
-    steering_.setAngle(angle);
+    steering_.setSteeringPercent(value);
     webPortal.sendResponse(true, "Steering set");
 }
 

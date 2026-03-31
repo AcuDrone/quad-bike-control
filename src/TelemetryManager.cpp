@@ -54,7 +54,7 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
 
     // Vehicle state from VehicleController
     telemetry.gear = vehicleController_.getCurrentGearString();
-    telemetry.steering_angle = (int)vehicleController_.getSteeringAngle();
+    telemetry.steering_pct = (int)vehicleController_.getSteeringPercent();
     telemetry.throttle_angle = (int)vehicleController_.getThrottleAngle();
     telemetry.input_source = getInputSourceName(vehicleController_.getInputSource());
 

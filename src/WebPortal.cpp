@@ -592,7 +592,7 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["hall_position"] = telemetry.hall_position;
     doc["brake_pct"] = telemetry.brake_pct;
     doc["throttle_angle"] = telemetry.throttle_angle;
-    doc["steering_angle"] = telemetry.steering_angle;
+    doc["steering_pct"] = telemetry.steering_pct;
     doc["input_source"] = telemetry.input_source;
     doc["sbus_active"] = telemetry.sbus_active;
 
