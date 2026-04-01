@@ -105,7 +105,8 @@ void CANController::update() {
                 vehicleData_.dataValid = true;
                 state_ = OBDState::IDLE;
             } else if (millis() - requestSentTime_ >= CAN_RESPONSE_TIMEOUT) {
-                // Timeout
+                // Timeout — abort the pending TX so the buffer is freed for the next request
+                mcp_can_->abortTX();
                 pidTable_[activePIDIndex_].retryCount++;
                 pidTable_[activePIDIndex_].nextPollTime = millis() + pidTable_[activePIDIndex_].interval;
 
@@ -177,6 +178,11 @@ bool CANController::sendOBDRequest(uint8_t pid) {
     byte result = mcp_can_->sendMsgBuf(0x7DF, 0, 8, requestData);
 
     if (result != CAN_OK) {
+        if (mcp_can_->getError() & MCP_EFLG_TXBO) {
+            Debug::printlnFeature(DebugFeature::CAN, "[CAN] Bus-off detected, recovering...");
+            mcp_can_->begin(MCP_ANY, CAN_500KBPS, MCP_8MHZ);
+            mcp_can_->setMode(MCP_NORMAL);
+        }
         Debug::printfFeature(DebugFeature::CAN,"[CAN] ERROR: Failed to send request for PID 0x%02X\n", pid);
         return false;
     }
