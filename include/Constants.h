@@ -80,7 +80,7 @@
 #define MCP_PORTB_BRAKE_BIT   4     // GPB4 (bit 4)
 
 // Cranking Parameters
-#define CRANKING_TIMEOUT           5000  // ms - maximum cranking duration
+#define CRANKING_TIMEOUT           2000  // ms - maximum cranking duration
 #define ENGINE_RUNNING_RPM_THRESHOLD 1100  // RPM - engine considered running above this
 
 // Note: GPIO 14 does not exist on ESP32-C6 (valid pins are 0-23 excluding 14)
@@ -144,8 +144,8 @@ struct SBusChannelConfig {
 #define SERVO_PWM_RESOLUTION  16     // bits (0-65535)
 
 // Steering Actuator Parameters
-#define STEER_CENTER_POSITION     500   // Encoder counts — center position (from left home)
-#define STEER_RIGHT_LIMIT         1000  // Encoder counts — maximum right travel (from left home)
+#define STEER_CENTER_POSITION     1775   // Encoder counts — center position (from left home)
+#define STEER_RIGHT_LIMIT         3400  // Encoder counts — maximum right travel (from left home)
 #define STEER_POSITION_TOLERANCE  15    // +/- encoder counts for position match
 #define STEER_HOMING_TIMEOUT      30000 // ms - maximum time for auto-home
 #define STEER_MOVE_TIMEOUT        15000 // ms - maximum time for any movement
@@ -184,10 +184,10 @@ struct SBusChannelConfig {
 #define TRANS_POSITION_TOLERANCE      10     // +/- encoder counts for position match (±2.5% of revolution)
 
 // Transmission Gear Positions (encoder counts - default values, overridden by calibration)
-#define TRANS_POSITION_REVERSE   1400      // Encoder count for REVERSE (default)
-#define TRANS_POSITION_NEUTRAL   3200    // Encoder count for NEUTRAL (default)
-#define TRANS_POSITION_LOW       6900    // Encoder count for LOW (default)
-#define TRANS_POSITION_HIGH      5400    // Encoder count for HIGH (default)
+#define TRANS_POSITION_REVERSE   725     // Encoder count for REVERSE (default)
+#define TRANS_POSITION_NEUTRAL   2550    // Encoder count for NEUTRAL (default)
+#define TRANS_POSITION_LOW       6225    // Encoder count for LOW (default)
+#define TRANS_POSITION_HIGH      4750    // Encoder count for HIGH (default)
 
 // Transmission Movement Parameters
 #define TRANS_MOVE_TIMEOUT    15000   // ms - maximum time for gear change
@@ -348,8 +348,8 @@ enum class InputSource {
 #define TRANS_CAN_TIMEOUT                5000  // ms - Allow gear change if CAN fails this long
 
 // Throttle Boost During Gear Changes
-#define TRANS_THROTTLE_BOOST_PERCENT     10    // % - Throttle increase during gear change
-#define TRANS_THROTTLE_BOOST_DURATION    5000   // ms - Maximum boost duration
+#define TRANS_THROTTLE_BOOST_PERCENT     0    // % - Throttle increase during gear change
+#define TRANS_THROTTLE_BOOST_DURATION    0   // ms - Maximum boost duration
 
 // ============================================================================
 // FIRMWARE VERSION

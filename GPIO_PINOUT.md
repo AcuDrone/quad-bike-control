@@ -84,7 +84,7 @@
 | MCP Pin | Function | Type | Description |
 |---------|----------|------|-------------|
 | **GPA0** (0) | `MCP_PIN_RELAY1` | Digital Out | Relay 1 (main power control) |
-| **GPA1** (1) | `MCP_PIN_RELAY2` | Digital Out | Relay 2 (accessory power) |
+| **GPA1** (1) | `MCP_PIN_RELAY2` | Digital Out | Relay 2 (starter) |
 | **GPA2** (2) | `MCP_PIN_RELAY3` | Digital Out | Relay 3 (front light / safety) |
 | **GPA3-7** (3-7) | -- | -- | Available for future outputs |
 
