@@ -106,7 +106,7 @@ void CANController::update() {
                 state_ = OBDState::IDLE;
             } else if (millis() - requestSentTime_ >= CAN_RESPONSE_TIMEOUT) {
                 // Abort pending TX and wait for bus-off recovery before next send
-                mcp_can_->abortTX();
+                // mcp_can_->abortTX();
                 if (mcp_can_->getError() & MCP_EFLG_TXBO) {
                     Debug::printlnFeature(DebugFeature::CAN, "[CAN] Bus-off detected, recovering...");
                     mcp_can_->begin(MCP_ANY, CAN_500KBPS, MCP_8MHZ);

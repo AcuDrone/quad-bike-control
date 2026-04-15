@@ -237,5 +237,5 @@ void loop() {
     telemetryManager.update();
 
     // Small delay to prevent CPU hogging
-    delay(10);
+    // delay(10);
 }
