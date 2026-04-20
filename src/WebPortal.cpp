@@ -265,20 +265,19 @@ void WebPortal::setupWebServer() {
                 otaUpdateType = U_FLASH;  // Default: firmware update
                 String updateTypeName = "firmware";
 
-                // Check for ?type=spiffs query parameter
+                // Check for ?type= query parameter
                 if (request->hasParam("type")) {
                     String type = request->getParam("type")->value();
-                    if (type == "spiffs" || type == "filesystem") {
+                    if (type == "littlefs" || type == "spiffs" || type == "filesystem") {
                         otaUpdateType = U_SPIFFS;
-                        updateTypeName = "SPIFFS";
-                        // Unmount filesystem before update
+                        updateTypeName = "LittleFS";
                         FILESYSTEM.end();
                     }
                 }
-                // Or detect from filename
-                else if (filename.indexOf("spiffs") >= 0 || filename.indexOf("filesystem") >= 0) {
+                // Or detect from filename (pio buildfs generates littlefs.bin)
+                else if (filename.indexOf("littlefs") >= 0 || filename.indexOf("spiffs") >= 0 || filename.indexOf("filesystem") >= 0) {
                     otaUpdateType = U_SPIFFS;
-                    updateTypeName = "SPIFFS";
+                    updateTypeName = "LittleFS";
                     FILESYSTEM.end();
                 }
 
@@ -291,9 +290,9 @@ void WebPortal::setupWebServer() {
                 // Begin OTA update with specified type and size
                 size_t updateSize;
                 if (otaUpdateType == U_SPIFFS) {
-                    // For SPIFFS, use UPDATE_SIZE_UNKNOWN to let Update library determine size
+                    // For LittleFS, use UPDATE_SIZE_UNKNOWN to let Update library determine size
                     updateSize = UPDATE_SIZE_UNKNOWN;
-                    Debug::printlnFeature(DebugFeature::WEB,"[WEB OTA] Using UPDATE_SIZE_UNKNOWN for SPIFFS");
+                    Debug::printlnFeature(DebugFeature::WEB,"[WEB OTA] Using UPDATE_SIZE_UNKNOWN for LittleFS");
                 } else {
                     // For firmware, use actual content length
                     updateSize = request->contentLength();
@@ -309,7 +308,7 @@ void WebPortal::setupWebServer() {
 
                     // Remount SPIFFS if it was unmounted for failed SPIFFS update
                     if (otaUpdateType == U_SPIFFS) {
-                        Debug::printlnFeature(DebugFeature::WEB,"[WEB OTA] Remounting SPIFFS after failed update...");
+                        Debug::printlnFeature(DebugFeature::WEB,"[WEB OTA] Remounting LittleFS after failed update...");
                         FILESYSTEM.begin(false);
                     }
                     return;
@@ -341,7 +340,7 @@ void WebPortal::setupWebServer() {
 
                     // Remount SPIFFS if it was unmounted for failed SPIFFS update
                     if (otaUpdateType == U_SPIFFS) {
-                        Debug::printlnFeature(DebugFeature::WEB,"[WEB OTA] Remounting SPIFFS after failed update...");
+                        Debug::printlnFeature(DebugFeature::WEB,"[WEB OTA] Remounting LittleFS after failed update...");
                         FILESYSTEM.begin(false);
                     }
                 }
@@ -451,15 +450,15 @@ void WebPortal::setupDNS() {
 }
 
 bool WebPortal::mountFilesystem() {
-    Debug::printlnFeature(DebugFeature::WEB,"Mounting SPIFFS filesystem...");
+    Debug::printlnFeature(DebugFeature::WEB,"Mounting LittleFS filesystem...");
 
     if (!FILESYSTEM.begin(false)) {  // false = don't format on fail
-        Debug::printlnFeature(DebugFeature::WEB,"  ✗ SPIFFS mount failed");
+        Debug::printlnFeature(DebugFeature::WEB,"  ✗ LittleFS mount failed");
         Debug::printlnFeature(DebugFeature::WEB,"  ! Run 'pio run -t uploadfs' to upload filesystem");
         return false;
     }
 
-    Debug::printlnFeature(DebugFeature::WEB,"  ✓ SPIFFS mounted");
+    Debug::printlnFeature(DebugFeature::WEB,"  ✓ LittleFS mounted");
 
     // Check if index.html exists
     if (!FILESYSTEM.exists("/index.html")) {

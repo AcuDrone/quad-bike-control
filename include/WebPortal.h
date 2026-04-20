@@ -9,12 +9,11 @@
 #include <Update.h>
 #include <DNSServer.h>
 #include <FS.h>
-#include <SPIFFS.h>
+#include <LittleFS.h>
 #include <ArduinoJson.h>
 #include "Constants.h"
 
-// Use SPIFFS for ESP32-C6 (LittleFS support may vary by framework version)
-#define FILESYSTEM SPIFFS
+#define FILESYSTEM LittleFS
 
 // Forward declarations for vehicle controllers
 class ServoController;
