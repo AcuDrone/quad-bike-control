@@ -3,7 +3,6 @@
 
 #include <Arduino.h>
 #include "Constants.h"
-#include "MCP23017Controller.h"
 
 /**
  * @brief Relay controller for ignition and lighting systems
@@ -30,7 +29,7 @@ public:
      * @param mcp Reference to initialized MCP23017Controller
      * @return true if initialization successful
      */
-    bool begin(MCP23017Controller& mcp);
+    bool begin();
 
     /**
      * @brief Set ignition state
@@ -75,8 +74,6 @@ public:
     void allOff();
 
 private:
-    // MCP23017 reference
-    MCP23017Controller* mcp_;
 
     // State tracking
     IgnitionState currentIgnitionState_;

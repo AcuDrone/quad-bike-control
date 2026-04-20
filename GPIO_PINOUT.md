@@ -26,14 +26,14 @@
 
 | GPIO | Function | Type | Description |
 |------|----------|------|-------------|
-| **20** | `PIN_SBUS_RX` | UART1 RX | S-bus receiver input (inverted signal) |
+| **44** | `PIN_SBUS_RX` | UART1 RX | S-bus receiver input (inverted signal) |
 
 ### Transmission System
 
 | GPIO | Function | Type | Description |
 |------|----------|------|-------------|
-| **2** | `PIN_TRANS_ENCODER_B` | PCNT | Hall sensor channel B (quadrature) |
-| **3** | `PIN_TRANS_ENCODER_A` | PCNT | Hall sensor channel A (quadrature) |
+| **1** | `PIN_TRANS_ENCODER_B` | PCNT | Hall sensor channel B (quadrature) |
+| **2** | `PIN_TRANS_ENCODER_A` | PCNT | Hall sensor channel A (quadrature) |
 | **4** | `PIN_TRANS_RPWM` | LEDC Ch2 | Transmission actuator forward (BTS7960) |
 | **5** | `PIN_TRANS_LPWM` | LEDC Ch3 | Transmission actuator reverse (BTS7960) |
 
@@ -41,63 +41,59 @@
 
 | GPIO | Function | Type | Description |
 |------|----------|------|-------------|
-| **9** | `PIN_STEER_RPWM` | Digital Out | Steering actuator right (BTS7960, full speed) |
-| **10** | `PIN_STEER_LPWM` | Digital Out | Steering actuator left (BTS7960, full speed) |
-| **11** | `PIN_STEER_ENCODER_A` | PCNT Unit 1 | Steering hall sensor channel A |
-| **12** | `PIN_STEER_ENCODER_B` | PCNT Unit 1 | Steering hall sensor channel B |
+| **17** | `PIN_STEER_RPWM` | Digital Out | Steering actuator right (BTS7960, full speed) |
+| **18** | `PIN_STEER_LPWM` | Digital Out | Steering actuator left (BTS7960, full speed) |
+| **42** | `PIN_STEER_ENCODER_A` | PCNT Unit 1 | Steering hall sensor channel A |
+| **41** | `PIN_STEER_ENCODER_B` | PCNT Unit 1 | Steering hall sensor channel B |
 
 ### Throttle Control
 
 | GPIO | Function | Type | Description |
 |------|----------|------|-------------|
-| **1** | `PIN_THROTTLE_PWM` | LEDC Ch1 | Throttle servo (0-180, 50Hz) |
+| **3** | `PIN_THROTTLE_PWM` | LEDC Ch1 | Throttle servo (0-180, 50Hz) |
 
 ### Brake System
 
 | GPIO | Function | Type | Description |
 |------|----------|------|-------------|
-| **6** | `PIN_BRAKE_RPWM` | LEDC Ch4 | Brake actuator forward (BTS7960) |
-| **7** | `PIN_BRAKE_LPWM` | LEDC Ch5 | Brake actuator reverse (BTS7960) |
+| **7** | `PIN_BRAKE_RPWM` | LEDC Ch4 | Brake actuator forward (BTS7960) |
+| **6** | `PIN_BRAKE_LPWM` | LEDC Ch5 | Brake actuator reverse (BTS7960) |
 
 ### I2C Bus (MCP23017 GPIO Expander)
 
 | GPIO | Function | Type | Description |
 |------|----------|------|-------------|
-| **18** | `PIN_I2C_SDA` | I2C SDA | MCP23017 data line (400 kHz) |
-| **19** | `PIN_I2C_SCL` | I2C SCL | MCP23017 clock line (400 kHz) |
+| **40** | `PIN_I2C_SDA` | I2C SDA | MCP23017 data line (400 kHz) |
+| **39** | `PIN_I2C_SCL` | I2C SCL | MCP23017 clock line (400 kHz) |
 
 ### SPI CAN Controller
 
 | GPIO | Function | Type | Description |
 |------|----------|------|-------------|
-| **0** | `PIN_CAN_MISO` | SPI MISO | CAN controller SPI input (boot pin) |
-| **8** | `PIN_CAN_MOSI` | SPI MOSI | CAN controller SPI output (NeoPixel) |
-| **22** | `PIN_CAN_CS` | SPI CS | CAN controller chip select |
-| **23** | `PIN_CAN_SCK` | SPI SCK | CAN controller SPI clock |
+| **13** | `PIN_CAN_MISO` | SPI MISO | CAN controller SPI input (boot pin) |
+| **11** | `PIN_CAN_MOSI` | SPI MOSI | CAN controller SPI output (NeoPixel) |
+| **10** | `PIN_CAN_CS` | SPI CS | CAN controller chip select |
+| **12** | `PIN_CAN_SCK` | SPI SCK | CAN controller SPI clock |
 
 ---
 
-## MCP23017 I2C GPIO EXPANDER (Address 0x20)
-
-### Port A - Outputs (Relays)
+### Relays
 
 | MCP Pin | Function | Type | Description |
 |---------|----------|------|-------------|
-| **GPA0** (0) | `MCP_PIN_RELAY1` | Digital Out | Relay 1 (main power control) |
-| **GPA1** (1) | `MCP_PIN_RELAY2` | Digital Out | Relay 2 (starter) |
-| **GPA2** (2) | `MCP_PIN_RELAY3` | Digital Out | Relay 3 (front light / safety) |
-| **GPA3-7** (3-7) | -- | -- | Available for future outputs |
+| **36** (0) | `PIN_RELAY1` | Digital Out | Relay 1 (main power control) |
+| **37** (1) | `PIN_RELAY2` | Digital Out | Relay 2 (starter) |
+| **38** (2) | `PIN_RELAY3` | Digital Out | Relay 3 (front light / safety) |
 
-### Port B - Inputs (Sensors, active-low with pull-ups)
+### Inputs (Sensors, active-low with pull-ups)
 
 | MCP Pin | Function | Type | Description |
 |---------|----------|------|-------------|
-| **GPB0** (8) | `MCP_PIN_GEAR_REVERSE` | Digital In | Gear selector REVERSE (active-low) |
-| **GPB1** (9) | `MCP_PIN_GEAR_NEUTRAL` | Digital In | Gear selector NEUTRAL (active-low) |
-| **GPB2** (10) | `MCP_PIN_GEAR_LOW` | Digital In | Gear selector LOW (active-low) |
-| **GPB3** (11) | `MCP_PIN_GEAR_HIGH` | Digital In | Gear selector HIGH (active-low) |
-| **GPB4** (12) | `MCP_PIN_BRAKE_SENSOR` | Digital In | Brake position sensor (active-low) |
-| **GPB5-7** (13-15) | -- | -- | Available for future inputs |
+| **19** (8) | `PIN_GEAR_REVERSE` | Digital In | Gear selector REVERSE (active-low) |
+| **20** (9) | `PIN_GEAR_NEUTRAL` | Digital In | Gear selector NEUTRAL (active-low) |
+| **21** (10) | `PIN_GEAR_LOW` | Digital In | Gear selector LOW (active-low) |
+| **47** (11) | `PIN_GEAR_HIGH` | Digital In | Gear selector HIGH (active-low) |
+| **48** (12) | `PIN_BRAKE_SENSOR` | Digital In | Brake position sensor (active-low) |
 
 ---
 

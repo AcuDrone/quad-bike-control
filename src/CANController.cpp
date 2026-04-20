@@ -21,11 +21,11 @@ CANController::CANController()
 
     // Initialize PID scheduling table
     pidTable_[0] = {PID_ENGINE_RPM,    CAN_POLL_INTERVAL_RPM,  0, 0};
-    pidTable_[1] = {PID_VEHICLE_SPEED, CAN_POLL_INTERVAL_RPM,  0, 0};
-    pidTable_[2] = {PID_COOLANT_TEMP,  CAN_POLL_INTERVAL_TEMP, 0, 0};
-    pidTable_[3] = {PID_OIL_TEMP,      CAN_POLL_INTERVAL_TEMP, 0, 0};
+    // pidTable_[1] = {PID_VEHICLE_SPEED, CAN_POLL_INTERVAL_RPM,  0, 0};
+    pidTable_[1] = {PID_COOLANT_TEMP,  CAN_POLL_INTERVAL_TEMP, 0, 0};
+    // pidTable_[3] = {PID_OIL_TEMP,      CAN_POLL_INTERVAL_TEMP, 0, 0};
     pidTable_[4] = {PID_THROTTLE_POS,  CAN_POLL_INTERVAL_TEMP, 0, 0};
-    pidTable_[5] = {PID_FUEL_LEVEL,    CAN_POLL_INTERVAL_TEMP, 0, 0};
+    // pidTable_[5] = {PID_FUEL_LEVEL,    CAN_POLL_INTERVAL_TEMP, 0, 0};і
 }
 
 CANController::~CANController() {
@@ -251,31 +251,31 @@ void CANController::parseAndStore(uint8_t index, const uint8_t* data, uint8_t le
                 vehicleData_.engineRPM = ((data[0] * 256) + data[1]) / 4;
             }
             break;
-        case PID_VEHICLE_SPEED:
-            if (len >= 1) {
-                vehicleData_.vehicleSpeed = data[0];
-            }
-            break;
+        // case PID_VEHICLE_SPEED:
+        //     if (len >= 1) {
+        //         vehicleData_.vehicleSpeed = data[0];
+        //     }
+        //     break;
         case PID_COOLANT_TEMP:
             if (len >= 1) {
                 vehicleData_.coolantTemp = data[0] - 40;
             }
             break;
-        case PID_OIL_TEMP:
-            if (len >= 1) {
-                vehicleData_.oilTemp = data[0] - 40;
-            }
-            break;
+        // case PID_OIL_TEMP:
+        //     if (len >= 1) {
+        //         vehicleData_.oilTemp = data[0] - 40;
+        //     }
+        //     break;
         case PID_THROTTLE_POS:
             if (len >= 1) {
                 vehicleData_.throttlePosition = (data[0] * 100) / 255;
             }
             break;
-        case PID_FUEL_LEVEL:
-            if (len >= 1) {
-                vehicleData_.fuelLevel = (data[0] * 100) / 255;
-            }
-            break;
+        // case PID_FUEL_LEVEL:
+        //     if (len >= 1) {
+        //         vehicleData_.fuelLevel = (data[0] * 100) / 255;
+        //     }
+        //     break;
     }
 }
 

@@ -29,7 +29,7 @@ bool ServoController::begin(gpio_num_t pin, uint8_t channel, uint16_t minUs, uin
     // Configure LEDC timer for servo PWM (50Hz)
     ledc_timer_config_t timer_conf = {
         .speed_mode = LEDC_LOW_SPEED_MODE,
-        .duty_resolution = LEDC_TIMER_16_BIT,
+        .duty_resolution = LEDC_TIMER_14_BIT,
         .timer_num = LEDC_TIMER_0,
         .freq_hz = SERVO_PWM_FREQ,
         .clk_cfg = LEDC_AUTO_CLK
@@ -121,6 +121,10 @@ uint32_t ServoController::usToDutyCycle(uint16_t us) const {
     // Calculate duty cycle for 16-bit resolution at 50Hz
     // Period = 1/50Hz = 20ms = 20000us
     // Duty cycle = (pulse_width_us / 20000us) * 65535
-    uint32_t duty = ((uint32_t)us * 65535UL) / 20000UL;
+    // uint32_t duty = ((uint32_t)us * 65535UL) / 20000UL;
+
+    // Duty cycle = (pulse_width_us / 20000us) * 16383
+    uint32_t duty = ((uint32_t)us * 16383UL) / 20000UL;
     return duty;
 }
+

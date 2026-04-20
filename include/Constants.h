@@ -8,33 +8,33 @@
 // ============================================================================
 
 // S-bus Input (UART)
-#define PIN_SBUS_RX         GPIO_NUM_20  // UART1 RX with inverted signal
+#define PIN_SBUS_RX         GPIO_NUM_8 // UART1 RX with inverted signal
 #define SBUS_UART_NUM       UART_NUM_1   // UART1 for S-bus
 
 // Transmission Hall Sensor (Incremental Encoder - Quadrature)
-#define PIN_TRANS_ENCODER_A GPIO_NUM_3   // Hall sensor channel A (PCNT) - SWAPPED
-#define PIN_TRANS_ENCODER_B GPIO_NUM_2   // Hall sensor channel B (PCNT) - SWAPPED
+#define PIN_TRANS_ENCODER_A GPIO_NUM_2   // Hall sensor channel A (PCNT) - SWAPPED
+#define PIN_TRANS_ENCODER_B GPIO_NUM_1   // Hall sensor channel B (PCNT) - SWAPPED
 #define PCNT_UNIT_TRANS     0            // PCNT unit ID for transmission encoder
 
 // Transmission Linear Actuator (BTS7960)
 // Note: R_EN and L_EN hardwired to 5V (always enabled)
-#define PIN_TRANS_RPWM      GPIO_NUM_4   // LEDC Channel 2
-#define PIN_TRANS_LPWM      GPIO_NUM_5   // LEDC Channel 3
+#define PIN_TRANS_RPWM      GPIO_NUM_5   // LEDC Channel 2
+#define PIN_TRANS_LPWM      GPIO_NUM_4   // LEDC Channel 3
 #define LEDC_CH_TRANS_RPWM  2
 #define LEDC_CH_TRANS_LPWM  3
 
 // Steering Actuator (BTS7960 — full speed, no PWM needed, uses GPIO digital write)
 // Note: R_EN and L_EN hardwired to 5V (always enabled)
-#define PIN_STEER_RPWM      GPIO_NUM_9    // Digital out — move right
-#define PIN_STEER_LPWM      GPIO_NUM_10   // Digital out — move left
+#define PIN_STEER_RPWM      GPIO_NUM_17    // Digital out — move right
+#define PIN_STEER_LPWM      GPIO_NUM_18   // Digital out — move left
 
 // Steering Hall Sensor (Incremental Encoder - Quadrature)
-#define PIN_STEER_ENCODER_A GPIO_NUM_11   // Hall sensor channel A (PCNT)
-#define PIN_STEER_ENCODER_B GPIO_NUM_12   // Hall sensor channel B (PCNT)
+#define PIN_STEER_ENCODER_A GPIO_NUM_42   // Hall sensor channel A (PCNT)
+#define PIN_STEER_ENCODER_B GPIO_NUM_41      // Hall sensor channel B (PCNT)
 #define PCNT_UNIT_STEER     1             // PCNT unit ID for steering encoder
 
 // Throttle Servo (PWM via LEDC)
-#define PIN_THROTTLE_PWM    GPIO_NUM_1   // LEDC Channel 1
+#define PIN_THROTTLE_PWM    GPIO_NUM_3   // LEDC Channel 1
 #define LEDC_CH_THROTTLE    1
 
 // Brake Linear Actuator (BTS7960)
@@ -49,43 +49,26 @@
 // ============================================================================
 
 // SPI CAN Controller (for vehicle CAN bus communication)
-#define PIN_CAN_MOSI        GPIO_NUM_8   // SPI MOSI (using freed NeoPixel pin)
-#define PIN_CAN_MISO        GPIO_NUM_0   // SPI MISO (using freed boot pin - safe during runtime)
-#define PIN_CAN_SCK         GPIO_NUM_23  // SPI SCK
-#define PIN_CAN_CS          GPIO_NUM_22  // SPI Chip Select
+#define PIN_CAN_MOSI        GPIO_NUM_11   // SPI MOSI
+#define PIN_CAN_MISO        GPIO_NUM_13   // SPI MISO
+#define PIN_CAN_SCK         GPIO_NUM_12  // SPI SCK
+#define PIN_CAN_CS          GPIO_NUM_10  // SPI Chip Select
 
-// ============================================================================
-// MCP23017 I2C GPIO EXPANDER
-// ============================================================================
+#define PIN_RELAY1      GPIO_NUM_36   
+#define PIN_RELAY2      GPIO_NUM_37   
+#define PIN_RELAY3      GPIO_NUM_38  
 
-// I2C pins for MCP23017 (TODO: assign final GPIO pins)
-#define PIN_I2C_SDA         GPIO_NUM_18  // I2C SDA
-#define PIN_I2C_SCL         GPIO_NUM_19  // I2C SCL
-#define MCP23017_ADDRESS    0x20         // Default address (A0=A1=A2=GND)
+#define PIN_GEAR_REVERSE  GPIO_NUM_19 
+#define PIN_GEAR_NEUTRAL  GPIO_NUM_20   
+#define PIN_GEAR_LOW      GPIO_NUM_21 
+#define PIN_GEAR_HIGH     GPIO_NUM_47  
+#define PIN_BRAKE_SENSOR  GPIO_NUM_14
 
-// MCP23017 Port A - Outputs (relays)
-#define MCP_PIN_RELAY1      0   // GPA0 - Relay 1 (main power control)
-#define MCP_PIN_RELAY2      1   // GPA1 - Relay 2 (accessory power)
-#define MCP_PIN_RELAY3      2   // GPA2 - Relay 3 (front light / safety)
-
-// MCP23017 Port B - Inputs (sensors, active-low with pull-ups)
-#define MCP_PIN_GEAR_REVERSE  8   // GPB0 - Gear selector REVERSE
-#define MCP_PIN_GEAR_NEUTRAL  9   // GPB1 - Gear selector NEUTRAL
-#define MCP_PIN_GEAR_LOW      10  // GPB2 - Gear selector LOW
-#define MCP_PIN_GEAR_HIGH     11  // GPB3 - Gear selector HIGH
-#define MCP_PIN_BRAKE_SENSOR  12  // GPB4 - Brake position sensor
-
-// Bit masks for bulk Port B reading
-#define MCP_PORTB_GEAR_MASK   0x0F  // GPB0-GPB3 (bits 0-3)
-#define MCP_PORTB_BRAKE_BIT   4     // GPB4 (bit 4)
+///////
 
 // Cranking Parameters
 #define CRANKING_TIMEOUT           2000  // ms - maximum cranking duration
 #define ENGINE_RUNNING_RPM_THRESHOLD 1100  // RPM - engine considered running above this
-
-// Note: GPIO 14 does not exist on ESP32-C6 (valid pins are 0-23 excluding 14)
-// Note: GPIO 0 (boot pin) and GPIO 8 (NeoPixel) are now used for CAN controller (safe during runtime)
-// Note: GPIO 18 (SDA) and GPIO 19 (SCL) are now used for MCP23017 I2C bus
 
 // ============================================================================
 // S-BUS CONFIGURATION
@@ -141,7 +124,7 @@ struct SBusChannelConfig {
 
 // Servo PWM Parameters
 #define SERVO_PWM_FREQ        50     // Hz (20ms period)
-#define SERVO_PWM_RESOLUTION  16     // bits (0-65535)
+#define SERVO_PWM_RESOLUTION  14     // bits (0-16383)
 
 // Steering Actuator Parameters
 #define STEER_CENTER_POSITION     1775   // Encoder counts — center position (from left home)

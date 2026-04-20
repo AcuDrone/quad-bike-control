@@ -88,11 +88,11 @@ private:
 
     // OBD-II PIDs (Mode 01 - Current Data)
     static constexpr uint8_t PID_ENGINE_RPM = 0x0C;
-    static constexpr uint8_t PID_VEHICLE_SPEED = 0x0D;
+    // static constexpr uint8_t PID_VEHICLE_SPEED = 0x0D;
     static constexpr uint8_t PID_COOLANT_TEMP = 0x05;
-    static constexpr uint8_t PID_OIL_TEMP = 0x5C;
+    // static constexpr uint8_t PID_OIL_TEMP = 0x5C;
     static constexpr uint8_t PID_THROTTLE_POS = 0x11;
-    static constexpr uint8_t PID_FUEL_LEVEL = 0x2F;
+    // static constexpr uint8_t PID_FUEL_LEVEL = 0x2F;
 
     MCP_CAN* mcp_can_;              // MCP2515 CAN controller object
     VehicleData vehicleData_;       // Current vehicle data
