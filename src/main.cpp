@@ -54,7 +54,6 @@ TelemetryManager telemetryManager(vehicleController, transmissionEncoder, webPor
 void setup() {
     // Initialize serial for debugging
     Serial.begin(SERIAL_BAUD_RATE);
-    delay(1000);
 
     // Debug::setFeatureEnabled(DebugFeature::CAN, true);
     // Debug::setFeatureEnabled(DebugFeature::TRANSMISSION, true);
@@ -90,7 +89,6 @@ void setup() {
         Debug::printlnFeature(DebugFeature::SERVO, "ERROR: Steering encoder failed");
     }
 
-    delay(1000);
     if (steeringActuator.begin(PIN_STEER_RPWM, PIN_STEER_LPWM)) {
         steeringActuator.attachEncoder(&steeringEncoder);
 
@@ -214,6 +212,4 @@ void loop() {
     // Broadcast telemetry to web clients
     telemetryManager.update();
 
-    // Small delay to prevent CPU hogging
-    // delay(10);
 }
