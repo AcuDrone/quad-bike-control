@@ -244,6 +244,15 @@ private:
      * @param webPortal Reference to web portal for sending responses
      */
     void processClearCalibrationCommand(WebPortal& webPortal);
+
+    /**
+     * @brief Process set_gear_default command
+     * @param gear Gear string ("R", "N", "L", "H")
+     * @param position Encoder count to save as default
+     * @param webPortal Reference to web portal for sending responses
+     */
+    void processSetGearDefaultCommand(const String& gear, int32_t position, WebPortal& webPortal);
+    void processMoveToPositionCommand(int32_t position, WebPortal& webPortal);
 };
 
 #endif // VEHICLE_CONTROLLER_H

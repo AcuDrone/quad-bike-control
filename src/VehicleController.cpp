@@ -93,6 +93,12 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
     } else if (cmd.cmd == "clear_calibration") {
         processClearCalibrationCommand(webPortal);
         return;
+    } else if (cmd.cmd == "set_gear_default") {
+        processSetGearDefaultCommand(cmd.strValue, (int32_t)cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "move_to_position") {
+        processMoveToPositionCommand((int32_t)cmd.floatValue, webPortal);
+        return;
     } else if (cmd.cmd == "set_ignition") {
         // Ignition control always available (not restricted by input source)
         processIgnitionCommand(cmd.strValue, webPortal);
@@ -285,6 +291,38 @@ void VehicleController::processClearCalibrationCommand(WebPortal& webPortal) {
     webPortal.sendResponse(true, "Calibration cleared - reboot to recalibrate");
 }
 
+void VehicleController::processSetGearDefaultCommand(const String& gearStr, int32_t position, WebPortal& webPortal) {
+    TransmissionController::Gear gear;
+    if      (gearStr == "R") gear = TransmissionController::Gear::GEAR_REVERSE;
+    else if (gearStr == "N") gear = TransmissionController::Gear::GEAR_NEUTRAL;
+    else if (gearStr == "L") gear = TransmissionController::Gear::GEAR_LOW;
+    else if (gearStr == "H") gear = TransmissionController::Gear::GEAR_HIGH;
+    else {
+        webPortal.sendResponse(false, "Invalid gear (use R/N/L/H)");
+        return;
+    }
+
+    if (!transmission_.setDefaultPosition(gear, position)) {
+        webPortal.sendResponse(false, "Position out of range (0-" + String(TRANS_ENCODER_MAX_COUNT) + ")");
+        return;
+    }
+
+    // Send specific response with saved values
+    String msg = "Default for " + gearStr + " set to " + String(position);
+    Debug::printfFeature(DebugFeature::VEHICLE, "[WEB] %s\n", msg.c_str());
+    webPortal.sendResponse(true, msg);
+}
+
+void VehicleController::processMoveToPositionCommand(int32_t position, WebPortal& webPortal) {
+    if (position < 0 || position > TRANS_ENCODER_MAX_COUNT) {
+        webPortal.sendResponse(false, "Position out of range (0-" + String(TRANS_ENCODER_MAX_COUNT) + ")");
+        return;
+    }
+    transmission_.moveToPosition(position, TRANS_HOMING_SPEED);
+    Debug::printfFeature(DebugFeature::VEHICLE, "[WEB] Moving transmission to position %ld\n", position);
+    webPortal.sendResponse(true, "Moving to " + String(position));
+}
+
 bool VehicleController::setIgnitionState(const String& state, String& errorMsg) {
     RelayController::IgnitionState currentState = relayController_.getIgnitionState();
     RelayController::IgnitionState targetState;
@@ -390,8 +428,6 @@ void VehicleController::updateBrakeControl() {
                     "[BRAKE] Stopped by sensor. Movement: %lums\n", movementDuration);
                 brakeIsMoving_ = false;
                 lastBrakeUpdateTime_ = 0;
-                // brakeSensorTriggerTime_ intentionally NOT reset here — keeps overrun-complete
-                // path active on subsequent calls (harmless stop) until brake is re-applied
             }
             brake_.stop();
             return;

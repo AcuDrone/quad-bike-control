@@ -80,6 +80,12 @@ public:
 
         // Firmware information
         String firmware_version;  // Firmware version string (e.g., "1.0.0")
+
+        // Gear default positions (user-configurable NVS values)
+        int32_t gear_default_r;   // Default encoder count for REVERSE
+        int32_t gear_default_n;   // Default encoder count for NEUTRAL
+        int32_t gear_default_l;   // Default encoder count for LOW
+        int32_t gear_default_h;   // Default encoder count for HIGH
     };
 
     WebPortal();

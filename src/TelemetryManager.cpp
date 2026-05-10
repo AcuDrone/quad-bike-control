@@ -109,6 +109,13 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     // Firmware version
     telemetry.firmware_version = FIRMWARE_VERSION;
 
+    // Gear default positions
+    const TransmissionController& trans = vehicleController_.getTransmission();
+    telemetry.gear_default_r = trans.getGearPosition(TransmissionController::Gear::GEAR_REVERSE);
+    telemetry.gear_default_n = trans.getGearPosition(TransmissionController::Gear::GEAR_NEUTRAL);
+    telemetry.gear_default_l = trans.getGearPosition(TransmissionController::Gear::GEAR_LOW);
+    telemetry.gear_default_h = trans.getGearPosition(TransmissionController::Gear::GEAR_HIGH);
+
     return telemetry;
 }
 

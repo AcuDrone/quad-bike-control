@@ -222,6 +222,25 @@ public:
      */
     bool restoreStateIfValid();
 
+    /**
+     * @brief Load user-configured default positions from NVS into gearPositions_
+     *
+     * Reads def_reverse/neutral/low/high keys. Sets 0 for any absent key.
+     * Call before loadCalibration() so calibration overwrites if present.
+     */
+    void loadDefaultPositions();
+
+    /**
+     * @brief Set and persist a single gear's default position
+     *
+     * Validates range (0–10000), writes to NVS, and updates gearPositions_ immediately.
+     *
+     * @param gear Target gear (must not be GEAR_UNKNOWN)
+     * @param position Encoder count (0–10000)
+     * @return true if saved, false if gear invalid or position out of range
+     */
+    bool setDefaultPosition(Gear gear, int32_t position);
+
 private:
     Gear targetGear_;  // Target gear for current move
     TransmissionVehicleData vehicleData_;  // Vehicle data for safety checks
@@ -232,12 +251,12 @@ private:
     Gear lastLoggedGear_;  // Last logged gear (to detect changes)
     bool lastLoggedMoving_;  // Last logged movement state (to detect changes)
 
-    // Calibrated gear positions (runtime calibration)
-    int32_t calibratedPositions_[4];  // Calibrated encoder positions for each gear
-    bool isCalibrated_;  // True if calibrateAllGearPositions() has been run
+    int32_t gearPositions_[4];  // Active gear encoder positions (defaults or calibrated)
+    bool isCalibrated_;         // True if auto-calibration is loaded
 
     void saveState(Gear gear, int32_t position, bool valid);
     bool loadState(Gear& gear, int32_t& position, bool& valid);
+    void saveDefaultPosition(Gear gear, int32_t position);
 
     /**
      * @brief Check if gear change is safe based on vehicle speed

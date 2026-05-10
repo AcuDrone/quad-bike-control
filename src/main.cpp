@@ -122,12 +122,13 @@ void setup() {
 
         transmissionActuator.initGearSensors();
 
-        // Load saved calibration from NVS (now that NVS is initialized)
-        if (transmissionActuator.loadCalibration()) {
-            Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Loaded saved calibration from storage");
-        } else {
-            Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] No saved calibration found, using default positions");
-        }
+        // Load user-configured defaults and saved calibration from NVS
+        transmissionActuator.loadDefaultPositions();
+        // if (transmissionActuator.loadCalibration()) {
+        //     Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Loaded saved calibration from storage");
+        // } else {
+        //     Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] No saved calibration found, using default positions");
+        // }
 
         if (transmissionActuator.restoreStateIfValid()) {
             Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Restored transmission state, skipping autohome");

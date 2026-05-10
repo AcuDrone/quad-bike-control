@@ -58,37 +58,29 @@ The system SHALL provide throttle control through a servo-driven acceleration me
 - **AND** throttle commands are ignored until brakes release
 
 ### Requirement: Transmission Control System
-The system SHALL control gear selection through a linear actuator with 4 discrete positions.
+The Transmission Control System SHALL use a three-level priority for default gear encoder positions: auto-calibrated positions (from `calibrateAllGearPositions()`) take highest priority; user-configured NVS defaults take second priority; compile-time factory constants are the final fallback.
 
-#### Scenario: Select transmission gear
-- **WHEN** TransmissionSystem.setGear() is called with valid gear (REVERSE, NEUTRAL, HIGH, LOW)
-- **THEN** linear actuator moves to calibrated position for that gear
-- **AND** system waits for position confirmation or timeout
-- **AND** current gear state is updated
+#### Scenario: Load user-configured defaults on startup
+- **WHEN** the system starts
+- **AND** NVS keys `def_reverse`, `def_neutral`, `def_low`, `def_high` exist in the `transmission` namespace
+- **THEN** `TransmissionController` SHALL load those values as its default positions for use when no auto-calibration is active
 
-#### Scenario: Calibrate transmission positions
-- **WHEN** TransmissionSystem.calibrate() is called
-- **THEN** user is prompted to manually select each gear
-- **AND** actuator position for each gear is recorded
-- **AND** calibration data is stored in non-volatile memory (NVS)
-- **AND** calibration timestamp is saved
+#### Scenario: Fall back to factory defaults when NVS defaults absent
+- **WHEN** the system starts
+- **AND** one or more `def_*` NVS keys are absent
+- **THEN** the corresponding position SHALL use the compile-time constant (`TRANS_POSITION_*`) as the default
+- **AND** no error SHALL be logged
 
-#### Scenario: Load calibration on startup
-- **WHEN** TransmissionSystem.begin() is called
-- **THEN** calibration data is loaded from NVS
-- **AND** if no valid calibration exists, system prompts for calibration
-- **AND** transmission moves to NEUTRAL position
+#### Scenario: Update a default position at runtime
+- **WHEN** `setDefaultPosition(gear, position)` is called with a valid gear and position value
+- **THEN** the value SHALL be written to the corresponding `def_*` NVS key in the `transmission` namespace
+- **AND** the in-RAM default SHALL be updated immediately so subsequent `getGearPosition()` calls (when uncalibrated) return the new value
 
-#### Scenario: Query current gear
-- **WHEN** TransmissionSystem.getCurrentGear() is called
-- **THEN** last commanded gear is returned
-- **AND** position uncertainty is indicated if calibration is stale
-
-#### Scenario: Safe gear transitions
-- **WHEN** changing from REVERSE to HIGH or LOW (or vice versa)
-- **THEN** system requires passing through NEUTRAL first
-- **AND** throttle must be at idle during transition
-- **AND** minimum dwell time in NEUTRAL is enforced (e.g., 500ms)
+#### Scenario: Auto-calibration overrides without clearing NVS defaults
+- **WHEN** `calibrateAllGearPositions()` completes successfully
+- **THEN** calibrated positions SHALL be used by `getGearPosition()`
+- **AND** the `def_*` NVS keys SHALL remain unchanged
+- **AND** clearing calibration via `clearCalibration()` SHALL restore the system to the NVS-default tier (not factory constants), provided `def_*` keys are present
 
 ### Requirement: Brake Control System
 The system SHALL control braking force through a linear actuator-driven brake mechanism.
@@ -370,4 +362,36 @@ The system SHALL provide diagnostic information about ignition and lighting syst
   - Front light state (ON/OFF)
   - Light toggle count
   - Relay3 output state
+
+### Requirement: Transmission State Persistence
+The system SHALL persist the last confirmed transmission state (gear, encoder position, validity flag) to NVS so that autohome can be skipped after a clean power cycle.
+
+#### Scenario: Mark state invalid at start of gear change
+- **WHEN** `TransmissionController::setGear()` is called
+- **THEN** `state_valid=false` SHALL be written to NVS before movement begins
+- **AND** a mid-move power loss will therefore result in `state_valid=false` on next boot
+
+#### Scenario: Save confirmed state on gear arrival
+- **WHEN** the physical gear switch confirms the target gear is reached
+- **THEN** `state_valid=true`, `state_gear`, and `state_pos` (current encoder count) SHALL be written to NVS
+- **AND** the saved state reflects the physical actuator position at that moment
+
+#### Scenario: Restore encoder and skip autohome on valid state
+- **WHEN** the system starts
+- **AND** NVS `state_valid=true`
+- **AND** the physical gear switch reports the same gear as `state_gear`
+- **THEN** the encoder SHALL be set to `state_pos` via `EncoderCounter::setPosition()`
+- **AND** autohome SHALL be skipped
+- **AND** the system SHALL log "Restored transmission state, skipping autohome"
+
+#### Scenario: Fall back to autohome on invalid or mismatched state
+- **WHEN** the system starts
+- **AND** NVS `state_valid=false`, or the physical switch disagrees with `state_gear`, or no state is saved
+- **THEN** the normal autohome sequence SHALL run
+- **AND** the system SHALL log the reason (invalid flag / switch mismatch / no data)
+
+#### Scenario: State persists independently of calibration
+- **WHEN** calibration data is cleared via `clearCalibration()`
+- **THEN** the state keys (`state_valid`, `state_gear`, `state_pos`) SHALL also be cleared
+- **AND** the next boot will run autohome
 

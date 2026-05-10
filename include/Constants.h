@@ -54,14 +54,14 @@
 #define PIN_CAN_SCK         GPIO_NUM_12  // SPI SCK
 #define PIN_CAN_CS          GPIO_NUM_10  // SPI Chip Select
 
-#define PIN_RELAY1      GPIO_NUM_36   
-#define PIN_RELAY2      GPIO_NUM_37   
-#define PIN_RELAY3      GPIO_NUM_38  
+#define PIN_RELAY1      GPIO_NUM_36
+#define PIN_RELAY2      GPIO_NUM_37
+#define PIN_RELAY3      GPIO_NUM_38
 
-#define PIN_GEAR_REVERSE  GPIO_NUM_19 
-#define PIN_GEAR_NEUTRAL  GPIO_NUM_20   
-#define PIN_GEAR_LOW      GPIO_NUM_21 
-#define PIN_GEAR_HIGH     GPIO_NUM_47  
+#define PIN_GEAR_REVERSE  GPIO_NUM_19
+#define PIN_GEAR_NEUTRAL  GPIO_NUM_20
+#define PIN_GEAR_LOW      GPIO_NUM_21
+#define PIN_GEAR_HIGH     GPIO_NUM_47
 #define PIN_BRAKE_SENSOR  GPIO_NUM_14
 
 ///////
@@ -87,7 +87,6 @@ struct SBusChannelConfig {
 #define SBUS_RAW_MIN        201   // Minimum S-bus raw value (ArduPilot: (1000-875)*1600/1000+1)
 #define SBUS_RAW_MAX        1801  // Maximum S-bus raw value (ArduPilot: (2000-875)*1600/1000+1)
 #define SBUS_SIGNAL_TIMEOUT   500   // ms before fail-safe activates
-#define SBUS_MIN_RECOVERY_FRAMES 3  // Consecutive good frames to exit fail-safe
 
 // S-bus to microseconds conversion (for compatibility)
 #define SBUS_US_MIN           1000   // Microseconds equivalent
@@ -124,7 +123,6 @@ struct SBusChannelConfig {
 
 // Servo PWM Parameters
 #define SERVO_PWM_FREQ        50     // Hz (20ms period)
-#define SERVO_PWM_RESOLUTION  14     // bits (0-16383)
 
 // Steering Actuator Parameters
 #define STEER_CENTER_POSITION     1775   // Encoder counts — center position (from left home)
@@ -148,9 +146,6 @@ struct SBusChannelConfig {
 
 // Motor PWM Parameters
 #define MOTOR_PWM_FREQ        10000  // Hz (10kHz to avoid audible noise)
-#define MOTOR_PWM_RESOLUTION  8      // bits (0-255)
-#define MOTOR_MIN_SPEED       0      // Minimum PWM value
-#define MOTOR_MAX_SPEED       255    // Maximum PWM value
 
 // Motor Speed Limits (for safety)
 #define MOTOR_MAX_FORWARD     255    // Maximum forward speed
@@ -161,21 +156,11 @@ struct SBusChannelConfig {
 // ============================================================================
 
 // Transmission Encoder Parameters
-#define TRANS_ENCODER_PULSES_PER_REV  400    // Pulses per revolution (adjust based on sensor)
 #define TRANS_ENCODER_MAX_COUNT       32767  // Maximum encoder count (PCNT 16-bit signed)
 #define TRANS_ENCODER_MIN_COUNT      -32768  // Minimum encoder count
 #define TRANS_POSITION_TOLERANCE      10     // +/- encoder counts for position match (±2.5% of revolution)
 
-// Transmission Gear Positions (encoder counts - default values, overridden by calibration)
-#define TRANS_POSITION_REVERSE   725     // Encoder count for REVERSE (default)
-#define TRANS_POSITION_NEUTRAL   2550    // Encoder count for NEUTRAL (default)
-#define TRANS_POSITION_LOW       6225    // Encoder count for LOW (default)
-#define TRANS_POSITION_HIGH      4750    // Encoder count for HIGH (default)
-
 // Transmission Movement Parameters
-#define TRANS_MOVE_TIMEOUT    15000   // ms - maximum time for gear change
-#define TRANS_SETTLE_TIME     500    // ms - dwell time in NEUTRAL during transitions
-#define TRANS_CALIBRATION_SPEED 100  // PWM value during calibration
 #define TRANS_HOMING_SPEED      255  // PWM value during auto-homing (full speed)
 #define TRANS_HOMING_TIMEOUT    60000 // ms - maximum time for homing
 #define TRANS_STALL_THRESHOLD   3    // Encoder counts - if no change for this time, assume stall
@@ -195,46 +180,10 @@ struct SBusChannelConfig {
 // BRAKE SYSTEM CONFIGURATION
 // ============================================================================
 
-// Brake Positions
-#define BRAKE_RELEASED        0      // 0% - fully released
-#define BRAKE_PARKING         30     // 30% - parking brake on startup
-#define BRAKE_FULL            100    // 100% - full braking
-#define BRAKE_EMERGENCY       100    // 100% - emergency stop
-
 // Brake Movement Parameters
 #define BRAKE_FULL_TRAVEL_TIME 1500  // ms - estimated time for 0-100% brake travel
 #define BRAKE_TOLERANCE        5  // % - position tolerance for "at target"
 #define BRAKE_SENSOR_OVERRUN_TIME 1000  // ms - continue moving after sensor triggers (full retraction)
-
-// ============================================================================
-// SAFETY PARAMETERS
-// ============================================================================
-
-// Watchdog Timer
-#define WATCHDOG_TIMEOUT      3000   // ms - watchdog timeout period
-
-// Command Deadbands
-#define STEERING_DEADBAND     2.0f   // % - center deadband
-#define THROTTLE_DEADBAND     2.0f   // % - idle deadband
-#define BRAKE_DEADBAND        1.0f   // % - release deadband
-
-// Safety Thresholds
-#define THROTTLE_IDLE_THRESHOLD  5.0f    // % - below this is considered idle
-#define BRAKE_OVERRIDE_THRESHOLD 50.0f   // % - brake overrides throttle above this
-#define ACTUATOR_TIMEOUT        10000    // ms - actuator movement timeout
-
-// Fail-safe Values
-#define FAILSAFE_STEERING     0.0f   // % - center steering
-#define FAILSAFE_THROTTLE     0.0f   // % - idle throttle
-#define FAILSAFE_BRAKE        30.0f  // % - parking brake
-// FAILSAFE_GEAR is NEUTRAL (defined in enum)
-
-// ============================================================================
-// LOOP TIMING
-// ============================================================================
-
-#define CONTROL_LOOP_FREQ     100    // Hz - main control loop frequency
-#define CONTROL_LOOP_DT       10     // ms - control loop period
 
 // ============================================================================
 // SERIAL DEBUG
@@ -249,20 +198,6 @@ struct SBusChannelConfig {
 // Enable programmatically: Debug::setFeatureEnabled(DebugFeature::TRANSMISSION, true)
 // Or via NVS: preferences.putBool("feat_trans", true) in "debug" namespace
 #define DEBUG_FEATURE_DEFAULT_STATE  false  // All features default to OFF
-
-// ============================================================================
-// NVS (Non-Volatile Storage) KEYS
-// ============================================================================
-
-#define NVS_NAMESPACE         "vehicle"
-#define NVS_KEY_CALIBRATED    "calibrated"
-#define NVS_KEY_ENCODER_POS   "encoder_pos"  // Current encoder position
-#define NVS_KEY_TRANS_R       "trans_r"      // REVERSE gear encoder position
-#define NVS_KEY_TRANS_N       "trans_n"      // NEUTRAL gear encoder position
-#define NVS_KEY_TRANS_H       "trans_h"      // HIGH gear encoder position
-#define NVS_KEY_TRANS_L       "trans_l"      // LOW gear encoder position
-#define NVS_KEY_BRAKE_MIN     "brake_min"
-#define NVS_KEY_BRAKE_MAX     "brake_max"
 
 // ============================================================================
 // WiFi ACCESS POINT CONFIGURATION
@@ -284,7 +219,6 @@ struct SBusChannelConfig {
 #define WEBSOCKET_PATH        "/ws"               // WebSocket endpoint path
 #define TELEMETRY_INTERVAL    200                 // ms - telemetry broadcast interval (5 Hz)
 #define WEB_COMMAND_TIMEOUT   10000               // ms - web control session timeout
-#define WEB_COMMAND_RATE_LIMIT 100                // ms - minimum time between commands (10 Hz max)
 
 // ============================================================================
 // OTA UPDATE CONFIGURATION
@@ -292,7 +226,6 @@ struct SBusChannelConfig {
 
 #define OTA_HOSTNAME          "quadbike-control"  // OTA hostname for identification
 #define OTA_PASSWORD          ""                  // OTA password (empty = no password)
-#define OTA_PORT              3232                // OTA port (default Arduino OTA port)
 
 // ============================================================================
 // INPUT SOURCE PRIORITY
@@ -313,9 +246,6 @@ enum class InputSource {
 // ============================================================================
 // CAN CONTROLLER CONFIGURATION
 // ============================================================================
-
-// CAN Controller Speed
-#define CAN_SPEED_500KBPS      0    // 500 kbps (standard automotive)
 
 // CAN Polling Intervals
 #define CAN_POLL_INTERVAL_RPM     200   // ms - RPM and speed polling rate
