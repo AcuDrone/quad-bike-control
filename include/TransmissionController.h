@@ -211,6 +211,17 @@ public:
      */
     void clearCalibration();
 
+    /**
+     * @brief Restore encoder position from NVS and skip autohome if state is valid
+     *
+     * Loads saved transmission state. If valid=true and the physical gear switch
+     * matches the saved gear, restores the encoder to the saved position and
+     * returns true (caller skips autohome). Otherwise returns false.
+     *
+     * @return true if state restored (skip autohome), false if autohome is needed
+     */
+    bool restoreStateIfValid();
+
 private:
     Gear targetGear_;  // Target gear for current move
     TransmissionVehicleData vehicleData_;  // Vehicle data for safety checks
@@ -224,6 +235,9 @@ private:
     // Calibrated gear positions (runtime calibration)
     int32_t calibratedPositions_[4];  // Calibrated encoder positions for each gear
     bool isCalibrated_;  // True if calibrateAllGearPositions() has been run
+
+    void saveState(Gear gear, int32_t position, bool valid);
+    bool loadState(Gear& gear, int32_t& position, bool& valid);
 
     /**
      * @brief Check if gear change is safe based on vehicle speed

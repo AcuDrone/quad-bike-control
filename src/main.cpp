@@ -131,34 +131,22 @@ void setup() {
             Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] No saved calibration found, using default positions");
         }
 
-        // TEMPORARY: Skip calibration/homing when testing without hardware
-        // Comment out this block and uncomment the full calibration below when hardware is connected
-        Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Skipping calibration/homing (no hardware connected)");
-        Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] WARNING: Gear changes will fail without calibration");
-        Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] To calibrate: use web portal 'Calibrate' button when hardware connected");
-
-        // Check if calibration already exists
-        if (transmissionActuator.isCalibrated()) {
-            // Calibration loaded from storage - home to physical stop then move to REVERSE
-            Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Using saved calibration, homing to physical stop...");
+        if (transmissionActuator.restoreStateIfValid()) {
+            Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Restored transmission state, skipping autohome");
         } else {
-            // No saved calibration - run full calibration routine
-            Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] No saved calibration found");
-        }
+            if (transmissionActuator.autoHome(-1, TRANS_HOMING_SPEED, TRANS_HOMING_TIMEOUT)) {
+                Debug::printfFeature(DebugFeature::TRANSMISSION, "[TRANS] Homed to physical stop at position %ld\n", transmissionEncoder.getPosition());
 
-        if (transmissionActuator.autoHome(-1, TRANS_HOMING_SPEED, TRANS_HOMING_TIMEOUT)) {
-            Debug::printfFeature(DebugFeature::TRANSMISSION, "[TRANS] Homed to physical stop at position %ld\n", transmissionEncoder.getPosition());
-
-            // Move to REVERSE gear position if calibrated
-            if (transmissionActuator.isCalibrated()) {
-                Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Moving to NEUTRAL gear...");
-                transmissionActuator.setGear(TransmissionController::Gear::GEAR_NEUTRAL);
+                if (transmissionActuator.isCalibrated()) {
+                    Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Moving to NEUTRAL gear...");
+                    transmissionActuator.setGear(TransmissionController::Gear::GEAR_NEUTRAL);
+                } else {
+                    Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Moving to REVERSE gear...");
+                    transmissionActuator.setGear(TransmissionController::Gear::GEAR_REVERSE);
+                }
             } else {
-                Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Moving to REVERSE gear...");
-                transmissionActuator.setGear(TransmissionController::Gear::GEAR_REVERSE);
+                Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] ERROR: Homing failed");
             }
-        } else {
-            Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] ERROR: Homing failed");
         }
     } else {
         Debug::printlnFeature(DebugFeature::TRANSMISSION, "ERROR: Transmission actuator failed");

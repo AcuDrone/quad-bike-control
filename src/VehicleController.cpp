@@ -425,14 +425,9 @@ void VehicleController::updateBrakeControl() {
                 currentBrakePosition_, currentBrakeTarget_, positionError);
         }
 
-        int16_t speed = 255;  // Cast to int16_t for motor controller
-
-        // Determine direction
-        // Positive = extend (apply brake)
-        // Negative = retract (release brake)
-        if (positionError < 0.0f) {
-            speed = -speed;  // Need to retract (release)
-        }
+        // Positive = extend (apply brake), negative = retract (release brake)
+        float direction = (positionError > 0.0f) ? 1.0f : -1.0f;
+        int16_t speed = (int16_t)(255 * direction);
 
         // Apply speed to actuator
         brake_.setSpeed(speed);
@@ -448,14 +443,7 @@ void VehicleController::updateBrakeControl() {
         float movementRate = (100.0f / BRAKE_FULL_TRAVEL_TIME) * speedFraction;  // %/ms
         float expectedMovement = movementRate * dt;
 
-        // Update position based on error direction
-        if (positionError > 0.0f) {
-            // Need higher % (release) - position increases
-            currentBrakePosition_ += expectedMovement;
-        } else {
-            // Need lower % (press) - position decreases
-            currentBrakePosition_ -= expectedMovement;
-        }
+        currentBrakePosition_ += direction * expectedMovement;
 
         // Clamp to valid range
         if (currentBrakePosition_ < 0.0f) currentBrakePosition_ = 0.0f;
@@ -471,7 +459,7 @@ void VehicleController::updateBrakeControl() {
             Debug::printfFeature(DebugFeature::BRAKE,
                 "[BRAKE] Target: %.1f%%, Error: %.1f%%, Duration: %lums, Speed: %d PWM, Dir: %s\n",
                 currentBrakeTarget_, positionError, now - brakeMovementStartTime_, speed,
-                positionError > 0 ? "RELEASE" : "PRESS");
+                direction > 0 ? "PRESS" : "RELEASE");
             lastProgressLog = now;
         }
 

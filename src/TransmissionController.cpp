@@ -50,6 +50,7 @@ bool TransmissionController::setGear(TransmissionController::Gear gear, uint8_t 
                   getGearName(gear), targetPosition);
 
     targetGear_ = gear;
+    saveState(gear, getPosition(), false);
     return moveToPosition(targetPosition, speed);
 }
 
@@ -306,6 +307,7 @@ void TransmissionController::update() {
 
             // Stop position control - physical switch confirms arrival
             // stopPositionControl();
+            saveState(targetGear_, getPosition(), true);
             Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] Target gear %s confirmed by physical switch\n",
                          getGearName(targetGear_));
 
@@ -554,7 +556,7 @@ void TransmissionController::clearCalibration() {
     Preferences prefs;
 
     if (prefs.begin("transmission", false)) {
-        prefs.clear();  // Clear all keys in this namespace
+        prefs.clear();  // Clear all keys in this namespace (includes state_* keys)
         prefs.end();
         Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] Calibration cleared from storage");
     }
@@ -565,4 +567,60 @@ void TransmissionController::clearCalibration() {
     calibratedPositions_[(int)Gear::GEAR_NEUTRAL] = TRANS_POSITION_NEUTRAL;
     calibratedPositions_[(int)Gear::GEAR_REVERSE] = TRANS_POSITION_REVERSE;
     isCalibrated_ = false;
+}
+
+void TransmissionController::saveState(Gear gear, int32_t position, bool valid) {
+    Preferences prefs;
+    if (!prefs.begin("transmission", false)) {
+        return;
+    }
+    prefs.putBool("state_valid", valid);
+    prefs.putInt("state_gear", (int)gear);
+    prefs.putInt("state_pos", position);
+    prefs.end();
+}
+
+bool TransmissionController::loadState(Gear& gear, int32_t& position, bool& valid) {
+    Preferences prefs;
+    if (!prefs.begin("transmission", true)) {
+        return false;
+    }
+    if (!prefs.isKey("state_valid")) {
+        prefs.end();
+        return false;
+    }
+    valid = prefs.getBool("state_valid", false);
+    gear = (Gear)prefs.getInt("state_gear", (int)Gear::GEAR_UNKNOWN);
+    position = prefs.getInt("state_pos", 0);
+    prefs.end();
+    return true;
+}
+
+bool TransmissionController::restoreStateIfValid() {
+    Gear savedGear;
+    int32_t savedPosition;
+    bool valid;
+
+    if (!loadState(savedGear, savedPosition, valid)) {
+        Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] No saved transmission state, running autohome");
+        return false;
+    }
+
+    if (!valid) {
+        Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Saved state invalid (mid-change power loss), running autohome");
+        return false;
+    }
+
+    Gear physicalGear = getPhysicalGear();
+    if (physicalGear != savedGear) {
+        Debug::printfFeature(DebugFeature::TRANSMISSION,
+            "[TRANS] Physical switch mismatch: saved=%s, physical=%s, running autohome\n",
+            getGearName(savedGear), getGearName(physicalGear));
+        return false;
+    }
+
+    recalibrateEncoder(savedPosition);
+    targetGear_ = savedGear;
+    Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Restored transmission state, skipping autohome");
+    return true;
 }

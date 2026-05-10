@@ -202,7 +202,7 @@ struct SBusChannelConfig {
 #define BRAKE_EMERGENCY       100    // 100% - emergency stop
 
 // Brake Movement Parameters
-#define BRAKE_FULL_TRAVEL_TIME 3000  // ms - estimated time for 0-100% brake travel
+#define BRAKE_FULL_TRAVEL_TIME 1500  // ms - estimated time for 0-100% brake travel
 #define BRAKE_TOLERANCE        5  // % - position tolerance for "at target"
 #define BRAKE_SENSOR_OVERRUN_TIME 1000  // ms - continue moving after sensor triggers (full retraction)
 
