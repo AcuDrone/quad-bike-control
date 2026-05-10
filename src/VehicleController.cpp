@@ -16,7 +16,7 @@ VehicleController::VehicleController(SteeringController& steering,
       currentInputSource_(InputSource::FAILSAFE),
       failsafeApplied_(false),
       currentBrakeTarget_(0.0f),
-      currentBrakePosition_(0.0f),
+      currentBrakePosition_(100.0f),
       brakeMovementStartTime_(0),
       lastBrakeUpdateTime_(0),
       brakeSensorTriggerTime_(0),
@@ -350,7 +350,7 @@ void VehicleController::processLightCommand(bool on, WebPortal& webPortal) {
 
 void VehicleController::applyBrake(float brakePct) {
     // Clamp brake percentage to valid range
-    if (brakePct < 0.0f) brakePct = 0.0f;
+    if (brakePct < 5.0f) brakePct = 0.0f;
     if (brakePct > 100.0f) brakePct = 100.0f;
 
     // Update target
@@ -383,26 +383,29 @@ void VehicleController::updateBrakeControl() {
                 currentBrakePosition_ = 0.0f;
             }
 
-            // Stop actuator if moving
+            // Stop actuator
             if (brakeIsMoving_) {
                 uint32_t movementDuration = millis() - brakeMovementStartTime_;
                 Debug::printfFeature(DebugFeature::BRAKE,
                     "[BRAKE] Stopped by sensor. Movement: %lums\n", movementDuration);
                 brakeIsMoving_ = false;
                 lastBrakeUpdateTime_ = 0;
-                brakeSensorTriggerTime_ = 0;  // Reset trigger time
+                // brakeSensorTriggerTime_ intentionally NOT reset here — keeps overrun-complete
+                // path active on subsequent calls (harmless stop) until brake is re-applied
             }
             brake_.stop();
-            return;  // Exit early
+            return;
         } else {
-            // Still in overrun period - continue moving (fall through to normal control)
+            // Still in overrun period - keep retracting
+            brake_.setSpeed(-255);
             static uint32_t lastOverrunLog = 0;
-            if (now - lastOverrunLog > 100) {  // Log every 100ms during overrun
+            if (now - lastOverrunLog > 100) {
                 Debug::printfFeature(DebugFeature::BRAKE,
                     "[BRAKE] Sensor overrun: %lums / %ldms remaining\n",
                     overrunDuration, (long)(BRAKE_SENSOR_OVERRUN_TIME - overrunDuration));
                 lastOverrunLog = now;
             }
+            return;
         }
     } else {
         // Not releasing or sensor not triggered - reset trigger time
