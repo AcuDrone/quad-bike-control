@@ -178,6 +178,7 @@
             background: rgba(0, 0, 0, 0.3);
             outline: none;
             -webkit-appearance: none;
+            appearance: none;
         }
 
         .slider::-webkit-slider-thumb {
@@ -397,13 +398,15 @@
             <div class="card">
                 <h2>⚙️ Gear Position Defaults</h2>
                 <p style="font-size: 0.8em; color: #aaa; margin-bottom: 12px;">
-                    Default encoder counts used when no auto-calibration is saved. Drive to a gear, read the encoder value above, then enter it here.
+                    Drive to a gear position, press <b>📍</b> to capture the current encoder count, then <b>Save</b>.
+                    <b>Move</b> drives the actuator to the entered value.
                 </p>
                 <div id="gear-defaults-grid" style="display: flex; flex-direction: column; gap: 10px;">
                     <div>
                         <label style="font-size: 0.8em; color: #aaa;">REVERSE (R)</label>
                         <div style="display: flex; gap: 6px; margin-top: 4px;">
                             <input type="number" id="default-r" min="0" max="10000" style="flex:1; padding:6px; border-radius:4px; border:1px solid #555; background:#2a2a2a; color:#fff;">
+                            <button onclick="captureEncoderPosition('R')" title="Use current encoder position" style="padding:6px 10px; border-radius:4px; border:none; background:#555; color:#fff; cursor:pointer;">📍</button>
                             <button onclick="moveToGearPosition('R')" style="padding:6px 10px; border-radius:4px; border:none; background:#ff9800; color:#fff; cursor:pointer;">Move</button>
                             <button onclick="saveGearDefault('R')" style="padding:6px 10px; border-radius:4px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Save</button>
                         </div>
@@ -412,6 +415,7 @@
                         <label style="font-size: 0.8em; color: #aaa;">NEUTRAL (N)</label>
                         <div style="display: flex; gap: 6px; margin-top: 4px;">
                             <input type="number" id="default-n" min="0" max="10000" style="flex:1; padding:6px; border-radius:4px; border:1px solid #555; background:#2a2a2a; color:#fff;">
+                            <button onclick="captureEncoderPosition('N')" title="Use current encoder position" style="padding:6px 10px; border-radius:4px; border:none; background:#555; color:#fff; cursor:pointer;">📍</button>
                             <button onclick="moveToGearPosition('N')" style="padding:6px 10px; border-radius:4px; border:none; background:#ff9800; color:#fff; cursor:pointer;">Move</button>
                             <button onclick="saveGearDefault('N')" style="padding:6px 10px; border-radius:4px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Save</button>
                         </div>
@@ -420,6 +424,7 @@
                         <label style="font-size: 0.8em; color: #aaa;">LOW (L)</label>
                         <div style="display: flex; gap: 6px; margin-top: 4px;">
                             <input type="number" id="default-l" min="0" max="10000" style="flex:1; padding:6px; border-radius:4px; border:1px solid #555; background:#2a2a2a; color:#fff;">
+                            <button onclick="captureEncoderPosition('L')" title="Use current encoder position" style="padding:6px 10px; border-radius:4px; border:none; background:#555; color:#fff; cursor:pointer;">📍</button>
                             <button onclick="moveToGearPosition('L')" style="padding:6px 10px; border-radius:4px; border:none; background:#ff9800; color:#fff; cursor:pointer;">Move</button>
                             <button onclick="saveGearDefault('L')" style="padding:6px 10px; border-radius:4px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Save</button>
                         </div>
@@ -428,6 +433,7 @@
                         <label style="font-size: 0.8em; color: #aaa;">HIGH (H)</label>
                         <div style="display: flex; gap: 6px; margin-top: 4px;">
                             <input type="number" id="default-h" min="0" max="10000" style="flex:1; padding:6px; border-radius:4px; border:1px solid #555; background:#2a2a2a; color:#fff;">
+                            <button onclick="captureEncoderPosition('H')" title="Use current encoder position" style="padding:6px 10px; border-radius:4px; border:none; background:#555; color:#fff; cursor:pointer;">📍</button>
                             <button onclick="moveToGearPosition('H')" style="padding:6px 10px; border-radius:4px; border:none; background:#ff9800; color:#fff; cursor:pointer;">Move</button>
                             <button onclick="saveGearDefault('H')" style="padding:6px 10px; border-radius:4px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Save</button>
                         </div>
@@ -890,6 +896,16 @@
             sendCommand('set_gear', gear);
         }
 
+        function captureEncoderPosition(gear) {
+            const idMap = { R: 'default-r', N: 'default-n', L: 'default-l', H: 'default-h' };
+            const pos = parseInt(document.getElementById('gear-encoder-pos').textContent, 10);
+            if (!isNaN(pos)) {
+                document.getElementById(idMap[gear]).value = pos;
+                document.getElementById('gear-default-status').textContent = 'Captured ' + pos + ' for ' + gear;
+                document.getElementById('gear-default-status').style.color = '#aaa';
+            }
+        }
+
         function moveToGearPosition(gear) {
             const idMap = { R: 'default-r', N: 'default-n', L: 'default-l', H: 'default-h' };
             const val = parseInt(document.getElementById(idMap[gear]).value, 10);
@@ -899,7 +915,7 @@
                 return;
             }
             if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ cmd: 'move_to_position', floatValue: val }));
+                ws.send(JSON.stringify({ cmd: 'move_to_position', value: val }));
                 document.getElementById('gear-default-status').textContent = 'Moving to ' + val + '...';
                 document.getElementById('gear-default-status').style.color = '#ff9800';
             }
@@ -914,7 +930,7 @@
                 return;
             }
             if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ cmd: 'set_gear_default', strValue: gear, floatValue: val }));
+                ws.send(JSON.stringify({ cmd: 'set_gear_default', value: val, strValue: gear }));
                 document.getElementById('gear-default-status').textContent = 'Saving ' + gear + '...';
                 document.getElementById('gear-default-status').style.color = '#aaa';
             }

@@ -189,7 +189,7 @@ TransmissionController::Gear TransmissionController::getPhysicalGear() const {
 
     if (activeCount == 0) {
         // No gear selected (all pins HIGH) - return UNKNOWN
-        Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] WARNING: No gear sensor active");
+        // Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] WARNING: No gear sensor active");
         return Gear::GEAR_UNKNOWN;
     }
 

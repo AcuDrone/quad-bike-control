@@ -55,9 +55,10 @@ void setup() {
     // Initialize serial for debugging
     Serial.begin(SERIAL_BAUD_RATE);
 
+    // delay(1000); // Short delay to allow serial monitor to connect
     // Debug::setFeatureEnabled(DebugFeature::CAN, true);
-    // Debug::setFeatureEnabled(DebugFeature::TRANSMISSION, true);
-    Debug::setFeatureEnabled(DebugFeature::BRAKE, true);
+    Debug::setFeatureEnabled(DebugFeature::TRANSMISSION, true);
+    Debug::setFeatureEnabled(DebugFeature::VEHICLE, true);
     // Debug::setFeatureEnabled(DebugFeature::SERVO, true);
     
 
@@ -163,10 +164,10 @@ void setup() {
     Debug::printfFeature(DebugFeature::BRAKE, "Brake sensor: %s\n",
         digitalRead(PIN_BRAKE_SENSOR) ? "Released (HIGH)" : "Pressed (LOW)");
  
-    // Initialize SBUS input
-    if (!sbusInput.begin()) {
-        Debug::printlnFeature(DebugFeature::SBUS, "ERROR: SBUS input failed");
-    }
+    // // Initialize SBUS input
+    // if (!sbusInput.begin()) {
+    //     Debug::printlnFeature(DebugFeature::SBUS, "ERROR: SBUS input failed");
+    // }
 
     if (!relayController.begin()) {
         Debug::printlnFeature(DebugFeature::RELAY, "ERROR: Relay controller failed");

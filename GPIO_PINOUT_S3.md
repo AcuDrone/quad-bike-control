@@ -1,6 +1,6 @@
 # ESP32-S3 GPIO Pinout - Quad Bike Control System
 
-**Hardware:** ESP32-S3-DevKitC-1 v1.1
+**Hardware:** ESP32-S3-DevKitC-1 v1.1 N16R8 (OPI PSRAM not used — `qio_qspi` mode; GPIO 33-37 free)
 **Reference:** [Official User Guide](https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32s3/esp32-s3-devkitc-1/user_guide_v1.1.html)
 **Pin Definitions:** `include/Constants.h`
 
@@ -32,7 +32,7 @@
 | **19** | J3-20 | `PIN_GEAR_REVERSE` — Digital In | ⚠ USB-OTG D− — do not enable USB-OTG |
 | **20** | J3-19 | `PIN_GEAR_NEUTRAL` — Digital In | ⚠ USB-OTG D+ — do not enable USB-OTG |
 | **21** | J3-18 | `PIN_GEAR_LOW` — Digital In | Gear selector LOW (active-low) |
-| **35** | J3-13 | FREE | |
+| **35** | J3-13 | FREE | Was OPI PSRAM SPIIO6 — free with qio_qspi |
 | **36** | J3-12 | `PIN_RELAY1` — Digital Out | Relay 1 — main power |
 | **37** | J3-11 | `PIN_RELAY2` — Digital Out | Relay 2 — starter |
 | **38** | J3-10 | `PIN_RELAY3` — Digital Out | ⚠ Drives onboard WS2812B RGB LED too |

@@ -387,12 +387,14 @@ void VehicleController::processLightCommand(bool on, WebPortal& webPortal) {
 }
 
 void VehicleController::applyBrake(float brakePct) {
+    if (currentBrakeTarget_ = brakePct) { return ;}
     // Clamp brake percentage to valid range
     if (brakePct < 5.0f) brakePct = 0.0f;
     if (brakePct > 100.0f) brakePct = 100.0f;
 
     // Update target
     currentBrakeTarget_ = brakePct;
+
     Debug::printfFeature(DebugFeature::BRAKE,
     "[BRAKE] SET brake: %lu%%\n", (unsigned long)currentBrakeTarget_);
 }

@@ -527,23 +527,23 @@ bool WebPortal::parseWebCommand(uint8_t* data, size_t len) {
     currentCommand.cmd = doc["cmd"].as<String>();
     currentCommand.hasCommand = true;
 
-    // Extract value based on command type
+    // Extract primary value (optional — some commands carry no value)
+    currentCommand.strValue = "";
+    currentCommand.floatValue = 0.0f;
+    currentCommand.boolValue = false;
     if (doc.containsKey("value")) {
         if (doc["value"].is<bool>()) {
             currentCommand.boolValue = doc["value"].as<bool>();
-            currentCommand.strValue = "";
-            currentCommand.floatValue = 0.0f;
         } else if (doc["value"].is<const char*>()) {
             currentCommand.strValue = doc["value"].as<String>();
-            currentCommand.floatValue = 0.0f;
-            currentCommand.boolValue = false;
         } else if (doc["value"].is<float>() || doc["value"].is<int>()) {
             currentCommand.floatValue = doc["value"].as<float>();
-            currentCommand.strValue = "";
-            currentCommand.boolValue = false;
         }
-    } else {
-        return false;
+    }
+
+    // Optional secondary string (e.g. gear name alongside a float value)
+    if (doc.containsKey("strValue")) {
+        currentCommand.strValue = doc["strValue"].as<String>();
     }
 
     return true;
