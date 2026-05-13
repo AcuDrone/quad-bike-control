@@ -68,7 +68,7 @@
 
 // Cranking Parameters
 #define CRANKING_TIMEOUT           2000  // ms - maximum cranking duration
-#define ENGINE_RUNNING_RPM_THRESHOLD 1100  // RPM - engine considered running above this
+#define ENGINE_RUNNING_RPM_THRESHOLD 1500  // RPM - engine considered running above this
 
 // ============================================================================
 // S-BUS CONFIGURATION
@@ -161,6 +161,7 @@ struct SBusChannelConfig {
 #define TRANS_POSITION_TOLERANCE      10     // +/- encoder counts for position match (±2.5% of revolution)
 
 // Transmission Movement Parameters
+#define TRANS_UNKNOWN_GEAR_THROTTLE_MAX  (float)17   // % - max throttle when physical gear is UNKNOWN
 #define TRANS_HOMING_SPEED      255  // PWM value during auto-homing (full speed)
 #define TRANS_HOMING_TIMEOUT    60000 // ms - maximum time for homing
 #define TRANS_STALL_THRESHOLD   3    // Encoder counts - if no change for this time, assume stall
@@ -182,7 +183,7 @@ struct SBusChannelConfig {
 
 // Brake Movement Parameters
 #define BRAKE_FULL_TRAVEL_TIME 1500  // ms - estimated time for 0-100% brake travel
-#define BRAKE_TOLERANCE        5  // % - position tolerance for "at target"
+#define BRAKE_TOLERANCE        1  // % - position tolerance for "at target"
 #define BRAKE_SENSOR_OVERRUN_TIME 1000  // ms - continue moving after sensor triggers (full retraction)
 
 // ============================================================================

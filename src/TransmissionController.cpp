@@ -212,17 +212,7 @@ TransmissionController::Gear TransmissionController::getPhysicalGear() const {
 
 
 bool TransmissionController::isGearPositionValid() const {
-    // Compare encoder-based gear with physical sensor gear
-    Gear encoderGear = getCurrentGear();
-    Gear physicalGear = getPhysicalGear();
-
-    if (encoderGear != physicalGear) {
-        Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] WARNING: Gear mismatch - Encoder: %s, Physical: %s\n",
-                     getGearName(encoderGear), getGearName(physicalGear));
-        return false;
-    }
-
-    return true;
+    return getCurrentGear() == getPhysicalGear();
 }
 
 void TransmissionController::update() {

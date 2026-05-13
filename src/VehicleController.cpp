@@ -166,8 +166,11 @@ void VehicleController::processSBusCommands() {
     float steeringPct = sbusInput_.getSteering();
     steering_.setSteeringPercent(steeringPct);
 
-    // Apply throttle
+    // Apply throttle (clamped if gear position invalid and not in neutral)
     float throttlePct = sbusInput_.getThrottle();
+    if (shouldClipThrottle()) {
+        throttlePct = min(TRANS_UNKNOWN_GEAR_THROTTLE_MAX, throttlePct);
+    }
     int throttleAngle = map((int)throttlePct, 0, 100, THROTTLE_MIN_ANGLE, THROTTLE_MAX_ANGLE);
     throttle_.setAngle(throttleAngle);
 
@@ -248,8 +251,20 @@ void VehicleController::processSteeringCommand(float value, WebPortal& webPortal
     webPortal.sendResponse(true, "Steering set");
 }
 
+bool VehicleController::shouldClipThrottle() const {
+    if (!transmission_.isGearPositionValid()) 
+        return true;
+
+    if (transmission_.getPhysicalGear() == TransmissionController::Gear::GEAR_NEUTRAL)
+        return true;
+
+    return false;
+}
+
 void VehicleController::processThrottleCommand(float value, WebPortal& webPortal) {
-    // Convert 0 to 100 percentage to servo angle (0-180 degrees)
+    if (shouldClipThrottle()) {
+        value = min(TRANS_UNKNOWN_GEAR_THROTTLE_MAX, value);
+    }
     int angle = map((int)value, 0, 100, THROTTLE_MIN_ANGLE, THROTTLE_MAX_ANGLE);
     throttle_.setAngle(angle);
     webPortal.sendResponse(true, "Throttle set");
@@ -394,14 +409,16 @@ void VehicleController::applyBrake(float brakePct) {
 
     // Update target
     currentBrakeTarget_ = brakePct;
-
-    Debug::printfFeature(DebugFeature::BRAKE,
-    "[BRAKE] SET brake: %lu%%\n", (unsigned long)currentBrakeTarget_);
 }
 
 void VehicleController::updateBrakeControl() {
+    float positionError = currentBrakeTarget_ - currentBrakePosition_;
+
     // Special case: If target is 0% (released), check sensor for confirmation with overrun
-    if (currentBrakeTarget_ == 0.0f && isBrakeReleased()) {
+    if (currentBrakeTarget_ == 0.0f && 
+        isBrakeReleased() && 
+        abs(positionError) < BRAKE_TOLERANCE) {
+
         // Sensor detected release
         if (brakeSensorTriggerTime_ == 0) {
             // First detection - start overrun timer
@@ -449,9 +466,6 @@ void VehicleController::updateBrakeControl() {
         // Not releasing or sensor not triggered - reset trigger time
         brakeSensorTriggerTime_ = 0;
     }
-
-    // Calculate position error
-    float positionError = currentBrakeTarget_ - currentBrakePosition_;
 
     // Check if we need to move
     if (abs(positionError) > BRAKE_TOLERANCE) {

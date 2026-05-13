@@ -253,6 +253,11 @@ private:
      */
     void processSetGearDefaultCommand(const String& gear, int32_t position, WebPortal& webPortal);
     void processMoveToPositionCommand(int32_t position, WebPortal& webPortal);
+
+    // Returns true when throttle should be clamped to TRANS_UNKNOWN_GEAR_THROTTLE_MAX.
+    // Clips when gear position is invalid and physical gear is not neutral
+    // (neutral is safe — drivetrain disconnected).
+    bool shouldClipThrottle() const;
 };
 
 #endif // VEHICLE_CONTROLLER_H
