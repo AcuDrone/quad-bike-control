@@ -87,13 +87,7 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
     }
 
     // Special commands that work regardless of input source
-    if (cmd.cmd == "calibrate_transmission") {
-        processCalibrationCommand(webPortal);
-        return;
-    } else if (cmd.cmd == "clear_calibration") {
-        processClearCalibrationCommand(webPortal);
-        return;
-    } else if (cmd.cmd == "set_gear_default") {
+    if (cmd.cmd == "set_gear_default") {
         processSetGearDefaultCommand(cmd.strValue, (int32_t)cmd.floatValue, webPortal);
         return;
     } else if (cmd.cmd == "move_to_position") {
@@ -280,30 +274,6 @@ void VehicleController::processBrakeCommand(float value, WebPortal& webPortal) {
     // Apply brake percentage (uses same mechanism as SBUS control)
     applyBrake(value);
     webPortal.sendResponse(true, "Brake set to " + String((int)value) + "%");
-}
-
-void VehicleController::processCalibrationCommand(WebPortal& webPortal) {
-    Debug::printlnFeature(DebugFeature::VEHICLE, "[WEB] Calibration command received");
-    webPortal.sendResponse(true, "Starting transmission calibration...");
-
-    // Run calibration with max speed (255) and 20 second timeout
-    bool success = transmission_.calibrateAllGearPositions(255, 20000);
-
-    if (success) {
-        Debug::printlnFeature(DebugFeature::VEHICLE, "[WEB] Calibration completed successfully");
-        webPortal.sendResponse(true, "Calibration completed successfully");
-    } else {
-        Debug::printlnFeature(DebugFeature::VEHICLE, "[WEB] Calibration failed");
-        webPortal.sendResponse(false, "Calibration failed - check serial output");
-    }
-}
-
-void VehicleController::processClearCalibrationCommand(WebPortal& webPortal) {
-    Debug::printlnFeature(DebugFeature::VEHICLE, "[WEB] Clear calibration command received");
-
-    transmission_.clearCalibration();
-
-    webPortal.sendResponse(true, "Calibration cleared - reboot to recalibrate");
 }
 
 void VehicleController::processSetGearDefaultCommand(const String& gearStr, int32_t position, WebPortal& webPortal) {

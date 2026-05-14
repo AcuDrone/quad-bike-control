@@ -122,27 +122,16 @@ void setup() {
 
         transmissionActuator.initGearSensors();
 
-        // Load user-configured defaults and saved calibration from NVS
+        // Load user-configured default positions from NVS
         transmissionActuator.loadDefaultPositions();
-        // if (transmissionActuator.loadCalibration()) {
-        //     Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Loaded saved calibration from storage");
-        // } else {
-        //     Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] No saved calibration found, using default positions");
-        // }
 
         if (transmissionActuator.restoreStateIfValid()) {
             Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Restored transmission state, skipping autohome");
         } else {
             if (transmissionActuator.autoHome(-1, TRANS_HOMING_SPEED, TRANS_HOMING_TIMEOUT)) {
                 Debug::printfFeature(DebugFeature::TRANSMISSION, "[TRANS] Homed to physical stop at position %ld\n", transmissionEncoder.getPosition());
-
-                if (transmissionActuator.isCalibrated()) {
-                    Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Moving to NEUTRAL gear...");
-                    transmissionActuator.setGear(TransmissionController::Gear::GEAR_NEUTRAL);
-                } else {
-                    Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Moving to REVERSE gear...");
-                    transmissionActuator.setGear(TransmissionController::Gear::GEAR_REVERSE);
-                }
+                Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Moving to NEUTRAL gear...");
+                transmissionActuator.setGear(TransmissionController::Gear::GEAR_NEUTRAL);
             } else {
                 Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] ERROR: Homing failed");
             }

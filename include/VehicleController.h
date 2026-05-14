@@ -227,25 +227,6 @@ private:
     void processLightCommand(bool on, WebPortal& webPortal);
 
     /**
-     * @brief Process transmission calibration command
-     *
-     * Runs full transmission calibration using physical gear sensors.
-     * Uses max speed (255) and 20 second timeout.
-     *
-     * @param webPortal Reference to web portal for sending responses
-     */
-    void processCalibrationCommand(WebPortal& webPortal);
-
-    /**
-     * @brief Process clear calibration command
-     *
-     * Clears saved calibration data from NVS. Next boot will require recalibration.
-     *
-     * @param webPortal Reference to web portal for sending responses
-     */
-    void processClearCalibrationCommand(WebPortal& webPortal);
-
-    /**
      * @brief Process set_gear_default command
      * @param gear Gear string ("R", "N", "L", "H")
      * @param position Encoder count to save as default
