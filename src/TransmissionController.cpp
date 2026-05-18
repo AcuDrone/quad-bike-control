@@ -144,7 +144,7 @@ bool TransmissionController::canChangeGear(TransmissionController::Gear targetGe
 
 bool TransmissionController::needsThrottleBoost() const {
     // Check if we're moving to a gear (not stopped at target)
-    return !isStopped() && targetGear_ != Gear::GEAR_NEUTRAL;
+    return !isStopped();
 }
 
 //rewrite for native pins

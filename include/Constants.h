@@ -136,9 +136,9 @@ struct SBusChannelConfig {
 // Throttle Servo Parameters
 #define THROTTLE_SERVO_MIN_US    800   // Minimum pulse width (microseconds)
 #define THROTTLE_SERVO_MAX_US    2200  // Maximum pulse width (microseconds)
-#define THROTTLE_MIN_ANGLE       23    // degrees (idle) - measured 13% of full range
-#define THROTTLE_MAX_ANGLE       67    // degrees (full throttle) - measured 37% of full range
-#define THROTTLE_IDLE_ANGLE      23    // degrees (idle position)
+#define THROTTLE_MIN_ANGLE       13    // degrees (idle) - measured 13% of full range
+#define THROTTLE_MAX_ANGLE       70    // degrees (full throttle) - measured 37% of full range
+#define THROTTLE_IDLE_ANGLE      13    // degrees (idle position)
 
 // ============================================================================
 // BTS7960 MOTOR DRIVER CONFIGURATION
@@ -249,8 +249,9 @@ enum class InputSource {
 // ============================================================================
 
 // CAN Polling Intervals
-#define CAN_POLL_INTERVAL_RPM     200   // ms - RPM and speed polling rate
-#define CAN_POLL_INTERVAL_TEMP    1000  // ms - Temperature polling rate
+#define CAN_POLL_INTERVAL_RPM           200   // ms - RPM polling rate (normal)
+#define CAN_POLL_INTERVAL_RPM_BOOST     30    // ms - RPM polling rate during gear change
+#define CAN_POLL_INTERVAL_TEMP          1000  // ms - Temperature polling rate
 
 // CAN Timeouts
 #define CAN_RESPONSE_TIMEOUT      200   // ms - OBD-II response timeout (non-blocking, healthy ECU responds in ~50ms)
@@ -261,9 +262,12 @@ enum class InputSource {
 #define TRANS_SPEED_INTERLOCK_THRESHOLD  5     // km/h - Block gear changes above this speed
 #define TRANS_CAN_TIMEOUT                5000  // ms - Allow gear change if CAN fails this long
 
-// Throttle Boost During Gear Changes
-#define TRANS_THROTTLE_BOOST_PERCENT     0    // % - Throttle increase during gear change
-#define TRANS_THROTTLE_BOOST_DURATION    0   // ms - Maximum boost duration
+// PID-Controlled RPM Boost During Gear Changes
+#define TRANS_GEAR_BOOST_TARGET_RPM      2100  // RPM target to hold during gear change
+#define TRANS_GEAR_BOOST_TIMEOUT         5000  // ms - max boost duration (safety escape)
+#define TRANS_GEAR_BOOST_PID_KP          0.05f // proportional gain (tunable)
+#define TRANS_GEAR_BOOST_PID_KI          0.01f // integral gain (tunable)
+#define TRANS_GEAR_BOOST_PID_KD          0.005f // derivative gain (tunable)
 
 // ============================================================================
 // FIRMWARE VERSION

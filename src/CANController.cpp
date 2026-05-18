@@ -147,6 +147,10 @@ void CANController::update() {
     }
 }
 
+void CANController::setRPMPollInterval(uint32_t ms) {
+    pidTable_[0].interval = ms;
+}
+
 String CANController::getStatusString() const {
     if (!initialized_) {
         return "Error - MCP2515 not responding";

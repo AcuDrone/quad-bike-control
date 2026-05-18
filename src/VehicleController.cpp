@@ -21,8 +21,12 @@ VehicleController::VehicleController(SteeringController& steering,
       lastBrakeUpdateTime_(0),
       brakeSensorTriggerTime_(0),
       brakeIsMoving_(false),
-      throttleBoostStartTime_(0),
-      throttleBoostActive_(false),
+      gearBoostActive_(false),
+      gearBoostStartTime_(0),
+      pidLastUpdateTime_(0),
+      pidIntegral_(0.0f),
+      pidPrevError_(0.0f),
+      lastPIDThrottleAngle_(THROTTLE_IDLE_ANGLE),
       previousSBusIgnitionState_(SBusInput::IgnitionState::OFF) {
 }
 
@@ -53,9 +57,9 @@ void VehicleController::update() {
     // Apply fail-safe if needed
     applyFailsafe();
 
-    // Check if throttle boost is needed for gear changes
-    if (transmission_.needsThrottleBoost() || throttleBoostActive_) {
-        updateThrottleBoost();
+    // PID-controlled RPM boost during gear changes (overrides SBUS/web throttle)
+    if (transmission_.needsThrottleBoost() || gearBoostActive_) {
+        updateGearBoostPID();
     }
 
     // Update steering position control
@@ -160,13 +164,15 @@ void VehicleController::processSBusCommands() {
     float steeringPct = sbusInput_.getSteering();
     steering_.setSteeringPercent(steeringPct);
 
-    // Apply throttle (clamped if gear position invalid and not in neutral)
-    float throttlePct = sbusInput_.getThrottle();
-    if (shouldClipThrottle()) {
-        throttlePct = min(TRANS_UNKNOWN_GEAR_THROTTLE_MAX, throttlePct);
+    // Apply throttle — skipped when gear boost PID is active (PID overrides)
+    if (!gearBoostActive_) {
+        float throttlePct = sbusInput_.getThrottle();
+        if (shouldClipThrottle()) {
+            throttlePct = min(TRANS_UNKNOWN_GEAR_THROTTLE_MAX, throttlePct);
+        }
+        int throttleAngle = map((int)throttlePct, 0, 100, THROTTLE_MIN_ANGLE, THROTTLE_MAX_ANGLE);
+        throttle_.setAngle(throttleAngle);
     }
-    int throttleAngle = map((int)throttlePct, 0, 100, THROTTLE_MIN_ANGLE, THROTTLE_MAX_ANGLE);
-    throttle_.setAngle(throttleAngle);
 
     // Apply gear selection
     TransmissionController::Gear gear = sbusInput_.getGear();
@@ -256,6 +262,10 @@ bool VehicleController::shouldClipThrottle() const {
 }
 
 void VehicleController::processThrottleCommand(float value, WebPortal& webPortal) {
+    if (gearBoostActive_) {
+        webPortal.sendResponse(false, "Gear boost active");
+        return;
+    }
     if (shouldClipThrottle()) {
         value = min(TRANS_UNKNOWN_GEAR_THROTTLE_MAX, value);
     }
@@ -509,37 +519,69 @@ void VehicleController::updateBrakeControl() {
     }
 }
 
-void VehicleController::updateThrottleBoost() {
-    // Safety check: disable boost if SBUS is commanding throttle
-    if (currentInputSource_ == InputSource::SBUS && sbusInput_.isSignalValid()) {
-        float sbusThrottle = sbusInput_.getThrottle();
-        if (sbusThrottle > 5.0f) {  // SBUS commanding throttle, let it take priority
-            if (throttleBoostActive_) {
-                Debug::printlnFeature(DebugFeature::VEHICLE, "[BOOST] Disabled due to SBUS throttle command");
-                throttleBoostActive_ = false;
-            }
-            return;  // SBUS will set throttle, don't override
+void VehicleController::updateGearBoostPID() {
+    uint32_t now = millis();
+    CANController::VehicleData canData = canController_.getVehicleData();
+
+    // Deactivate when gear change completes
+    if (gearBoostActive_ && !transmission_.needsThrottleBoost()) {
+        Debug::printlnFeature(DebugFeature::VEHICLE, "[BOOST] Gear change complete, releasing PID");
+        canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM);
+        gearBoostActive_ = false;
+        return;
+    }
+
+    // Activate on first call (gear change just started)
+    if (!gearBoostActive_) {
+        if (!canData.dataValid || canData.engineRPM < ENGINE_RUNNING_RPM_THRESHOLD) {
+            return;  // Engine not running — unsafe to boost throttle
         }
+        gearBoostActive_ = true;
+        gearBoostStartTime_ = now;
+        pidLastUpdateTime_ = now;
+        pidIntegral_ = 0.0f;
+        pidPrevError_ = 0.0f;
+        lastPIDThrottleAngle_ = THROTTLE_IDLE_ANGLE;
+        canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM_BOOST);
+        Debug::printfFeature(DebugFeature::VEHICLE, "[BOOST] PID activated, target=%d RPM\n", TRANS_GEAR_BOOST_TARGET_RPM);
     }
 
-    // Check if we need to start boost
-    if (!throttleBoostActive_) {
-        throttleBoostStartTime_ = millis();
-        throttleBoostActive_ = true;
-        Debug::printfFeature(DebugFeature::VEHICLE, "[BOOST] Activated at %d%%\n", TRANS_THROTTLE_BOOST_PERCENT);
-    }
-
-    // Check timeout
-    uint32_t boostDuration = millis() - throttleBoostStartTime_;
-    if (boostDuration > TRANS_THROTTLE_BOOST_DURATION) {
-        Debug::printlnFeature(DebugFeature::VEHICLE, "[BOOST] Timeout, releasing boost");
-        throttleBoostActive_ = false;
+    // Safety timeout
+    if (now - gearBoostStartTime_ > TRANS_GEAR_BOOST_TIMEOUT) {
+        Debug::printlnFeature(DebugFeature::VEHICLE, "[BOOST] Timeout, releasing gear boost PID");
+        canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM);
+        gearBoostActive_ = false;
         throttle_.setAngle(THROTTLE_IDLE_ANGLE);
         return;
     }
 
-    // Apply boost throttle
-    int boostAngle = map(TRANS_THROTTLE_BOOST_PERCENT, 0, 100,
-                        THROTTLE_MIN_ANGLE, THROTTLE_MAX_ANGLE);
-    throttle_.setAngle(boostAngle);
+    // CAN stale: hold last angle, don't accumulate integral
+    if (!canData.dataValid) {
+        throttle_.setAngle(lastPIDThrottleAngle_);
+        return;
+    }
+
+    // Compute PID
+    float dt = (now - pidLastUpdateTime_) / 1000.0f;
+    if (dt < 0.001f) dt = 0.001f;
+    pidLastUpdateTime_ = now;
+
+    float error = (float)TRANS_GEAR_BOOST_TARGET_RPM - (float)canData.engineRPM;
+
+    // Anti-windup: clamp integral so its contribution is ≤ 20% throttle
+    const float integralLimit = 20.0f / TRANS_GEAR_BOOST_PID_KI;
+    pidIntegral_ += error * dt;
+    pidIntegral_ = constrain(pidIntegral_, -integralLimit, integralLimit);
+
+    float derivative = (error - pidPrevError_) / dt;
+    pidPrevError_ = error;
+
+    float outputPct = TRANS_GEAR_BOOST_PID_KP * error
+                    + TRANS_GEAR_BOOST_PID_KI * pidIntegral_
+                    + TRANS_GEAR_BOOST_PID_KD * derivative;
+    outputPct = constrain(outputPct, 0.0f, 100.0f);
+
+    int angle = map((int)outputPct, 0, 100, THROTTLE_MIN_ANGLE, THROTTLE_MAX_ANGLE);
+    lastPIDThrottleAngle_ = angle;
+    throttle_.setAngle(angle);
 }

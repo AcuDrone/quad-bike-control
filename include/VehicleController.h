@@ -150,9 +150,13 @@ private:
     uint32_t brakeSensorTriggerTime_;   // Time when brake sensor detected release (0 = not triggered)
     bool brakeIsMoving_;
 
-    // Throttle boost tracking
-    uint32_t throttleBoostStartTime_;   // Time when throttle boost started
-    bool throttleBoostActive_;          // True if boost is currently active
+    // Gear boost PID state
+    bool gearBoostActive_;              // True while PID is holding RPM during gear change
+    uint32_t gearBoostStartTime_;       // millis() when boost activated (for timeout)
+    uint32_t pidLastUpdateTime_;        // millis() of last PID compute (for dt)
+    float pidIntegral_;                 // Accumulated integral term
+    float pidPrevError_;                // Previous error (for derivative)
+    int lastPIDThrottleAngle_;          // Last PID-computed throttle angle (held on CAN stale)
 
     // Ignition state tracking
     SBusInput::IgnitionState previousSBusIgnitionState_;  // Track previous state for transition detection
@@ -179,10 +183,10 @@ private:
     void updateBrakeControl();
 
     /**
-     * @brief Update throttle boost during gear changes
-     * Temporarily increases throttle to maintain RPM
+     * @brief PID-controlled RPM hold during gear changes
+     * Overrides SBUS/web throttle while gear change is active.
      */
-    void updateThrottleBoost();
+    void updateGearBoostPID();
 
     /**
      * @brief Process gear change command

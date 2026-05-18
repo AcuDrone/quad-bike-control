@@ -64,6 +64,12 @@ public:
     bool isConnected() const { return initialized_; }
 
     /**
+     * @brief Set RPM PID poll interval at runtime
+     * @param ms Poll interval in milliseconds (e.g. CAN_POLL_INTERVAL_RPM_BOOST during gear change)
+     */
+    void setRPMPollInterval(uint32_t ms);
+
+    /**
      * @brief Get human-readable status string
      * @return Status string (e.g., "Connected - 10 Hz", "Disconnected")
      */
