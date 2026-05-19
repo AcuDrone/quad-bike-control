@@ -126,6 +126,11 @@ public:
      */
     bool getFrontLight() const { return relayController_.getFrontLight(); }
 
+    /**
+     * @brief Get current boost RPM target (NVS-backed, runtime-editable)
+     */
+    int32_t getBoostTargetRpm() const { return boostTargetRpm_; }
+
 private:
     // Actuator references
     SteeringController& steering_;
@@ -150,13 +155,18 @@ private:
     uint32_t brakeSensorTriggerTime_;   // Time when brake sensor detected release (0 = not triggered)
     bool brakeIsMoving_;
 
+    // Gear boost configuration (NVS-backed, runtime-editable)
+    int32_t boostTargetRpm_;            // RPM target for gear boost PID (default TRANS_GEAR_BOOST_TARGET_RPM)
+
     // Gear boost PID state
     bool gearBoostActive_;              // True while PID is holding RPM during gear change
+    bool boostManualActive_;            // True when boost is triggered manually via web for testing
     uint32_t gearBoostStartTime_;       // millis() when boost activated (for timeout)
     uint32_t pidLastUpdateTime_;        // millis() of last PID compute (for dt)
+    uint32_t lastCanUpdateTime_;        // CAN lastUpdateTime seen on previous PID iteration
     float pidIntegral_;                 // Accumulated integral term
     float pidPrevError_;                // Previous error (for derivative)
-    int lastPIDThrottleAngle_;          // Last PID-computed throttle angle (held on CAN stale)
+    uint16_t lastPIDThrottleUs_;        // Last PID-computed throttle µs (held on CAN stale)
 
     // Ignition state tracking
     SBusInput::IgnitionState previousSBusIgnitionState_;  // Track previous state for transition detection
@@ -238,6 +248,8 @@ private:
      */
     void processSetGearDefaultCommand(const String& gear, int32_t position, WebPortal& webPortal);
     void processMoveToPositionCommand(int32_t position, WebPortal& webPortal);
+    void processBoostTestCommand(bool enable, WebPortal& webPortal);
+    void processSetBoostRpmCommand(int32_t rpm, WebPortal& webPortal);
 
     // Returns true when throttle should be clamped to TRANS_UNKNOWN_GEAR_THROTTLE_MAX.
     // Clips when gear position is invalid and physical gear is not neutral

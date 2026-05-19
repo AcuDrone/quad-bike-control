@@ -634,6 +634,8 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     gearDefaults["L"] = telemetry.gear_default_l;
     gearDefaults["H"] = telemetry.gear_default_h;
 
+    doc["boost_target_rpm"] = telemetry.boost_target_rpm;
+
     String json;
     serializeJson(doc, json);
     return json;

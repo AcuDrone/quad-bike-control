@@ -1,5 +1,6 @@
 #include "VehicleController.h"
 #include "Debug.h"
+#include <Preferences.h>
 
 VehicleController::VehicleController(SteeringController& steering,
                                      ServoController& throttle,
@@ -21,17 +22,27 @@ VehicleController::VehicleController(SteeringController& steering,
       lastBrakeUpdateTime_(0),
       brakeSensorTriggerTime_(0),
       brakeIsMoving_(false),
+      boostTargetRpm_(TRANS_GEAR_BOOST_TARGET_RPM),
       gearBoostActive_(false),
+      boostManualActive_(false),
       gearBoostStartTime_(0),
       pidLastUpdateTime_(0),
+      lastCanUpdateTime_(0),
       pidIntegral_(0.0f),
       pidPrevError_(0.0f),
-      lastPIDThrottleAngle_(THROTTLE_IDLE_ANGLE),
+      lastPIDThrottleUs_(THROTTLE_IDLE_US),
       previousSBusIgnitionState_(SBusInput::IgnitionState::OFF) {
 }
 
 bool VehicleController::initCAN() {
-    return canController_.begin();
+    Preferences prefs;
+    if (prefs.begin("boost", true)) {
+        boostTargetRpm_ = prefs.getInt("target_rpm", TRANS_GEAR_BOOST_TARGET_RPM);
+        prefs.end();
+    }
+    bool result = canController_.begin();
+    canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM);
+    return result;
 }
 
 void VehicleController::update() {
@@ -57,8 +68,8 @@ void VehicleController::update() {
     // Apply fail-safe if needed
     applyFailsafe();
 
-    // PID-controlled RPM boost during gear changes (overrides SBUS/web throttle)
-    if (transmission_.needsThrottleBoost() || gearBoostActive_) {
+    // PID-controlled RPM boost during gear changes or manual test (overrides SBUS/web throttle)
+    if (transmission_.needsThrottleBoost() || gearBoostActive_ || boostManualActive_) {
         updateGearBoostPID();
     }
 
@@ -105,6 +116,12 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
         // Light control always available (not restricted by input source)
         processLightCommand(cmd.boolValue, webPortal);
         return;
+    } else if (cmd.cmd == "test_boost") {
+        processBoostTestCommand(cmd.boolValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_boost_rpm") {
+        processSetBoostRpmCommand((int32_t)cmd.floatValue, webPortal);
+        return;
     }
 
     // Normal control commands require WEB input source
@@ -140,7 +157,7 @@ void VehicleController::applyFailsafe() {
     if (currentInputSource_ == InputSource::FAILSAFE && !failsafeApplied_) {
         Debug::printlnFeature(DebugFeature::VEHICLE, "[FAILSAFE] Entering safe state");
         steering_.setSteeringPercent(0.0f);
-        throttle_.setAngle(THROTTLE_IDLE_ANGLE);
+        throttle_.setMicroseconds(THROTTLE_IDLE_US);
         brake_.stop();         // Stop brake actuator (hold position)
         brakeIsMoving_ = false;
         brakeSensorTriggerTime_ = 0;  // Reset sensor trigger
@@ -170,8 +187,8 @@ void VehicleController::processSBusCommands() {
         if (shouldClipThrottle()) {
             throttlePct = min(TRANS_UNKNOWN_GEAR_THROTTLE_MAX, throttlePct);
         }
-        int throttleAngle = map((int)throttlePct, 0, 100, THROTTLE_MIN_ANGLE, THROTTLE_MAX_ANGLE);
-        throttle_.setAngle(throttleAngle);
+        uint16_t throttleUs = (uint16_t)map((long)throttlePct, 0, 100, THROTTLE_IDLE_US, THROTTLE_FULL_US);
+        throttle_.setMicroseconds(throttleUs);
     }
 
     // Apply gear selection
@@ -269,8 +286,8 @@ void VehicleController::processThrottleCommand(float value, WebPortal& webPortal
     if (shouldClipThrottle()) {
         value = min(TRANS_UNKNOWN_GEAR_THROTTLE_MAX, value);
     }
-    int angle = map((int)value, 0, 100, THROTTLE_MIN_ANGLE, THROTTLE_MAX_ANGLE);
-    throttle_.setAngle(angle);
+    uint16_t us = (uint16_t)map((long)value, 0, 100, THROTTLE_IDLE_US, THROTTLE_FULL_US);
+    throttle_.setMicroseconds(us);
     webPortal.sendResponse(true, "Throttle set");
 }
 
@@ -316,6 +333,38 @@ void VehicleController::processMoveToPositionCommand(int32_t position, WebPortal
     transmission_.moveToPosition(position, TRANS_HOMING_SPEED);
     Debug::printfFeature(DebugFeature::VEHICLE, "[WEB] Moving transmission to position %ld\n", position);
     webPortal.sendResponse(true, "Moving to " + String(position));
+}
+
+void VehicleController::processBoostTestCommand(bool enable, WebPortal& webPortal) {
+    if (enable) {
+        boostManualActive_ = true;
+        Debug::printlnFeature(DebugFeature::VEHICLE, "[BOOST] Manual test activated");
+        webPortal.sendResponse(true, "Boost test started");
+    } else {
+        boostManualActive_ = false;
+        if (gearBoostActive_) {
+            canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM);
+            gearBoostActive_ = false;
+            throttle_.setMicroseconds(THROTTLE_IDLE_US);
+        }
+        Debug::printlnFeature(DebugFeature::VEHICLE, "[BOOST] Manual test stopped");
+        webPortal.sendResponse(true, "Boost test stopped");
+    }
+}
+
+void VehicleController::processSetBoostRpmCommand(int32_t rpm, WebPortal& webPortal) {
+    if (rpm < 1700 || rpm > 2500) {
+        webPortal.sendResponse(false, "Boost RPM out of range (1700-2500)");
+        return;
+    }
+    boostTargetRpm_ = rpm;
+    Preferences prefs;
+    if (prefs.begin("boost", false)) {
+        prefs.putInt("target_rpm", rpm);
+        prefs.end();
+    }
+    Debug::printfFeature(DebugFeature::VEHICLE, "[BOOST] Target RPM set to %ld\n", rpm);
+    webPortal.sendResponse(true, "Boost RPM set to " + String(rpm));
 }
 
 bool VehicleController::setIgnitionState(const String& state, String& errorMsg) {
@@ -523,15 +572,16 @@ void VehicleController::updateGearBoostPID() {
     uint32_t now = millis();
     CANController::VehicleData canData = canController_.getVehicleData();
 
-    // Deactivate when gear change completes
-    if (gearBoostActive_ && !transmission_.needsThrottleBoost()) {
+    // Deactivate when gear change completes (skip if in manual test mode)
+    if (gearBoostActive_ && !boostManualActive_ && !transmission_.needsThrottleBoost()) {
         Debug::printlnFeature(DebugFeature::VEHICLE, "[BOOST] Gear change complete, releasing PID");
         canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM);
+        throttle_.setMicroseconds(THROTTLE_IDLE_US);
         gearBoostActive_ = false;
         return;
     }
 
-    // Activate on first call (gear change just started)
+    // Activate on first call (gear change just started, or manual test triggered)
     if (!gearBoostActive_) {
         if (!canData.dataValid || canData.engineRPM < ENGINE_RUNNING_RPM_THRESHOLD) {
             return;  // Engine not running — unsafe to boost throttle
@@ -539,11 +589,12 @@ void VehicleController::updateGearBoostPID() {
         gearBoostActive_ = true;
         gearBoostStartTime_ = now;
         pidLastUpdateTime_ = now;
+        lastCanUpdateTime_ = 0;
         pidIntegral_ = 0.0f;
         pidPrevError_ = 0.0f;
-        lastPIDThrottleAngle_ = THROTTLE_IDLE_ANGLE;
+        lastPIDThrottleUs_ = THROTTLE_IDLE_US;
         canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM_BOOST);
-        Debug::printfFeature(DebugFeature::VEHICLE, "[BOOST] PID activated, target=%d RPM\n", TRANS_GEAR_BOOST_TARGET_RPM);
+        Debug::printfFeature(DebugFeature::VEHICLE, "[BOOST] PID activated, target=%ld RPM\n", boostTargetRpm_);
     }
 
     // Safety timeout
@@ -551,25 +602,38 @@ void VehicleController::updateGearBoostPID() {
         Debug::printlnFeature(DebugFeature::VEHICLE, "[BOOST] Timeout, releasing gear boost PID");
         canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM);
         gearBoostActive_ = false;
-        throttle_.setAngle(THROTTLE_IDLE_ANGLE);
+        throttle_.setMicroseconds(THROTTLE_IDLE_US);
         return;
     }
 
-    // CAN stale: hold last angle, don't accumulate integral
+    // CAN stale: hold last µs, don't accumulate integral
     if (!canData.dataValid) {
-        throttle_.setAngle(lastPIDThrottleAngle_);
+        throttle_.setMicroseconds(THROTTLE_IDLE_US);
         return;
     }
+
+    // No new CAN sample since last compute: hold last µs, skip integral accumulation
+    if (canData.lastUpdateTime == lastCanUpdateTime_) {
+        throttle_.setMicroseconds(lastPIDThrottleUs_);
+        return;
+    }
+    lastCanUpdateTime_ = canData.lastUpdateTime;
 
     // Compute PID
     float dt = (now - pidLastUpdateTime_) / 1000.0f;
     if (dt < 0.001f) dt = 0.001f;
     pidLastUpdateTime_ = now;
 
-    float error = (float)TRANS_GEAR_BOOST_TARGET_RPM - (float)canData.engineRPM;
+    float error = (float)boostTargetRpm_ - (float)canData.engineRPM;
 
-    // Anti-windup: clamp integral so its contribution is ≤ 20% throttle
-    const float integralLimit = 20.0f / TRANS_GEAR_BOOST_PID_KI;
+    // Reset integral on zero-crossing to prevent windup from fighting recovery
+    if (pidPrevError_ != 0.0f && ((error > 0.0f) != (pidPrevError_ > 0.0f))) {
+        pidIntegral_ = 0.0f;
+    }
+
+    // Anti-windup: clamp integral so its contribution is ≤ half of max output
+    const float integralLimit = (TRANS_GEAR_BOOST_PID_KI > 0.0f)
+        ? (TRANS_GEAR_BOOST_MAX_PCT * 0.5f / TRANS_GEAR_BOOST_PID_KI) : 0.0f;
     pidIntegral_ += error * dt;
     pidIntegral_ = constrain(pidIntegral_, -integralLimit, integralLimit);
 
@@ -579,9 +643,17 @@ void VehicleController::updateGearBoostPID() {
     float outputPct = TRANS_GEAR_BOOST_PID_KP * error
                     + TRANS_GEAR_BOOST_PID_KI * pidIntegral_
                     + TRANS_GEAR_BOOST_PID_KD * derivative;
-    outputPct = constrain(outputPct, 0.0f, 100.0f);
+    outputPct = constrain(outputPct, 0.0f, TRANS_GEAR_BOOST_MAX_PCT);
 
-    int angle = map((int)outputPct, 0, 100, THROTTLE_MIN_ANGLE, THROTTLE_MAX_ANGLE);
-    lastPIDThrottleAngle_ = angle;
-    throttle_.setAngle(angle);
+    uint16_t targetUs = (uint16_t)map((long)outputPct, 0, 100, THROTTLE_IDLE_US, THROTTLE_FULL_US);
+    int delta = constrain((int)targetUs - (int)lastPIDThrottleUs_, -TRANS_GEAR_BOOST_SLEW_RATE_US, TRANS_GEAR_BOOST_SLEW_RATE_US);
+    uint16_t us = (uint16_t)((int)lastPIDThrottleUs_ + delta);
+    lastPIDThrottleUs_ = us;
+    throttle_.setMicroseconds(us);
+
+    static uint32_t lastProgressLog = 0;
+    if (now - lastProgressLog > 250) {
+        Debug::printfFeature(DebugFeature::VEHICLE, "[BOOST] Us=%d Error=%.0f RPM=%d CAN_age=%lums\n", us, error, canData.engineRPM, now - canData.lastUpdateTime);
+        lastProgressLog = now;
+    }
 }

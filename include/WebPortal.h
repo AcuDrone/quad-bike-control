@@ -86,6 +86,9 @@ public:
         int32_t gear_default_n;   // Default encoder count for NEUTRAL
         int32_t gear_default_l;   // Default encoder count for LOW
         int32_t gear_default_h;   // Default encoder count for HIGH
+
+        // Boost PID configuration
+        int32_t boost_target_rpm; // RPM target for gear boost PID
     };
 
     WebPortal();

@@ -19,7 +19,7 @@ The Transmission Control System SHALL use a two-level priority for default gear 
 - **THEN** the value SHALL be written to the corresponding `def_*` NVS key in the `transmission` namespace
 - **AND** the in-RAM default SHALL be updated immediately
 
-## MODIFIED Requirements
+## ADDED Requirements
 
 ### Requirement: Throttle Boost During Gear Changes
 The system SHALL use a PID controller to regulate engine RPM to a configurable target value (`TRANS_GEAR_BOOST_TARGET_RPM`) for the duration of a gear change, overriding SBUS/web throttle commands while active.

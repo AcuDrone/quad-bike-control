@@ -439,6 +439,13 @@
                         </div>
                     </div>
                 </div>
+                <div style="margin-top: 14px; border-top: 1px solid #444; padding-top: 12px;">
+                    <label style="font-size: 0.8em; color: #aaa;">RPM Boost Target</label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px;">
+                        <input type="number" id="boost-rpm-input" min="500" max="5000" step="50" style="flex:1; padding:6px; border-radius:4px; border:1px solid #555; background:#2a2a2a; color:#fff;">
+                        <button onclick="saveBoostRpm()" style="padding:6px 10px; border-radius:4px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Save</button>
+                    </div>
+                </div>
                 <div id="gear-default-status" style="margin-top: 10px; font-size: 0.8em; color: #4caf50; min-height: 1.2em;"></div>
             </div>
 
@@ -450,7 +457,6 @@
                 <div class="gear-buttons" style="margin-bottom: 20px;">
                     <button class="gear-btn" id="ignition-off" onclick="setIgnition('OFF')">OFF</button>
                     <button class="gear-btn" id="ignition-acc" onclick="setIgnition('ACC')">ACC</button>
-                    <button class="gear-btn" id="ignition-ignition" onclick="setIgnition('IGNITION')">IGN</button>
                     <button class="gear-btn" id="ignition-start" onclick="setIgnition('START')">START</button>
                 </div>
 
@@ -546,6 +552,11 @@
                 <div class="slider-container">
                     <button class="upload-btn" id="debug-toggle-btn" onclick="toggleDebug()" style="background: #9c27b0;">
                         🐛 <span id="debug-toggle-text">Debug: Loading...</span>
+                    </button>
+                </div>
+                <div class="slider-container" style="margin-top: 10px;">
+                    <button class="upload-btn" id="boost-test-btn" onclick="toggleBoostTest()" style="background: #e65100;">
+                        ⚡ RPM Boost Test: <span id="boost-test-status">OFF</span>
                     </button>
                 </div>
             </div>
@@ -761,6 +772,12 @@
                     }
                 }
             }
+            if (data.boost_target_rpm !== undefined) {
+                const el = document.getElementById('boost-rpm-input');
+                if (el && document.activeElement !== el) {
+                    el.value = data.boost_target_rpm;
+                }
+            }
 
             // Update gear button active state
             updateGearButtons(data.gear);
@@ -926,6 +943,20 @@
             }
         }
 
+        function saveBoostRpm() {
+            const val = parseInt(document.getElementById('boost-rpm-input').value, 10);
+            if (isNaN(val) || val < 500 || val > 5000) {
+                document.getElementById('gear-default-status').textContent = 'Invalid RPM (500–5000)';
+                document.getElementById('gear-default-status').style.color = '#f44336';
+                return;
+            }
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ cmd: 'set_boost_rpm', value: val }));
+                document.getElementById('gear-default-status').textContent = 'Boost RPM saving...';
+                document.getElementById('gear-default-status').style.color = '#aaa';
+            }
+        }
+
         function setIgnition(state) {
             sendCommand('set_ignition', state);
         }
@@ -934,6 +965,21 @@
         function toggleLight() {
             lightState = !lightState;
             sendCommand('set_light', lightState);
+        }
+
+        let boostTestActive = false;
+        function toggleBoostTest() {
+            boostTestActive = !boostTestActive;
+            sendCommand('test_boost', boostTestActive);
+            const btn = document.getElementById('boost-test-btn');
+            const status = document.getElementById('boost-test-status');
+            if (boostTestActive) {
+                btn.style.background = '#ff6d00';
+                status.textContent = 'ON';
+            } else {
+                btn.style.background = '#e65100';
+                status.textContent = 'OFF';
+            }
         }
 
         // Slider event handlers with rate limiting and active tracking

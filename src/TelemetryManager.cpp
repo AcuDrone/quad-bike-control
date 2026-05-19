@@ -116,6 +116,8 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.gear_default_l = trans.getGearPosition(TransmissionController::Gear::GEAR_LOW);
     telemetry.gear_default_h = trans.getGearPosition(TransmissionController::Gear::GEAR_HIGH);
 
+    telemetry.boost_target_rpm = vehicleController_.getBoostTargetRpm();
+
     return telemetry;
 }
 
