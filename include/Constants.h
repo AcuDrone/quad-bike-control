@@ -164,6 +164,7 @@ struct SBusChannelConfig {
 
 // Transmission Movement Parameters
 #define TRANS_UNKNOWN_GEAR_THROTTLE_MAX  (float)17   // % - max throttle when physical gear is UNKNOWN
+#define TRANS_GEAR_OVERSHOOT    340   // encoder counts past target before returning (overshoot-and-return)
 #define TRANS_HOMING_SPEED      255  // PWM value during auto-homing (full speed)
 #define TRANS_HOMING_TIMEOUT    60000 // ms - maximum time for homing
 #define TRANS_STALL_THRESHOLD   3    // Encoder counts - if no change for this time, assume stall
@@ -271,7 +272,7 @@ enum class InputSource {
 #define TRANS_GEAR_BOOST_PID_KP          0.015f // proportional gain (tunable)
 #define TRANS_GEAR_BOOST_PID_KI          0.01f // integral gain (tunable)
 #define TRANS_GEAR_BOOST_PID_KD          0.0f  // derivative gain (0 = disabled; noisy on RPM signal)
-#define TRANS_GEAR_BOOST_SLEW_RATE_US    10    // µs per CAN update °
+#define TRANS_GEAR_BOOST_SLEW_RATE_US    16    // µs per CAN update °
 
 // ============================================================================
 // FIRMWARE VERSION

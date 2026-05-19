@@ -56,7 +56,7 @@ void setup() {
     Serial.begin(SERIAL_BAUD_RATE);
 
     // Debug::setFeatureEnabled(DebugFeature::CAN, true);
-    Debug::setFeatureEnabled(DebugFeature::BRAKE, true);
+    Debug::setFeatureEnabled(DebugFeature::TRANSMISSION, true);
     Debug::setFeatureEnabled(DebugFeature::VEHICLE, true);
     // Debug::setFeatureEnabled(DebugFeature::SERVO, true);
     

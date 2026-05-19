@@ -182,7 +182,15 @@ public:
     bool setDefaultPosition(Gear gear, int32_t position);
 
 private:
+    enum class GearChangePhase {
+        NONE,      // No active gear change, or single-phase direct move
+        OVERSHOOT, // Phase 1: moving past the target by TRANS_GEAR_OVERSHOOT counts
+        RETURN     // Phase 2: returning from overshoot to final gear position
+    };
+
     Gear targetGear_;  // Target gear for current move
+    GearChangePhase gearChangePhase_;  // Current overshoot phase
+    int32_t finalGearPosition_;        // True target position, saved during Phase 1
     TransmissionVehicleData vehicleData_;  // Vehicle data for safety checks
     uint32_t lastGearCheckTime_;  // Timestamp of last physical gear check (ms)
     uint32_t lastMovementLogTime_;  // Timestamp of last movement log (ms)

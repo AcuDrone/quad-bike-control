@@ -4,6 +4,8 @@
 TransmissionController::TransmissionController()
     : BTS7960Controller()
     , targetGear_(Gear::GEAR_NEUTRAL)
+    , gearChangePhase_(GearChangePhase::NONE)
+    , finalGearPosition_(0)
     , lastGearCheckTime_(0)
     , lastMovementLogTime_(0)
     , lastStatusLogTime_(0)
@@ -41,13 +43,25 @@ bool TransmissionController::setGear(TransmissionController::Gear gear, uint8_t 
     }
 
     int32_t targetPosition = getGearPosition(gear);
+    int32_t currentPosition = getPosition();
+    int32_t error = targetPosition - currentPosition;
 
     Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] Setting gear to %s (position %ld)\n",
                   getGearName(gear), targetPosition);
 
     targetGear_ = gear;
-    saveState(gear, getPosition(), false);
-    return moveToPosition(targetPosition, speed);
+    saveState(gear, currentPosition, false);
+
+    // Phase 1: move to overshoot position
+    int32_t direction = (error > 0) ? 1 : -1;
+    finalGearPosition_ = targetPosition;
+    gearChangePhase_ = GearChangePhase::OVERSHOOT;
+    int32_t overshootPosition = targetPosition + direction * TRANS_GEAR_OVERSHOOT;
+
+    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] Overshoot phase 1: moving to %ld (final target %ld)\n",
+                  overshootPosition, finalGearPosition_);
+
+    return moveToPosition(overshootPosition, speed);
 }
 
 TransmissionController::Gear TransmissionController::getCurrentGear() const {
@@ -248,32 +262,27 @@ void TransmissionController::update() {
         // Read physical gear position (ground truth)
         Gear physicalGear = getPhysicalGear();
 
-        // Check if physical gear matches target gear during position control
-        if (isPositionControlActive() && physicalGear == targetGear_) {
+        // Check if physical gear matches target gear during position control.
+        // Ignored during OVERSHOOT phase — we are intentionally past the target.
+        if (isPositionControlActive() && physicalGear == targetGear_ &&
+            gearChangePhase_ != GearChangePhase::OVERSHOOT) {
             // Physical switch confirms we've reached target gear!
-            // Recalibrate encoder to match expected position for this gear
             int32_t expectedPosition = getGearPosition(targetGear_);
             int32_t currentPosition = getPosition();
             int32_t positionError = abs(currentPosition - expectedPosition);
 
             if (positionError > TRANS_POSITION_TOLERANCE) {
-                // Encoder position differs from expected - recalibrate
                 Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] Physical gear %s reached, recalibrating encoder\n",
                              getGearName(targetGear_));
                 Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] Encoder: %ld -> %ld (error: %ld)\n",
                              currentPosition, expectedPosition, positionError);
-
-                // Recalibrate encoder to expected position for this gear
-                // recalibrateEncoder(expectedPosition);
             }
 
-            // Stop position control - physical switch confirms arrival
-            // stopPositionControl();
             saveState(targetGear_, getPosition(), true);
+            gearChangePhase_ = GearChangePhase::NONE;
             Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] Target gear %s confirmed by physical switch\n",
                          getGearName(targetGear_));
 
-            // Clear any previous mismatch flag
             lastGearMismatch_ = false;
             return;
         }
@@ -307,6 +316,20 @@ void TransmissionController::update() {
 
     // Call parent update() to handle encoder-based position control loop
     BTS7960Controller::update();
+
+    // Overshoot phase transitions (evaluated after BTS7960 updates position state)
+    if (gearChangePhase_ == GearChangePhase::OVERSHOOT && !isPositionControlActive()) {
+        // Phase 1 complete — return to final gear position
+        Debug::printfFeature(DebugFeature::TRANSMISSION,
+            "[TRANS] Overshoot reached, phase 2: returning to %ld\n", finalGearPosition_);
+        gearChangePhase_ = GearChangePhase::RETURN;
+        moveToPosition(finalGearPosition_);
+    } else if (gearChangePhase_ == GearChangePhase::RETURN && !isPositionControlActive()) {
+        // Phase 2 complete — gear change done
+        gearChangePhase_ = GearChangePhase::NONE;
+        Debug::printfFeature(DebugFeature::TRANSMISSION,
+            "[TRANS] Overshoot return complete, at %ld\n", getPosition());
+    }
 }
 
 void TransmissionController::saveState(Gear gear, int32_t position, bool valid) {
