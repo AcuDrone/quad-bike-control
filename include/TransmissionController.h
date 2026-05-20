@@ -181,6 +181,29 @@ public:
      */
     bool setDefaultPosition(Gear gear, int32_t position);
 
+    /**
+     * @brief Get the gear the transmission is currently moving toward
+     * @return Target gear (GEAR_UNKNOWN if no active gear change)
+     */
+    Gear getTargetGear() const { return targetGear_; }
+
+    /**
+     * @brief Save transmission state to NVS
+     * @param gear Current gear
+     * @param position Encoder position
+     * @param valid true if state is reliable
+     */
+    void saveState(Gear gear, int32_t position, bool valid);
+
+    /**
+     * @brief Load transmission state from NVS
+     * @param gear Output: saved gear
+     * @param position Output: saved encoder position
+     * @param valid Output: whether saved state was valid
+     * @return true if state was found in NVS
+     */
+    bool loadState(Gear& gear, int32_t& position, bool& valid);
+
 private:
     enum class GearChangePhase {
         NONE,      // No active gear change, or single-phase direct move
@@ -201,8 +224,6 @@ private:
 
     int32_t gearPositions_[4];  // Active gear encoder positions (user defaults)
 
-    void saveState(Gear gear, int32_t position, bool valid);
-    bool loadState(Gear& gear, int32_t& position, bool& valid);
     void saveDefaultPosition(Gear gear, int32_t position);
 
     /**

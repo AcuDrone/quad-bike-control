@@ -72,16 +72,16 @@ TransmissionController::Gear TransmissionController::getCurrentGear() const {
     int32_t currentPos = getPosition();
 
     // Check each gear position using calibrated positions (within tolerance)
-    if (abs(currentPos - getGearPosition(Gear::GEAR_REVERSE)) <= TRANS_POSITION_TOLERANCE) {
+    if (abs(currentPos - getGearPosition(Gear::GEAR_REVERSE)) <= 2 * TRANS_POSITION_TOLERANCE) {
         return Gear::GEAR_REVERSE;
     }
-    if (abs(currentPos - getGearPosition(Gear::GEAR_NEUTRAL)) <= TRANS_POSITION_TOLERANCE) {
+    if (abs(currentPos - getGearPosition(Gear::GEAR_NEUTRAL)) <= 2 * TRANS_POSITION_TOLERANCE) {
         return Gear::GEAR_NEUTRAL;
     }
-    if (abs(currentPos - getGearPosition(Gear::GEAR_LOW)) <= TRANS_POSITION_TOLERANCE) {
+    if (abs(currentPos - getGearPosition(Gear::GEAR_LOW)) <= 2 * TRANS_POSITION_TOLERANCE) {
         return Gear::GEAR_LOW;
     }
-    if (abs(currentPos - getGearPosition(Gear::GEAR_HIGH)) <= TRANS_POSITION_TOLERANCE) {
+    if (abs(currentPos - getGearPosition(Gear::GEAR_HIGH)) <= 2 * TRANS_POSITION_TOLERANCE) {
         return Gear::GEAR_HIGH;
     }
 
@@ -243,7 +243,23 @@ void TransmissionController::update() {
             "[TRANS] Status: Encoder=%s (%ld), Physical=%s, Moving=%s\n",
             getGearName(encoderGear), currentPos, getGearName(physicalGear),
             currentlyMoving ? "YES" : "NO");
+
+        if (!isPositionControlActive()) {
+            Gear encoderGear = getCurrentGear();
+            int32_t currentPos = getPosition();
+
+            TransmissionController::Gear savedGear;
+            int32_t savedPos;
+            bool savedValid;
+            bool hasState = loadState(savedGear, savedPos, savedValid);
+            if ( !hasState || !savedValid || abs(savedPos - currentPos) > TRANS_POSITION_TOLERANCE) {
+                saveState(encoderGear, currentPos, true);
+                Debug::printfFeature(DebugFeature::VEHICLE, "[HOME] NVS updated (drift %ld counts)\n", currentPos);
+            }
+        }
     }
+
+
 
     // Log current state if moving (throttled to reduce spam)
     if (isPositionControlActive() && (now - lastMovementLogTime_ >= 500)) {

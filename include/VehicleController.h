@@ -131,6 +131,15 @@ public:
      */
     int32_t getBoostTargetRpm() const { return boostTargetRpm_; }
 
+    /**
+     * @brief Check if engine is running based on CAN RPM data
+     * @return true if CAN data is valid and RPM >= 1000
+     */
+    bool isEngineRunning() const {
+        CANController::VehicleData d = canController_.getVehicleData();
+        return d.dataValid && d.engineRPM >= ENGINE_RUNNING_RPM_THRESHOLD;
+    }
+
 private:
     // Actuator references
     SteeringController& steering_;
@@ -170,6 +179,12 @@ private:
 
     // Ignition state tracking
     SBusInput::IgnitionState previousSBusIgnitionState_;  // Track previous state for transition detection
+
+    // Auto-home state
+    bool autoHomeActive_;
+    uint32_t autoHomeStartTime_;
+    uint32_t autoHomeLastChangeTime_;
+    int32_t autoHomeLastPosition_;
 
     /**
      * @brief Apply fail-safe commands (center steering, idle throttle, stop actuators)
@@ -250,6 +265,7 @@ private:
     void processMoveToPositionCommand(int32_t position, WebPortal& webPortal);
     void processBoostTestCommand(bool enable, WebPortal& webPortal);
     void processSetBoostRpmCommand(int32_t rpm, WebPortal& webPortal);
+    void updateAutoHome();
 
     // Returns true when throttle should be clamped to TRANS_UNKNOWN_GEAR_THROTTLE_MAX.
     // Clips when gear position is invalid and physical gear is not neutral

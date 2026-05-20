@@ -128,13 +128,13 @@ void setup() {
         if (transmissionActuator.restoreStateIfValid()) {
             Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Restored transmission state, skipping autohome");
         } else {
-            if (transmissionActuator.autoHome(-1, TRANS_HOMING_SPEED, TRANS_HOMING_TIMEOUT)) {
-                Debug::printfFeature(DebugFeature::TRANSMISSION, "[TRANS] Homed to physical stop at position %ld\n", transmissionEncoder.getPosition());
-                Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Moving to NEUTRAL gear...");
-                transmissionActuator.setGear(TransmissionController::Gear::GEAR_NEUTRAL);
-            } else {
+            // if (transmissionActuator.autoHome(-1, TRANS_HOMING_SPEED, TRANS_HOMING_TIMEOUT)) {
+            //     Debug::printfFeature(DebugFeature::TRANSMISSION, "[TRANS] Homed to physical stop at position %ld\n", transmissionEncoder.getPosition());
+            //     Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Moving to NEUTRAL gear...");
+            //     transmissionActuator.setGear(TransmissionController::Gear::GEAR_NEUTRAL);
+            // } else {
                 Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] ERROR: Homing failed");
-            }
+            // }
         }
     } else {
         Debug::printlnFeature(DebugFeature::TRANSMISSION, "ERROR: Transmission actuator failed");
