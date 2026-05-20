@@ -414,13 +414,13 @@ bool TransmissionController::restoreStateIfValid() {
         return false;
     }
 
-    Gear physicalGear = getPhysicalGear();
-    if (physicalGear != savedGear) {
-        Debug::printfFeature(DebugFeature::TRANSMISSION,
-            "[TRANS] Physical switch mismatch: saved=%s, physical=%s, running autohome\n",
-            getGearName(savedGear), getGearName(physicalGear));
-        return false;
-    }
+    // Gear physicalGear = getPhysicalGear();
+    // if (physicalGear != savedGear) {
+    //     Debug::printfFeature(DebugFeature::TRANSMISSION,
+    //         "[TRANS] Physical switch mismatch: saved=%s, physical=%s, running autohome\n",
+    //         getGearName(savedGear), getGearName(physicalGear));
+    //     return false;
+    // }
 
     recalibrateEncoder(savedPosition);
     targetGear_ = savedGear;
