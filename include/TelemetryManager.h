@@ -4,7 +4,6 @@
 #include <Arduino.h>
 #include "Constants.h"
 #include "VehicleController.h"
-#include "EncoderCounter.h"
 #include "WebPortal.h"
 #include "SBusInput.h"
 
@@ -18,7 +17,6 @@
 class TelemetryManager {
 public:
     TelemetryManager(VehicleController& vehicleController,
-                     EncoderCounter& transmissionEncoder,
                      WebPortal& webPortal,
                      SBusInput& sbusInput);
 
@@ -56,7 +54,6 @@ public:
 private:
     // Component references
     VehicleController& vehicleController_;
-    EncoderCounter& transmissionEncoder_;
     WebPortal& webPortal_;
     SBusInput& sbusInput_;
 

@@ -1,7 +1,7 @@
 #ifndef TRANSMISSION_CONTROLLER_H
 #define TRANSMISSION_CONTROLLER_H
 
-#include "BTS7960Controller.h"
+#include "ServoController.h"
 #include "Constants.h"
 #include <Preferences.h>
 
@@ -15,224 +15,171 @@ struct TransmissionVehicleData {
 };
 
 /**
- * @brief High-level transmission controller with gear selection
+ * @brief Transmission controller — PWM servo-based gear selector
  *
- * Extends BTS7960Controller with gear-based interface.
- * Translates gear enum (R, N, L, H) to calibrated encoder positions.
- *
- * Features:
- * - Enum-based gear selection (HIGH, LOW, NEUTRAL, REVERSE)
- * - Automatic position control to target gear
- * - Calibrated encoder positions for each gear
- * - Status reporting (current gear, moving state)
+ * Controls a PWM servo (HappyModel Super400 Plus, 800–2200 µs) to select gears.
+ * Gear positions are stored and exposed as float percentages (0.0–100.0).
+ * Physical hall-effect switches confirm gear arrival.
+ * Overshoot-and-return motion profile ensures mechanical detent engagement.
  */
-class TransmissionController : public BTS7960Controller {
+class TransmissionController {
 public:
     /**
      * @brief Transmission gear selection enumeration
-     *
-     * Four gears with calibrated encoder positions (relative to physical stop at 0):
-     * - GEAR_REVERSE (R): ~50 counts
-     * - GEAR_NEUTRAL (N): ~2000 counts
-     * - GEAR_LOW (L): ~4000 counts
-     * - GEAR_HIGH (H): ~6000 counts
-     * - GEAR_UNKNOWN: Invalid/unclear gear state
-     *
-     * All positions are auto-calibrated during startup by detecting physical sensors.
      */
     enum class Gear {
-        GEAR_HIGH = 0,      // H gear
-        GEAR_LOW = 1,       // L gear
-        GEAR_NEUTRAL = 2,   // N gear
-        GEAR_REVERSE = 3,   // R gear
-        GEAR_UNKNOWN = 4    // Invalid or unclear gear state
+        GEAR_HIGH = 0,
+        GEAR_LOW = 1,
+        GEAR_NEUTRAL = 2,
+        GEAR_REVERSE = 3,
+        GEAR_UNKNOWN = 4
     };
 
     TransmissionController();
     ~TransmissionController();
 
     /**
-     * @brief Set transmission to target gear
-     *
-     * Automatically moves actuator to calibrated position for selected gear.
-     * Uses encoder feedback for closed-loop position control.
-     *
-     * @param gear Target gear (HIGH, LOW, NEUTRAL, REVERSE)
-     * @param speed Movement speed (0-255), default 255 (full speed)
-     * @return true if gear change initiated, false if already at target or error
+     * @brief Initialize the transmission servo
+     * @return true if initialization successful
      */
-    bool setGear(Gear gear, uint8_t speed = 255);
+    bool begin();
 
     /**
-     * @brief Get current gear based on encoder position
-     *
-     * Determines current gear by comparing encoder position to calibrated positions.
-     * Uses TRANS_POSITION_TOLERANCE for position matching.
-     *
-     * @return Current gear, or NEUTRAL if position doesn't match any gear
+     * @brief Set transmission to target gear
+     * @param gear Target gear
+     * @return true if gear change initiated
+     */
+    bool setGear(Gear gear);
+
+    /**
+     * @brief Get current gear from physical switches
      */
     Gear getCurrentGear() const;
 
     /**
-     * @brief Check if transmission is at target gear
-     *
-     * @param gear Target gear to check
-     * @return true if at target gear position (within tolerance)
+     * @brief Check if physical switch reports target gear
      */
     bool isAtGear(Gear gear) const;
 
     /**
-     * @brief Get encoder position for a given gear
-     *
-     * @param gear Gear to query
-     * @return Encoder position for the gear
+     * @brief Get default servo position for a gear (0.0–100.0 %)
      */
-    int32_t getGearPosition(Gear gear) const;
+    float getGearPosition(Gear gear) const;
 
     /**
      * @brief Get human-readable gear name
-     *
-     * @param gear Gear to convert to string
-     * @return Gear name (e.g., "HIGH", "LOW", "NEUTRAL", "REVERSE")
      */
     const char* getGearName(Gear gear) const;
 
     /**
-     * @brief Set vehicle data from CAN bus for safety checks
-     *
-     * @param data Vehicle data (speed, validity, etc.)
+     * @brief Set vehicle data for safety interlocks
      */
     void setVehicleData(const TransmissionVehicleData& data);
 
     /**
-     * @brief Check if transmission needs throttle boost
-     *
-     * @return true if gear change is in progress and boost is needed
+     * @brief Returns true while a gear change is in progress (boost trigger)
      */
     bool needsThrottleBoost() const;
 
     /**
-     * @brief Initialize gear position sensors on MCP23017
-     *
-     * Configures gear selector input pins on MCP23017 Port B with pull-ups.
-     * Active-low configuration: pin reads LOW when gear is selected.
-     *
+     * @brief Configure gear selector switch GPIO pins
      */
     void initGearSensors();
 
     /**
-     * @brief Read physical gear position from GPIO sensors
-     *
-     * Reads the gear selector position switches to determine which gear is physically selected.
-     * Uses active-low logic: the pin that reads LOW indicates the selected gear.
-     *
-     * @return Physical gear position based on switch state, or GEAR_NEUTRAL if no switch active or multiple active
+     * @brief Read physical gear from hall-effect switches
      */
     Gear getPhysicalGear() const;
 
     /**
-     * @brief Check if encoder position matches physical gear sensors
-     *
-     * Compares the encoder-based gear position with the physical switch position
-     * for safety verification and diagnostics.
-     *
-     * @return true if encoder gear matches physical switch gear, false if mismatch
+     * @brief True when servo position matches physical switch
      */
     bool isGearPositionValid() const;
 
     /**
-     * @brief Update transmission position control with physical gear verification
-     *
-     * Extends BTS7960Controller::update() to add physical gear sensor verification.
-     * Checks that encoder position matches physical gear switches and logs warnings
-     * if mismatches are detected.
-     *
-     * Call this in main loop to handle position control and safety monitoring.
+     * @brief Update gear change phase transitions — call every loop iteration
      */
     void update();
 
     /**
-     * @brief Restore encoder position from NVS and skip autohome if state is valid
-     *
-     * Loads saved transmission state. If valid=true and the physical gear switch
-     * matches the saved gear, restores the encoder to the saved position and
-     * returns true (caller skips autohome). Otherwise returns false.
-     *
-     * @return true if state restored (skip autohome), false if autohome is needed
+     * @brief Restore servo position from NVS; return true to skip legacy autohome
      */
     bool restoreStateIfValid();
 
     /**
-     * @brief Load user-configured default positions from NVS into gearPositions_
-     *
-     * Reads def_reverse/neutral/low/high keys. Sets 0 for any absent key.
-     * Call before loadCalibration() so calibration overwrites if present.
+     * @brief Load user-configured gear positions from NVS
      */
     void loadDefaultPositions();
 
     /**
-     * @brief Set and persist a single gear's default position
-     *
-     * Validates range (0–10000), writes to NVS, and updates gearPositions_ immediately.
-     *
-     * @param gear Target gear (must not be GEAR_UNKNOWN)
-     * @param position Encoder count (0–10000)
-     * @return true if saved, false if gear invalid or position out of range
+     * @brief Save and apply a gear's default position
+     * @param gear  Target gear (must not be GEAR_UNKNOWN)
+     * @param positionPct  Servo position 0.0–100.0 %
+     * @return true if saved successfully
      */
-    bool setDefaultPosition(Gear gear, int32_t position);
+    bool setDefaultPosition(Gear gear, float positionPct);
 
     /**
-     * @brief Get the gear the transmission is currently moving toward
-     * @return Target gear (GEAR_UNKNOWN if no active gear change)
+     * @brief Get the gear the transmission is moving toward
      */
     Gear getTargetGear() const { return targetGear_; }
 
     /**
-     * @brief Save transmission state to NVS
-     * @param gear Current gear
-     * @param position Encoder position
-     * @param valid true if state is reliable
+     * @brief No-op — servo holds position; retained for API compatibility
      */
-    void saveState(Gear gear, int32_t position, bool valid);
+    void stop() {}
+
+    /**
+     * @brief Save transmission state to NVS
+     */
+    void saveState(Gear gear, float positionPct, bool valid);
 
     /**
      * @brief Load transmission state from NVS
-     * @param gear Output: saved gear
-     * @param position Output: saved encoder position
-     * @param valid Output: whether saved state was valid
-     * @return true if state was found in NVS
+     * @return true if a state record was found
      */
-    bool loadState(Gear& gear, int32_t& position, bool& valid);
+    bool loadState(Gear& gear, float& positionPct, bool& valid);
+
+    /**
+     * @brief Get current commanded servo position (0.0–100.0 %)
+     */
+    float getCurrentServoPct() const {
+        return (servo_.getMicroseconds() - TRANS_SERVO_MIN_US) / float(TRANS_SERVO_MAX_US - TRANS_SERVO_MIN_US) * 100.0f;
+    }
+
+    /**
+     * @brief Move servo directly to a percentage (bypasses gear state machine — for calibration)
+     */
+    void moveToPercent(float pct);
 
 private:
     enum class GearChangePhase {
-        NONE,      // No active gear change, or single-phase direct move
-        OVERSHOOT, // Phase 1: moving past the target by TRANS_GEAR_OVERSHOOT counts
-        RETURN     // Phase 2: returning from overshoot to final gear position
+        NONE,
+        OVERSHOOT,
+        RETURN
     };
 
-    Gear targetGear_;  // Target gear for current move
-    GearChangePhase gearChangePhase_;  // Current overshoot phase
-    int32_t finalGearPosition_;        // True target position, saved during Phase 1
-    TransmissionVehicleData vehicleData_;  // Vehicle data for safety checks
-    uint32_t lastGearCheckTime_;  // Timestamp of last physical gear check (ms)
-    uint32_t lastMovementLogTime_;  // Timestamp of last movement log (ms)
-    uint32_t lastStatusLogTime_;  // Timestamp of last status log (ms)
-    bool lastGearMismatch_;  // Track if last check had a mismatch (avoid spam)
-    Gear lastLoggedGear_;  // Last logged gear (to detect changes)
-    bool lastLoggedMoving_;  // Last logged movement state (to detect changes)
+    ServoController servo_;
 
-    int32_t gearPositions_[4];  // Active gear encoder positions (user defaults)
+    Gear targetGear_;
+    GearChangePhase gearChangePhase_;
+    float finalGearPositionPct_;
+    uint32_t gearPhaseStartTime_;
+    uint32_t settleMs_;
 
-    void saveDefaultPosition(Gear gear, int32_t position);
+    TransmissionVehicleData vehicleData_;
+    uint32_t lastGearCheckTime_;
+    uint32_t lastStatusLogTime_;
+    bool lastGearMismatch_;
+    Gear lastLoggedGear_;
+    bool lastLoggedMoving_;
 
-    /**
-     * @brief Check if gear change is safe based on vehicle speed
-     *
-     * @param targetGear Target gear for change
-     * @return true if gear change is allowed, false if blocked
-     */
+    float gearPositions_[4];
+
     bool canChangeGear(Gear targetGear) const;
+    void commandServo(float positionPct);
+    uint32_t computeSettleMs(float fromPct, float toPct) const;
+    void saveDefaultPosition(Gear gear, float positionPct);
 };
 
 #endif // TRANSMISSION_CONTROLLER_H

@@ -24,12 +24,10 @@ EncoderCounter steeringEncoder;
 // Throttle Servo
 ServoController throttleServo;
 
-// Linear Actuator Controllers (BTS7960)
-TransmissionController transmissionActuator;  // Gear selector (R/N/L/H) with position control
-BTS7960Controller brakeActuator;              // Brake control
-
-// Encoder for Transmission Position Feedback
-EncoderCounter transmissionEncoder;
+// Transmission servo (PWM servo-based gear selector)
+TransmissionController transmissionActuator;
+// Brake actuator (BTS7960)
+BTS7960Controller brakeActuator;
 
 // SBUS Input from ArduPilot Rover
 SBusInput sbusInput;
@@ -45,7 +43,7 @@ VehicleController vehicleController(steeringActuator, throttleServo, transmissio
 WebPortal webPortal;
 
 // Telemetry Manager (collects and broadcasts telemetry data)
-TelemetryManager telemetryManager(vehicleController, transmissionEncoder, webPortal, sbusInput);
+TelemetryManager telemetryManager(vehicleController, webPortal, sbusInput);
 
 // ============================================================================
 // SETUP
@@ -110,34 +108,12 @@ void setup() {
     }
     throttleServo.setAngle(THROTTLE_IDLE_ANGLE);
 
-    // Initialize transmission system
-    if (!transmissionEncoder.begin(PIN_TRANS_ENCODER_A, PIN_TRANS_ENCODER_B, PCNT_UNIT_TRANS)) {
-        Debug::printlnFeature(DebugFeature::TRANSMISSION, "ERROR: Transmission encoder failed");
-    }
-
-    if (transmissionActuator.begin(PIN_TRANS_RPWM, PIN_TRANS_LPWM,
-                                    LEDC_CH_TRANS_RPWM, LEDC_CH_TRANS_LPWM)) {
-        transmissionActuator.attachEncoder(&transmissionEncoder);
-        transmissionActuator.stop();
-
+    // Initialize transmission servo
+    if (transmissionActuator.begin()) {
         transmissionActuator.initGearSensors();
-
-        // Load user-configured default positions from NVS
         transmissionActuator.loadDefaultPositions();
-
-        if (transmissionActuator.restoreStateIfValid()) {
-            Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Restored transmission state, skipping autohome");
-        } else {
-            // if (transmissionActuator.autoHome(-1, TRANS_HOMING_SPEED, TRANS_HOMING_TIMEOUT)) {
-            //     Debug::printfFeature(DebugFeature::TRANSMISSION, "[TRANS] Homed to physical stop at position %ld\n", transmissionEncoder.getPosition());
-            //     Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Moving to NEUTRAL gear...");
-            //     transmissionActuator.setGear(TransmissionController::Gear::GEAR_NEUTRAL);
-            // } else {
-                Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] ERROR: Homing failed");
-            // }
-        }
     } else {
-        Debug::printlnFeature(DebugFeature::TRANSMISSION, "ERROR: Transmission actuator failed");
+        Debug::printlnFeature(DebugFeature::TRANSMISSION, "ERROR: Transmission servo failed");
     }
 
     // Initialize brake

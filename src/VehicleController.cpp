@@ -32,10 +32,7 @@ VehicleController::VehicleController(SteeringController& steering,
       pidPrevError_(0.0f),
       lastPIDThrottleUs_(THROTTLE_IDLE_US),
       previousSBusIgnitionState_(SBusInput::IgnitionState::OFF),
-      autoHomeActive_(false),
-      autoHomeStartTime_(0),
-      autoHomeLastChangeTime_(0),
-      autoHomeLastPosition_(0) {
+      transmissionInitialized_(false) {
 }
 
 bool VehicleController::initCAN() {
@@ -52,6 +49,15 @@ bool VehicleController::initCAN() {
 void VehicleController::update() {
     // Update CAN controller (read vehicle data from ECU)
     canController_.update();
+
+    // Restore transmission state once, on first engine-running detection
+    if (!transmissionInitialized_ && isEngineRunning()) {
+        transmissionInitialized_ = true;
+        if (!transmission_.restoreStateIfValid()) {
+            transmission_.setGear(TransmissionController::Gear::GEAR_NEUTRAL);
+        }
+        Debug::printlnFeature(DebugFeature::VEHICLE, "[VEHICLE] Transmission initialized on engine start");
+    }
 
     // Pass vehicle data to transmission for safety checks
     CANController::VehicleData canData = canController_.getVehicleData();
@@ -75,11 +81,6 @@ void VehicleController::update() {
     // PID-controlled RPM boost during gear changes or manual test (overrides SBUS/web throttle)
     if (transmission_.needsThrottleBoost() || gearBoostActive_ || boostManualActive_) {
         updateGearBoostPID();
-    }
-
-    // Non-blocking transmission auto-home
-    if (autoHomeActive_) {
-        updateAutoHome();
     }
 
     // Update steering position control
@@ -109,13 +110,13 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
     if (!cmd.hasCommand) {
         return;
     }
-
+    Debug::printfFeature(DebugFeature::VEHICLE, "[WEB] Command %s\n", cmd.cmd);
     // Special commands that work regardless of input source
     if (cmd.cmd == "set_gear_default") {
-        processSetGearDefaultCommand(cmd.strValue, (int32_t)cmd.floatValue, webPortal);
+        processSetGearDefaultCommand(cmd.strValue, cmd.floatValue, webPortal);
         return;
     } else if (cmd.cmd == "move_to_position") {
-        processMoveToPositionCommand((int32_t)cmd.floatValue, webPortal);
+        processMoveToPositionCommand(cmd.floatValue, webPortal);
         return;
     } else if (cmd.cmd == "set_ignition") {
         // Ignition control always available (not restricted by input source)
@@ -131,28 +132,17 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
     } else if (cmd.cmd == "set_boost_rpm") {
         processSetBoostRpmCommand((int32_t)cmd.floatValue, webPortal);
         return;
-    } else if (cmd.cmd == "auto_home") {
-        if (!isEngineRunning()) {
-            webPortal.sendResponse(false, "Engine must be running to auto-home");
-            return;
-        }
-        transmission_.stopPositionControl();
-        transmission_.setSpeed(-TRANS_HOMING_SPEED);
-        autoHomeActive_ = true;
-        autoHomeStartTime_ = millis();
-        autoHomeLastChangeTime_ = millis();
-        autoHomeLastPosition_ = transmission_.getPosition();
-        Debug::printlnFeature(DebugFeature::VEHICLE, "[HOME] Auto-home started");
-        webPortal.sendResponse(true, "Transmission auto-home started");
-        return;
     }
 
+    
     // Normal control commands require WEB input source
-    if (currentInputSource_ != InputSource::WEB) {
-        // Web control not active, ignore control commands
-        return;
-    }
+    // if (currentInputSource_ != InputSource::WEB) {
+    //     // Web control not active, ignore control commands
+    //     Debug::printfFeature(DebugFeature::VEHICLE, "[WEB] Command return %s\n", cmd.cmd);
+    //     return;
+    // }
 
+    Debug::printfFeature(DebugFeature::VEHICLE, "[WEB] Command end %s\n", cmd.cmd);
     // Process control commands
     if (cmd.cmd == "set_gear") {
         processGearCommand(cmd.strValue, webPortal);
@@ -216,7 +206,7 @@ void VehicleController::processSBusCommands() {
 
     // Apply gear selection (blocked during auto-home)
     TransmissionController::Gear gear = sbusInput_.getGear();
-    if (!autoHomeActive_ && gear != transmission_.getTargetGear() && isEngineRunning()) {
+    if (gear != transmission_.getTargetGear() && isEngineRunning()) {
         transmission_.setGear(gear);
     }
     
@@ -261,10 +251,6 @@ void VehicleController::processSBusCommands() {
 }
 
 void VehicleController::processGearCommand(const String& gearStr, WebPortal& webPortal) {
-    if (autoHomeActive_) {
-        webPortal.sendResponse(false, "Auto-home in progress");
-        return;
-    }
     TransmissionController::Gear targetGear;
     String gearName;
 
@@ -281,13 +267,16 @@ void VehicleController::processGearCommand(const String& gearStr, WebPortal& web
         targetGear = TransmissionController::Gear::GEAR_HIGH;
         gearName = "HIGH";
     } else {
+        Debug::printfFeature(DebugFeature::VEHICLE, "[WEB] Invalid gear selection %s\n", gearStr);
         webPortal.sendResponse(false, "Invalid gear selection");
         return;
     }
 
     if (transmission_.setGear(targetGear)) {
+        Debug::printfFeature(DebugFeature::VEHICLE, "[WEB] Moving %s\n", gearName);
         webPortal.sendResponse(true, "Moving to " + gearName + " gear");
     } else {
+        Debug::printfFeature(DebugFeature::VEHICLE, "[WEB] Already at %s\n", gearName);
         webPortal.sendResponse(false, "Already at " + gearName + " gear");
     }
 }
@@ -332,7 +321,7 @@ void VehicleController::processBrakeCommand(float value, WebPortal& webPortal) {
     webPortal.sendResponse(true, "Brake set to " + String((int)value) + "%");
 }
 
-void VehicleController::processSetGearDefaultCommand(const String& gearStr, int32_t position, WebPortal& webPortal) {
+void VehicleController::processSetGearDefaultCommand(const String& gearStr, float positionPct, WebPortal& webPortal) {
     TransmissionController::Gear gear;
     if      (gearStr == "R") gear = TransmissionController::Gear::GEAR_REVERSE;
     else if (gearStr == "N") gear = TransmissionController::Gear::GEAR_NEUTRAL;
@@ -343,25 +332,24 @@ void VehicleController::processSetGearDefaultCommand(const String& gearStr, int3
         return;
     }
 
-    if (!transmission_.setDefaultPosition(gear, position)) {
-        webPortal.sendResponse(false, "Position out of range (0-" + String(TRANS_ENCODER_MAX_COUNT) + ")");
+    if (!transmission_.setDefaultPosition(gear, positionPct)) {
+        webPortal.sendResponse(false, "Position out of range (0.0-100.0)");
         return;
     }
 
-    // Send specific response with saved values
-    String msg = "Default for " + gearStr + " set to " + String(position);
+    String msg = "Default for " + gearStr + " set to " + String(positionPct, 1) + "%";
     Debug::printfFeature(DebugFeature::VEHICLE, "[WEB] %s\n", msg.c_str());
     webPortal.sendResponse(true, msg);
 }
 
-void VehicleController::processMoveToPositionCommand(int32_t position, WebPortal& webPortal) {
-    if (position < 0 || position > TRANS_ENCODER_MAX_COUNT) {
-        webPortal.sendResponse(false, "Position out of range (0-" + String(TRANS_ENCODER_MAX_COUNT) + ")");
+void VehicleController::processMoveToPositionCommand(float positionPct, WebPortal& webPortal) {
+    if (positionPct < 0.0f || positionPct > 100.0f) {
+        webPortal.sendResponse(false, "Position out of range (0.0-100.0)");
         return;
     }
-    transmission_.moveToPosition(position, TRANS_HOMING_SPEED);
-    Debug::printfFeature(DebugFeature::VEHICLE, "[WEB] Moving transmission to position %ld\n", position);
-    webPortal.sendResponse(true, "Moving to " + String(position));
+    transmission_.moveToPercent(positionPct);
+    Debug::printfFeature(DebugFeature::VEHICLE, "[WEB] Moving transmission to %.1f%%\n", positionPct);
+    webPortal.sendResponse(true, "Moving to " + String(positionPct, 1) + "%");
 }
 
 void VehicleController::processBoostTestCommand(bool enable, WebPortal& webPortal) {
@@ -396,34 +384,6 @@ void VehicleController::processSetBoostRpmCommand(int32_t rpm, WebPortal& webPor
     webPortal.sendResponse(true, "Boost RPM set to " + String(rpm));
 }
 
-void VehicleController::updateAutoHome() {
-    int32_t currentPos = transmission_.getPosition();
-    uint32_t now = millis();
-
-    if (abs(currentPos - autoHomeLastPosition_) >= TRANS_STALL_THRESHOLD) {
-        autoHomeLastPosition_ = currentPos;
-        autoHomeLastChangeTime_ = now;
-    }
-
-    if (now - autoHomeLastChangeTime_ >= TRANS_STALL_TIMEOUT) {
-        transmission_.stop();
-        transmission_.recalibrateEncoder(0);
-
-        autoHomeActive_ = false;
-        Debug::printfFeature(DebugFeature::VEHICLE, "[HOME] Complete, encoder reset to 0 (stall at %ld)\n", currentPos);
-        transmission_.setGear(TransmissionController::Gear::GEAR_REVERSE);  // Move to neutral after homing
-        return;
-    }
-
-    if (now - autoHomeStartTime_ >= TRANS_HOMING_TIMEOUT) {
-        transmission_.stop();
-        autoHomeActive_ = false;
-        Debug::printlnFeature(DebugFeature::VEHICLE, "[HOME] Timeout, auto-home failed");
-        return;
-    }
-
-    transmission_.setSpeed(-TRANS_HOMING_SPEED);
-}
 
 bool VehicleController::setIgnitionState(const String& state, String& errorMsg) {
     RelayController::IgnitionState currentState = relayController_.getIgnitionState();

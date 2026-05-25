@@ -21,6 +21,10 @@ ServoController::~ServoController() {
 }
 
 bool ServoController::begin(gpio_num_t pin, uint8_t channel, uint16_t minUs, uint16_t maxUs) {
+    return begin(pin, channel, minUs, maxUs, (minUs + maxUs) / 2);
+}
+
+bool ServoController::begin(gpio_num_t pin, uint8_t channel, uint16_t minUs, uint16_t maxUs, uint16_t initialUs) {
     pin_ = pin;
     channel_ = channel;
     minUs_ = minUs;
@@ -63,10 +67,14 @@ bool ServoController::begin(gpio_num_t pin, uint8_t channel, uint16_t minUs, uin
 
     initialized_ = true;
 
-    // Set to center position
-    setAngle(90.0f);
+    if (initialUs > 0) {
+        setMicroseconds(initialUs);
+        Debug::printfFeature(DebugFeature::SERVO, "ServoController: Initialized on pin %d, channel %d, us=%d\n", pin_, channel_, initialUs);
+    } else {
+        currentUs_ = 0;
+        Debug::printfFeature(DebugFeature::SERVO, "ServoController: Initialized on pin %d, channel %d (no output)\n", pin_, channel_);
+    }
 
-    Debug::printfFeature(DebugFeature::SERVO, "ServoController: Initialized on pin %d, channel %d\n", pin_, channel_);
     return true;
 }
 

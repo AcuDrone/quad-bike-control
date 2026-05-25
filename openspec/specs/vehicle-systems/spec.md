@@ -58,23 +58,28 @@ The system SHALL provide throttle control through a servo-driven acceleration me
 - **AND** throttle commands are ignored until brakes release
 
 ### Requirement: Transmission Control System
-The Transmission Control System SHALL use a two-level priority for default gear encoder positions: user-configured NVS defaults take first priority; compile-time factory constants are the final fallback.
+The Transmission Control System SHALL use a two-level priority for default gear **servo positions** (expressed as float percentages 0.0–100.0): user-configured NVS defaults take first priority; compile-time factory constants are the final fallback.
 
 #### Scenario: Load user-configured defaults on startup
 - **WHEN** the system starts
-- **AND** NVS keys `def_reverse`, `def_neutral`, `def_low`, `def_high` exist in the `transmission` namespace
+- **AND** NVS float keys `pct_r`, `pct_n`, `pct_l`, `pct_h` exist in the `transmission` namespace
 - **THEN** `TransmissionController` SHALL load those values as its default positions
 
 #### Scenario: Fall back to factory defaults when NVS defaults absent
 - **WHEN** the system starts
-- **AND** one or more `def_*` NVS keys are absent
-- **THEN** the corresponding position SHALL use the compile-time constant as the default
+- **AND** one or more `pct_*` NVS keys are absent
+- **THEN** the corresponding position SHALL use the compile-time constant (`TRANS_GEAR_DEFAULT_*_PCT`) as the default
 - **AND** no error SHALL be logged
 
 #### Scenario: Update a default position at runtime
-- **WHEN** `setDefaultPosition(gear, position)` is called with a valid gear and position value
-- **THEN** the value SHALL be written to the corresponding `def_*` NVS key in the `transmission` namespace
+- **WHEN** `setDefaultPosition(gear, positionPct)` is called with a valid gear and a value in [0.0, 100.0]
+- **THEN** the value SHALL be written to the corresponding `pct_*` NVS float key in the `transmission` namespace
 - **AND** the in-RAM default SHALL be updated immediately
+
+#### Scenario: Reject out-of-range position
+- **WHEN** `setDefaultPosition(gear, positionPct)` is called with a value outside [0.0, 100.0]
+- **THEN** the call SHALL return false
+- **AND** neither NVS nor the in-RAM array SHALL be modified
 
 ### Requirement: Brake Control System
 The system SHALL control braking force through a linear actuator-driven brake mechanism.
@@ -358,36 +363,30 @@ The system SHALL provide diagnostic information about ignition and lighting syst
   - Relay3 output state
 
 ### Requirement: Transmission State Persistence
-The system SHALL persist the last confirmed transmission state (gear, encoder position, validity flag) to NVS so that autohome can be skipped after a clean power cycle.
+The system SHALL persist the last confirmed transmission state (gear, servo position as float percent, validity flag) to NVS so that the servo can be restored to its last known position after a clean power cycle.
 
 #### Scenario: Mark state invalid at start of gear change
 - **WHEN** `TransmissionController::setGear()` is called
-- **THEN** `state_valid=false` SHALL be written to NVS before movement begins
+- **THEN** `state_valid=false` SHALL be written to NVS before the servo moves
 - **AND** a mid-move power loss will therefore result in `state_valid=false` on next boot
 
 #### Scenario: Save confirmed state on gear arrival
-- **WHEN** the physical gear switch confirms the target gear is reached
-- **THEN** `state_valid=true`, `state_gear`, and `state_pos` (current encoder count) SHALL be written to NVS
-- **AND** the saved state reflects the physical actuator position at that moment
+- **WHEN** the physical gear switch confirms the target gear is reached (RETURN phase complete)
+- **THEN** `state_valid=true`, `state_gear`, and `state_pct` (float percent) SHALL be written to NVS
+- **AND** the saved state reflects the servo position at that moment
 
-#### Scenario: Restore encoder and skip autohome on valid state
+#### Scenario: Restore servo position and skip autohome on valid state
 - **WHEN** the system starts
 - **AND** NVS `state_valid=true`
-- **AND** the physical gear switch reports the same gear as `state_gear`
-- **THEN** the encoder SHALL be set to `state_pos` via `EncoderCounter::setPosition()`
-- **AND** autohome SHALL be skipped
+- **THEN** the servo SHALL be commanded to `state_pct` immediately
+- **AND** the normal autohome path SHALL be skipped
 - **AND** the system SHALL log "Restored transmission state, skipping autohome"
 
-#### Scenario: Fall back to autohome on invalid or mismatched state
+#### Scenario: Fall back to neutral default on invalid or missing state
 - **WHEN** the system starts
-- **AND** NVS `state_valid=false`, or the physical switch disagrees with `state_gear`, or no state is saved
-- **THEN** the normal autohome sequence SHALL run
-- **AND** the system SHALL log the reason (invalid flag / switch mismatch / no data)
-
-#### Scenario: State persists independently of calibration
-- **WHEN** calibration data is cleared via `clearCalibration()`
-- **THEN** the state keys (`state_valid`, `state_gear`, `state_pos`) SHALL also be cleared
-- **AND** the next boot will run autohome
+- **AND** NVS `state_valid=false`, or no state is saved
+- **THEN** the servo SHALL be commanded to the neutral default position (`TRANS_GEAR_DEFAULT_NEUTRAL_PCT`)
+- **AND** the system SHALL log the reason (invalid flag / no data)
 
 ### Requirement: Throttle Boost During Gear Changes
 The system SHALL use a PID controller to regulate engine RPM to a configurable target value (`TRANS_GEAR_BOOST_TARGET_RPM`) for the duration of a gear change, overriding SBUS/web throttle commands while active.

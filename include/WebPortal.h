@@ -47,7 +47,7 @@ public:
     struct Telemetry {
         uint32_t timestamp;       // System time in milliseconds
         String gear;              // Current gear: "R", "N", "L", "H"
-        int32_t hall_position;    // Transmission encoder position
+        float hall_position;      // Transmission servo position (0.0–100.0 %)
         float brake_pct;          // Brake position percentage (0-100)
         int throttle_angle;       // Throttle servo angle (degrees)
         int steering_pct;         // Steering percentage (-100 to +100)
@@ -81,11 +81,11 @@ public:
         // Firmware information
         String firmware_version;  // Firmware version string (e.g., "1.0.0")
 
-        // Gear default positions (user-configurable NVS values)
-        int32_t gear_default_r;   // Default encoder count for REVERSE
-        int32_t gear_default_n;   // Default encoder count for NEUTRAL
-        int32_t gear_default_l;   // Default encoder count for LOW
-        int32_t gear_default_h;   // Default encoder count for HIGH
+        // Gear default positions (user-configurable NVS values, 0.0–100.0 %)
+        float gear_default_r;     // Default servo % for REVERSE
+        float gear_default_n;     // Default servo % for NEUTRAL
+        float gear_default_l;     // Default servo % for LOW
+        float gear_default_h;     // Default servo % for HIGH
 
         // Boost PID configuration
         int32_t boost_target_rpm; // RPM target for gear boost PID

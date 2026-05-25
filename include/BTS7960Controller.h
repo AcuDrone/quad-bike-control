@@ -117,7 +117,7 @@ public:
      * @param tolerance Position tolerance (+/- counts)
      * @return true if at target position
      */
-    bool isAtPosition(int32_t targetPosition, int32_t tolerance = TRANS_POSITION_TOLERANCE) const;
+    bool isAtPosition(int32_t targetPosition, int32_t tolerance = 100) const;
 
     /**
      * @brief Auto-home: drive to limit until stall, then set zero
@@ -127,7 +127,7 @@ public:
      * @param timeout Maximum time for homing (ms)
      * @return true if homing successful
      */
-    bool autoHome(int8_t direction, uint8_t homingSpeed = TRANS_HOMING_SPEED, uint32_t timeout = TRANS_HOMING_TIMEOUT);
+    bool autoHome(int8_t direction, uint8_t homingSpeed = 150, uint32_t timeout = 10000);
 
     /**
      * @brief Update position control (call in main loop if using position control)

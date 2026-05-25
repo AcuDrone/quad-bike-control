@@ -11,17 +11,8 @@
 #define PIN_SBUS_RX         GPIO_NUM_8 // UART1 RX with inverted signal
 #define SBUS_UART_NUM       UART_NUM_1   // UART1 for S-bus
 
-// Transmission Hall Sensor (Incremental Encoder - Quadrature)
-#define PIN_TRANS_ENCODER_A GPIO_NUM_2   // Hall sensor channel A (PCNT) - SWAPPED
-#define PIN_TRANS_ENCODER_B GPIO_NUM_1   // Hall sensor channel B (PCNT) - SWAPPED
-#define PCNT_UNIT_TRANS     0            // PCNT unit ID for transmission encoder
-
-// Transmission Linear Actuator (BTS7960)
-// Note: R_EN and L_EN hardwired to 5V (always enabled)
-#define PIN_TRANS_RPWM      GPIO_NUM_5   // LEDC Channel 2
-#define PIN_TRANS_LPWM      GPIO_NUM_4   // LEDC Channel 3
-#define LEDC_CH_TRANS_RPWM  2
-#define LEDC_CH_TRANS_LPWM  3
+// Transmission Servo (HappyModel Super400 Plus)
+#define PIN_TRANS_SERVO     GPIO_NUM_9   // LEDC Channel 2
 
 // Steering Actuator (BTS7960 — full speed, no PWM needed, uses GPIO digital write)
 // Note: R_EN and L_EN hardwired to 5V (always enabled)
@@ -157,28 +148,23 @@ struct SBusChannelConfig {
 // TRANSMISSION SYSTEM CONFIGURATION
 // ============================================================================
 
-// Transmission Encoder Parameters
-#define TRANS_ENCODER_MAX_COUNT       32767  // Maximum encoder count (PCNT 16-bit signed)
-#define TRANS_ENCODER_MIN_COUNT      -32768  // Minimum encoder count
-#define TRANS_POSITION_TOLERANCE      10     // +/- encoder counts for position match (±2.5% of revolution)
+// Transmission Servo Parameters (HappyModel Super400 Plus @ 24V, 180° range)
+#define LEDC_CH_TRANS_SERVO                 2
+#define TRANS_SERVO_MIN_US                  800
+#define TRANS_SERVO_MAX_US                  2200
+#define TRANS_SERVO_MS_PER_PCT              12      // ms per 1% travel (180° @ 24V: 1110ms/100%)
+#define TRANS_SERVO_SETTLE_MIN_MS           300     // minimum settle time for short moves
+#define TRANS_GEAR_OVERSHOOT_PCT            1.0f    // % overshoot for mechanical detent engagement
 
-// Transmission Movement Parameters
-#define TRANS_UNKNOWN_GEAR_THROTTLE_MAX  (float)5   // % - max throttle when physical gear is UNKNOWN
-#define TRANS_GEAR_OVERSHOOT    240   // encoder counts past target before returning (overshoot-and-return)
-#define TRANS_HOMING_SPEED      128  // PWM value during auto-homing (full speed)
-#define TRANS_HOMING_TIMEOUT    60000 // ms - maximum time for homing
-#define TRANS_STALL_THRESHOLD   3    // Encoder counts - if no change for this time, assume stall
-#define TRANS_STALL_TIMEOUT     1000 // ms - time without encoder change = stall detected
-#define TRANS_GEAR_CHECK_INTERVAL 500 // ms - interval for physical gear position verification
+// Default gear positions (percent: 0.0 = 800µs, 100.0 = 2200µs)
+#define TRANS_GEAR_DEFAULT_REVERSE_PCT      10.0f
+#define TRANS_GEAR_DEFAULT_NEUTRAL_PCT      35.0f
+#define TRANS_GEAR_DEFAULT_LOW_PCT          65.0f
+#define TRANS_GEAR_DEFAULT_HIGH_PCT         90.0f
 
-// Proportional Speed Control (implemented in BTS7960Controller::update())
-// Speed ramp thresholds for smooth positioning:
-//   > 200 counts: 100% speed (180 PWM)
-//   > 100 counts: 85% speed
-//   > 50 counts:  65% speed
-//   > 30 counts:  45% speed
-//   > 15 counts:  30% speed
-//   ≤ 15 counts:  20% speed (minimum 30 PWM for reliable movement)
+// Safety limits
+#define TRANS_UNKNOWN_GEAR_THROTTLE_MAX     (float)5   // % - max throttle when physical gear UNKNOWN
+#define TRANS_GEAR_CHECK_INTERVAL           500        // ms - physical gear verification period
 
 // ============================================================================
 // BRAKE SYSTEM CONFIGURATION

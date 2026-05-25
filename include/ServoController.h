@@ -26,6 +26,18 @@ public:
     bool begin(gpio_num_t pin, uint8_t channel, uint16_t minUs = 1000, uint16_t maxUs = 2000);
 
     /**
+     * @brief Initialize with a known initial pulse width
+     *
+     * @param pin GPIO pin number for PWM output
+     * @param channel LEDC channel number
+     * @param minUs Minimum pulse width in microseconds
+     * @param maxUs Maximum pulse width in microseconds
+     * @param initialUs Starting pulse width; 0 = no output (servo not commanded)
+     * @return true if initialization successful
+     */
+    bool begin(gpio_num_t pin, uint8_t channel, uint16_t minUs, uint16_t maxUs, uint16_t initialUs);
+
+    /**
      * @brief Set servo position by angle
      *
      * @param degrees Angle in degrees (0-180)

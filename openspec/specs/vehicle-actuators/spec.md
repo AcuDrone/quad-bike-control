@@ -27,39 +27,16 @@ The system SHALL provide hardware PWM control for servo motors using ESP32 LEDC 
 - **AND** servo holds last position or relaxes based on servo type
 
 ### Requirement: BTS7960 Motor Driver Control
-The system SHALL control linear actuators using BTS7960 dual H-bridge motor drivers with hardwired enable pins.
+The system SHALL use the BTS7960 motor driver for the brake actuator only. Transmission
+control has been moved to a PWM servo; transmission-specific encoder and position-control
+methods are no longer part of `TransmissionController`.
 
-#### Scenario: Initialize BTS7960 driver
-- **WHEN** BTS7960Controller.begin() is called with RPWM and LPWM pin configuration
-- **THEN** GPIO pins are configured as outputs
-- **AND** RPWM and LPWM pins are set to PWM mode
-- **AND** both PWM outputs are set to 0 (stopped state)
-
-**Note**: Enable pins (R_EN, L_EN) are hardwired to 5V power and always active.
-
-#### Scenario: Set forward motion speed
-- **WHEN** BTS7960Controller.setSpeed() is called with positive value (1-255)
-- **THEN** RPWM duty cycle is set to requested speed
-- **AND** LPWM is set to 0
-- **AND** actuator extends at proportional speed
-
-#### Scenario: Set reverse motion speed
-- **WHEN** BTS7960Controller.setSpeed() is called with negative value (-255 to -1)
-- **THEN** LPWM duty cycle is set to absolute speed value
-- **AND** RPWM is set to 0
-- **AND** actuator retracts at proportional speed
-
-#### Scenario: Stop motor with coast
-- **WHEN** BTS7960Controller.stop() is called
-- **THEN** both RPWM and LPWM are set to 0
-- **AND** actuator coasts to a stop (driver remains enabled via hardwired pins)
-
-#### Scenario: Stop motor with brake command
-- **WHEN** BTS7960Controller.brake() is called
-- **THEN** both RPWM and LPWM are set to 0 (coast)
-- **AND** actuator coasts to a stop
-
-**CRITICAL SAFETY NOTE**: BTS7960 does NOT support electrical braking via simultaneous RPWM+LPWM high. Setting both high will short the H-bridge and destroy the controller. The brake() method is an alias for stop() (coast).
+#### Scenario: BTS7960 retained for brake actuator
+- **WHEN** the brake actuator is commanded via `BTS7960Controller::setSpeed()`
+- **THEN** RPWM/LPWM PWM outputs SHALL be set as specified in the existing brake scenarios
+- **AND** transmission-related methods (`getPosition`, `moveToPosition`, `stopPositionControl`,
+  `recalibrateEncoder`, `isPositionControlActive`, `autoHome`) are no longer called from
+  `TransmissionController` or `VehicleController`
 
 ### Requirement: Actuator Safety Limits
 The system SHALL enforce safety limits on all actuator operations.
@@ -114,4 +91,35 @@ The system SHALL track and report current state of all actuators.
 - **WHEN** isHealthy() is called on any controller
 - **THEN** health status is returned based on last operation success
 - **AND** fault conditions are reported (overcurrent, timeout, etc.)
+
+### Requirement: Transmission Servo Control
+The system SHALL drive the transmission gear selector through a PWM servo on GPIO 9 with a pulse range of 800–2200 µs, replacing the former BTS7960 linear actuator.
+
+#### Scenario: Initialize transmission servo
+- **WHEN** `TransmissionController::begin()` is called
+- **THEN** `ServoController` SHALL be initialised with `PIN_TRANS_SERVO`, `LEDC_CH_TRANS_SERVO`, `TRANS_SERVO_MIN_US` (800), `TRANS_SERVO_MAX_US` (2200)
+- **AND** the servo SHALL be commanded to the neutral default position (`TRANS_GEAR_DEFAULT_NEUTRAL_PCT`)
+
+#### Scenario: Map gear percent to servo microseconds
+- **WHEN** any gear position is commanded as a float percent
+- **THEN** the mapping SHALL be `µs = TRANS_SERVO_MIN_US + pct / 100.0 * (TRANS_SERVO_MAX_US - TRANS_SERVO_MIN_US)`
+- **AND** the result SHALL be clamped to `[TRANS_SERVO_MIN_US, TRANS_SERVO_MAX_US]`
+
+#### Scenario: Overshoot-and-return motion profile
+- **WHEN** `setGear(target)` is called
+- **THEN** the servo SHALL first be commanded to `targetPct ± TRANS_GEAR_OVERSHOOT_PCT` (direction away from origin)
+- **AND** after `TRANS_SERVO_SETTLE_MS` the servo SHALL be commanded to `targetPct`
+- **AND** the physical gear switch for the target gear SHALL be checked after a second `TRANS_SERVO_SETTLE_MS`
+
+#### Scenario: Confirm gear arrival via physical switch
+- **WHEN** the return phase settle time has elapsed
+- **AND** `getPhysicalGear()` returns the target gear
+- **THEN** the gear change is marked complete (`gearChangePhase_ = NONE`)
+- **AND** state is saved to NVS with `state_valid=true`
+
+#### Scenario: Log warning on switch mismatch after settle
+- **WHEN** the return phase settle time has elapsed
+- **AND** `getPhysicalGear()` does NOT return the target gear after `2 × TRANS_SERVO_SETTLE_MS`
+- **THEN** a warning SHALL be logged: "[TRANS] Gear mismatch after return"
+- **AND** `gearChangePhase_` is reset to NONE to prevent indefinite retry
 

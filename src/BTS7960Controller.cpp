@@ -212,7 +212,7 @@ bool BTS7960Controller::moveToPosition(int32_t targetPosition, uint8_t speed) {
     int32_t error = targetPosition - currentPos;
 
     // Check if already at target position
-    if (abs(error) <= TRANS_POSITION_TOLERANCE) {
+    if (abs(error) <= 50) {
         stop();
         positionControlActive_ = false;
         return false;
@@ -263,18 +263,18 @@ bool BTS7960Controller::autoHome(int8_t direction, uint8_t homingSpeed, uint32_t
     int32_t lastPosition = encoder_->getPosition();
     uint32_t lastChangeTime = millis();
 
-    // Monitor for stall (no encoder change for TRANS_STALL_TIMEOUT)
+    // Monitor for stall (no encoder change for 500)
     while (true) {
         int32_t currentPos = encoder_->getPosition();
 
         // Check if encoder changed
-        if (abs(currentPos - lastPosition) >= TRANS_STALL_THRESHOLD) {
+        if (abs(currentPos - lastPosition) >= 3) {
             lastPosition = currentPos;
             lastChangeTime = millis();
         }
 
         // Check for stall (no movement for timeout period)
-        if (millis() - lastChangeTime >= TRANS_STALL_TIMEOUT) {
+        if (millis() - lastChangeTime >= 500) {
             Debug::printlnFeature(DebugFeature::BRAKE, "BTS7960: Stall detected - setting zero position");
             stop();
             delay(100);  // Let actuator settle
@@ -331,7 +331,7 @@ void BTS7960Controller::update() {
     int32_t error = targetPosition_ - currentPos;
 
     // Check if we've reached target position
-    if (abs(error) <= TRANS_POSITION_TOLERANCE) {
+    if (abs(error) <= 50) {
         stop();
         delay(50);  // Brief settling delay for mechanical stability
 
@@ -339,7 +339,7 @@ void BTS7960Controller::update() {
         int32_t settledPos = encoder_->getPosition();
         int32_t settledError = abs(targetPosition_ - settledPos);
 
-        if (settledError <= TRANS_POSITION_TOLERANCE) {
+        if (settledError <= 50) {
             positionControlActive_ = false;
             Debug::printfFeature(DebugFeature::BRAKE, "BTS7960: Reached target position %ld (actual: %ld, error: %ld)\n",
                           targetPosition_, settledPos, settledError);
@@ -391,10 +391,10 @@ void BTS7960Controller::update() {
     // Check for stall during position control
     // Only check for stall if we're not very close to target (> 15 counts away)
     if (absError > 15) {
-        if (abs(currentPos - lastEncoderPosition_) >= TRANS_STALL_THRESHOLD) {
+        if (abs(currentPos - lastEncoderPosition_) >= 3) {
             lastEncoderPosition_ = currentPos;
             lastEncoderChange_ = millis();
-        } else if (millis() - lastEncoderChange_ >= TRANS_STALL_TIMEOUT) {
+        } else if (millis() - lastEncoderChange_ >= 500) {
             // Stall detected during position control
             stop();
             positionControlActive_ = false;

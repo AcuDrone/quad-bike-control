@@ -2,122 +2,108 @@
 #include "Debug.h"
 
 TransmissionController::TransmissionController()
-    : BTS7960Controller()
-    , targetGear_(Gear::GEAR_NEUTRAL)
+    : targetGear_(Gear::GEAR_NEUTRAL)
     , gearChangePhase_(GearChangePhase::NONE)
-    , finalGearPosition_(0)
+    , finalGearPositionPct_(TRANS_GEAR_DEFAULT_NEUTRAL_PCT)
+    , gearPhaseStartTime_(0)
+    , settleMs_(TRANS_SERVO_SETTLE_MIN_MS)
     , lastGearCheckTime_(0)
-    , lastMovementLogTime_(0)
     , lastStatusLogTime_(0)
     , lastGearMismatch_(false)
+    , lastLoggedGear_(Gear::GEAR_UNKNOWN)
+    , lastLoggedMoving_(false)
 {
-    // Initialize vehicle data to safe defaults
     vehicleData_.vehicleSpeed = 0;
     vehicleData_.lastUpdateTime = 0;
     vehicleData_.dataValid = false;
 
-    // Initialize logging state tracking
-    lastLoggedGear_ = Gear::GEAR_UNKNOWN;
-    lastLoggedMoving_ = false;
-
-    // All positions start at 0; loaded from NVS in main.cpp after NVS init
-    gearPositions_[(int)Gear::GEAR_HIGH]    = 0;
-    gearPositions_[(int)Gear::GEAR_LOW]     = 0;
-    gearPositions_[(int)Gear::GEAR_NEUTRAL] = 0;
-    gearPositions_[(int)Gear::GEAR_REVERSE] = 0;
+    gearPositions_[(int)Gear::GEAR_HIGH]    = TRANS_GEAR_DEFAULT_HIGH_PCT;
+    gearPositions_[(int)Gear::GEAR_LOW]     = TRANS_GEAR_DEFAULT_LOW_PCT;
+    gearPositions_[(int)Gear::GEAR_NEUTRAL] = TRANS_GEAR_DEFAULT_NEUTRAL_PCT;
+    gearPositions_[(int)Gear::GEAR_REVERSE] = TRANS_GEAR_DEFAULT_REVERSE_PCT;
 }
 
 TransmissionController::~TransmissionController() {
 }
 
-bool TransmissionController::setGear(TransmissionController::Gear gear, uint8_t speed) {
-    // Reject invalid gear
+bool TransmissionController::begin() {
+    bool ok = servo_.begin(PIN_TRANS_SERVO, LEDC_CH_TRANS_SERVO,
+                           TRANS_SERVO_MIN_US, TRANS_SERVO_MAX_US, 0);
+    return ok;
+}
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+void TransmissionController::commandServo(float positionPct) {
+    positionPct = constrain(positionPct, 0.0f, 100.0f);
+    uint16_t us = (uint16_t)(TRANS_SERVO_MIN_US
+                  + positionPct / 100.0f * (TRANS_SERVO_MAX_US - TRANS_SERVO_MIN_US));
+    servo_.setMicroseconds(us);
+}
+
+uint32_t TransmissionController::computeSettleMs(float fromPct, float toPct) const {
+    float dist = fabsf(toPct - fromPct);
+    uint32_t ms = (uint32_t)(dist * TRANS_SERVO_MS_PER_PCT);
+    return max(ms, (uint32_t)TRANS_SERVO_SETTLE_MIN_MS);
+}
+
+// ── gear control ─────────────────────────────────────────────────────────────
+
+bool TransmissionController::setGear(Gear gear) {
     if (gear == Gear::GEAR_UNKNOWN) {
-        Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] ERROR: Cannot set to UNKNOWN gear");
+        Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] ERROR: Cannot set UNKNOWN gear");
+        return false;
+    }
+    if (!canChangeGear(gear)) {
         return false;
     }
 
-    // Safety check: prevent gear changes when vehicle is moving
-    if (!canChangeGear(gear)) {
-        return false;  // Gear change blocked
+    if (getPhysicalGear() == gear) {
+        Debug::printfFeature(DebugFeature::TRANSMISSION, "[TRANS] Already at %s\n", getGearName(gear));
+        return false;
     }
 
-    int32_t targetPosition = getGearPosition(gear);
-    int32_t currentPosition = getPosition();
-    int32_t error = targetPosition - currentPosition;
+    float targetPct = getGearPosition(gear);
+    saveState(gear, getCurrentServoPct(), false);
 
-    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] Setting gear to %s (position %ld)\n",
-                  getGearName(gear), targetPosition);
+    float diff = targetPct - getCurrentServoPct();
+    float direction = (diff >= 0.0f) ? 1.0f : -1.0f;
+    float overshootPct = constrain(targetPct + direction * TRANS_GEAR_OVERSHOOT_PCT, 0.0f, 100.0f);
 
     targetGear_ = gear;
-    saveState(gear, currentPosition, false);
-
-    // Phase 1: move to overshoot position
-    int32_t direction = (error > 0) ? 1 : -1;
-    finalGearPosition_ = targetPosition;
+    finalGearPositionPct_ = targetPct;
     gearChangePhase_ = GearChangePhase::OVERSHOOT;
-    int32_t overshootPosition = targetPosition + direction * TRANS_GEAR_OVERSHOOT;
+    settleMs_ = computeSettleMs(getCurrentServoPct(), overshootPct);
+    gearPhaseStartTime_ = millis();
 
-    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] Overshoot phase 1: moving to %ld (final target %ld)\n",
-                  overshootPosition, finalGearPosition_);
+    commandServo(overshootPct);
 
-    return moveToPosition(overshootPosition, speed);
+    Debug::printfFeature(DebugFeature::TRANSMISSION,
+        "[TRANS] Gear %s: overshoot %.1f%% -> final %.1f%% (settle %lums)\n",
+        getGearName(gear), overshootPct, targetPct, settleMs_);
+    return true;
 }
 
 TransmissionController::Gear TransmissionController::getCurrentGear() const {
-    if (!hasEncoder()) {
-        return Gear::GEAR_NEUTRAL;
-    }
-
-    int32_t currentPos = getPosition();
-
-    // Check each gear position using calibrated positions (within tolerance)
-    if (abs(currentPos - getGearPosition(Gear::GEAR_REVERSE)) <= 2 * TRANS_POSITION_TOLERANCE) {
-        return Gear::GEAR_REVERSE;
-    }
-    if (abs(currentPos - getGearPosition(Gear::GEAR_NEUTRAL)) <= 2 * TRANS_POSITION_TOLERANCE) {
-        return Gear::GEAR_NEUTRAL;
-    }
-    if (abs(currentPos - getGearPosition(Gear::GEAR_LOW)) <= 2 * TRANS_POSITION_TOLERANCE) {
-        return Gear::GEAR_LOW;
-    }
-    if (abs(currentPos - getGearPosition(Gear::GEAR_HIGH)) <= 2 * TRANS_POSITION_TOLERANCE) {
-        return Gear::GEAR_HIGH;
-    }
-
-    // If not at any known gear position, return UNKNOWN
-    return Gear::GEAR_UNKNOWN;
+    return getPhysicalGear();
 }
 
-bool TransmissionController::isAtGear(TransmissionController::Gear gear) const {
-    int32_t targetPosition = getGearPosition(gear);
-    return isAtPosition(targetPosition, TRANS_POSITION_TOLERANCE);
+bool TransmissionController::isAtGear(Gear gear) const {
+    return getPhysicalGear() == gear;
 }
 
-int32_t TransmissionController::getGearPosition(TransmissionController::Gear gear) const {
-    // GEAR_UNKNOWN has no valid position
-    if (gear == Gear::GEAR_UNKNOWN) {
-        return 0;
-    }
-
+float TransmissionController::getGearPosition(Gear gear) const {
+    if (gear == Gear::GEAR_UNKNOWN) return 0.0f;
     return gearPositions_[(int)gear];
 }
 
-
-const char* TransmissionController::getGearName(TransmissionController::Gear gear) const {
+const char* TransmissionController::getGearName(Gear gear) const {
     switch (gear) {
-        case Gear::GEAR_HIGH:
-            return "HIGH";
-        case Gear::GEAR_LOW:
-            return "LOW";
-        case Gear::GEAR_NEUTRAL:
-            return "NEUTRAL";
-        case Gear::GEAR_REVERSE:
-            return "REVERSE";
-        case Gear::GEAR_UNKNOWN:
-            return "UNKNOWN";
-        default:
-            return "UNKNOWN";
+        case Gear::GEAR_HIGH:    return "HIGH";
+        case Gear::GEAR_LOW:     return "LOW";
+        case Gear::GEAR_NEUTRAL: return "NEUTRAL";
+        case Gear::GEAR_REVERSE: return "REVERSE";
+        default:                 return "UNKNOWN";
     }
 }
 
@@ -125,110 +111,82 @@ void TransmissionController::setVehicleData(const TransmissionVehicleData& data)
     vehicleData_ = data;
 }
 
-bool TransmissionController::canChangeGear(TransmissionController::Gear targetGear) const {
-    // Always allow changes to NEUTRAL (safety override)
-    if (targetGear == Gear::GEAR_NEUTRAL) {
-        return true;
-    }
+bool TransmissionController::needsThrottleBoost() const {
+    return gearChangePhase_ != GearChangePhase::NONE;
+}
 
-    // Check if CAN data is valid
+bool TransmissionController::canChangeGear(Gear targetGear) const {
+    if (targetGear == Gear::GEAR_NEUTRAL) return true;
+
     if (vehicleData_.dataValid) {
-        // Block gear change if vehicle is moving above threshold
         if (vehicleData_.vehicleSpeed > TRANS_SPEED_INTERLOCK_THRESHOLD) {
-            Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] Gear change blocked: vehicle moving at %d km/h\n",
-                         vehicleData_.vehicleSpeed);
+            Debug::printfFeature(DebugFeature::TRANSMISSION,
+                "[TRANS] Gear change blocked: vehicle moving at %d km/h\n",
+                vehicleData_.vehicleSpeed);
             return false;
         }
     } else {
-        // CAN data unavailable - check timeout
         uint32_t dataAge = millis() - vehicleData_.lastUpdateTime;
-
         if (vehicleData_.lastUpdateTime > 0 && dataAge < TRANS_CAN_TIMEOUT) {
-            // Data is recent but marked invalid - be cautious
-            Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] WARNING: CAN data invalid, blocking gear change");
+            Debug::printlnFeature(DebugFeature::TRANSMISSION,
+                "[TRANS] WARNING: CAN data invalid, blocking gear change");
             return false;
         } else {
-            // CAN timeout exceeded or never had data - allow gear change (fail-safe)
-            Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] WARNING: CAN timeout (%lu ms), allowing gear change\n", dataAge);
+            Debug::printfFeature(DebugFeature::TRANSMISSION,
+                "[TRANS] WARNING: CAN timeout (%lu ms), allowing gear change\n", dataAge);
         }
     }
-
     return true;
 }
 
-bool TransmissionController::needsThrottleBoost() const {
-    // Check if we're moving to a gear (not stopped at target)
-    return !isStopped();
-}
+// ── gear sensors ─────────────────────────────────────────────────────────────
 
-//rewrite for native pins
 void TransmissionController::initGearSensors() {
-    // Configure gear position sensor pins as inputs
-    // Active-low: pin reads LOW when gear is selected
-    // Hardware has external pull-up resistors - no internal pull-ups needed
-    // Using ESP-IDF GPIO API for proper configuration (required for GPIO 15 strapping pin)
-
     gpio_set_direction(PIN_GEAR_REVERSE, GPIO_MODE_INPUT);
-    gpio_set_pull_mode(PIN_GEAR_REVERSE, GPIO_FLOATING);    // External pull-up on hardware
-
+    gpio_set_pull_mode(PIN_GEAR_REVERSE, GPIO_FLOATING);
     gpio_set_direction(PIN_GEAR_NEUTRAL, GPIO_MODE_INPUT);
-    gpio_set_pull_mode(PIN_GEAR_NEUTRAL, GPIO_FLOATING);    // External pull-up on hardware
-
-    gpio_set_direction(PIN_GEAR_LOW, GPIO_MODE_INPUT);      // GPIO 15 - strapping pin
-    gpio_set_pull_mode(PIN_GEAR_LOW, GPIO_FLOATING);        // External pull-up on hardware
-
-    gpio_set_direction(PIN_GEAR_HIGH, GPIO_MODE_INPUT);     // GPIO 18 - safe
-    gpio_set_pull_mode(PIN_GEAR_HIGH, GPIO_FLOATING);       // External pull-up on hardware
-
-    Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] Gear position sensors initialized (active-low, external pull-ups)");
+    gpio_set_pull_mode(PIN_GEAR_NEUTRAL, GPIO_FLOATING);
+    gpio_set_direction(PIN_GEAR_LOW, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(PIN_GEAR_LOW, GPIO_FLOATING);
+    gpio_set_direction(PIN_GEAR_HIGH, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(PIN_GEAR_HIGH, GPIO_FLOATING);
+    Debug::printlnFeature(DebugFeature::TRANSMISSION,
+        "[TRANS] Gear sensors initialized (active-low, external pull-ups)");
 }
 
 TransmissionController::Gear TransmissionController::getPhysicalGear() const {
-    // Read all gear sensor pins (active-low: LOW = selected)
     bool reverseActive = !digitalRead(PIN_GEAR_REVERSE);
     bool neutralActive = !digitalRead(PIN_GEAR_NEUTRAL);
-    bool lowActive = !digitalRead(PIN_GEAR_LOW);
-    bool highActive = !digitalRead(PIN_GEAR_HIGH);
+    bool lowActive     = !digitalRead(PIN_GEAR_LOW);
+    bool highActive    = !digitalRead(PIN_GEAR_HIGH);
 
-
-    // Count how many sensors are active (should be exactly 1)
     uint8_t activeCount = reverseActive + neutralActive + lowActive + highActive;
-
-    if (activeCount == 0) {
-        // No gear selected (all pins HIGH) - return UNKNOWN
-        // Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] WARNING: No gear sensor active");
-        return Gear::GEAR_UNKNOWN;
-    }
-
+    if (activeCount == 0) return Gear::GEAR_UNKNOWN;
     if (activeCount > 1) {
-        // Multiple gears active - invalid state, return UNKNOWN
-        Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] ERROR: Multiple gear sensors active (R:%d N:%d L:%d H:%d)\n",
-                     reverseActive, neutralActive, lowActive, highActive);
+        Debug::printfFeature(DebugFeature::TRANSMISSION,
+            "[TRANS] ERROR: Multiple gear sensors active (R:%d N:%d L:%d H:%d)\n",
+            reverseActive, neutralActive, lowActive, highActive);
         return Gear::GEAR_UNKNOWN;
     }
-
-    // Exactly one sensor is active - return the corresponding gear
     if (reverseActive) return Gear::GEAR_REVERSE;
     if (neutralActive) return Gear::GEAR_NEUTRAL;
-    if (lowActive) return Gear::GEAR_LOW;
-    if (highActive) return Gear::GEAR_HIGH;
-
-    // Should never reach here, but return UNKNOWN for safety
-    return Gear::GEAR_UNKNOWN;
+    if (lowActive)     return Gear::GEAR_LOW;
+    return Gear::GEAR_HIGH;
 }
-
 
 bool TransmissionController::isGearPositionValid() const {
     return getCurrentGear() == getPhysicalGear();
 }
 
+// ── update loop ───────────────────────────────────────────────────────────────
+
 void TransmissionController::update() {
     uint32_t now = millis();
 
-    // Periodic status log every 2 seconds, or when state changes
     Gear physicalGear = getPhysicalGear();
-    bool currentlyMoving = isPositionControlActive();
+    bool currentlyMoving = (gearChangePhase_ != GearChangePhase::NONE);
 
+    // Periodic status log
     if (now - lastStatusLogTime_ >= 2000 ||
         physicalGear != lastLoggedGear_ ||
         currentlyMoving != lastLoggedMoving_) {
@@ -237,209 +195,149 @@ void TransmissionController::update() {
         lastLoggedGear_ = physicalGear;
         lastLoggedMoving_ = currentlyMoving;
 
-        Gear encoderGear = getCurrentGear();
-        int32_t currentPos = getPosition();
         Debug::printfFeature(DebugFeature::TRANSMISSION,
-            "[TRANS] Status: Encoder=%s (%ld), Physical=%s, Moving=%s\n",
-            getGearName(encoderGear), currentPos, getGearName(physicalGear),
-            currentlyMoving ? "YES" : "NO");
-
-        if (!isPositionControlActive()) {
-            Gear encoderGear = getCurrentGear();
-            int32_t currentPos = getPosition();
-
-            TransmissionController::Gear savedGear;
-            int32_t savedPos;
-            bool savedValid;
-            bool hasState = loadState(savedGear, savedPos, savedValid);
-            if ( !hasState || !savedValid || abs(savedPos - currentPos) > TRANS_POSITION_TOLERANCE) {
-                saveState(encoderGear, currentPos, true);
-                Debug::printfFeature(DebugFeature::VEHICLE, "[HOME] NVS updated (drift %ld counts)\n", currentPos);
-            }
-        }
+            "[TRANS] Status: Physical=%s, ServoPct=%.1f%%, Phase=%s\n",
+            getGearName(physicalGear), getCurrentServoPct(),
+            gearChangePhase_ == GearChangePhase::NONE ? "IDLE" :
+            gearChangePhase_ == GearChangePhase::OVERSHOOT ? "OVERSHOOT" : "RETURN");
     }
 
-
-
-    // Log current state if moving (throttled to reduce spam)
-    if (isPositionControlActive() && (now - lastMovementLogTime_ >= 500)) {
-        lastMovementLogTime_ = now;
-        int32_t currentPos = getPosition();
-        int32_t targetPos = getTargetPosition();
-        Debug::printfFeature(DebugFeature::TRANSMISSION,
-            "[TRANS] Moving: Current=%ld, Target=%ld, Error=%ld\n",
-            currentPos, targetPos, abs(targetPos - currentPos));
-    }
-
-    // Check physical gear position periodically
-    if (now - lastGearCheckTime_ >= TRANS_GEAR_CHECK_INTERVAL) {
-        lastGearCheckTime_ = now;
-
-        // Read physical gear position (ground truth)
-        Gear physicalGear = getPhysicalGear();
-
-        // Check if physical gear matches target gear during position control.
-        // Ignored during OVERSHOOT phase — we are intentionally past the target.
-        if (isPositionControlActive() && physicalGear == targetGear_ &&
-            gearChangePhase_ != GearChangePhase::OVERSHOOT) {
-            // Physical switch confirms we've reached target gear!
-            int32_t expectedPosition = getGearPosition(targetGear_);
-            int32_t currentPosition = getPosition();
-            int32_t positionError = abs(currentPosition - expectedPosition);
-
-            if (positionError > TRANS_POSITION_TOLERANCE) {
-                Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] Physical gear %s reached, recalibrating encoder\n",
-                             getGearName(targetGear_));
-                Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] Encoder: %ld -> %ld (error: %ld)\n",
-                             currentPosition, expectedPosition, positionError);
-            }
-
-            saveState(targetGear_, getPosition(), true);
-            gearChangePhase_ = GearChangePhase::NONE;
-            Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] Target gear %s confirmed by physical switch\n",
-                         getGearName(targetGear_));
-
-            lastGearMismatch_ = false;
-            return;
-        }
-
-        // Verify encoder consistency when stopped (skip if physical gear is unknown)
-        if (isStopped() && physicalGear != Gear::GEAR_UNKNOWN) {
-            Gear encoderGear = getCurrentGear();
-
-            if (encoderGear != physicalGear) {
-                // Mismatch detected while stopped
+    if (gearChangePhase_ == GearChangePhase::NONE) {
+        // Check for mismatch when idle
+        if (now - lastGearCheckTime_ >= TRANS_GEAR_CHECK_INTERVAL) {
+            lastGearCheckTime_ = now;
+            if (physicalGear != Gear::GEAR_UNKNOWN && physicalGear != targetGear_) {
                 if (!lastGearMismatch_) {
-                    // First mismatch - log detailed warning
-                    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] MISMATCH: Encoder reports %s, Physical switch shows %s\n",
-                                 getGearName(encoderGear), getGearName(physicalGear));
-                    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] Encoder position: %ld, Expected: %ld\n",
-                                 getPosition(), getGearPosition(physicalGear));
-                    Debug::printlnFeature(DebugFeature::TRANSMISSION,"[TRANS] Possible causes: encoder drift, mechanical slippage, or wiring issue");
+                    Debug::printfFeature(DebugFeature::TRANSMISSION,
+                        "[TRANS] MISMATCH: target=%s, physical=%s\n",
+                        getGearName(targetGear_), getGearName(physicalGear));
                     lastGearMismatch_ = true;
                 }
-                // Subsequent mismatches are silent to avoid spam
             } else {
-                // Position valid
                 if (lastGearMismatch_) {
-                    // Mismatch resolved
-                    Debug::printfFeature(DebugFeature::TRANSMISSION,"[TRANS] Position mismatch RESOLVED: Now at %s\n", getGearName(encoderGear));
+                    Debug::printfFeature(DebugFeature::TRANSMISSION,
+                        "[TRANS] Mismatch resolved: now at %s\n", getGearName(physicalGear));
                     lastGearMismatch_ = false;
                 }
             }
         }
+        return;
     }
 
-    // Call parent update() to handle encoder-based position control loop
-    BTS7960Controller::update();
+    // ── OVERSHOOT phase ──
+    if (gearChangePhase_ == GearChangePhase::OVERSHOOT) {
+        if (now - gearPhaseStartTime_ >= settleMs_) {
+            settleMs_ = computeSettleMs(getCurrentServoPct(), finalGearPositionPct_);
+            gearPhaseStartTime_ = now;
+            gearChangePhase_ = GearChangePhase::RETURN;
+            commandServo(finalGearPositionPct_);
+            Debug::printfFeature(DebugFeature::TRANSMISSION,
+                "[TRANS] RETURN phase: %.1f%% (settle %lums)\n",
+                finalGearPositionPct_, settleMs_);
+        }
+        return;
+    }
 
-    // Overshoot phase transitions (evaluated after BTS7960 updates position state)
-    if (gearChangePhase_ == GearChangePhase::OVERSHOOT && !isPositionControlActive()) {
-        // Phase 1 complete — return to final gear position
-        Debug::printfFeature(DebugFeature::TRANSMISSION,
-            "[TRANS] Overshoot reached, phase 2: returning to %ld\n", finalGearPosition_);
-        gearChangePhase_ = GearChangePhase::RETURN;
-        moveToPosition(finalGearPosition_);
-    } else if (gearChangePhase_ == GearChangePhase::RETURN && !isPositionControlActive()) {
-        // Phase 2 complete — gear change done
-        gearChangePhase_ = GearChangePhase::NONE;
-        Debug::printfFeature(DebugFeature::TRANSMISSION,
-            "[TRANS] Overshoot return complete, at %ld\n", getPosition());
+    // ── RETURN phase ──
+    if (gearChangePhase_ == GearChangePhase::RETURN) {
+        uint32_t elapsed = now - gearPhaseStartTime_;
+        if (elapsed < settleMs_) return;
+
+        if (physicalGear == targetGear_) {
+            saveState(targetGear_, getCurrentServoPct(), true);
+            gearChangePhase_ = GearChangePhase::NONE;
+            lastGearMismatch_ = false;
+            Debug::printfFeature(DebugFeature::TRANSMISSION,
+                "[TRANS] Gear %s confirmed by switch at %.1f%%\n",
+                getGearName(targetGear_), getCurrentServoPct());
+        } else if (elapsed >= 2 * settleMs_) {
+            gearChangePhase_ = GearChangePhase::NONE;
+            Debug::printfFeature(DebugFeature::TRANSMISSION,
+                "[TRANS] WARNING: Gear mismatch after return (expected %s, physical %s)\n",
+                getGearName(targetGear_), getGearName(physicalGear));
+        }
     }
 }
 
-void TransmissionController::saveState(Gear gear, int32_t position, bool valid) {
+// ── NVS persistence ───────────────────────────────────────────────────────────
+
+void TransmissionController::saveState(Gear gear, float positionPct, bool valid) {
     Preferences prefs;
-    if (!prefs.begin("transmission", false)) {
-        return;
-    }
+    if (!prefs.begin("transmission", false)) return;
     prefs.putBool("state_valid", valid);
     prefs.putInt("state_gear", (int)gear);
-    prefs.putInt("state_pos", position);
+    prefs.putFloat("state_pct", positionPct);
     prefs.end();
 }
 
-bool TransmissionController::loadState(Gear& gear, int32_t& position, bool& valid) {
+bool TransmissionController::loadState(Gear& gear, float& positionPct, bool& valid) {
     Preferences prefs;
-    if (!prefs.begin("transmission", true)) {
-        return false;
-    }
-    if (!prefs.isKey("state_valid")) {
-        prefs.end();
-        return false;
-    }
-    valid = prefs.getBool("state_valid", false);
-    gear = (Gear)prefs.getInt("state_gear", (int)Gear::GEAR_UNKNOWN);
-    position = prefs.getInt("state_pos", 0);
+    if (!prefs.begin("transmission", true)) return false;
+    if (!prefs.isKey("state_valid")) { prefs.end(); return false; }
+    valid       = prefs.getBool("state_valid", false);
+    gear        = (Gear)prefs.getInt("state_gear", (int)Gear::GEAR_UNKNOWN);
+    positionPct = prefs.getFloat("state_pct", TRANS_GEAR_DEFAULT_NEUTRAL_PCT);
     prefs.end();
     return true;
 }
 
 void TransmissionController::loadDefaultPositions() {
     Preferences prefs;
-    if (!prefs.begin("transmission", true)) {
-        return;
-    }
-    gearPositions_[(int)Gear::GEAR_HIGH]    = prefs.getInt("def_high",    0);
-    gearPositions_[(int)Gear::GEAR_LOW]     = prefs.getInt("def_low",     0);
-    gearPositions_[(int)Gear::GEAR_NEUTRAL] = prefs.getInt("def_neutral", 0);
-    gearPositions_[(int)Gear::GEAR_REVERSE] = prefs.getInt("def_reverse", 0);
+    if (!prefs.begin("transmission", true)) return;
+    gearPositions_[(int)Gear::GEAR_HIGH]    = prefs.getFloat("pct_h", TRANS_GEAR_DEFAULT_HIGH_PCT);
+    gearPositions_[(int)Gear::GEAR_LOW]     = prefs.getFloat("pct_l", TRANS_GEAR_DEFAULT_LOW_PCT);
+    gearPositions_[(int)Gear::GEAR_NEUTRAL] = prefs.getFloat("pct_n", TRANS_GEAR_DEFAULT_NEUTRAL_PCT);
+    gearPositions_[(int)Gear::GEAR_REVERSE] = prefs.getFloat("pct_r", TRANS_GEAR_DEFAULT_REVERSE_PCT);
     prefs.end();
     Debug::printfFeature(DebugFeature::TRANSMISSION,
-        "[TRANS] Default positions loaded: H=%ld N=%ld L=%ld R=%ld\n",
-        gearPositions_[(int)Gear::GEAR_HIGH], gearPositions_[(int)Gear::GEAR_NEUTRAL],
-        gearPositions_[(int)Gear::GEAR_LOW],  gearPositions_[(int)Gear::GEAR_REVERSE]);
+        "[TRANS] Positions loaded: H=%.1f%% N=%.1f%% L=%.1f%% R=%.1f%%\n",
+        gearPositions_[(int)Gear::GEAR_HIGH],    gearPositions_[(int)Gear::GEAR_NEUTRAL],
+        gearPositions_[(int)Gear::GEAR_LOW],     gearPositions_[(int)Gear::GEAR_REVERSE]);
 }
 
-void TransmissionController::saveDefaultPosition(Gear gear, int32_t position) {
-    static const char* keys[] = {"def_high", "def_low", "def_neutral", "def_reverse"};
+void TransmissionController::saveDefaultPosition(Gear gear, float positionPct) {
+    static const char* keys[] = {"pct_h", "pct_l", "pct_n", "pct_r"};
     Preferences prefs;
-    if (!prefs.begin("transmission", false)) {
-        return;
-    }
-    prefs.putInt(keys[(int)gear], position);
+    if (!prefs.begin("transmission", false)) return;
+    prefs.putFloat(keys[(int)gear], positionPct);
     prefs.end();
-    gearPositions_[(int)gear] = position;
+    gearPositions_[(int)gear] = positionPct;
 }
 
-bool TransmissionController::setDefaultPosition(Gear gear, int32_t position) {
-    if (gear == Gear::GEAR_UNKNOWN || (int)gear >= 4) {
-        return false;
-    }
-    if (position < 0 || position > TRANS_ENCODER_MAX_COUNT) {
-        return false;
-    }
-    saveDefaultPosition(gear, position);
+bool TransmissionController::setDefaultPosition(Gear gear, float positionPct) {
+    if (gear == Gear::GEAR_UNKNOWN || (int)gear >= 4) return false;
+    if (positionPct < 0.0f || positionPct > 100.0f) return false;
+    saveDefaultPosition(gear, positionPct);
     Debug::printfFeature(DebugFeature::TRANSMISSION,
-        "[TRANS] Default position for %s set to %ld\n", getGearName(gear), position);
+        "[TRANS] Default for %s set to %.1f%%\n", getGearName(gear), positionPct);
     return true;
+}
+
+void TransmissionController::moveToPercent(float pct) {
+    commandServo(pct);
 }
 
 bool TransmissionController::restoreStateIfValid() {
     Gear savedGear;
-    int32_t savedPosition;
+    float savedPct;
     bool valid;
 
-    if (!loadState(savedGear, savedPosition, valid)) {
-        Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] No saved transmission state, running autohome");
+    if (!loadState(savedGear, savedPct, valid)) {
+        Debug::printlnFeature(DebugFeature::TRANSMISSION,
+            "[TRANS] No saved state, moving to NEUTRAL default");
+        commandServo(gearPositions_[(int)Gear::GEAR_NEUTRAL]);
         return false;
     }
-
     if (!valid) {
-        Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Saved state invalid (mid-change power loss), running autohome");
+        Debug::printlnFeature(DebugFeature::TRANSMISSION,
+            "[TRANS] Saved state invalid (mid-change power loss), moving to NEUTRAL default");
+        commandServo(gearPositions_[(int)Gear::GEAR_NEUTRAL]);
         return false;
     }
 
-    // Gear physicalGear = getPhysicalGear();
-    // if (physicalGear != savedGear) {
-    //     Debug::printfFeature(DebugFeature::TRANSMISSION,
-    //         "[TRANS] Physical switch mismatch: saved=%s, physical=%s, running autohome\n",
-    //         getGearName(savedGear), getGearName(physicalGear));
-    //     return false;
-    // }
-
-    recalibrateEncoder(savedPosition);
+    commandServo(savedPct);
     targetGear_ = savedGear;
-    Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] Restored transmission state, skipping autohome");
+    Debug::printfFeature(DebugFeature::TRANSMISSION,
+        "[TRANS] Restored state: %s at %.1f%%\n", getGearName(savedGear), savedPct);
     return true;
 }

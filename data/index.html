@@ -329,8 +329,8 @@
                         <div id="gear-switching-indicator" style="display: none; font-size: 0.6em; color: #ffa500; margin-top: 5px;">⚙️ Switching...</div>
                     </div>
                     <div class="telemetry-item">
-                        <div class="telemetry-label">Hall Position</div>
-                        <div class="telemetry-value" id="telemetry-hall">0</div>
+                        <div class="telemetry-label">Servo Position</div>
+                        <div class="telemetry-value" id="telemetry-hall">0.0%</div>
                     </div>
                     <div class="telemetry-item">
                         <div class="telemetry-label">Brake</div>
@@ -366,7 +366,7 @@
                     <button class="gear-btn" id="gear-h" onclick="setGear('H')">H</button>
                 </div>
                 <div style="font-size: 0.75em; color: #aaa; margin-top: 6px;">
-                    Encoder: <span id="gear-encoder-pos" style="color: #fff; font-weight: bold;">0</span>
+                    Servo: <span id="gear-encoder-pos" style="color: #fff; font-weight: bold;">0.0%</span>
                 </div>
 
                 <div class="slider-container">
@@ -398,15 +398,15 @@
             <div class="card">
                 <h2>⚙️ Gear Position Defaults</h2>
                 <p style="font-size: 0.8em; color: #aaa; margin-bottom: 12px;">
-                    Drive to a gear position, press <b>📍</b> to capture the current encoder count, then <b>Save</b>.
-                    <b>Move</b> drives the actuator to the entered value.
+                    Press <b>📍</b> to capture the current servo position (0.0–100.0%), then <b>Save</b>.
+                    <b>Move</b> drives the servo to the entered value.
                 </p>
                 <div id="gear-defaults-grid" style="display: flex; flex-direction: column; gap: 10px;">
                     <div>
                         <label style="font-size: 0.8em; color: #aaa;">REVERSE (R)</label>
                         <div style="display: flex; gap: 6px; margin-top: 4px;">
-                            <input type="number" id="default-r" min="0" max="10000" style="flex:1; padding:6px; border-radius:4px; border:1px solid #555; background:#2a2a2a; color:#fff;">
-                            <button onclick="captureEncoderPosition('R')" title="Use current encoder position" style="padding:6px 10px; border-radius:4px; border:none; background:#555; color:#fff; cursor:pointer;">📍</button>
+                            <input type="number" id="default-r" min="0" max="100" step="0.1" style="flex:1; padding:6px; border-radius:4px; border:1px solid #555; background:#2a2a2a; color:#fff;">
+                            <button onclick="captureServoPosition('R')" title="Use current servo position" style="padding:6px 10px; border-radius:4px; border:none; background:#555; color:#fff; cursor:pointer;">📍</button>
                             <button onclick="moveToGearPosition('R')" style="padding:6px 10px; border-radius:4px; border:none; background:#ff9800; color:#fff; cursor:pointer;">Move</button>
                             <button onclick="saveGearDefault('R')" style="padding:6px 10px; border-radius:4px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Save</button>
                         </div>
@@ -414,8 +414,8 @@
                     <div>
                         <label style="font-size: 0.8em; color: #aaa;">NEUTRAL (N)</label>
                         <div style="display: flex; gap: 6px; margin-top: 4px;">
-                            <input type="number" id="default-n" min="0" max="10000" style="flex:1; padding:6px; border-radius:4px; border:1px solid #555; background:#2a2a2a; color:#fff;">
-                            <button onclick="captureEncoderPosition('N')" title="Use current encoder position" style="padding:6px 10px; border-radius:4px; border:none; background:#555; color:#fff; cursor:pointer;">📍</button>
+                            <input type="number" id="default-n" min="0" max="100" step="0.1" style="flex:1; padding:6px; border-radius:4px; border:1px solid #555; background:#2a2a2a; color:#fff;">
+                            <button onclick="captureServoPosition('N')" title="Use current servo position" style="padding:6px 10px; border-radius:4px; border:none; background:#555; color:#fff; cursor:pointer;">📍</button>
                             <button onclick="moveToGearPosition('N')" style="padding:6px 10px; border-radius:4px; border:none; background:#ff9800; color:#fff; cursor:pointer;">Move</button>
                             <button onclick="saveGearDefault('N')" style="padding:6px 10px; border-radius:4px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Save</button>
                         </div>
@@ -423,8 +423,8 @@
                     <div>
                         <label style="font-size: 0.8em; color: #aaa;">LOW (L)</label>
                         <div style="display: flex; gap: 6px; margin-top: 4px;">
-                            <input type="number" id="default-l" min="0" max="10000" style="flex:1; padding:6px; border-radius:4px; border:1px solid #555; background:#2a2a2a; color:#fff;">
-                            <button onclick="captureEncoderPosition('L')" title="Use current encoder position" style="padding:6px 10px; border-radius:4px; border:none; background:#555; color:#fff; cursor:pointer;">📍</button>
+                            <input type="number" id="default-l" min="0" max="100" step="0.1" style="flex:1; padding:6px; border-radius:4px; border:1px solid #555; background:#2a2a2a; color:#fff;">
+                            <button onclick="captureServoPosition('L')" title="Use current servo position" style="padding:6px 10px; border-radius:4px; border:none; background:#555; color:#fff; cursor:pointer;">📍</button>
                             <button onclick="moveToGearPosition('L')" style="padding:6px 10px; border-radius:4px; border:none; background:#ff9800; color:#fff; cursor:pointer;">Move</button>
                             <button onclick="saveGearDefault('L')" style="padding:6px 10px; border-radius:4px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Save</button>
                         </div>
@@ -432,8 +432,8 @@
                     <div>
                         <label style="font-size: 0.8em; color: #aaa;">HIGH (H)</label>
                         <div style="display: flex; gap: 6px; margin-top: 4px;">
-                            <input type="number" id="default-h" min="0" max="10000" style="flex:1; padding:6px; border-radius:4px; border:1px solid #555; background:#2a2a2a; color:#fff;">
-                            <button onclick="captureEncoderPosition('H')" title="Use current encoder position" style="padding:6px 10px; border-radius:4px; border:none; background:#555; color:#fff; cursor:pointer;">📍</button>
+                            <input type="number" id="default-h" min="0" max="100" step="0.1" style="flex:1; padding:6px; border-radius:4px; border:1px solid #555; background:#2a2a2a; color:#fff;">
+                            <button onclick="captureServoPosition('H')" title="Use current servo position" style="padding:6px 10px; border-radius:4px; border:none; background:#555; color:#fff; cursor:pointer;">📍</button>
                             <button onclick="moveToGearPosition('H')" style="padding:6px 10px; border-radius:4px; border:none; background:#ff9800; color:#fff; cursor:pointer;">Move</button>
                             <button onclick="saveGearDefault('H')" style="padding:6px 10px; border-radius:4px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Save</button>
                         </div>
@@ -559,11 +559,6 @@
                         ⚡ RPM Boost Test: <span id="boost-test-status">OFF</span>
                     </button>
                 </div>
-                <div class="slider-container" style="margin-top: 10px;">
-                    <button class="upload-btn" onclick="sendCommand('auto_home', true)" style="background: #37474f;">
-                        🏠 Transmission Auto-Home
-                    </button>
-                </div>
             </div>
 
             <!-- OTA Update -->
@@ -674,8 +669,8 @@
             // Update gear display
             document.getElementById('telemetry-gear').textContent = data.gear || 'N';
 
-            // Update hall position
-            document.getElementById('telemetry-hall').textContent = data.hall_position || 0;
+            // Update servo position
+            document.getElementById('telemetry-hall').textContent = (data.hall_position || 0).toFixed(1) + '%';
 
             // Update brake
             document.getElementById('telemetry-brake').textContent = (data.brake_pct || 0).toFixed(0) + '%';
@@ -764,8 +759,8 @@
             currentInputSource = data.input_source || 'FAILSAFE';
             updateInputSourceDisplay();
 
-            // Update encoder count near gear buttons
-            document.getElementById('gear-encoder-pos').textContent = data.hall_position || 0;
+            // Update servo position near gear buttons
+            document.getElementById('gear-encoder-pos').textContent = (data.hall_position || 0).toFixed(1) + '%';
 
             // Update gear defaults editor (only for fields not currently focused)
             if (data.gear_defaults) {
@@ -773,7 +768,7 @@
                 for (const [key, id] of Object.entries(fields)) {
                     const el = document.getElementById(id);
                     if (el && document.activeElement !== el) {
-                        el.value = data.gear_defaults[key] || 0;
+                        el.value = parseFloat(data.gear_defaults[key] || 0).toFixed(1);
                     }
                 }
             }
@@ -908,36 +903,37 @@
             sendCommand('set_gear', gear);
         }
 
-        function captureEncoderPosition(gear) {
+        function captureServoPosition(gear) {
             const idMap = { R: 'default-r', N: 'default-n', L: 'default-l', H: 'default-h' };
-            const pos = parseInt(document.getElementById('gear-encoder-pos').textContent, 10);
+            const raw = document.getElementById('gear-encoder-pos').textContent;
+            const pos = parseFloat(raw);
             if (!isNaN(pos)) {
-                document.getElementById(idMap[gear]).value = pos;
-                document.getElementById('gear-default-status').textContent = 'Captured ' + pos + ' for ' + gear;
+                document.getElementById(idMap[gear]).value = pos.toFixed(1);
+                document.getElementById('gear-default-status').textContent = 'Captured ' + pos.toFixed(1) + '% for ' + gear;
                 document.getElementById('gear-default-status').style.color = '#aaa';
             }
         }
 
         function moveToGearPosition(gear) {
             const idMap = { R: 'default-r', N: 'default-n', L: 'default-l', H: 'default-h' };
-            const val = parseInt(document.getElementById(idMap[gear]).value, 10);
-            if (isNaN(val) || val < 0 || val > 10000) {
-                document.getElementById('gear-default-status').textContent = 'Invalid position (0–10000)';
+            const val = parseFloat(document.getElementById(idMap[gear]).value);
+            if (isNaN(val) || val < 0 || val > 100) {
+                document.getElementById('gear-default-status').textContent = 'Invalid position (0.0–100.0)';
                 document.getElementById('gear-default-status').style.color = '#f44336';
                 return;
             }
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ cmd: 'move_to_position', value: val }));
-                document.getElementById('gear-default-status').textContent = 'Moving to ' + val + '...';
+                document.getElementById('gear-default-status').textContent = 'Moving to ' + val.toFixed(1) + '%...';
                 document.getElementById('gear-default-status').style.color = '#ff9800';
             }
         }
 
         function saveGearDefault(gear) {
             const idMap = { R: 'default-r', N: 'default-n', L: 'default-l', H: 'default-h' };
-            const val = parseInt(document.getElementById(idMap[gear]).value, 10);
-            if (isNaN(val) || val < 0 || val > 10000) {
-                document.getElementById('gear-default-status').textContent = 'Invalid value (0–10000)';
+            const val = parseFloat(document.getElementById(idMap[gear]).value);
+            if (isNaN(val) || val < 0 || val > 100) {
+                document.getElementById('gear-default-status').textContent = 'Invalid value (0.0–100.0)';
                 document.getElementById('gear-default-status').style.color = '#f44336';
                 return;
             }

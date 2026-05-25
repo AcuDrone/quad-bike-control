@@ -180,11 +180,7 @@ private:
     // Ignition state tracking
     SBusInput::IgnitionState previousSBusIgnitionState_;  // Track previous state for transition detection
 
-    // Auto-home state
-    bool autoHomeActive_;
-    uint32_t autoHomeStartTime_;
-    uint32_t autoHomeLastChangeTime_;
-    int32_t autoHomeLastPosition_;
+    bool transmissionInitialized_;  // True after first engine-running restore
 
     /**
      * @brief Apply fail-safe commands (center steering, idle throttle, stop actuators)
@@ -258,14 +254,13 @@ private:
     /**
      * @brief Process set_gear_default command
      * @param gear Gear string ("R", "N", "L", "H")
-     * @param position Encoder count to save as default
+     * @param positionPct Servo position 0.0–100.0 % to save as default
      * @param webPortal Reference to web portal for sending responses
      */
-    void processSetGearDefaultCommand(const String& gear, int32_t position, WebPortal& webPortal);
-    void processMoveToPositionCommand(int32_t position, WebPortal& webPortal);
+    void processSetGearDefaultCommand(const String& gear, float positionPct, WebPortal& webPortal);
+    void processMoveToPositionCommand(float positionPct, WebPortal& webPortal);
     void processBoostTestCommand(bool enable, WebPortal& webPortal);
     void processSetBoostRpmCommand(int32_t rpm, WebPortal& webPortal);
-    void updateAutoHome();
 
     // Returns true when throttle should be clamped to TRANS_UNKNOWN_GEAR_THROTTLE_MAX.
     // Clips when gear position is invalid and physical gear is not neutral

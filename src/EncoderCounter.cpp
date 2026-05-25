@@ -41,8 +41,8 @@ bool EncoderCounter::begin(gpio_num_t channelA, gpio_num_t channelB, int unitId)
 
     // Configure PCNT unit
     pcnt_unit_config_t unit_config = {
-        .low_limit = TRANS_ENCODER_MIN_COUNT,
-        .high_limit = TRANS_ENCODER_MAX_COUNT,
+        .low_limit = -32768,
+        .high_limit = 32767,
         .flags = {
             .accum_count = 0  // Don't accumulate on overflow
         }
