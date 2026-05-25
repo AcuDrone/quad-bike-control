@@ -152,11 +152,44 @@ public:
      */
     void moveToPercent(float pct);
 
+    /**
+     * @brief Get overshoot percent for a specific gear
+     */
+    float getGearOvershoot(Gear gear) const;
+
+    /**
+     * @brief Save and apply per-gear overshoot percent (0.0–20.0 %)
+     * @return true if saved successfully
+     */
+    bool setGearOvershoot(Gear gear, float overshootPct);
+
+    /**
+     * @brief Load per-gear overshoot values from NVS
+     */
+    void loadGearOvershoots();
+
+    /**
+     * @brief Get pullback percent for a specific gear
+     */
+    float getGearPullback(Gear gear) const;
+
+    /**
+     * @brief Save and apply per-gear pullback percent (0.0–20.0 %)
+     * @return true if saved successfully
+     */
+    bool setGearPullback(Gear gear, float pullbackPct);
+
+    /**
+     * @brief Load per-gear pullback values from NVS
+     */
+    void loadGearPullbacks();
+
 private:
     enum class GearChangePhase {
         NONE,
         OVERSHOOT,
-        RETURN
+        RETURN,
+        PULLBACK    // move away from target before retry overshoot
     };
 
     ServoController servo_;
@@ -164,6 +197,8 @@ private:
     Gear targetGear_;
     GearChangePhase gearChangePhase_;
     float finalGearPositionPct_;
+    float overshootDirection_;   // +1.0 or -1.0, direction of overshoot from target
+    uint8_t overshootRetryCount_; // 0=first attempt, 1=1.5x retry, 2=2x retry
     uint32_t gearPhaseStartTime_;
     uint32_t settleMs_;
 
@@ -175,6 +210,8 @@ private:
     bool lastLoggedMoving_;
 
     float gearPositions_[4];
+    float overshootPcts_[4];
+    float pullbackPcts_[4];
 
     bool canChangeGear(Gear targetGear) const;
     void commandServo(float positionPct);

@@ -154,7 +154,16 @@ struct SBusChannelConfig {
 #define TRANS_SERVO_MAX_US                  2200
 #define TRANS_SERVO_MS_PER_PCT              12      // ms per 1% travel (180° @ 24V: 1110ms/100%)
 #define TRANS_SERVO_SETTLE_MIN_MS           300     // minimum settle time for short moves
-#define TRANS_GEAR_OVERSHOOT_PCT            1.0f    // % overshoot for mechanical detent engagement
+#define TRANS_GEAR_OVERSHOOT_DEFAULT_PCT    1.0f    // default % overshoot (used when no per-gear value saved)
+#define TRANS_GEAR_OVERSHOOT_R_PCT          1.0f
+#define TRANS_GEAR_OVERSHOOT_N_PCT          1.0f
+#define TRANS_GEAR_OVERSHOOT_L_PCT          3.0f
+#define TRANS_GEAR_OVERSHOOT_H_PCT          1.0f
+
+#define TRANS_GEAR_PULLBACK_R_PCT           3.0f    // % to pull back from target before retry overshoot
+#define TRANS_GEAR_PULLBACK_N_PCT           3.0f
+#define TRANS_GEAR_PULLBACK_L_PCT           3.0f
+#define TRANS_GEAR_PULLBACK_H_PCT           3.0f
 
 // Default gear positions (percent: 0.0 = 800µs, 100.0 = 2200µs)
 #define TRANS_GEAR_DEFAULT_REVERSE_PCT      10.0f

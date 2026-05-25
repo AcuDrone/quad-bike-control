@@ -5,6 +5,8 @@ TransmissionController::TransmissionController()
     : targetGear_(Gear::GEAR_NEUTRAL)
     , gearChangePhase_(GearChangePhase::NONE)
     , finalGearPositionPct_(TRANS_GEAR_DEFAULT_NEUTRAL_PCT)
+    , overshootDirection_(1.0f)
+    , overshootRetryCount_(0)
     , gearPhaseStartTime_(0)
     , settleMs_(TRANS_SERVO_SETTLE_MIN_MS)
     , lastGearCheckTime_(0)
@@ -21,6 +23,16 @@ TransmissionController::TransmissionController()
     gearPositions_[(int)Gear::GEAR_LOW]     = TRANS_GEAR_DEFAULT_LOW_PCT;
     gearPositions_[(int)Gear::GEAR_NEUTRAL] = TRANS_GEAR_DEFAULT_NEUTRAL_PCT;
     gearPositions_[(int)Gear::GEAR_REVERSE] = TRANS_GEAR_DEFAULT_REVERSE_PCT;
+
+    overshootPcts_[(int)Gear::GEAR_HIGH]    = TRANS_GEAR_OVERSHOOT_H_PCT;
+    overshootPcts_[(int)Gear::GEAR_LOW]     = TRANS_GEAR_OVERSHOOT_L_PCT;
+    overshootPcts_[(int)Gear::GEAR_NEUTRAL] = TRANS_GEAR_OVERSHOOT_N_PCT;
+    overshootPcts_[(int)Gear::GEAR_REVERSE] = TRANS_GEAR_OVERSHOOT_R_PCT;
+
+    pullbackPcts_[(int)Gear::GEAR_HIGH]    = TRANS_GEAR_PULLBACK_H_PCT;
+    pullbackPcts_[(int)Gear::GEAR_LOW]     = TRANS_GEAR_PULLBACK_L_PCT;
+    pullbackPcts_[(int)Gear::GEAR_NEUTRAL] = TRANS_GEAR_PULLBACK_N_PCT;
+    pullbackPcts_[(int)Gear::GEAR_REVERSE] = TRANS_GEAR_PULLBACK_R_PCT;
 }
 
 TransmissionController::~TransmissionController() {
@@ -67,8 +79,9 @@ bool TransmissionController::setGear(Gear gear) {
     saveState(gear, getCurrentServoPct(), false);
 
     float diff = targetPct - getCurrentServoPct();
-    float direction = (diff >= 0.0f) ? 1.0f : -1.0f;
-    float overshootPct = constrain(targetPct + direction * TRANS_GEAR_OVERSHOOT_PCT, 0.0f, 100.0f);
+    overshootDirection_ = (diff >= 0.0f) ? 1.0f : -1.0f;
+    overshootRetryCount_ = 0;
+    float overshootPct = constrain(targetPct + overshootDirection_ * overshootPcts_[(int)gear], 0.0f, 100.0f);
 
     targetGear_ = gear;
     finalGearPositionPct_ = targetPct;
@@ -198,8 +211,9 @@ void TransmissionController::update() {
         Debug::printfFeature(DebugFeature::TRANSMISSION,
             "[TRANS] Status: Physical=%s, ServoPct=%.1f%%, Phase=%s\n",
             getGearName(physicalGear), getCurrentServoPct(),
-            gearChangePhase_ == GearChangePhase::NONE ? "IDLE" :
-            gearChangePhase_ == GearChangePhase::OVERSHOOT ? "OVERSHOOT" : "RETURN");
+            gearChangePhase_ == GearChangePhase::NONE     ? "IDLE" :
+            gearChangePhase_ == GearChangePhase::OVERSHOOT ? "OVERSHOOT" :
+            gearChangePhase_ == GearChangePhase::PULLBACK  ? "PULLBACK" : "RETURN");
     }
 
     if (gearChangePhase_ == GearChangePhase::NONE) {
@@ -240,22 +254,54 @@ void TransmissionController::update() {
 
     // ── RETURN phase ──
     if (gearChangePhase_ == GearChangePhase::RETURN) {
-        uint32_t elapsed = now - gearPhaseStartTime_;
-        if (elapsed < settleMs_) return;
+        if (now - gearPhaseStartTime_ < settleMs_) return;
 
         if (physicalGear == targetGear_) {
             saveState(targetGear_, getCurrentServoPct(), true);
             gearChangePhase_ = GearChangePhase::NONE;
+            overshootRetryCount_ = 0;
             lastGearMismatch_ = false;
             Debug::printfFeature(DebugFeature::TRANSMISSION,
                 "[TRANS] Gear %s confirmed by switch at %.1f%%\n",
                 getGearName(targetGear_), getCurrentServoPct());
-        } else if (elapsed >= 2 * settleMs_) {
-            gearChangePhase_ = GearChangePhase::NONE;
+            return;
+        }
+
+        // Switch not confirmed — pull back then retry with larger overshoot
+        if (overshootRetryCount_ < 100) {
+            float pullbackTarget = constrain(
+                finalGearPositionPct_ - overshootDirection_ * pullbackPcts_[(int)targetGear_],
+                0.0f, 100.0f);
+            settleMs_ = computeSettleMs(getCurrentServoPct(), pullbackTarget);
+            gearPhaseStartTime_ = now;
+            gearChangePhase_ = GearChangePhase::PULLBACK;
+            commandServo(pullbackTarget);
             Debug::printfFeature(DebugFeature::TRANSMISSION,
-                "[TRANS] WARNING: Gear mismatch after return (expected %s, physical %s)\n",
+                "[TRANS] PULLBACK: %.1f%% (settle %lums)\n", pullbackTarget, settleMs_);
+        } else {
+            gearChangePhase_ = GearChangePhase::NONE;
+            overshootRetryCount_ = 0;
+            Debug::printfFeature(DebugFeature::TRANSMISSION,
+                "[TRANS] WARNING: Gear %s not engaged after all attempts (physical %s)\n",
                 getGearName(targetGear_), getGearName(physicalGear));
         }
+    }
+
+    // ── PULLBACK phase ──
+    if (gearChangePhase_ == GearChangePhase::PULLBACK) {
+        if (now - gearPhaseStartTime_ < settleMs_) return;
+        overshootRetryCount_++;
+        float multiplier = (overshootRetryCount_ == 1) ? 1.5f : 2.0f;
+        float newOvershoot = constrain(
+            finalGearPositionPct_ + overshootDirection_ * overshootPcts_[(int)targetGear_] * multiplier,
+            0.0f, 100.0f);
+        settleMs_ = computeSettleMs(getCurrentServoPct(), newOvershoot);
+        gearPhaseStartTime_ = now;
+        gearChangePhase_ = GearChangePhase::OVERSHOOT;
+        commandServo(newOvershoot);
+        Debug::printfFeature(DebugFeature::TRANSMISSION,
+            "[TRANS] Retry %d: overshoot %.1f%% (%.1fx) -> %.1f%% (settle %lums)\n",
+            overshootRetryCount_, newOvershoot, multiplier, finalGearPositionPct_, settleMs_);
     }
 }
 
@@ -315,6 +361,74 @@ bool TransmissionController::setDefaultPosition(Gear gear, float positionPct) {
 
 void TransmissionController::moveToPercent(float pct) {
     commandServo(pct);
+}
+
+float TransmissionController::getGearOvershoot(Gear gear) const {
+    if (gear == Gear::GEAR_UNKNOWN) return 0.0f;
+    return overshootPcts_[(int)gear];
+}
+
+bool TransmissionController::setGearOvershoot(Gear gear, float overshootPct) {
+    if (gear == Gear::GEAR_UNKNOWN || (int)gear >= 4) return false;
+    if (overshootPct < 0.0f || overshootPct > 20.0f) return false;
+    overshootPcts_[(int)gear] = overshootPct;
+    static const char* keys[] = {"ovr_h", "ovr_l", "ovr_n", "ovr_r"};
+    Preferences prefs;
+    if (prefs.begin("transmission", false)) {
+        prefs.putFloat(keys[(int)gear], overshootPct);
+        prefs.end();
+    }
+    Debug::printfFeature(DebugFeature::TRANSMISSION,
+        "[TRANS] Overshoot for %s set to %.1f%%\n", getGearName(gear), overshootPct);
+    return true;
+}
+
+void TransmissionController::loadGearOvershoots() {
+    Preferences prefs;
+    if (!prefs.begin("transmission", true)) return;
+    overshootPcts_[(int)Gear::GEAR_HIGH]    = prefs.getFloat("ovr_h", TRANS_GEAR_OVERSHOOT_H_PCT);
+    overshootPcts_[(int)Gear::GEAR_LOW]     = prefs.getFloat("ovr_l", TRANS_GEAR_OVERSHOOT_L_PCT);
+    overshootPcts_[(int)Gear::GEAR_NEUTRAL] = prefs.getFloat("ovr_n", TRANS_GEAR_OVERSHOOT_N_PCT);
+    overshootPcts_[(int)Gear::GEAR_REVERSE] = prefs.getFloat("ovr_r", TRANS_GEAR_OVERSHOOT_R_PCT);
+    prefs.end();
+    Debug::printfFeature(DebugFeature::TRANSMISSION,
+        "[TRANS] Overshoots loaded: H=%.1f%% L=%.1f%% N=%.1f%% R=%.1f%%\n",
+        overshootPcts_[(int)Gear::GEAR_HIGH], overshootPcts_[(int)Gear::GEAR_LOW],
+        overshootPcts_[(int)Gear::GEAR_NEUTRAL], overshootPcts_[(int)Gear::GEAR_REVERSE]);
+}
+
+float TransmissionController::getGearPullback(Gear gear) const {
+    if (gear == Gear::GEAR_UNKNOWN) return 0.0f;
+    return pullbackPcts_[(int)gear];
+}
+
+bool TransmissionController::setGearPullback(Gear gear, float pullbackPct) {
+    if (gear == Gear::GEAR_UNKNOWN || (int)gear >= 4) return false;
+    if (pullbackPct < 0.0f || pullbackPct > 20.0f) return false;
+    pullbackPcts_[(int)gear] = pullbackPct;
+    static const char* keys[] = {"plb_h", "plb_l", "plb_n", "plb_r"};
+    Preferences prefs;
+    if (prefs.begin("transmission", false)) {
+        prefs.putFloat(keys[(int)gear], pullbackPct);
+        prefs.end();
+    }
+    Debug::printfFeature(DebugFeature::TRANSMISSION,
+        "[TRANS] Pullback for %s set to %.1f%%\n", getGearName(gear), pullbackPct);
+    return true;
+}
+
+void TransmissionController::loadGearPullbacks() {
+    Preferences prefs;
+    if (!prefs.begin("transmission", true)) return;
+    pullbackPcts_[(int)Gear::GEAR_HIGH]    = prefs.getFloat("plb_h", TRANS_GEAR_PULLBACK_H_PCT);
+    pullbackPcts_[(int)Gear::GEAR_LOW]     = prefs.getFloat("plb_l", TRANS_GEAR_PULLBACK_L_PCT);
+    pullbackPcts_[(int)Gear::GEAR_NEUTRAL] = prefs.getFloat("plb_n", TRANS_GEAR_PULLBACK_N_PCT);
+    pullbackPcts_[(int)Gear::GEAR_REVERSE] = prefs.getFloat("plb_r", TRANS_GEAR_PULLBACK_R_PCT);
+    prefs.end();
+    Debug::printfFeature(DebugFeature::TRANSMISSION,
+        "[TRANS] Pullbacks loaded: H=%.1f%% L=%.1f%% N=%.1f%% R=%.1f%%\n",
+        pullbackPcts_[(int)Gear::GEAR_HIGH], pullbackPcts_[(int)Gear::GEAR_LOW],
+        pullbackPcts_[(int)Gear::GEAR_NEUTRAL], pullbackPcts_[(int)Gear::GEAR_REVERSE]);
 }
 
 bool TransmissionController::restoreStateIfValid() {
