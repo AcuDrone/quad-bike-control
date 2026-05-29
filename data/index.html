@@ -362,8 +362,8 @@
                 <div class="gear-buttons">
                     <button class="gear-btn" id="gear-r" onclick="setGear('R')">R</button>
                     <button class="gear-btn" id="gear-n" onclick="setGear('N')">N</button>
-                    <button class="gear-btn" id="gear-l" onclick="setGear('L')">L</button>
                     <button class="gear-btn" id="gear-h" onclick="setGear('H')">H</button>
+                    <button class="gear-btn" id="gear-l" onclick="setGear('L')">L</button>
                 </div>
                 <div style="font-size: 0.75em; color: #aaa; margin-top: 6px;">
                     Servo: <span id="gear-encoder-pos" style="color: #fff; font-weight: bold;">0.0%</span>
@@ -421,21 +421,21 @@
                         </div>
                     </div>
                     <div>
-                        <label style="font-size: 0.8em; color: #aaa;">LOW (L)</label>
-                        <div style="display: flex; gap: 6px; margin-top: 4px;">
-                            <input type="number" id="default-l" min="0" max="100" step="0.1" style="flex:1; padding:6px; border-radius:4px; border:1px solid #555; background:#2a2a2a; color:#fff;">
-                            <button onclick="captureServoPosition('L')" title="Use current servo position" style="padding:6px 10px; border-radius:4px; border:none; background:#555; color:#fff; cursor:pointer;">📍</button>
-                            <button onclick="moveToGearPosition('L')" style="padding:6px 10px; border-radius:4px; border:none; background:#ff9800; color:#fff; cursor:pointer;">Move</button>
-                            <button onclick="saveGearDefault('L')" style="padding:6px 10px; border-radius:4px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Save</button>
-                        </div>
-                    </div>
-                    <div>
                         <label style="font-size: 0.8em; color: #aaa;">HIGH (H)</label>
                         <div style="display: flex; gap: 6px; margin-top: 4px;">
                             <input type="number" id="default-h" min="0" max="100" step="0.1" style="flex:1; padding:6px; border-radius:4px; border:1px solid #555; background:#2a2a2a; color:#fff;">
                             <button onclick="captureServoPosition('H')" title="Use current servo position" style="padding:6px 10px; border-radius:4px; border:none; background:#555; color:#fff; cursor:pointer;">📍</button>
                             <button onclick="moveToGearPosition('H')" style="padding:6px 10px; border-radius:4px; border:none; background:#ff9800; color:#fff; cursor:pointer;">Move</button>
                             <button onclick="saveGearDefault('H')" style="padding:6px 10px; border-radius:4px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Save</button>
+                        </div>
+                    </div>
+                    <div>
+                        <label style="font-size: 0.8em; color: #aaa;">LOW (L)</label>
+                        <div style="display: flex; gap: 6px; margin-top: 4px;">
+                            <input type="number" id="default-l" min="0" max="100" step="0.1" style="flex:1; padding:6px; border-radius:4px; border:1px solid #555; background:#2a2a2a; color:#fff;">
+                            <button onclick="captureServoPosition('L')" title="Use current servo position" style="padding:6px 10px; border-radius:4px; border:none; background:#555; color:#fff; cursor:pointer;">📍</button>
+                            <button onclick="moveToGearPosition('L')" style="padding:6px 10px; border-radius:4px; border:none; background:#ff9800; color:#fff; cursor:pointer;">Move</button>
+                            <button onclick="saveGearDefault('L')" style="padding:6px 10px; border-radius:4px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Save</button>
                         </div>
                     </div>
                 </div>

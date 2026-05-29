@@ -152,28 +152,32 @@ struct SBusChannelConfig {
 #define LEDC_CH_TRANS_SERVO                 2
 #define TRANS_SERVO_MIN_US                  800
 #define TRANS_SERVO_MAX_US                  2200
-#define TRANS_SERVO_MS_PER_PCT              12      // ms per 1% travel (180° @ 24V: 1110ms/100%)
+#define TRANS_SERVO_MS_PER_PCT              35      // ms per 1% travel (180° @ 24V: 1110ms/100%)
 #define TRANS_SERVO_SETTLE_MIN_MS           300     // minimum settle time for short moves
 #define TRANS_GEAR_OVERSHOOT_DEFAULT_PCT    1.0f    // default % overshoot (used when no per-gear value saved)
-#define TRANS_GEAR_OVERSHOOT_R_PCT          1.0f
+#define TRANS_GEAR_OVERSHOOT_R_PCT          4.5f
 #define TRANS_GEAR_OVERSHOOT_N_PCT          1.0f
-#define TRANS_GEAR_OVERSHOOT_L_PCT          3.0f
-#define TRANS_GEAR_OVERSHOOT_H_PCT          1.0f
+#define TRANS_GEAR_OVERSHOOT_L_PCT          5.0f
+#define TRANS_GEAR_OVERSHOOT_H_PCT          5.0f
 
 #define TRANS_GEAR_PULLBACK_R_PCT           3.0f    // % to pull back from target before retry overshoot
 #define TRANS_GEAR_PULLBACK_N_PCT           3.0f
 #define TRANS_GEAR_PULLBACK_L_PCT           3.0f
 #define TRANS_GEAR_PULLBACK_H_PCT           3.0f
 
+#define TRANS_OVERSHOOT_DWELL_MS            3000    // ms to wait at overshoot position for switch to confirm
+#define TRANS_ROLLBACK_DWELL_MS             500    // ms to wait after pullback before retrying overshoot
+
 // Default gear positions (percent: 0.0 = 800µs, 100.0 = 2200µs)
-#define TRANS_GEAR_DEFAULT_REVERSE_PCT      10.0f
-#define TRANS_GEAR_DEFAULT_NEUTRAL_PCT      35.0f
-#define TRANS_GEAR_DEFAULT_LOW_PCT          65.0f
-#define TRANS_GEAR_DEFAULT_HIGH_PCT         90.0f
+#define TRANS_GEAR_DEFAULT_REVERSE_PCT      40.0f
+#define TRANS_GEAR_DEFAULT_NEUTRAL_PCT      48.0f
+#define TRANS_GEAR_DEFAULT_LOW_PCT          68.0f
+#define TRANS_GEAR_DEFAULT_HIGH_PCT         58.0f
 
 // Safety limits
 #define TRANS_UNKNOWN_GEAR_THROTTLE_MAX     (float)5   // % - max throttle when physical gear UNKNOWN
 #define TRANS_GEAR_CHECK_INTERVAL           500        // ms - physical gear verification period
+#define TRANS_GEAR_READ_INTERVAL_MS         100        // ms - GPIO debounce cache for getPhysicalGear()
 
 // ============================================================================
 // BRAKE SYSTEM CONFIGURATION
@@ -183,6 +187,7 @@ struct SBusChannelConfig {
 #define BRAKE_FULL_TRAVEL_TIME 1500  // ms - estimated time for 0-100% brake travel
 #define BRAKE_TOLERANCE        1  // % - position tolerance for "at target"
 #define BRAKE_SENSOR_OVERRUN_TIME 1000  // ms - continue moving after sensor triggers (full retraction)
+#define BRAKE_HOLD_SPEED          30    // PWM (0-255) applied against spring return when at target position
 
 // ============================================================================
 // SERIAL DEBUG

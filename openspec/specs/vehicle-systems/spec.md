@@ -58,28 +58,26 @@ The system SHALL provide throttle control through a servo-driven acceleration me
 - **AND** throttle commands are ignored until brakes release
 
 ### Requirement: Transmission Control System
-The Transmission Control System SHALL use a two-level priority for default gear **servo positions** (expressed as float percentages 0.0–100.0): user-configured NVS defaults take first priority; compile-time factory constants are the final fallback.
 
-#### Scenario: Load user-configured defaults on startup
-- **WHEN** the system starts
-- **AND** NVS float keys `pct_r`, `pct_n`, `pct_l`, `pct_h` exist in the `transmission` namespace
-- **THEN** `TransmissionController` SHALL load those values as its default positions
+The transmission actuator SHALL use an overshoot-and-return motion profile when
+changing gears to ensure full mechanical engagement of the detent.
 
-#### Scenario: Fall back to factory defaults when NVS defaults absent
-- **WHEN** the system starts
-- **AND** one or more `pct_*` NVS keys are absent
-- **THEN** the corresponding position SHALL use the compile-time constant (`TRANS_GEAR_DEFAULT_*_PCT`) as the default
-- **AND** no error SHALL be logged
+#### Scenario: Overshoot then return on gear change
 
-#### Scenario: Update a default position at runtime
-- **WHEN** `setDefaultPosition(gear, positionPct)` is called with a valid gear and a value in [0.0, 100.0]
-- **THEN** the value SHALL be written to the corresponding `pct_*` NVS float key in the `transmission` namespace
-- **AND** the in-RAM default SHALL be updated immediately
+- **Given** a gear change is requested to a target gear whose stored position differs
+  from the current position by more than `TRANS_POSITION_TOLERANCE`
+- **When** `setGear()` is called
+- **Then** the actuator first moves to `targetPosition + sign(targetPosition − currentPosition) × TRANS_GEAR_OVERSHOOT` (Phase 1)
+- **And** once Phase 1 position is reached, the actuator moves back to `targetPosition` (Phase 2)
+- **And** physical-switch confirmation and `saveState()` are unchanged and occur only after Phase 2
 
-#### Scenario: Reject out-of-range position
-- **WHEN** `setDefaultPosition(gear, positionPct)` is called with a value outside [0.0, 100.0]
-- **THEN** the call SHALL return false
-- **AND** neither NVS nor the in-RAM array SHALL be modified
+#### Scenario: Skip overshoot when already near target
+
+- **Given** the current encoder position is within `TRANS_POSITION_TOLERANCE` of the
+  target gear position
+- **When** `setGear()` is called
+- **Then** no overshoot phase is started; the actuator moves directly to target (or
+  stops immediately if already there)
 
 ### Requirement: Brake Control System
 The system SHALL control braking force through a linear actuator-driven brake mechanism.

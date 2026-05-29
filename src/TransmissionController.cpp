@@ -9,6 +9,9 @@ TransmissionController::TransmissionController()
     , overshootRetryCount_(0)
     , gearPhaseStartTime_(0)
     , settleMs_(TRANS_SERVO_SETTLE_MIN_MS)
+    , queuedGear_(Gear::GEAR_UNKNOWN)
+    , cachedPhysicalGear_(Gear::GEAR_UNKNOWN)
+    , lastGearReadTime_(0)
     , lastGearCheckTime_(0)
     , lastStatusLogTime_(0)
     , lastGearMismatch_(false)
@@ -61,20 +64,26 @@ uint32_t TransmissionController::computeSettleMs(float fromPct, float toPct) con
 
 // ── gear control ─────────────────────────────────────────────────────────────
 
-bool TransmissionController::setGear(Gear gear) {
-    if (gear == Gear::GEAR_UNKNOWN) {
-        Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] ERROR: Cannot set UNKNOWN gear");
-        return false;
-    }
-    if (!canChangeGear(gear)) {
-        return false;
-    }
+// Physical gear sequence: R(0) - N(1) - H(2) - L(3)
+static const TransmissionController::Gear GEAR_SEQ[] = {
+    TransmissionController::Gear::GEAR_REVERSE,
+    TransmissionController::Gear::GEAR_NEUTRAL,
+    TransmissionController::Gear::GEAR_HIGH,
+    TransmissionController::Gear::GEAR_LOW
+};
 
-    if (getPhysicalGear() == gear) {
-        Debug::printfFeature(DebugFeature::TRANSMISSION, "[TRANS] Already at %s\n", getGearName(gear));
-        return false;
+TransmissionController::Gear TransmissionController::nextGearToward(Gear from, Gear to) {
+    if (from == to) return from;
+    int fromIdx = -1, toIdx = -1;
+    for (int i = 0; i < 4; i++) {
+        if (GEAR_SEQ[i] == from) fromIdx = i;
+        if (GEAR_SEQ[i] == to)   toIdx   = i;
     }
+    if (fromIdx < 0 || toIdx < 0) return Gear::GEAR_NEUTRAL;
+    return GEAR_SEQ[fromIdx + (fromIdx < toIdx ? 1 : -1)];
+}
 
+void TransmissionController::startGearChange(Gear gear) {
     float targetPct = getGearPosition(gear);
     saveState(gear, getCurrentServoPct(), false);
 
@@ -94,6 +103,38 @@ bool TransmissionController::setGear(Gear gear) {
     Debug::printfFeature(DebugFeature::TRANSMISSION,
         "[TRANS] Gear %s: overshoot %.1f%% -> final %.1f%% (settle %lums)\n",
         getGearName(gear), overshootPct, targetPct, settleMs_);
+}
+
+bool TransmissionController::setGear(Gear finalGear) {
+    if (finalGear == Gear::GEAR_UNKNOWN) {
+        Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] ERROR: Cannot set UNKNOWN gear");
+        return false;
+    }
+    if (!canChangeGear(finalGear)) {
+        return false;
+    }
+
+    Gear physicalGear = getPhysicalGear();
+    if (physicalGear == finalGear) {
+        Debug::printfFeature(DebugFeature::TRANSMISSION, "[TRANS] Already at %s\n", getGearName(finalGear));
+        queuedGear_ = Gear::GEAR_UNKNOWN;
+        return false;
+    }
+
+    // If current gear is unknown, route through NEUTRAL first
+    Gear nextStep = (physicalGear == Gear::GEAR_UNKNOWN)
+                  ? Gear::GEAR_NEUTRAL
+                  : nextGearToward(physicalGear, finalGear);
+
+    queuedGear_ = (nextStep == finalGear) ? Gear::GEAR_UNKNOWN : finalGear;
+
+    if (queuedGear_ != Gear::GEAR_UNKNOWN) {
+        Debug::printfFeature(DebugFeature::TRANSMISSION,
+            "[TRANS] Sequence %s -> ... -> %s, next step: %s\n",
+            getGearName(physicalGear), getGearName(finalGear), getGearName(nextStep));
+    }
+
+    startGearChange(nextStep);
     return true;
 }
 
@@ -125,7 +166,7 @@ void TransmissionController::setVehicleData(const TransmissionVehicleData& data)
 }
 
 bool TransmissionController::needsThrottleBoost() const {
-    return gearChangePhase_ != GearChangePhase::NONE;
+    return gearChangePhase_ == GearChangePhase::OVERSHOOT_DWELL;
 }
 
 bool TransmissionController::canChangeGear(Gear targetGear) const {
@@ -168,23 +209,35 @@ void TransmissionController::initGearSensors() {
 }
 
 TransmissionController::Gear TransmissionController::getPhysicalGear() const {
+    uint32_t now = millis();
+    if (now - lastGearReadTime_ < TRANS_GEAR_READ_INTERVAL_MS) {
+        return cachedPhysicalGear_;
+    }
+    lastGearReadTime_ = now;
+
     bool reverseActive = !digitalRead(PIN_GEAR_REVERSE);
     bool neutralActive = !digitalRead(PIN_GEAR_NEUTRAL);
     bool lowActive     = !digitalRead(PIN_GEAR_LOW);
     bool highActive    = !digitalRead(PIN_GEAR_HIGH);
 
     uint8_t activeCount = reverseActive + neutralActive + lowActive + highActive;
-    if (activeCount == 0) return Gear::GEAR_UNKNOWN;
-    if (activeCount > 1) {
+    if (activeCount == 0) {
+        cachedPhysicalGear_ = Gear::GEAR_UNKNOWN;
+    } else if (activeCount > 1) {
         Debug::printfFeature(DebugFeature::TRANSMISSION,
             "[TRANS] ERROR: Multiple gear sensors active (R:%d N:%d L:%d H:%d)\n",
             reverseActive, neutralActive, lowActive, highActive);
-        return Gear::GEAR_UNKNOWN;
+        cachedPhysicalGear_ = Gear::GEAR_UNKNOWN;
+    } else if (reverseActive) {
+        cachedPhysicalGear_ = Gear::GEAR_REVERSE;
+    } else if (neutralActive) {
+        cachedPhysicalGear_ = Gear::GEAR_NEUTRAL;
+    } else if (lowActive) {
+        cachedPhysicalGear_ = Gear::GEAR_LOW;
+    } else {
+        cachedPhysicalGear_ = Gear::GEAR_HIGH;
     }
-    if (reverseActive) return Gear::GEAR_REVERSE;
-    if (neutralActive) return Gear::GEAR_NEUTRAL;
-    if (lowActive)     return Gear::GEAR_LOW;
-    return Gear::GEAR_HIGH;
+    return cachedPhysicalGear_;
 }
 
 bool TransmissionController::isGearPositionValid() const {
@@ -208,15 +261,38 @@ void TransmissionController::update() {
         lastLoggedGear_ = physicalGear;
         lastLoggedMoving_ = currentlyMoving;
 
+        const char* phaseStr =
+            gearChangePhase_ == GearChangePhase::NONE          ? "IDLE" :
+            gearChangePhase_ == GearChangePhase::OVERSHOOT      ? "OVERSHOOT" :
+            gearChangePhase_ == GearChangePhase::OVERSHOOT_DWELL ? "OVERSHOOT_DWELL" :
+            gearChangePhase_ == GearChangePhase::RETURN          ? "RETURN" :
+            gearChangePhase_ == GearChangePhase::PULLBACK        ? "PULLBACK" :
+                                                                   "PULLBACK_DWELL";
         Debug::printfFeature(DebugFeature::TRANSMISSION,
-            "[TRANS] Status: Physical=%s, ServoPct=%.1f%%, Phase=%s\n",
-            getGearName(physicalGear), getCurrentServoPct(),
-            gearChangePhase_ == GearChangePhase::NONE     ? "IDLE" :
-            gearChangePhase_ == GearChangePhase::OVERSHOOT ? "OVERSHOOT" :
-            gearChangePhase_ == GearChangePhase::PULLBACK  ? "PULLBACK" : "RETURN");
+            "[TRANS] Status: Physical=%s, ServoPct=%.1f%%, Phase=%s%s\n",
+            getGearName(physicalGear), getCurrentServoPct(), phaseStr,
+            queuedGear_ != Gear::GEAR_UNKNOWN ? " (seq)" : "");
     }
 
+    // ── NONE phase ──
     if (gearChangePhase_ == GearChangePhase::NONE) {
+        // Advance gear sequence if a final destination is queued
+        if (queuedGear_ != Gear::GEAR_UNKNOWN) {
+            if (physicalGear == queuedGear_) {
+                Debug::printfFeature(DebugFeature::TRANSMISSION,
+                    "[TRANS] Sequence complete at %s\n", getGearName(queuedGear_));
+                queuedGear_ = Gear::GEAR_UNKNOWN;
+            } else if (physicalGear == Gear::GEAR_UNKNOWN) {
+                Debug::printlnFeature(DebugFeature::TRANSMISSION,
+                    "[TRANS] WARNING: Gear UNKNOWN mid-sequence, aborting");
+                queuedGear_ = Gear::GEAR_UNKNOWN;
+            } else if (canChangeGear(queuedGear_)) {
+                Gear nextStep = nextGearToward(physicalGear, queuedGear_);
+                startGearChange(nextStep);
+            }
+            return;
+        }
+
         // Check for mismatch when idle
         if (now - lastGearCheckTime_ >= TRANS_GEAR_CHECK_INTERVAL) {
             lastGearCheckTime_ = now;
@@ -238,36 +314,33 @@ void TransmissionController::update() {
         return;
     }
 
-    // ── OVERSHOOT phase ──
+    // ── OVERSHOOT phase: servo moving to overshoot position ──
     if (gearChangePhase_ == GearChangePhase::OVERSHOOT) {
         if (now - gearPhaseStartTime_ >= settleMs_) {
+            gearPhaseStartTime_ = now;
+            gearChangePhase_ = GearChangePhase::OVERSHOOT_DWELL;
+            Debug::printfFeature(DebugFeature::TRANSMISSION,
+                "[TRANS] OVERSHOOT_DWELL: waiting up to %ums for %s\n",
+                TRANS_OVERSHOOT_DWELL_MS, getGearName(targetGear_));
+        }
+        return;
+    }
+
+    // ── OVERSHOOT_DWELL phase: wait for switch confirmation ──
+    if (gearChangePhase_ == GearChangePhase::OVERSHOOT_DWELL) {
+        if (physicalGear == targetGear_) {
             settleMs_ = computeSettleMs(getCurrentServoPct(), finalGearPositionPct_);
             gearPhaseStartTime_ = now;
             gearChangePhase_ = GearChangePhase::RETURN;
             commandServo(finalGearPositionPct_);
             Debug::printfFeature(DebugFeature::TRANSMISSION,
-                "[TRANS] RETURN phase: %.1f%% (settle %lums)\n",
+                "[TRANS] Switch confirmed, RETURN: %.1f%% (settle %lums)\n",
                 finalGearPositionPct_, settleMs_);
-        }
-        return;
-    }
-
-    // ── RETURN phase ──
-    if (gearChangePhase_ == GearChangePhase::RETURN) {
-        if (now - gearPhaseStartTime_ < settleMs_) return;
-
-        if (physicalGear == targetGear_) {
-            saveState(targetGear_, getCurrentServoPct(), true);
-            gearChangePhase_ = GearChangePhase::NONE;
-            overshootRetryCount_ = 0;
-            lastGearMismatch_ = false;
-            Debug::printfFeature(DebugFeature::TRANSMISSION,
-                "[TRANS] Gear %s confirmed by switch at %.1f%%\n",
-                getGearName(targetGear_), getCurrentServoPct());
             return;
         }
+        if (now - gearPhaseStartTime_ < TRANS_OVERSHOOT_DWELL_MS) return;
 
-        // Switch not confirmed — pull back then retry with larger overshoot
+        // Dwell timed out without confirmation
         if (overshootRetryCount_ < 100) {
             float pullbackTarget = constrain(
                 finalGearPositionPct_ - overshootDirection_ * pullbackPcts_[(int)targetGear_],
@@ -277,19 +350,46 @@ void TransmissionController::update() {
             gearChangePhase_ = GearChangePhase::PULLBACK;
             commandServo(pullbackTarget);
             Debug::printfFeature(DebugFeature::TRANSMISSION,
-                "[TRANS] PULLBACK: %.1f%% (settle %lums)\n", pullbackTarget, settleMs_);
+                "[TRANS] Dwell timeout, PULLBACK: %.1f%% (settle %lums)\n",
+                pullbackTarget, settleMs_);
         } else {
             gearChangePhase_ = GearChangePhase::NONE;
             overshootRetryCount_ = 0;
+            queuedGear_ = Gear::GEAR_UNKNOWN;
             Debug::printfFeature(DebugFeature::TRANSMISSION,
                 "[TRANS] WARNING: Gear %s not engaged after all attempts (physical %s)\n",
                 getGearName(targetGear_), getGearName(physicalGear));
         }
+        return;
     }
 
-    // ── PULLBACK phase ──
+    // ── RETURN phase: servo moving back to target (gear already confirmed) ──
+    if (gearChangePhase_ == GearChangePhase::RETURN) {
+        if (now - gearPhaseStartTime_ < settleMs_) return;
+
+        saveState(targetGear_, getCurrentServoPct(), true);
+        gearChangePhase_ = GearChangePhase::NONE;
+        overshootRetryCount_ = 0;
+        lastGearMismatch_ = false;
+        Debug::printfFeature(DebugFeature::TRANSMISSION,
+            "[TRANS] Gear %s engaged at %.1f%%\n",
+            getGearName(targetGear_), getCurrentServoPct());
+        return;
+    }
+
+    // ── PULLBACK phase: servo moving away from target ──
     if (gearChangePhase_ == GearChangePhase::PULLBACK) {
         if (now - gearPhaseStartTime_ < settleMs_) return;
+        gearPhaseStartTime_ = now;
+        gearChangePhase_ = GearChangePhase::PULLBACK_DWELL;
+        Debug::printfFeature(DebugFeature::TRANSMISSION,
+            "[TRANS] PULLBACK_DWELL: waiting %ums\n", TRANS_ROLLBACK_DWELL_MS);
+        return;
+    }
+
+    // ── PULLBACK_DWELL phase: wait before retrying ──
+    if (gearChangePhase_ == GearChangePhase::PULLBACK_DWELL) {
+        if (now - gearPhaseStartTime_ < TRANS_ROLLBACK_DWELL_MS) return;
         overshootRetryCount_++;
         float multiplier = (overshootRetryCount_ == 1) ? 1.5f : 2.0f;
         float newOvershoot = constrain(

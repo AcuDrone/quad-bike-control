@@ -131,9 +131,9 @@ void setup() {
         digitalRead(PIN_BRAKE_SENSOR) ? "Released (HIGH)" : "Pressed (LOW)");
  
     // Initialize SBUS input
-    // if (!sbusInput.begin()) {
-    //     Debug::printlnFeature(DebugFeature::SBUS, "ERROR: SBUS input failed");
-    // }
+    if (!sbusInput.begin()) {
+        Debug::printlnFeature(DebugFeature::SBUS, "ERROR: SBUS input failed");
+    }
 
     if (!relayController.begin()) {
         Debug::printlnFeature(DebugFeature::RELAY, "ERROR: Relay controller failed");

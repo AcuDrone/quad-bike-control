@@ -187,9 +187,11 @@ public:
 private:
     enum class GearChangePhase {
         NONE,
-        OVERSHOOT,
-        RETURN,
-        PULLBACK    // move away from target before retry overshoot
+        OVERSHOOT,        // servo moving to overshoot position
+        OVERSHOOT_DWELL,  // waiting at overshoot for switch confirmation
+        RETURN,           // servo moving back to target (gear confirmed)
+        PULLBACK,         // servo moving away from target
+        PULLBACK_DWELL    // waiting after pullback before retry
     };
 
     ServoController servo_;
@@ -209,6 +211,11 @@ private:
     Gear lastLoggedGear_;
     bool lastLoggedMoving_;
 
+    Gear queuedGear_;     // GEAR_UNKNOWN = no sequence pending, else = final destination
+
+    mutable Gear     cachedPhysicalGear_;
+    mutable uint32_t lastGearReadTime_;
+
     float gearPositions_[4];
     float overshootPcts_[4];
     float pullbackPcts_[4];
@@ -217,6 +224,8 @@ private:
     void commandServo(float positionPct);
     uint32_t computeSettleMs(float fromPct, float toPct) const;
     void saveDefaultPosition(Gear gear, float positionPct);
+    void startGearChange(Gear gear);
+    static Gear nextGearToward(Gear from, Gear to);
 };
 
 #endif // TRANSMISSION_CONTROLLER_H

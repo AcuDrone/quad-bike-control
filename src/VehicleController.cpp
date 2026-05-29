@@ -581,8 +581,8 @@ void VehicleController::updateBrakeControl() {
             brakeSensorTriggerTime_ = 0;  // Reset sensor trigger
         }
 
-        // Stop actuator
-        brake_.stop();
+        // Hold position against cylinder hydraulic preassure return
+        brake_.setSpeed(BRAKE_HOLD_SPEED);
     }
 }
 

@@ -40,7 +40,9 @@
       "Bash(curl -s \"https://raw.githubusercontent.com/ArduPilot/ardupilot/master/libraries/AP_SBusOut/AP_SBusOut.cpp\")",
       "Bash(curl -s \"https://api.github.com/search/code?q=sbus+pwm+repo:ArduPilot/ardupilot+filename:SBusOut\")",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(xargs -I{} sh -c 'echo \"=== {} ===\"; head -30 {}')",
+      "Bash(~/.platformio/penv/bin/pio run *)"
     ]
   }
 }
