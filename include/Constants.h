@@ -160,14 +160,8 @@ struct SBusChannelConfig {
 #define TRANS_GEAR_OVERSHOOT_L_PCT          5.0f
 #define TRANS_GEAR_OVERSHOOT_H_PCT          5.0f
 
-#define TRANS_GEAR_PULLBACK_R_PCT           3.0f    // % to pull back from target before retry overshoot
-#define TRANS_GEAR_PULLBACK_N_PCT           3.0f
-#define TRANS_GEAR_PULLBACK_L_PCT           3.0f
-#define TRANS_GEAR_PULLBACK_H_PCT           3.0f
-
-#define TRANS_OVERSHOOT_DWELL_MS            3000    // ms to wait at overshoot position for switch to confirm
-#define TRANS_ROLLBACK_DWELL_MS             500    // ms to wait after pullback before retrying overshoot
-#define TRANS_SEQUENCE_STEP_DWELL_MS        1000    // ms to dwell at confirmed gear before moving to next step in sequence
+#define TRANS_OVERSHOOT_DWELL_MS            2000    // ms to hold at overshoot position before assuming gear engaged
+#define TRANS_SEQUENCE_STEP_DWELL_MS        1000    // ms to dwell after a step completes before starting the next step
 
 // Default gear positions (percent: 0.0 = 800µs, 100.0 = 2200µs)
 #define TRANS_GEAR_DEFAULT_REVERSE_PCT      40.0f

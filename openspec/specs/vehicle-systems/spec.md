@@ -58,26 +58,18 @@ The system SHALL provide throttle control through a servo-driven acceleration me
 - **AND** throttle commands are ignored until brakes release
 
 ### Requirement: Transmission Control System
+The transmission control system SHALL enforce the physical gear sequence `[R, N, H, L]` and SHALL govern overshoot and rollback dwell timing via constants in `Constants.h`.
 
-The transmission actuator SHALL use an overshoot-and-return motion profile when
-changing gears to ensure full mechanical engagement of the detent.
+#### Scenario: Gear change routes through sequence
+- **WHEN** a gear change command is received (S-bus or web)
+- **AND** the target gear is not adjacent to the current gear in sequence `[R, N, H, L]`
+- **THEN** the vehicle controller SHALL pass the final target gear to `TransmissionController::setGear()`
+- **AND** intermediate gear changes SHALL be handled automatically by `TransmissionController`
+- **AND** the telemetry SHALL report the current physical gear at each step
 
-#### Scenario: Overshoot then return on gear change
-
-- **Given** a gear change is requested to a target gear whose stored position differs
-  from the current position by more than `TRANS_POSITION_TOLERANCE`
-- **When** `setGear()` is called
-- **Then** the actuator first moves to `targetPosition + sign(targetPosition − currentPosition) × TRANS_GEAR_OVERSHOOT` (Phase 1)
-- **And** once Phase 1 position is reached, the actuator moves back to `targetPosition` (Phase 2)
-- **And** physical-switch confirmation and `saveState()` are unchanged and occur only after Phase 2
-
-#### Scenario: Skip overshoot when already near target
-
-- **Given** the current encoder position is within `TRANS_POSITION_TOLERANCE` of the
-  target gear position
-- **When** `setGear()` is called
-- **Then** no overshoot phase is started; the actuator moves directly to target (or
-  stops immediately if already there)
+#### Scenario: Constants govern dwell timing
+- **WHEN** `TRANS_OVERSHOOT_DWELL_MS` or `TRANS_ROLLBACK_DWELL_MS` are modified in `Constants.h`
+- **THEN** the corresponding dwell durations in the transmission state machine SHALL reflect the updated values without additional code changes
 
 ### Requirement: Brake Control System
 The system SHALL control braking force through a linear actuator-driven brake mechanism.

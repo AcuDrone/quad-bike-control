@@ -56,12 +56,7 @@ public:
      */
     Gear getCurrentGear() const;
 
-    /**
-     * @brief Check if physical switch reports target gear
-     */
-    bool isAtGear(Gear gear) const;
-
-    /**
+/**
      * @brief Get default servo position for a gear (0.0–100.0 %)
      */
     float getGearPosition(Gear gear) const;
@@ -95,11 +90,6 @@ public:
      * @brief Read physical gear from hall-effect switches
      */
     Gear getPhysicalGear() const;
-
-    /**
-     * @brief True when servo position matches physical switch
-     */
-    bool isGearPositionValid() const;
 
     /**
      * @brief Update gear change phase transitions — call every loop iteration
@@ -173,30 +163,12 @@ public:
      */
     void loadGearOvershoots();
 
-    /**
-     * @brief Get pullback percent for a specific gear
-     */
-    float getGearPullback(Gear gear) const;
-
-    /**
-     * @brief Save and apply per-gear pullback percent (0.0–20.0 %)
-     * @return true if saved successfully
-     */
-    bool setGearPullback(Gear gear, float pullbackPct);
-
-    /**
-     * @brief Load per-gear pullback values from NVS
-     */
-    void loadGearPullbacks();
-
 private:
     enum class GearChangePhase {
         NONE,
         OVERSHOOT,        // servo moving to overshoot position
-        OVERSHOOT_DWELL,  // waiting at overshoot for switch confirmation
-        RETURN,           // servo moving back to target (gear confirmed)
-        PULLBACK,         // servo moving away from target
-        PULLBACK_DWELL    // waiting after pullback before retry
+        OVERSHOOT_DWELL,  // dwelling at overshoot for TRANS_OVERSHOOT_DWELL_MS
+        RETURN            // servo moving back to final position (gear assumed engaged)
     };
 
     ServoController servo_;
@@ -205,7 +177,6 @@ private:
     GearChangePhase gearChangePhase_;
     float finalGearPositionPct_;
     float overshootDirection_;   // +1.0 or -1.0, direction of overshoot from target
-    uint8_t overshootRetryCount_; // 0=first attempt, 1=1.5x retry, 2=2x retry
     uint32_t gearPhaseStartTime_;
     uint32_t settleMs_;
 
@@ -224,7 +195,6 @@ private:
 
     float gearPositions_[4];
     float overshootPcts_[4];
-    float pullbackPcts_[4];
 
     bool canChangeGear(Gear targetGear) const;
     void commandServo(float positionPct);

@@ -210,7 +210,7 @@ void VehicleController::processSBusCommands() {
     TransmissionController::Gear gear = sbusInput_.getGear();
     if (gear != lastSBusGear_ && isEngineRunning()) {
         bool accepted = transmission_.setGear(gear);
-        if (accepted || transmission_.isAtGear(gear)) {
+        if (accepted || transmission_.getTargetGear() == gear) {
             lastSBusGear_ = gear;
         }
         // If not accepted (e.g. speed interlock), lastSBusGear_ stays unchanged → retry next loop
@@ -293,11 +293,9 @@ void VehicleController::processSteeringCommand(float value, WebPortal& webPortal
 }
 
 bool VehicleController::shouldClipThrottle() const {
-    // if (!transmission_.isGearPositionValid())
-    //     return true;
-    // if (transmission_.getPhysicalGear() == TransmissionController::Gear::GEAR_NEUTRAL)
-    //     return true;
     if (transmission_.isGearChangeActive())
+        return true;
+    if (transmission_.getTargetGear() == TransmissionController::Gear::GEAR_NEUTRAL)
         return true;
     return false;
 }

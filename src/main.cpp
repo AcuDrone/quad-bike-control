@@ -113,7 +113,6 @@ void setup() {
         transmissionActuator.initGearSensors();
         transmissionActuator.loadDefaultPositions();
         transmissionActuator.loadGearOvershoots();
-        transmissionActuator.loadGearPullbacks();
     } else {
         Debug::printlnFeature(DebugFeature::TRANSMISSION, "ERROR: Transmission servo failed");
     }
