@@ -179,6 +179,7 @@ private:
 
     // Ignition state tracking
     SBusInput::IgnitionState previousSBusIgnitionState_;  // Track previous state for transition detection
+    TransmissionController::Gear lastSBusGear_;           // Last gear requested via SBUS (dedup guard)
 
     bool transmissionInitialized_;  // True after first engine-running restore
 

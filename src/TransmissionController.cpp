@@ -10,6 +10,7 @@ TransmissionController::TransmissionController()
     , gearPhaseStartTime_(0)
     , settleMs_(TRANS_SERVO_SETTLE_MIN_MS)
     , queuedGear_(Gear::GEAR_UNKNOWN)
+    , sequenceStepDwellStart_(0)
     , cachedPhysicalGear_(Gear::GEAR_UNKNOWN)
     , lastGearReadTime_(0)
     , lastGearCheckTime_(0)
@@ -110,6 +111,11 @@ bool TransmissionController::setGear(Gear finalGear) {
         Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] ERROR: Cannot set UNKNOWN gear");
         return false;
     }
+
+    // Idempotent: already queued for this exact destination, or active single-step change
+    if (queuedGear_ == finalGear) return true;
+    if (targetGear_ == finalGear && gearChangePhase_ != GearChangePhase::NONE) return true;
+
     if (!canChangeGear(finalGear)) {
         return false;
     }
@@ -127,6 +133,7 @@ bool TransmissionController::setGear(Gear finalGear) {
                   : nextGearToward(physicalGear, finalGear);
 
     queuedGear_ = (nextStep == finalGear) ? Gear::GEAR_UNKNOWN : finalGear;
+    sequenceStepDwellStart_ = 0;
 
     if (queuedGear_ != Gear::GEAR_UNKNOWN) {
         Debug::printfFeature(DebugFeature::TRANSMISSION,
@@ -219,8 +226,20 @@ TransmissionController::Gear TransmissionController::getPhysicalGear() const {
     bool neutralActive = !digitalRead(PIN_GEAR_NEUTRAL);
     bool lowActive     = !digitalRead(PIN_GEAR_LOW);
     bool highActive    = !digitalRead(PIN_GEAR_HIGH);
-
     uint8_t activeCount = reverseActive + neutralActive + lowActive + highActive;
+
+    // Retry when result is not clean and servo is idle (filter transient bounces)
+    uint8_t retries = 0;
+    while (activeCount != 1 && gearChangePhase_ == GearChangePhase::NONE
+           && retries < TRANS_GEAR_READ_RETRY_COUNT) {
+        reverseActive = !digitalRead(PIN_GEAR_REVERSE);
+        neutralActive = !digitalRead(PIN_GEAR_NEUTRAL);
+        lowActive     = !digitalRead(PIN_GEAR_LOW);
+        highActive    = !digitalRead(PIN_GEAR_HIGH);
+        activeCount   = reverseActive + neutralActive + lowActive + highActive;
+        retries++;
+    }
+
     if (activeCount == 0) {
         cachedPhysicalGear_ = Gear::GEAR_UNKNOWN;
     } else if (activeCount > 1) {
@@ -278,17 +297,33 @@ void TransmissionController::update() {
     if (gearChangePhase_ == GearChangePhase::NONE) {
         // Advance gear sequence if a final destination is queued
         if (queuedGear_ != Gear::GEAR_UNKNOWN) {
-            if (physicalGear == queuedGear_) {
+            // Hall switch can read UNKNOWN for 1-2 loops after RETURN due to contact bounce.
+            // Fall back to targetGear_ (which was confirmed in OVERSHOOT_DWELL) as the
+            // effective current position rather than aborting on a transient read.
+            Gear effectiveGear = (physicalGear != Gear::GEAR_UNKNOWN) ? physicalGear : targetGear_;
+
+            if (effectiveGear == queuedGear_) {
                 Debug::printfFeature(DebugFeature::TRANSMISSION,
                     "[TRANS] Sequence complete at %s\n", getGearName(queuedGear_));
                 queuedGear_ = Gear::GEAR_UNKNOWN;
-            } else if (physicalGear == Gear::GEAR_UNKNOWN) {
+                sequenceStepDwellStart_ = 0;
+            } else if (effectiveGear == Gear::GEAR_UNKNOWN) {
                 Debug::printlnFeature(DebugFeature::TRANSMISSION,
                     "[TRANS] WARNING: Gear UNKNOWN mid-sequence, aborting");
                 queuedGear_ = Gear::GEAR_UNKNOWN;
+                sequenceStepDwellStart_ = 0;
             } else if (canChangeGear(queuedGear_)) {
-                Gear nextStep = nextGearToward(physicalGear, queuedGear_);
-                startGearChange(nextStep);
+                // Arm dwell on first entry after a step completes
+                if (sequenceStepDwellStart_ == 0) {
+                    sequenceStepDwellStart_ = now;
+                    Debug::printfFeature(DebugFeature::TRANSMISSION,
+                        "[TRANS] Step confirmed at %s, dwell %ums before next step\n",
+                        getGearName(effectiveGear), TRANS_SEQUENCE_STEP_DWELL_MS);
+                } else if (now - sequenceStepDwellStart_ >= TRANS_SEQUENCE_STEP_DWELL_MS) {
+                    sequenceStepDwellStart_ = 0;
+                    Gear nextStep = nextGearToward(effectiveGear, queuedGear_);
+                    startGearChange(nextStep);
+                }
             }
             return;
         }

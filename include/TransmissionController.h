@@ -82,6 +82,11 @@ public:
     bool needsThrottleBoost() const;
 
     /**
+     * @brief Returns true while any gear change phase is active (servo moving or dwelling)
+     */
+    bool isGearChangeActive() const { return gearChangePhase_ != GearChangePhase::NONE; }
+
+    /**
      * @brief Configure gear selector switch GPIO pins
      */
     void initGearSensors();
@@ -211,7 +216,8 @@ private:
     Gear lastLoggedGear_;
     bool lastLoggedMoving_;
 
-    Gear queuedGear_;     // GEAR_UNKNOWN = no sequence pending, else = final destination
+    Gear queuedGear_;               // GEAR_UNKNOWN = no sequence pending, else = final destination
+    uint32_t sequenceStepDwellStart_;  // millis() when step-dwell armed, 0 = not armed
 
     mutable Gear     cachedPhysicalGear_;
     mutable uint32_t lastGearReadTime_;

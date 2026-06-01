@@ -167,6 +167,7 @@ struct SBusChannelConfig {
 
 #define TRANS_OVERSHOOT_DWELL_MS            3000    // ms to wait at overshoot position for switch to confirm
 #define TRANS_ROLLBACK_DWELL_MS             500    // ms to wait after pullback before retrying overshoot
+#define TRANS_SEQUENCE_STEP_DWELL_MS        1000    // ms to dwell at confirmed gear before moving to next step in sequence
 
 // Default gear positions (percent: 0.0 = 800µs, 100.0 = 2200µs)
 #define TRANS_GEAR_DEFAULT_REVERSE_PCT      40.0f
@@ -178,6 +179,7 @@ struct SBusChannelConfig {
 #define TRANS_UNKNOWN_GEAR_THROTTLE_MAX     (float)5   // % - max throttle when physical gear UNKNOWN
 #define TRANS_GEAR_CHECK_INTERVAL           500        // ms - physical gear verification period
 #define TRANS_GEAR_READ_INTERVAL_MS         100        // ms - GPIO debounce cache for getPhysicalGear()
+#define TRANS_GEAR_READ_RETRY_COUNT         3          // extra reads when all switches read inactive while servo is idle
 
 // ============================================================================
 // BRAKE SYSTEM CONFIGURATION

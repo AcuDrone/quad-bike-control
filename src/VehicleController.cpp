@@ -32,6 +32,7 @@ VehicleController::VehicleController(SteeringController& steering,
       pidPrevError_(0.0f),
       lastPIDThrottleUs_(THROTTLE_IDLE_US),
       previousSBusIgnitionState_(SBusInput::IgnitionState::OFF),
+      lastSBusGear_(TransmissionController::Gear::GEAR_UNKNOWN),
       transmissionInitialized_(false) {
 }
 
@@ -177,6 +178,7 @@ void VehicleController::applyFailsafe() {
         transmission_.stop();  // Stop transmission actuator
         relayController_.allOff();  // Turn off ignition and lights
         previousSBusIgnitionState_ = SBusInput::IgnitionState::OFF;  // Reset ignition tracking
+        lastSBusGear_ = TransmissionController::Gear::GEAR_UNKNOWN;  // Force re-eval on restore
         failsafeApplied_ = true;
     } else if (currentInputSource_ != InputSource::FAILSAFE && failsafeApplied_) {
         Debug::printlnFeature(DebugFeature::VEHICLE, "[FAILSAFE] Exiting safe state");
@@ -204,10 +206,14 @@ void VehicleController::processSBusCommands() {
         throttle_.setMicroseconds(throttleUs);
     }
 
-    // Apply gear selection (blocked during auto-home)
+    // Apply gear selection — retry until setGear() accepts the command
     TransmissionController::Gear gear = sbusInput_.getGear();
-    if (gear != transmission_.getTargetGear() && isEngineRunning()) {
-        transmission_.setGear(gear);
+    if (gear != lastSBusGear_ && isEngineRunning()) {
+        bool accepted = transmission_.setGear(gear);
+        if (accepted || transmission_.isAtGear(gear)) {
+            lastSBusGear_ = gear;
+        }
+        // If not accepted (e.g. speed interlock), lastSBusGear_ stays unchanged → retry next loop
     }
     
     // Apply brake
@@ -287,12 +293,12 @@ void VehicleController::processSteeringCommand(float value, WebPortal& webPortal
 }
 
 bool VehicleController::shouldClipThrottle() const {
-    if (!transmission_.isGearPositionValid()) 
+    // if (!transmission_.isGearPositionValid())
+    //     return true;
+    // if (transmission_.getPhysicalGear() == TransmissionController::Gear::GEAR_NEUTRAL)
+    //     return true;
+    if (transmission_.isGearChangeActive())
         return true;
-
-    if (transmission_.getPhysicalGear() == TransmissionController::Gear::GEAR_NEUTRAL)
-        return true;
-
     return false;
 }
 
