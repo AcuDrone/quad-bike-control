@@ -61,7 +61,7 @@
             border-color: #f44336;
         }
 
-        .status-item.sbus-active {
+        .status-item.mav-active {
             background: rgba(33, 150, 243, 0.3);
             border-color: #2196f3;
         }
@@ -345,8 +345,8 @@
                         <div class="telemetry-value" id="telemetry-steering">90°</div>
                     </div>
                     <div class="telemetry-item">
-                        <div class="telemetry-label">S-bus Status</div>
-                        <div class="telemetry-value" id="telemetry-sbus">Inactive</div>
+                        <div class="telemetry-label">MAVLink Link</div>
+                        <div class="telemetry-value" id="telemetry-mav">Inactive</div>
                     </div>
                 </div>
             </div>
@@ -355,7 +355,7 @@
             <div class="card">
                 <h2>🎮 Manual Control</h2>
                 <div id="control-warning" class="warning" style="display: none;">
-                    S-bus control is active. Manual control disabled.
+                    MAVLink control is active. Manual control disabled.
                 </div>
 
                 <h3 style="margin-top: 20px; margin-bottom: 10px;">Gear Selection</h3>
@@ -480,33 +480,33 @@
                 </div>
             </div>
 
-            <!-- SBUS Channels -->
+            <!-- MAVLink Command Channels -->
             <div class="card">
-                <h2>📡 S-bus Channels</h2>
+                <h2>📡 MAVLink Command Channels</h2>
                 <div class="telemetry-grid" style="grid-template-columns: repeat(4, 1fr); font-size: 0.85em;">
                     <div class="telemetry-item" style="grid-column: span 4;">
-                        <div class="telemetry-label">Signal Quality</div>
+                        <div class="telemetry-label">Link Status</div>
                         <div style="font-size: 0.9em;">
-                            <span id="sbus-frame-rate">0</span> Hz |
-                            <span id="sbus-error-rate">0</span>% error |
-                            Age: <span id="sbus-signal-age">0</span>ms
+                            <span id="mav-cmd-rate">0</span> Hz |
+                            Link age: <span id="mav-link-age">0</span>ms |
+                            HB age: <span id="mav-hb-age">0</span>ms
                         </div>
                     </div>
                     <div class="telemetry-item">
                         <div class="telemetry-label">Ch1 (Steer)</div>
-                        <div class="telemetry-value" id="sbus-ch1">1500</div>
+                        <div class="telemetry-value" id="mav-ch1">1500</div>
                     </div>
                     <div class="telemetry-item">
                         <div class="telemetry-label">Ch2 (Thr)</div>
-                        <div class="telemetry-value" id="sbus-ch2">1500</div>
+                        <div class="telemetry-value" id="mav-ch2">1500</div>
                     </div>
                     <div class="telemetry-item">
                         <div class="telemetry-label">Ch3 (Gear)</div>
-                        <div class="telemetry-value" id="sbus-ch3">1500</div>
+                        <div class="telemetry-value" id="mav-ch3">1500</div>
                     </div>
                     <div class="telemetry-item">
                         <div class="telemetry-label">Ch4 (Brake)</div>
-                        <div class="telemetry-value" id="sbus-ch4">1500</div>
+                        <div class="telemetry-value" id="mav-ch4">1500</div>
                     </div>
                 </div>
             </div>
@@ -681,19 +681,19 @@
             // Update steering
             document.getElementById('telemetry-steering').textContent = (data.steering_angle || 90) + '°';
 
-            // Update S-bus status
-            document.getElementById('telemetry-sbus').textContent = data.sbus_active ? 'Active' : 'Inactive';
+            // Update MAVLink link status
+            document.getElementById('telemetry-mav').textContent = data.mav_active ? 'Active' : 'Inactive';
 
-            // Update SBUS channels
-            if (data.sbus_channels && data.sbus_channels.length === 16) {
-                document.getElementById('sbus-ch1').textContent = data.sbus_channels[0];
-                document.getElementById('sbus-ch2').textContent = data.sbus_channels[1];
-                document.getElementById('sbus-ch3').textContent = data.sbus_channels[2];
-                document.getElementById('sbus-ch4').textContent = data.sbus_channels[3];
+            // Update MAVLink command channels
+            if (data.mav_channels && data.mav_channels.length === 16) {
+                document.getElementById('mav-ch1').textContent = data.mav_channels[0];
+                document.getElementById('mav-ch2').textContent = data.mav_channels[1];
+                document.getElementById('mav-ch3').textContent = data.mav_channels[2];
+                document.getElementById('mav-ch4').textContent = data.mav_channels[3];
             }
-            document.getElementById('sbus-frame-rate').textContent = (data.sbus_frame_rate || 0).toFixed(1);
-            document.getElementById('sbus-error-rate').textContent = (data.sbus_error_rate || 0).toFixed(1);
-            document.getElementById('sbus-signal-age').textContent = data.sbus_signal_age || 0;
+            document.getElementById('mav-cmd-rate').textContent = (data.mav_cmd_rate || 0).toFixed(1);
+            document.getElementById('mav-link-age').textContent = data.mav_link_age || 0;
+            document.getElementById('mav-hb-age').textContent = data.mav_heartbeat_age || 0;
 
             // Update CAN data
             if (data.can_status === 'connected') {
@@ -808,11 +808,11 @@
             const statusElem = document.getElementById('input-source-status');
             const statusText = document.getElementById('input-source-text');
 
-            statusElem.classList.remove('sbus-active', 'web-active', 'failsafe');
+            statusElem.classList.remove('mav-active', 'web-active', 'failsafe');
 
-            if (currentInputSource === 'SBUS') {
-                statusElem.classList.add('sbus-active');
-                statusText.textContent = 'S-bus';
+            if (currentInputSource === 'MAVLINK') {
+                statusElem.classList.add('mav-active');
+                statusText.textContent = 'MAVLink';
             } else if (currentInputSource === 'WEB') {
                 statusElem.classList.add('web-active');
                 statusText.textContent = 'Web';
@@ -873,7 +873,7 @@
 
             // Update warning visibility
             const warning = document.getElementById('control-warning');
-            warning.style.display = currentInputSource === 'SBUS' ? 'block' : 'none';
+            warning.style.display = currentInputSource === 'MAVLINK' ? 'block' : 'none';
 
             // Enable/disable gear buttons
             const gearButtons = document.querySelectorAll('.gear-btn');

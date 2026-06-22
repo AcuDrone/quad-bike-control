@@ -18,14 +18,14 @@
 | **5** | J1-5 | `PIN_TRANS_RPWM` — LEDC Ch2 | Transmission actuator forward |
 | **6** | J1-6 | `PIN_BRAKE_LPWM` — LEDC Ch5 | Brake actuator reverse |
 | **7** | J1-7 | `PIN_BRAKE_RPWM` — LEDC Ch4 | Brake actuator forward |
-| **8** | J1-12 | `PIN_SBUS_RX` — UART1 RX | S-bus receiver (inverted) |
-| **9** | J1-15 | FREE | ADC1 / touch capable |
+| **8** | J1-12 | `PIN_MAVLINK_RX` — UART1 RX | MAVLink ↔ Pixhawk TELEM2 (non-inverted) |
+| **9** | J1-15 | `PIN_TRANS_SERVO` — LEDC Ch2 | Transmission servo (gear selector) |
 | **10** | J1-16 | `PIN_CAN_CS` — SPI CS | MCP2515 chip select |
 | **11** | J1-17 | `PIN_CAN_MOSI` — SPI MOSI | MCP2515 data out |
 | **12** | J1-18 | `PIN_CAN_SCK` — SPI CLK | MCP2515 clock |
 | **13** | J1-19 | `PIN_CAN_MISO` — SPI MISO | MCP2515 data in |
 | **14** | J1-20 | `PIN_BRAKE_SENSOR` — Digital In | Brake position sensor (active-low) |
-| **15** | J1-8 | FREE | ADC2, 32 kHz crystal capable |
+| **15** | J1-8 | `PIN_MAVLINK_TX` — UART1 TX | MAVLink ↔ Pixhawk TELEM2 (non-inverted) |
 | **16** | J1-9 | FREE | ADC2, 32 kHz crystal capable |
 | **17** | J1-10 | `PIN_STEER_RPWM` — Digital Out | Steering right (BTS7960 full speed) |
 | **18** | J1-11 | `PIN_STEER_LPWM` — Digital Out | Steering left (BTS7960 full speed) |
@@ -53,8 +53,6 @@
 
 | GPIO | Header | Best Use |
 |------|--------|----------|
-| **9** | J1-15 | ADC1 / capacitive touch |
-| **15** | J1-8 | General I/O, ADC2, 32 kHz crystal |
 | **16** | J1-9 | General I/O, ADC2, 32 kHz crystal |
 | **35** | J3-13 | General I/O, SPI |
 | **39** | J3-9 | General I/O (JTAG TCK if JTAG needed) |
@@ -93,7 +91,7 @@
 | UART | RX | TX | Baud | Purpose |
 |------|----|----|------|---------|
 | UART0 | 44 | 43 | 115200 | USB serial console — reserved |
-| UART1 | 8 | — | 100000 | S-bus receiver (inverted signal) |
+| UART1 | 8 | 15 | 115200 | MAVLink 2 ↔ Pixhawk TELEM2 (non-inverted) |
 
 ---
 

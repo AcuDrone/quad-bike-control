@@ -25,7 +25,7 @@ class TransmissionController;
  *
  * This class provides a web-based interface for:
  * - Real-time telemetry display (gear, sensors, actuators)
- * - Manual control when S-bus is inactive
+ * - Manual control when the MAVLink command stream is inactive
  * - Over-the-air firmware updates
  */
 class WebPortal {
@@ -51,8 +51,8 @@ public:
         float brake_pct;          // Brake position percentage (0-100)
         int throttle_angle;       // Throttle servo angle (degrees)
         int steering_pct;         // Steering percentage (-100 to +100)
-        String input_source;      // Current input source: "SBUS", "WEB", "FAILSAFE"
-        bool sbus_active;         // True if S-bus signal is valid
+        String input_source;      // Current input source: "MAVLINK", "WEB", "FAILSAFE"
+        bool mav_active;          // True if MAVLink command stream is valid
 
         // CAN bus vehicle data
         uint16_t engine_rpm;      // Engine RPM (0-16383)
@@ -64,11 +64,11 @@ public:
         String can_status;        // CAN status: "connected", "disconnected"
         uint32_t can_data_age;    // Time since last CAN update (ms)
 
-        // SBUS channel data
-        uint16_t sbus_channels[16]; // Raw SBUS channel values in microseconds
-        float sbus_frame_rate;    // SBUS frame rate in Hz
-        float sbus_error_rate;    // SBUS error percentage (0-100)
-        uint32_t sbus_signal_age; // Time since last valid SBUS frame (ms)
+        // MAVLink command channel + link data
+        uint16_t mav_channels[16]; // Decoded command channel values in microseconds
+        float mav_cmd_rate;        // SERVO_OUTPUT_RAW command rate in Hz
+        uint32_t mav_link_age;     // Time since last command frame (ms)
+        uint32_t mav_heartbeat_age; // Time since last autopilot heartbeat (ms)
 
         // Gear transition state
         bool gear_switching;      // True if gear change in progress

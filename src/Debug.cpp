@@ -78,8 +78,8 @@ void Debug::loadFeatureFlags() {
     if (preferences.getBool("feat_can", DEBUG_FEATURE_DEFAULT_STATE)) {
         loaded |= featureBit(DebugFeature::CAN);
     }
-    if (preferences.getBool("feat_sbus", DEBUG_FEATURE_DEFAULT_STATE)) {
-        loaded |= featureBit(DebugFeature::SBUS);
+    if (preferences.getBool("feat_mav", DEBUG_FEATURE_DEFAULT_STATE)) {
+        loaded |= featureBit(DebugFeature::MAVLINK);
     }
     if (preferences.getBool("feat_servo", DEBUG_FEATURE_DEFAULT_STATE)) {
         loaded |= featureBit(DebugFeature::SERVO);
@@ -110,7 +110,7 @@ void Debug::saveFeatureFlags() {
     // Save individual feature flags with descriptive keys
     preferences.putBool("feat_trans", (featureFlags & featureBit(DebugFeature::TRANSMISSION)) != 0);
     preferences.putBool("feat_can", (featureFlags & featureBit(DebugFeature::CAN)) != 0);
-    preferences.putBool("feat_sbus", (featureFlags & featureBit(DebugFeature::SBUS)) != 0);
+    preferences.putBool("feat_mav", (featureFlags & featureBit(DebugFeature::MAVLINK)) != 0);
     preferences.putBool("feat_servo", (featureFlags & featureBit(DebugFeature::SERVO)) != 0);
     preferences.putBool("feat_brake", (featureFlags & featureBit(DebugFeature::BRAKE)) != 0);
     preferences.putBool("feat_relay", (featureFlags & featureBit(DebugFeature::RELAY)) != 0);

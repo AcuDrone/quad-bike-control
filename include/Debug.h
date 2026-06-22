@@ -20,7 +20,7 @@ extern bool g_debugEnabled;
 enum class DebugFeature {
     TRANSMISSION,  // TransmissionController logs
     CAN,          // CANController logs
-    SBUS,         // SBusInput logs
+    MAVLINK,      // MavlinkInterface logs
     SERVO,        // ServoController logs
     BRAKE,        // BTS7960Controller (brake) logs
     RELAY,        // RelayController (ignition/lights) logs

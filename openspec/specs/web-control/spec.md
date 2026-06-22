@@ -4,21 +4,22 @@
 TBD - created by archiving change add-web-portal. Update Purpose after archive.
 ## Requirements
 ### Requirement: Web-Based Manual Control
-The system SHALL accept manual control commands from the web interface when S-bus input is inactive.
+The system SHALL accept manual control commands from the web interface when the MAVLink
+command stream is inactive.
 
 #### Scenario: Receive brake control command from web
 - **WHEN** set_brake command is received via WebSocket with value 0 to 100
-- **AND** input source is WEB (S-bus inactive)
+- **AND** input source is WEB (MAVLink inactive)
 - **THEN** brake value is validated (0 to 100 range, integer or float)
 - **AND** BrakeController or BTS7960Controller is called with brake percentage
 - **AND** success response is sent to web client
 - **AND** brake position updates in real-time
 
-#### Scenario: Reject brake control when S-bus active
+#### Scenario: Reject brake control when MAVLink active
 - **WHEN** set_brake command is received via WebSocket
-- **AND** input source is SBUS (S-bus signal valid)
+- **AND** input source is MAVLINK (MAVLink command stream valid)
 - **THEN** command is rejected
-- **AND** error response is sent with reason "S-bus control active"
+- **AND** error response is sent with reason "MAVLink control active"
 - **AND** no brake actuator state change occurs
 
 #### Scenario: Validate brake command value range
@@ -30,22 +31,22 @@ The system SHALL accept manual control commands from the web interface when S-bu
 ### Requirement: Input Source Priority Management
 The system SHALL enforce input source priority to prevent control conflicts.
 
-#### Scenario: Activate web control when S-bus inactive
-- **WHEN** S-bus signal is lost or times out (>500ms)
-- **AND** no recent S-bus frames received
+#### Scenario: Activate web control when MAVLink inactive
+- **WHEN** the MAVLink command stream is lost or times out (>500ms)
+- **AND** no recent `SERVO_OUTPUT_RAW` commands received
 - **THEN** input source switches to WEB (if web control commands present) or FAILSAFE (if no commands)
 - **AND** web control commands are accepted
 - **AND** web interface enables manual control UI
 
-#### Scenario: Deactivate web control when S-bus reconnects
-- **WHEN** S-bus signal becomes valid after being inactive
-- **THEN** input source switches to SBUS immediately
+#### Scenario: Deactivate web control when MAVLink reconnects
+- **WHEN** the MAVLink command stream becomes valid after being inactive
+- **THEN** input source switches to MAVLINK immediately
 - **AND** web control commands are rejected
 - **AND** web interface disables manual control UI (read-only telemetry only)
-- **AND** S-bus commands take control of vehicle
+- **AND** MAVLink commands take control of vehicle
 
 #### Scenario: Apply fail-safe when both sources inactive
-- **WHEN** S-bus signal is inactive (>500ms timeout)
+- **WHEN** the MAVLink command stream is inactive (>500ms timeout)
 - **AND** no web control commands received for >1 second
 - **THEN** input source switches to FAILSAFE
 - **AND** fail-safe commands are applied (brakes on, neutral, center steering, idle throttle)
@@ -67,10 +68,10 @@ The system SHALL provide web interface controls for manual operation.
 - **AND** brake slider position reflects telemetry feedback
 - **AND** brake percentage value is displayed next to slider
 
-#### Scenario: Disable brake control when S-bus active
-- **WHEN** input source is SBUS
+#### Scenario: Disable brake control when MAVLink active
+- **WHEN** input source is MAVLINK
 - **THEN** brake slider is disabled (greyed out)
-- **AND** brake slider shows current SBUS-controlled position (read-only)
+- **AND** brake slider shows current MAVLink-controlled position (read-only)
 - **AND** slider cannot be moved by user
 
 #### Scenario: Send brake command from web UI

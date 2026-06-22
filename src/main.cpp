@@ -9,7 +9,7 @@
 #include "WebPortal.h"
 #include "VehicleController.h"
 #include "TelemetryManager.h"
-#include "SBusInput.h"
+#include "MavlinkInterface.h"
 #include "RelayController.h"
 #include "nvs_flash.h"
 
@@ -29,21 +29,21 @@ TransmissionController transmissionActuator;
 // Brake actuator (BTS7960)
 BTS7960Controller brakeActuator;
 
-// SBUS Input from ArduPilot Rover
-SBusInput sbusInput;
+// MAVLink interface to Pixhawk (TELEM2)
+MavlinkInterface mavlinkInterface;
 
 // Relay Controller for ignition and lights
 RelayController relayController;
 
 // Vehicle Controller (coordinates all actuators and input sources)
 VehicleController vehicleController(steeringActuator, throttleServo, transmissionActuator, brakeActuator,
-                                     sbusInput, relayController);
+                                     mavlinkInterface, relayController);
 
 // Web Portal for telemetry and manual control
 WebPortal webPortal;
 
 // Telemetry Manager (collects and broadcasts telemetry data)
-TelemetryManager telemetryManager(vehicleController, webPortal, sbusInput);
+TelemetryManager telemetryManager(vehicleController, webPortal, mavlinkInterface);
 
 // ============================================================================
 // SETUP
@@ -129,9 +129,9 @@ void setup() {
     Debug::printfFeature(DebugFeature::BRAKE, "Brake sensor: %s\n",
         digitalRead(PIN_BRAKE_SENSOR) ? "Released (HIGH)" : "Pressed (LOW)");
  
-    // Initialize SBUS input
-    if (!sbusInput.begin()) {
-        Debug::printlnFeature(DebugFeature::SBUS, "ERROR: SBUS input failed");
+    // Initialize MAVLink interface (Pixhawk TELEM2)
+    if (!mavlinkInterface.begin()) {
+        Debug::printlnFeature(DebugFeature::MAVLINK, "ERROR: MAVLink interface failed");
     }
 
     if (!relayController.begin()) {
@@ -156,13 +156,13 @@ void setup() {
 // ============================================================================
 
 void loop() {
-    // Update SBUS receiver
-    sbusInput.update();
+    // Update MAVLink interface (parse inbound, request command stream)
+    mavlinkInterface.update();
 
     // Update web portal (handles OTA, WebSocket cleanup, etc.)
     webPortal.update();
 
-    // Determine current input source (SBUS > WEB > FAILSAFE)
+    // Determine current input source (MAVLINK > WEB > FAILSAFE)
     InputSource currentSource = telemetryManager.determineInputSource();
     vehicleController.setInputSource(currentSource);
 
@@ -175,6 +175,22 @@ void loop() {
 
     // Update vehicle controller (failsafe, actuators, etc.)
     vehicleController.update();
+
+    // Report vehicle state back to the MAVLink network (rate-limited internally)
+    CANController::VehicleData vd = vehicleController.getVehicleData();
+    String gearToStr   = vehicleController.getTargetGearString();  // current step / assumed gear
+    String gearFromStr = vehicleController.getFromGearString();    // gear the step is leaving
+    MavlinkInterface::StateReport report;
+    report.canValid     = vd.dataValid;
+    report.engineRpm    = vd.engineRPM;
+    report.coolantTemp  = vd.coolantTemp;
+    report.throttlePct  = vd.throttlePosition;
+    report.gearFrom     = gearFromStr.c_str();
+    report.gearTo       = gearToStr.c_str();
+    report.gearMoving   = vehicleController.getTransmission().isGearChangeActive();
+    report.ignition     = getRelayIgnitionStateName(vehicleController.getIgnitionState());
+    report.failsafe     = (vehicleController.getInputSource() == InputSource::FAILSAFE);
+    mavlinkInterface.report(report);
 
     // Broadcast telemetry to web clients
     telemetryManager.update();

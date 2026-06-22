@@ -1,8 +1,5 @@
-# web-telemetry Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change add-web-portal. Update Purpose after archive.
-## Requirements
 ### Requirement: Real-Time Telemetry Broadcasting
 The system SHALL broadcast vehicle telemetry data to connected web clients at 5 Hz.
 
@@ -84,47 +81,3 @@ The system SHALL ensure telemetry broadcasting does not degrade control loop per
 - **AND** JSON message size remains under 1KB
 - **AND** broadcast completes within 5ms for 5 concurrent clients
 - **AND** control loop timing remains <10ms average
-
-### Requirement: Firmware Version Display
-The system SHALL display the firmware version in the web portal interface.
-
-#### Scenario: Include firmware version in telemetry broadcast
-- **WHEN** telemetry data is collected for broadcast
-- **THEN** the firmware version string is included from the `FIRMWARE_VERSION` constant defined in Constants.h
-- **AND** the version is added to the telemetry struct as `firmware_version` field
-- **AND** the version is serialized to JSON as `"firmware_version": "<version>"`
-
-#### Scenario: Display firmware version in web UI
-- **WHEN** the web portal receives telemetry data via WebSocket
-- **AND** the telemetry message contains a `firmware_version` field
-- **THEN** the firmware version is displayed in the status bar
-- **AND** the version display uses the existing `.status-item` CSS pattern
-- **AND** the version display has the format: "Firmware: X.X.X"
-- **AND** the version is visible without scrolling (always in status bar)
-
-#### Scenario: Handle missing firmware version gracefully
-- **WHEN** the web portal connects but version data is not yet received
-- **THEN** the firmware version display shows "Loading..." as placeholder text
-- **WHEN** the firmware version field is missing from telemetry
-- **THEN** the display shows "N/A" or retains "Loading..." state
-- **AND** no JavaScript errors are thrown
-
-#### Scenario: Firmware version constant is centrally defined
-- **WHEN** developers need to update the firmware version
-- **THEN** the version is defined as `FIRMWARE_VERSION` constant in `include/Constants.h`
-- **AND** the constant uses semantic versioning format (e.g., "1.0.0")
-- **AND** updating the constant automatically propagates to web portal display
-
-### Requirement: Gear Default Positions in Telemetry
-The telemetry broadcast SHALL include the current effective default positions for all four gears so the web UI can populate the defaults editor without a separate request.
-
-#### Scenario: Include gear_defaults in telemetry JSON
-- **WHEN** the system broadcasts a telemetry update
-- **THEN** the JSON payload SHALL include a `gear_defaults` object with keys `R`, `N`, `L`, `H` containing the current default encoder counts for each gear
-- **AND** the values SHALL reflect the active NVS defaults (or factory constants when no NVS defaults are set)
-
-#### Scenario: Web UI populates defaults editor from telemetry
-- **WHEN** a telemetry message containing `gear_defaults` is received
-- **AND** the user is not currently editing the corresponding input field
-- **THEN** the web UI SHALL update the input fields with the received values
-

@@ -5,7 +5,7 @@
 #include "Constants.h"
 #include "VehicleController.h"
 #include "WebPortal.h"
-#include "SBusInput.h"
+#include "MavlinkInterface.h"
 
 /**
  * @brief Telemetry collection and broadcasting manager
@@ -18,7 +18,7 @@ class TelemetryManager {
 public:
     TelemetryManager(VehicleController& vehicleController,
                      WebPortal& webPortal,
-                     SBusInput& sbusInput);
+                     MavlinkInterface& mavlink);
 
     /**
      * @brief Update telemetry broadcast - call every loop iteration
@@ -46,7 +46,7 @@ public:
     void forceBroadcast();
 
     /**
-     * @brief Determine current input source based on priority: SBUS > WEB > FAILSAFE
+     * @brief Determine current input source based on priority: MAVLINK > WEB > FAILSAFE
      * @return Current input source
      */
     InputSource determineInputSource();
@@ -55,7 +55,7 @@ private:
     // Component references
     VehicleController& vehicleController_;
     WebPortal& webPortal_;
-    SBusInput& sbusInput_;
+    MavlinkInterface& mavlink_;
 
     // Timing
     uint32_t lastBroadcast_;
@@ -86,7 +86,7 @@ private:
  */
 inline const char* getInputSourceName(InputSource source) {
     switch (source) {
-        case InputSource::SBUS: return INPUT_SOURCE_NAME_SBUS;
+        case InputSource::MAVLINK: return INPUT_SOURCE_NAME_MAVLINK;
         case InputSource::WEB: return INPUT_SOURCE_NAME_WEB;
         case InputSource::FAILSAFE: return INPUT_SOURCE_NAME_FAILSAFE;
         default: return "UNKNOWN";

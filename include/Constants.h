@@ -7,9 +7,11 @@
 // GPIO PIN ASSIGNMENTS
 // ============================================================================
 
-// S-bus Input (UART)
-#define PIN_SBUS_RX         GPIO_NUM_8 // UART1 RX with inverted signal
-#define SBUS_UART_NUM       UART_NUM_1   // UART1 for S-bus
+// MAVLink telemetry link (UART to Pixhawk TELEM2)
+#define PIN_MAVLINK_RX      GPIO_NUM_8   // UART1 RX (non-inverted)
+#define PIN_MAVLINK_TX      GPIO_NUM_15  // UART1 TX (non-inverted) — confirmed free; do NOT use GPIO 9 (PIN_TRANS_SERVO)
+#define MAVLINK_UART_NUM    UART_NUM_1   // UART1 for MAVLink
+#define MAVLINK_BAUD_RATE   115200       // Pixhawk TELEM2 baud
 
 // Transmission Servo (HappyModel Super400 Plus)
 #define PIN_TRANS_SERVO     GPIO_NUM_9   // LEDC Channel 2
@@ -62,51 +64,60 @@
 #define ENGINE_RUNNING_RPM_THRESHOLD 1500  // RPM - engine considered running above this
 
 // ============================================================================
-// S-BUS CONFIGURATION
+// MAVLINK / COMMAND CHANNEL CONFIGURATION
 // ============================================================================
 
-// S-bus Channel Assignments (1-16)
-struct SBusChannelConfig {
-    static constexpr uint8_t STEERING = 1;      // Channel 1: Steering (-100% to +100%)
-    static constexpr uint8_t THROTTLE = 2;      // Channel 2: Throttle/Brake combined (above center=throttle, below=brake)
-    static constexpr uint8_t TRANSMISSION = 3;  // Channel 3: Gear selector (3 positions: R/N/L)
-    static constexpr uint8_t IGNITION = 4;      // Channel 4: Ignition state (OFF/ACC/IGNITION)
-    static constexpr uint8_t FRONT_LIGHT = 5;   // Channel 5: Front light (on/off)
+// Servo-output channel assignments (SERVO_OUTPUT_RAW servoN_raw indices, 1-16).
+// Mirrors the function map previously used for S-bus. ArduPilot SERVOn_FUNCTION
+// outputs must align with these indices.
+struct ServoChannelConfig {
+    static constexpr uint8_t STEERING = 1;      // Steering (-100% to +100%)
+    static constexpr uint8_t THROTTLE = 2;      // Throttle/Brake combined (above center=throttle, below=brake)
+    static constexpr uint8_t TRANSMISSION = 3;  // Gear selector (3 positions: R/N/L)
+    static constexpr uint8_t IGNITION = 4;      // Ignition state (OFF/ACC/IGNITION)
+    static constexpr uint8_t FRONT_LIGHT = 6;   // Front light (on/off)  — channel 5 intentionally unused
 };
 
-// S-bus Protocol Parameters
-#define SBUS_RAW_MIN        201   // Minimum S-bus raw value (ArduPilot: (1000-875)*1600/1000+1)
-#define SBUS_RAW_MAX        1801  // Maximum S-bus raw value (ArduPilot: (2000-875)*1600/1000+1)
-#define SBUS_SIGNAL_TIMEOUT   500   // ms before fail-safe activates
+// MAVLink transport / link parameters
+#define MAVLINK_SERVO_OUTPUT_RATE_HZ  50     // Requested SERVO_OUTPUT_RAW stream rate
+#define MAVLINK_CMD_TIMEOUT_MS        500    // ms without a command frame before fail-safe
+#define MAVLINK_HEARTBEAT_TIMEOUT_MS  3000   // ms without an autopilot heartbeat before link is "down"
+#define MAVLINK_HEARTBEAT_TX_MS       1000   // ms between outbound HEARTBEAT messages (1 Hz)
+#define MAVLINK_REPORT_TX_MS          200    // ms between outbound engine/state reports (5 Hz)
+#define MAVLINK_STATUSTEXT_MIN_MS     250    // ms minimum spacing between STATUSTEXT messages
 
-// S-bus to microseconds conversion (for compatibility)
-#define SBUS_US_MIN           1000   // Microseconds equivalent
-#define SBUS_US_MAX           2000  // Microseconds equivalent
-#define SBUS_US_CENTER        1500  // Microseconds center point (updated to match SBUS standard)
+// ESP32 MAVLink identity (distinct component on the vehicle's system)
+#define MAVLINK_SYSTEM_ID             1      // Same system as the autopilot
+#define MAVLINK_COMPONENT_ID          25     // MAV_COMP_ID_USER1 (peripheral component)
+
+// Command channel value range (microseconds) — SERVO_OUTPUT_RAW carries µs directly
+#define RC_US_MIN     1000   // Minimum command microseconds
+#define RC_US_MAX     2000   // Maximum command microseconds
+#define RC_US_CENTER  1500   // Center point (split between throttle and brake)
 
 // Deadband Configuration
-#define SBUS_STEERING_DEADBAND    2.0f   // % center deadband for steering
-#define SBUS_THROTTLE_DEADBAND    2.0f   // % idle deadband for throttle
+#define RC_STEERING_DEADBAND  2.0f   // % center deadband for steering
+#define RC_THROTTLE_DEADBAND  2.0f   // % idle deadband for throttle
 
 // Gear Selection Ranges (in microseconds) - 3-position switch: R/N/L
-#define SBUS_GEAR_REVERSE_MIN     880
-#define SBUS_GEAR_REVERSE_MAX     1200
-#define SBUS_GEAR_NEUTRAL_MIN     1201
-#define SBUS_GEAR_NEUTRAL_MAX     1520
-#define SBUS_GEAR_LOW_MIN         1521
-#define SBUS_GEAR_LOW_MAX         2160
+#define RC_GEAR_REVERSE_MIN   880
+#define RC_GEAR_REVERSE_MAX   1200
+#define RC_GEAR_NEUTRAL_MIN   1201
+#define RC_GEAR_NEUTRAL_MAX   1520
+#define RC_GEAR_LOW_MIN       1521
+#define RC_GEAR_LOW_MAX       2160
 
 // Ignition State Ranges (in microseconds) - 3-position switch: OFF/ACC/IGNITION
-// Note: IGNITION automatically triggers cranking (max 5s, auto-stops when engine starts)
-#define SBUS_IGNITION_OFF_MIN     880
-#define SBUS_IGNITION_OFF_MAX     1200
-#define SBUS_IGNITION_ACC_MIN     1201
-#define SBUS_IGNITION_ACC_MAX     1520
-#define SBUS_IGNITION_ON_MIN      1521
-#define SBUS_IGNITION_ON_MAX      2160
+// Note: IGNITION automatically triggers cranking (auto-stops when engine starts)
+#define RC_IGNITION_OFF_MIN   880
+#define RC_IGNITION_OFF_MAX   1200
+#define RC_IGNITION_ACC_MIN   1201
+#define RC_IGNITION_ACC_MAX   1520
+#define RC_IGNITION_ON_MIN    1521
+#define RC_IGNITION_ON_MAX    2160
 
 // Front Light Threshold (in microseconds)
-#define SBUS_FRONT_LIGHT_THRESHOLD 1520  // >1520 = ON, <=1520 = OFF
+#define RC_FRONT_LIGHT_THRESHOLD 1520  // >1520 = ON, <=1520 = OFF
 
 // ============================================================================
 // SERVO CONFIGURATION
@@ -194,7 +205,7 @@ struct SBusChannelConfig {
 
 // Feature-specific debug flags (code-only control, persisted to NVS)
 // Two-tier logging: Master debug (DEBUG_ENABLED) AND feature flag must both be ON
-// Features: TRANSMISSION, CAN, SBUS, SERVO, BRAKE, RELAY, WEB, VEHICLE, TELEMETRY
+// Features: TRANSMISSION, CAN, MAVLINK, SERVO, BRAKE, RELAY, WEB, VEHICLE, TELEMETRY
 // Enable programmatically: Debug::setFeatureEnabled(DebugFeature::TRANSMISSION, true)
 // Or via NVS: preferences.putBool("feat_trans", true) in "debug" namespace
 #define DEBUG_FEATURE_DEFAULT_STATE  false  // All features default to OFF
@@ -231,15 +242,15 @@ struct SBusChannelConfig {
 // INPUT SOURCE PRIORITY
 // ============================================================================
 
-// Input source priority: SBUS > WEB > FAILSAFE
+// Input source priority: MAVLINK > WEB > FAILSAFE
 enum class InputSource {
-    SBUS,       // S-bus control active (highest priority)
+    MAVLINK,    // MAVLink command stream active (highest priority)
     WEB,        // Web portal control active
     FAILSAFE    // No control source active (safe state)
 };
 
 // Input source names for telemetry/debugging
-#define INPUT_SOURCE_NAME_SBUS      "SBUS"
+#define INPUT_SOURCE_NAME_MAVLINK   "MAVLINK"
 #define INPUT_SOURCE_NAME_WEB       "WEB"
 #define INPUT_SOURCE_NAME_FAILSAFE  "FAILSAFE"
 

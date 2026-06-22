@@ -8,7 +8,7 @@
 #include "BTS7960Controller.h"
 #include "TransmissionController.h"
 #include "WebPortal.h"
-#include "SBusInput.h"
+#include "MavlinkInterface.h"
 #include "RelayController.h"
 #include "CANController.h"
 #include "MCP23017Controller.h"
@@ -16,7 +16,7 @@
 /**
  * @brief Vehicle control coordination layer
  *
- * Handles input source priority (SBUS > WEB > FAILSAFE), processes commands,
+ * Handles input source priority (MAVLINK > WEB > FAILSAFE), processes commands,
  * and coordinates all vehicle actuators (steering, throttle, brake, transmission).
  */
 class VehicleController {
@@ -25,7 +25,7 @@ public:
                       ServoController& throttle,
                       TransmissionController& transmission,
                       BTS7960Controller& brake,
-                      SBusInput& sbusInput,
+                      MavlinkInterface& mavlink,
                       RelayController& relayController);
 
     /**
@@ -41,7 +41,7 @@ public:
 
     /**
      * @brief Set current input source
-     * @param source Input source (SBUS, WEB, or FAILSAFE)
+     * @param source Input source (MAVLINK, WEB, or FAILSAFE)
      */
     void setInputSource(InputSource source);
 
@@ -63,6 +63,19 @@ public:
      * @return Gear string
      */
     String getCurrentGearString() const;
+
+    /**
+     * @brief Get the current target/step gear as string (R/N/L/H).
+     * During a multi-step sequence this is the gear currently being moved to.
+     * @return Gear string
+     */
+    String getTargetGearString() const;
+
+    /**
+     * @brief Get the gear the current step is moving away from, as string (R/N/L/H).
+     * @return Gear string
+     */
+    String getFromGearString() const;
 
     /**
      * @brief Get steering percentage
@@ -148,7 +161,7 @@ private:
     BTS7960Controller& brake_;
 
     // Input and output references
-    SBusInput& sbusInput_;
+    MavlinkInterface& mavlink_;
     RelayController& relayController_;
     CANController canController_;  // CAN bus controller (owned, not reference)
 
@@ -178,8 +191,8 @@ private:
     uint16_t lastPIDThrottleUs_;        // Last PID-computed throttle µs (held on CAN stale)
 
     // Ignition state tracking
-    SBusInput::IgnitionState previousSBusIgnitionState_;  // Track previous state for transition detection
-    TransmissionController::Gear lastSBusGear_;           // Last gear requested via SBUS (dedup guard)
+    MavlinkInterface::IgnitionState previousIgnitionState_;  // Track previous state for transition detection
+    TransmissionController::Gear lastCommandedGear_;         // Last gear requested via MAVLink (dedup guard)
 
     bool transmissionInitialized_;  // True after first engine-running restore
 
@@ -189,9 +202,9 @@ private:
     void applyFailsafe();
 
     /**
-     * @brief Process SBUS commands from ArduPilot
+     * @brief Process MAVLink commands from the autopilot
      */
-    void processSBusCommands();
+    void processMavlinkCommands();
 
     /**
      * @brief Apply brake control with percentage (0-100%)
@@ -206,7 +219,7 @@ private:
 
     /**
      * @brief PID-controlled RPM hold during gear changes
-     * Overrides SBUS/web throttle while gear change is active.
+     * Overrides MAVLink/web throttle while gear change is active.
      */
     void updateGearBoostPID();
 

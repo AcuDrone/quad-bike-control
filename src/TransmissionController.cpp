@@ -3,6 +3,7 @@
 
 TransmissionController::TransmissionController()
     : targetGear_(Gear::GEAR_NEUTRAL)
+    , fromGear_(Gear::GEAR_NEUTRAL)
     , gearChangePhase_(GearChangePhase::NONE)
     , finalGearPositionPct_(TRANS_GEAR_DEFAULT_NEUTRAL_PCT)
     , overshootDirection_(1.0f)
@@ -87,6 +88,7 @@ void TransmissionController::startGearChange(Gear gear) {
     overshootDirection_ = (diff >= 0.0f) ? 1.0f : -1.0f;
     float overshootPct = constrain(targetPct + overshootDirection_ * overshootPcts_[(int)gear], 0.0f, 100.0f);
 
+    fromGear_ = targetGear_;   // capture outgoing gear before advancing the step
     targetGear_ = gear;
     finalGearPositionPct_ = targetPct;
     gearChangePhase_ = GearChangePhase::OVERSHOOT;

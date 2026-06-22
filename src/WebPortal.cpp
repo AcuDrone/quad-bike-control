@@ -550,7 +550,7 @@ bool WebPortal::parseWebCommand(uint8_t* data, size_t len) {
 }
 
 bool WebPortal::validateCommand(const WebCommand& cmd, InputSource inputSource) {
-    // Only allow web commands when input source is WEB (not SBUS or FAILSAFE)
+    // Only allow web commands when input source is WEB (not MAVLINK or FAILSAFE)
     if (inputSource != InputSource::WEB) {
         return false;
     }
@@ -593,7 +593,7 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["throttle_angle"] = telemetry.throttle_angle;
     doc["steering_pct"] = telemetry.steering_pct;
     doc["input_source"] = telemetry.input_source;
-    doc["sbus_active"] = telemetry.sbus_active;
+    doc["mav_active"] = telemetry.mav_active;
 
     // CAN bus vehicle data
     if (telemetry.can_status == "connected") {
@@ -607,14 +607,14 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["can_status"] = telemetry.can_status;
     doc["can_data_age"] = telemetry.can_data_age;
 
-    // SBUS channel data
-    JsonArray sbusChannels = doc.createNestedArray("sbus_channels");
+    // MAVLink command channel + link data
+    JsonArray mavChannels = doc.createNestedArray("mav_channels");
     for (int i = 0; i < 16; i++) {
-        sbusChannels.add(telemetry.sbus_channels[i]);
+        mavChannels.add(telemetry.mav_channels[i]);
     }
-    doc["sbus_frame_rate"] = telemetry.sbus_frame_rate;
-    doc["sbus_error_rate"] = telemetry.sbus_error_rate;
-    doc["sbus_signal_age"] = telemetry.sbus_signal_age;
+    doc["mav_cmd_rate"] = telemetry.mav_cmd_rate;
+    doc["mav_link_age"] = telemetry.mav_link_age;
+    doc["mav_heartbeat_age"] = telemetry.mav_heartbeat_age;
 
     // Gear switching state
     doc["gear_switching"] = telemetry.gear_switching;

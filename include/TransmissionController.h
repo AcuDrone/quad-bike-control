@@ -115,9 +115,15 @@ public:
     bool setDefaultPosition(Gear gear, float positionPct);
 
     /**
-     * @brief Get the gear the transmission is moving toward
+     * @brief Get the gear the transmission is moving toward (current step)
      */
     Gear getTargetGear() const { return targetGear_; }
+
+    /**
+     * @brief Get the gear the current step is moving away from.
+     * Valid while a step is active; equals the destination once settled.
+     */
+    Gear getFromGear() const { return fromGear_; }
 
     /**
      * @brief No-op — servo holds position; retained for API compatibility
@@ -174,6 +180,7 @@ private:
     ServoController servo_;
 
     Gear targetGear_;
+    Gear fromGear_;              // gear the current step is moving away from
     GearChangePhase gearChangePhase_;
     float finalGearPositionPct_;
     float overshootDirection_;   // +1.0 or -1.0, direction of overshoot from target

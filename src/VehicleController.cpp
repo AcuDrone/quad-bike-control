@@ -6,13 +6,13 @@ VehicleController::VehicleController(SteeringController& steering,
                                      ServoController& throttle,
                                      TransmissionController& transmission,
                                      BTS7960Controller& brake,
-                                     SBusInput& sbusInput,
+                                     MavlinkInterface& mavlink,
                                      RelayController& relayController)
     : steering_(steering),
       throttle_(throttle),
       transmission_(transmission),
       brake_(brake),
-      sbusInput_(sbusInput),
+      mavlink_(mavlink),
       relayController_(relayController),
       currentInputSource_(InputSource::FAILSAFE),
       failsafeApplied_(false),
@@ -31,8 +31,8 @@ VehicleController::VehicleController(SteeringController& steering,
       pidIntegral_(0.0f),
       pidPrevError_(0.0f),
       lastPIDThrottleUs_(THROTTLE_IDLE_US),
-      previousSBusIgnitionState_(SBusInput::IgnitionState::OFF),
-      lastSBusGear_(TransmissionController::Gear::GEAR_UNKNOWN),
+      previousIgnitionState_(MavlinkInterface::IgnitionState::OFF),
+      lastCommandedGear_(TransmissionController::Gear::GEAR_UNKNOWN),
       transmissionInitialized_(false) {
 }
 
@@ -71,15 +71,15 @@ void VehicleController::update() {
     // Update relay controller with engine RPM (for automatic cranking stop)
     relayController_.update(canData.engineRPM);
 
-    // Process SBUS commands if SBUS is active
-    if (currentInputSource_ == InputSource::SBUS) {
-        processSBusCommands();
+    // Process MAVLink commands if MAVLink is active
+    if (currentInputSource_ == InputSource::MAVLINK) {
+        processMavlinkCommands();
     }
 
     // Apply fail-safe if needed
     applyFailsafe();
 
-    // PID-controlled RPM boost during gear changes or manual test (overrides SBUS/web throttle)
+    // PID-controlled RPM boost during gear changes or manual test (overrides MAVLink/web throttle)
     if (transmission_.needsThrottleBoost() || gearBoostActive_ || boostManualActive_) {
         updateGearBoostPID();
     }
@@ -97,10 +97,10 @@ void VehicleController::update() {
 void VehicleController::setInputSource(InputSource source) {
     if (currentInputSource_ != source) {
         Debug::printfFeature(DebugFeature::VEHICLE, "[INPUT] Source changed: %s -> %s\n",
-                     (currentInputSource_ == InputSource::SBUS) ? INPUT_SOURCE_NAME_SBUS :
+                     (currentInputSource_ == InputSource::MAVLINK) ? INPUT_SOURCE_NAME_MAVLINK :
                      (currentInputSource_ == InputSource::WEB) ? INPUT_SOURCE_NAME_WEB :
                      INPUT_SOURCE_NAME_FAILSAFE,
-                     (source == InputSource::SBUS) ? INPUT_SOURCE_NAME_SBUS :
+                     (source == InputSource::MAVLINK) ? INPUT_SOURCE_NAME_MAVLINK :
                      (source == InputSource::WEB) ? INPUT_SOURCE_NAME_WEB :
                      INPUT_SOURCE_NAME_FAILSAFE);
     }
@@ -167,6 +167,28 @@ String VehicleController::getCurrentGearString() const {
     }
 }
 
+String VehicleController::getTargetGearString() const {
+    TransmissionController::Gear gear = transmission_.getTargetGear();
+    switch (gear) {
+        case TransmissionController::Gear::GEAR_REVERSE: return "R";
+        case TransmissionController::Gear::GEAR_NEUTRAL: return "N";
+        case TransmissionController::Gear::GEAR_LOW: return "L";
+        case TransmissionController::Gear::GEAR_HIGH: return "H";
+        default: return "N";
+    }
+}
+
+String VehicleController::getFromGearString() const {
+    TransmissionController::Gear gear = transmission_.getFromGear();
+    switch (gear) {
+        case TransmissionController::Gear::GEAR_REVERSE: return "R";
+        case TransmissionController::Gear::GEAR_NEUTRAL: return "N";
+        case TransmissionController::Gear::GEAR_LOW: return "L";
+        case TransmissionController::Gear::GEAR_HIGH: return "H";
+        default: return "N";
+    }
+}
+
 void VehicleController::applyFailsafe() {
     if (currentInputSource_ == InputSource::FAILSAFE && !failsafeApplied_) {
         Debug::printlnFeature(DebugFeature::VEHICLE, "[FAILSAFE] Entering safe state");
@@ -177,8 +199,8 @@ void VehicleController::applyFailsafe() {
         brakeSensorTriggerTime_ = 0;  // Reset sensor trigger
         transmission_.stop();  // Stop transmission actuator
         relayController_.allOff();  // Turn off ignition and lights
-        previousSBusIgnitionState_ = SBusInput::IgnitionState::OFF;  // Reset ignition tracking
-        lastSBusGear_ = TransmissionController::Gear::GEAR_UNKNOWN;  // Force re-eval on restore
+        previousIgnitionState_ = MavlinkInterface::IgnitionState::OFF;  // Reset ignition tracking
+        lastCommandedGear_ = TransmissionController::Gear::GEAR_UNKNOWN;  // Force re-eval on restore
         failsafeApplied_ = true;
     } else if (currentInputSource_ != InputSource::FAILSAFE && failsafeApplied_) {
         Debug::printlnFeature(DebugFeature::VEHICLE, "[FAILSAFE] Exiting safe state");
@@ -187,18 +209,18 @@ void VehicleController::applyFailsafe() {
     }
 }
 
-void VehicleController::processSBusCommands() {
-    if (!sbusInput_.isSignalValid()) {
+void VehicleController::processMavlinkCommands() {
+    if (!mavlink_.isSignalValid()) {
         return;  // Safety check
     }
 
     // Apply steering
-    float steeringPct = sbusInput_.getSteering();
+    float steeringPct = mavlink_.getSteering();
     steering_.setSteeringPercent(steeringPct);
 
     // Apply throttle — skipped when gear boost PID is active (PID overrides)
     if (!gearBoostActive_) {
-        float throttlePct = sbusInput_.getThrottle();
+        float throttlePct = mavlink_.getThrottle();
         if (shouldClipThrottle()) {
             throttlePct = min(TRANS_UNKNOWN_GEAR_THROTTLE_MAX, throttlePct);
         }
@@ -207,33 +229,33 @@ void VehicleController::processSBusCommands() {
     }
 
     // Apply gear selection — retry until setGear() accepts the command
-    TransmissionController::Gear gear = sbusInput_.getGear();
-    if (gear != lastSBusGear_ && isEngineRunning()) {
+    TransmissionController::Gear gear = mavlink_.getGear();
+    if (gear != lastCommandedGear_ && isEngineRunning()) {
         bool accepted = transmission_.setGear(gear);
         if (accepted || transmission_.getTargetGear() == gear) {
-            lastSBusGear_ = gear;
+            lastCommandedGear_ = gear;
         }
-        // If not accepted (e.g. speed interlock), lastSBusGear_ stays unchanged → retry next loop
+        // If not accepted (e.g. speed interlock), lastCommandedGear_ stays unchanged → retry next loop
     }
-    
+
     // Apply brake
-    float brakePct = sbusInput_.getBrake();
+    float brakePct = mavlink_.getBrake();
     applyBrake(brakePct);
 
     // Apply ignition state with automatic cranking
-    SBusInput::IgnitionState ignitionState = sbusInput_.getIgnitionState();
+    MavlinkInterface::IgnitionState ignitionState = mavlink_.getIgnitionState();
     RelayController::IgnitionState relayIgnitionState;
 
     switch (ignitionState) {
-        case SBusInput::IgnitionState::OFF:
+        case MavlinkInterface::IgnitionState::OFF:
             relayIgnitionState = RelayController::IgnitionState::OFF;
             break;
-        case SBusInput::IgnitionState::ACC:
+        case MavlinkInterface::IgnitionState::ACC:
             relayIgnitionState = RelayController::IgnitionState::ACC;
             break;
-        case SBusInput::IgnitionState::IGNITION:
+        case MavlinkInterface::IgnitionState::IGNITION:
             // Check if this is a fresh transition to IGNITION (from OFF or ACC)
-            if (previousSBusIgnitionState_ != SBusInput::IgnitionState::IGNITION) {
+            if (previousIgnitionState_ != MavlinkInterface::IgnitionState::IGNITION) {
                 // Fresh transition - start automatic cranking
                 relayIgnitionState = RelayController::IgnitionState::CRANKING;
                 Debug::printlnFeature(DebugFeature::VEHICLE, "[VEHICLE] IGNITION detected - starting automatic cranking");
@@ -249,10 +271,10 @@ void VehicleController::processSBusCommands() {
     relayController_.setIgnitionState(relayIgnitionState);
 
     // Track state for next iteration
-    previousSBusIgnitionState_ = ignitionState;
+    previousIgnitionState_ = ignitionState;
 
     // Apply front light
-    bool frontLightOn = sbusInput_.getFrontLight();
+    bool frontLightOn = mavlink_.getFrontLight();
     relayController_.setFrontLight(frontLightOn);
 }
 
@@ -320,7 +342,7 @@ void VehicleController::processBrakeCommand(float value, WebPortal& webPortal) {
         return;
     }
 
-    // Apply brake percentage (uses same mechanism as SBUS control)
+    // Apply brake percentage (uses same mechanism as MAVLink control)
     applyBrake(value);
     webPortal.sendResponse(true, "Brake set to " + String((int)value) + "%");
 }
@@ -453,7 +475,7 @@ void VehicleController::processLightCommand(bool on, WebPortal& webPortal) {
 }
 
 void VehicleController::applyBrake(float brakePct) {
-    if (currentBrakeTarget_ = brakePct) { return ;}
+    if (currentBrakeTarget_ == brakePct) { return ;}
     // Clamp brake percentage to valid range
     if (brakePct < 5.0f) brakePct = 0.0f;
     if (brakePct > 100.0f) brakePct = 100.0f;

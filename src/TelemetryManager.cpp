@@ -2,10 +2,10 @@
 
 TelemetryManager::TelemetryManager(VehicleController& vehicleController,
                                    WebPortal& webPortal,
-                                   SBusInput& sbusInput)
+                                   MavlinkInterface& mavlink)
     : vehicleController_(vehicleController),
       webPortal_(webPortal),
-      sbusInput_(sbusInput),
+      mavlink_(mavlink),
       lastBroadcast_(0),
       broadcastInterval_(TELEMETRY_INTERVAL) {
 }
@@ -26,8 +26,8 @@ void TelemetryManager::forceBroadcast() {
 }
 
 InputSource TelemetryManager::determineInputSource() {
-    if (sbusInput_.isSignalValid()) {
-        return InputSource::SBUS;
+    if (mavlink_.isSignalValid()) {
+        return InputSource::MAVLINK;
     }
     if (webPortal_.getClientCount() > 0) {
         return InputSource::WEB;
@@ -49,7 +49,7 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.hall_position = vehicleController_.getTransmission().getCurrentServoPct();
 
     telemetry.brake_pct = 0.0f;
-    telemetry.sbus_active = sbusInput_.isSignalValid();
+    telemetry.mav_active = mavlink_.isSignalValid();
 
     CANController::VehicleData vehicleData = vehicleController_.getVehicleData();
     if (vehicleData.dataValid) {
@@ -72,11 +72,11 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
         telemetry.can_data_age = (vehicleData.lastUpdateTime == 0) ? 0 : (millis() - vehicleData.lastUpdateTime);
     }
 
-    sbusInput_.getRawChannels(telemetry.sbus_channels);
-    SBusInput::SignalQuality sbusQuality = sbusInput_.getSignalQuality();
-    telemetry.sbus_frame_rate = sbusQuality.frameRate;
-    telemetry.sbus_error_rate = sbusQuality.errorRate;
-    telemetry.sbus_signal_age = sbusQuality.signalAge;
+    mavlink_.getRawChannels(telemetry.mav_channels);
+    MavlinkInterface::LinkQuality linkQuality = mavlink_.getLinkQuality();
+    telemetry.mav_cmd_rate = linkQuality.commandRate;
+    telemetry.mav_link_age = linkQuality.signalAge;
+    telemetry.mav_heartbeat_age = linkQuality.heartbeatAge;
 
     telemetry.gear_switching = vehicleController_.getTransmission().needsThrottleBoost();
 
