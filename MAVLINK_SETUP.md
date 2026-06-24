@@ -47,12 +47,25 @@ The ESP32 reads command channels from `SERVO_OUTPUT_RAW.servoN_raw`. ArduPilot's
 
 Sourced from the CAN bus (`CANController::VehicleData`):
 
-| Data | MAVLink message | Rate |
-|------|-----------------|------|
-| Liveness + fail-safe status | `HEARTBEAT` (`MAV_TYPE_GROUND_ROVER`) | 1 Hz |
-| Engine RPM, coolant temp, throttle | `EFI_STATUS` | 5 Hz |
-| Current gear (live value) | `NAMED_VALUE_FLOAT` `GEAR` | 5 Hz |
-| Gear / ignition / fail-safe transitions | `STATUSTEXT` | on change |
+| Data | MAVLink message | Component | MP field | Rate |
+|------|-----------------|-----------|----------|------|
+| Liveness + fail-safe status | `HEARTBEAT` (`MAV_TYPE_GROUND_ROVER`) | 25 | — | 1 Hz |
+| Engine RPM | `EFI_STATUS.rpm` | **1** | `efi_rpm` | 5 Hz |
+| Coolant temp | `EFI_STATUS.cylinder_head_temperature` | **1** | `efi_cylinder_head_temperature` | 5 Hz |
+| Gear | `EFI_STATUS.engine_load` | **1** | `efi_load` | 5 Hz |
+| Gear (also) | `NAMED_VALUE_FLOAT` `GEAR` | 25 | `customFieldN` / `GEAR` in Tuning | 5 Hz |
+| Gear / ignition / fail-safe transitions | `STATUSTEXT` | 25 | Messages tab | on change |
+
+> **Why EFI_STATUS is sent as component 1:** Mission Planner only maps `EFI_STATUS` into its
+> labeled `efi_*` fields from the **autopilot component** (sysid 1 / comp 1), not from a
+> peripheral component. So engine telemetry is tagged comp 1 (the real autopilot sends no EFI,
+> so there's no conflict), while the ESP32 keeps its own identity (comp 25) for `HEARTBEAT`/
+> `STATUSTEXT`. Verified against BlueOS + MP 1.3.83: from comp 25, `efi_rpm`/`rpm1` stay 0.
+>
+> **Gear → `efi_load`:** gear has no standard MP field, so it rides in the otherwise-unused
+> `EFI_STATUS.engine_load`, surfacing as the selectable/gaugeable `efi_load` value in MP. It is
+> *also* sent as `NAMED_VALUE_FLOAT "GEAR"` (correctly labeled in the Tuning graph; `customFieldN`
+> in the Status tab — MP does not show NVF names there or offer them on the Quick tab).
 
 `GEAR` appears in Mission Planner's **Status tab** (and can be graphed). It is encoded by
 physical gear-sequence position; while shifting it reads the **midpoint** between the two gears

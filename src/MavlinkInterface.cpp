@@ -16,7 +16,7 @@ MavlinkInterface::MavlinkInterface()
       targetSystem_(0),
       targetComponent_(0),
       targetKnown_(false),
-      streamRequested_(false),
+      lastStreamRequestTime_(0),
       lastHeartbeatTx_(0),
       lastReportTx_(0),
       lastStatustextTx_(0),
@@ -89,20 +89,40 @@ void MavlinkInterface::update() {
                     handleServoOutputRaw(servoUs);
                     break;
                 }
+                case MAVLINK_MSG_ID_COMMAND_ACK: {
+                    mavlink_command_ack_t ack;
+                    mavlink_msg_command_ack_decode(&msg, &ack);
+                    if (ack.command == MAV_CMD_SET_MESSAGE_INTERVAL) {
+                        const char* r =
+                            (ack.result == MAV_RESULT_ACCEPTED) ? "ACCEPTED" :
+                            (ack.result == MAV_RESULT_TEMPORARILY_REJECTED) ? "TEMP_REJECTED" :
+                            (ack.result == MAV_RESULT_DENIED) ? "DENIED" :
+                            (ack.result == MAV_RESULT_UNSUPPORTED) ? "UNSUPPORTED" :
+                            (ack.result == MAV_RESULT_FAILED) ? "FAILED" : "OTHER";
+                        Debug::printfFeature(DebugFeature::MAVLINK,
+                            "[MAV] SET_MESSAGE_INTERVAL ack: %s (%u)\n", r, ack.result);
+                    }
+                    break;
+                }
                 default:
                     break;
             }
         }
     }
 
-    // Request the command stream once we know who the autopilot is
-    if (targetKnown_ && !streamRequested_) {
+    uint32_t now = millis();
+
+    // Request — and periodically re-request — the command stream until it is
+    // flowing at a healthy rate. The one-shot request can be lost or rejected at
+    // boot; re-requesting also recovers after an autopilot reboot.
+    if (targetKnown_ && isLinkUp() &&
+        lastCmdRate_ < MAVLINK_STREAM_MIN_RATE_HZ &&
+        (lastStreamRequestTime_ == 0 || now - lastStreamRequestTime_ >= MAVLINK_STREAM_REREQUEST_MS)) {
         requestServoOutputStream();
-        streamRequested_ = true;
+        lastStreamRequestTime_ = now;
     }
 
     // Rolling command-rate estimate (1 s window)
-    uint32_t now = millis();
     if (now - rateWindowStart_ >= 1000) {
         lastCmdRate_ = (float)rateWindowCount_ * 1000.0f / (float)(now - rateWindowStart_);
         rateWindowStart_ = now;
@@ -119,6 +139,14 @@ void MavlinkInterface::update() {
             isSignalValid() ? "Y" : "N",
             (unsigned long)(heartbeatSeen_ ? now - lastHeartbeatTime_ : 0),
             isLinkUp() ? "Y" : "N");
+        // Decoded command channels (µs) — steering / throttle-brake / gear / ignition / light
+        Debug::printfFeature(DebugFeature::MAVLINK,
+            "[MAV] ch S:%u T:%u G:%u I:%u L:%u\n",
+            getChannel(ServoChannelConfig::STEERING),
+            getChannel(ServoChannelConfig::THROTTLE),
+            getChannel(ServoChannelConfig::TRANSMISSION),
+            getChannel(ServoChannelConfig::IGNITION),
+            getChannel(ServoChannelConfig::FRONT_LIGHT));
     }
 }
 
@@ -149,7 +177,21 @@ void MavlinkInterface::handleServoOutputRaw(const uint16_t* servoUs) {
 void MavlinkInterface::requestServoOutputStream() {
     mavlink_message_t msg;
     uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+    uint16_t len;
 
+    // 1) Legacy REQUEST_DATA_STREAM — sets the rate of the whole RC_CHANNELS
+    //    stream group (which contains SERVO_OUTPUT_RAW). Honored by ArduPilot on
+    //    ports where SET_MESSAGE_INTERVAL is denied (e.g. SERIAL4/TELEM4).
+    mavlink_msg_request_data_stream_pack(
+        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &msg,
+        targetSystem_, targetComponent_,
+        MAV_DATA_STREAM_RC_CHANNELS,            // stream group containing SERVO_OUTPUT_RAW
+        MAVLINK_SERVO_OUTPUT_RATE_HZ,           // requested rate (Hz)
+        1);                                     // start
+    len = mavlink_msg_to_send_buffer(buf, &msg);
+    serial_->write(buf, len);
+
+    // 2) Modern SET_MESSAGE_INTERVAL — kept for autopilots/ports that honor it.
     const float intervalUs = 1000000.0f / (float)MAVLINK_SERVO_OUTPUT_RATE_HZ;
     mavlink_msg_command_long_pack(
         MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &msg,
@@ -158,11 +200,12 @@ void MavlinkInterface::requestServoOutputStream() {
         (float)MAVLINK_MSG_ID_SERVO_OUTPUT_RAW,  // param1: message id
         intervalUs,                              // param2: interval (µs)
         0, 0, 0, 0, 0);
-    uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+    len = mavlink_msg_to_send_buffer(buf, &msg);
     serial_->write(buf, len);
 
     Debug::printfFeature(DebugFeature::MAVLINK,
-        "[MAV] Requested SERVO_OUTPUT_RAW @ %d Hz\n", MAVLINK_SERVO_OUTPUT_RATE_HZ);
+        "[MAV] Requested SERVO_OUTPUT_RAW @ %d Hz (REQUEST_DATA_STREAM + SET_MESSAGE_INTERVAL)\n",
+        MAVLINK_SERVO_OUTPUT_RATE_HZ);
 }
 
 // ============================================================================
@@ -194,34 +237,38 @@ void MavlinkInterface::report(const StateReport& state) {
     if (now - lastReportTx_ >= MAVLINK_REPORT_TX_MS) {
         lastReportTx_ = now;
 
-        // EFI_STATUS — engine RPM, coolant temperature, throttle (encode from a
-        // zeroed struct so dialect extension fields stay neutral).
-        // Note: vehicle speed and oil temperature are not available from the ECU,
-        // so they are intentionally not reported (would be misleading zeros).
-        mavlink_efi_status_t efi;
-        memset(&efi, 0, sizeof(efi));
-        efi.health = state.canValid ? 1 : 0;
-        efi.rpm = state.engineRpm;
-        efi.throttle_position = (float)state.throttlePct;
-        efi.cylinder_head_temperature = (float)state.coolantTemp;
-        mavlink_msg_efi_status_encode(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &msg, &efi);
-        uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
-        serial_->write(buf, len);
-
-        // GEAR as a NAMED_VALUE_FLOAT so it shows as a live value in the GCS
-        // (Mission Planner Status tab / graphs). Encoded by PHYSICAL SEQUENCE
-        // position [R, N, H, L] = [-1, 0, 1, 2]. While the servo is moving between
-        // two gears the value is their MIDPOINT, so a multi-step change renders as
-        // an even 0.5 staircase (e.g. -0.5 = between R and N). When settled it is the
-        // integer gear value. This is the controller's ASSUMED/commanded gear — the
-        // transmission is sensorless and time-based, so it reflects intent, not a
-        // measured position.
+        // Gear value, encoded by PHYSICAL SEQUENCE position [R, N, H, L] = [-1, 0, 1, 2].
+        // While the servo is moving between two gears the value is their MIDPOINT, so a
+        // multi-step change renders as an even 0.5 staircase (e.g. -0.5 = between R and N);
+        // when settled it is the integer gear value. This is the controller's ASSUMED
+        // (commanded) gear — the transmission is sensorless and time-based.
         float gearVal;
         if (state.gearMoving) {
             gearVal = (encodeGear(state.gearFrom) + encodeGear(state.gearTo)) * 0.5f;
         } else {
             gearVal = encodeGear(state.gearTo);
         }
+
+        // EFI_STATUS — engine RPM, coolant temperature, and gear.
+        // Sent as the AUTOPILOT component (MAVLINK_EFI_COMPONENT_ID) because Mission
+        // Planner only maps EFI_STATUS into its labeled efi_* fields from that component.
+        // Gear is carried in the otherwise-unused engine_load field so it appears as a
+        // selectable/gaugeable "efi_load" value in MP. Throttle is intentionally not sent:
+        // MP 1.3.83 does not surface EFI_STATUS.throttle_position, and the autopilot already
+        // knows the commanded throttle. Vehicle speed and oil temperature are unavailable
+        // from the ECU, so they are left zero.
+        mavlink_efi_status_t efi;
+        memset(&efi, 0, sizeof(efi));
+        efi.health = state.canValid ? 1 : 0;
+        efi.rpm = state.engineRpm;
+        efi.cylinder_head_temperature = (float)state.coolantTemp;
+        efi.engine_load = gearVal;   // gear -> MP "efi_load"
+        mavlink_msg_efi_status_encode(MAVLINK_SYSTEM_ID, MAVLINK_EFI_COMPONENT_ID, &msg, &efi);
+        uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+        serial_->write(buf, len);
+
+        // GEAR also as a NAMED_VALUE_FLOAT — correctly labeled "GEAR" in the MP Tuning
+        // graph (and as a customField in the Status tab).
         sendNamedValueFloat("GEAR", gearVal);
     }
 

@@ -79,7 +79,9 @@ struct ServoChannelConfig {
 };
 
 // MAVLink transport / link parameters
-#define MAVLINK_SERVO_OUTPUT_RATE_HZ  50     // Requested SERVO_OUTPUT_RAW stream rate
+#define MAVLINK_SERVO_OUTPUT_RATE_HZ  25     // Requested SERVO_OUTPUT_RAW stream rate
+#define MAVLINK_STREAM_REREQUEST_MS   3000   // ms between SET_MESSAGE_INTERVAL retries until the stream is healthy
+#define MAVLINK_STREAM_MIN_RATE_HZ    10.0f  // re-request the stream while command rate is below this
 #define MAVLINK_CMD_TIMEOUT_MS        500    // ms without a command frame before fail-safe
 #define MAVLINK_HEARTBEAT_TIMEOUT_MS  3000   // ms without an autopilot heartbeat before link is "down"
 #define MAVLINK_HEARTBEAT_TX_MS       1000   // ms between outbound HEARTBEAT messages (1 Hz)
@@ -89,6 +91,9 @@ struct ServoChannelConfig {
 // ESP32 MAVLink identity (distinct component on the vehicle's system)
 #define MAVLINK_SYSTEM_ID             1      // Same system as the autopilot
 #define MAVLINK_COMPONENT_ID          25     // MAV_COMP_ID_USER1 (peripheral component)
+// EFI_STATUS is sent as the autopilot component so Mission Planner maps it into its
+// labeled efi_* fields (MP only does this for the autopilot component, not comp 25).
+#define MAVLINK_EFI_COMPONENT_ID      1      // MAV_COMP_ID_AUTOPILOT1
 
 // Command channel value range (microseconds) — SERVO_OUTPUT_RAW carries µs directly
 #define RC_US_MIN     1000   // Minimum command microseconds

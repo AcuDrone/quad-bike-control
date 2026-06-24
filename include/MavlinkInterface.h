@@ -132,7 +132,7 @@ private:
     uint8_t targetSystem_;
     uint8_t targetComponent_;
     bool     targetKnown_;
-    bool     streamRequested_;
+    uint32_t lastStreamRequestTime_;   // millis() of last SET_MESSAGE_INTERVAL request (0 = none)
 
     // Outbound scheduling
     uint32_t lastHeartbeatTx_;
