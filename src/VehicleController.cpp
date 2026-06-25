@@ -317,8 +317,8 @@ void VehicleController::processSteeringCommand(float value, WebPortal& webPortal
 bool VehicleController::shouldClipThrottle() const {
     if (transmission_.isGearChangeActive())
         return true;
-    if (transmission_.getTargetGear() == TransmissionController::Gear::GEAR_NEUTRAL)
-        return true;
+    // if (transmission_.getTargetGear() == TransmissionController::Gear::GEAR_NEUTRAL)
+    //     return true;
     return false;
 }
 
