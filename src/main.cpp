@@ -83,6 +83,12 @@ void setup() {
 
     Debug::println("\n=== ESP32-C6 Quad Bike Control ===");
 
+    // Initialize throttle servo
+    if (!throttleServo.begin(PIN_THROTTLE_PWM, LEDC_CH_THROTTLE, THROTTLE_SERVO_MIN_US, THROTTLE_SERVO_MAX_US)) {
+        Debug::printlnFeature(DebugFeature::SERVO, "ERROR: Throttle servo failed");
+    }
+    throttleServo.setAngle(THROTTLE_IDLE_ANGLE);
+
     // Initialize steering actuator (BTS7960 + encoder)
     if (!steeringEncoder.begin(PIN_STEER_ENCODER_A, PIN_STEER_ENCODER_B, PCNT_UNIT_STEER)) {
         Debug::printlnFeature(DebugFeature::SERVO, "ERROR: Steering encoder failed");
@@ -102,12 +108,6 @@ void setup() {
     } else {
         Debug::printlnFeature(DebugFeature::SERVO, "ERROR: Steering actuator failed");
     }
-
-    // Initialize throttle servo
-    if (!throttleServo.begin(PIN_THROTTLE_PWM, LEDC_CH_THROTTLE, THROTTLE_SERVO_MIN_US, THROTTLE_SERVO_MAX_US)) {
-        Debug::printlnFeature(DebugFeature::SERVO, "ERROR: Throttle servo failed");
-    }
-    throttleServo.setAngle(THROTTLE_IDLE_ANGLE);
 
     // Initialize transmission servo
     if (transmissionActuator.begin()) {
