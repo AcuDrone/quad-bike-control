@@ -49,27 +49,30 @@ Sourced from the CAN bus (`CANController::VehicleData`):
 
 | Data | MAVLink message | Component | MP field | Rate |
 |------|-----------------|-----------|----------|------|
-| Liveness + fail-safe status | `HEARTBEAT` (`MAV_TYPE_GROUND_ROVER`) | 25 | — | 1 Hz |
-| Engine RPM | `EFI_STATUS.rpm` | **1** | `efi_rpm` | 5 Hz |
-| Coolant temp | `EFI_STATUS.cylinder_head_temperature` | **1** | `efi_cylinder_head_temperature` | 5 Hz |
-| Gear | `EFI_STATUS.engine_load` | **1** | `efi_load` | 5 Hz |
-| Gear (also) | `NAMED_VALUE_FLOAT` `GEAR` | 25 | `customFieldN` / `GEAR` in Tuning | 5 Hz |
-| Gear / ignition / fail-safe transitions | `STATUSTEXT` | 25 | Messages tab | on change |
+| Data | EFI_STATUS field | Component | Rate |
+|------|------------------|-----------|------|
+| Liveness + fail-safe status | `HEARTBEAT` (`MAV_TYPE_GROUND_ROVER`) | 25 | 1 Hz |
+| Gear | `engine_load` | 25 | 5 Hz |
+| Engine RPM | `rpm` | 25 | 5 Hz¹ |
+| Coolant temp | `cylinder_head_temperature` | 25 | 5 Hz¹ |
+| Gear / ignition / fail-safe transitions | `STATUSTEXT` | 25 | on change |
 
-> **Why EFI_STATUS is sent as component 1:** Mission Planner only maps `EFI_STATUS` into its
-> labeled `efi_*` fields from the **autopilot component** (sysid 1 / comp 1), not from a
-> peripheral component. So engine telemetry is tagged comp 1 (the real autopilot sends no EFI,
-> so there's no conflict), while the ESP32 keeps its own identity (comp 25) for `HEARTBEAT`/
-> `STATUSTEXT`. Verified against BlueOS + MP 1.3.83: from comp 25, `efi_rpm`/`rpm1` stay 0.
->
-> **Gear → `efi_load`:** gear has no standard MP field, so it rides in the otherwise-unused
-> `EFI_STATUS.engine_load`, surfacing as the selectable/gaugeable `efi_load` value in MP. It is
-> *also* sent as `NAMED_VALUE_FLOAT "GEAR"` (correctly labeled in the Tuning graph; `customFieldN`
-> in the Status tab — MP does not show NVF names there or offer them on the Quick tab).
+¹ `rpm` and `cylinder_head_temperature` are sent as **NaN** while CAN data is invalid
+(`!canValid`), so the consumer shows "--" instead of misleading zeros. The `engine_load`
+(gear) field is always valid (sensorless, time-based).
 
-`GEAR` appears in Mission Planner's **Status tab** (and can be graphed). It is encoded by
-physical gear-sequence position; while shifting it reads the **midpoint** between the two gears
-in transit, so a multi-step change is an even 0.5 staircase:
+> **Why one `EFI_STATUS`, not per-value `NAMED_VALUE_FLOAT`:** all `NAMED_VALUE_FLOAT` messages
+> share a single message id and are distinguished only by a `name` field, so any name-agnostic
+> store (MP's MAVLink Inspector, the mavlink2rest cache, unmapped `customField`s) keeps only the
+> last one received — the three values appear to override each other. Packing gear/rpm/coolant
+> into **distinct fields of one `EFI_STATUS`** eliminates that collision entirely. Mission Planner
+> won't surface a *peripheral's* EFI in its native `efi_*` fields (those map only the autopilot,
+> comp 1), but the raw packet **is** delivered, so the QuadBike MP plugin reads it cleanly via a
+> packet subscription. Verified against BlueOS + MP 1.3.83.
+
+`engine_load` carries the gear, encoded by physical gear-sequence position; while shifting it
+reads the **midpoint** between the two gears in transit, so a multi-step change is an even 0.5
+staircase:
 
 | Gear | Settled value | Moving toward it (midpoint) |
 |------|---------------|------------------------------|

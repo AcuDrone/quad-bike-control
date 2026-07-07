@@ -12,8 +12,8 @@
  * from the MAVLink SERVO_OUTPUT_RAW message (servo PWM microseconds) and exposes
  * the same typed command API the vehicle layer consumes
  * (steering/throttle/gear/brake/ignition/light). Also reports vehicle state back
- * to the MAVLink network using standard messages (HEARTBEAT / EFI_STATUS /
- * VFR_HUD) plus STATUSTEXT for state transitions.
+ * to the MAVLink network: HEARTBEAT plus a single EFI_STATUS (RPM / coolant /
+ * gear) from this component, plus STATUSTEXT for state transitions.
  *
  * The MAVLink C library headers are included only in the .cpp to keep this
  * header lightweight.
@@ -150,7 +150,6 @@ private:
     void handleServoOutputRaw(const uint16_t* servoUs);
     void requestServoOutputStream();
     void sendStatusText(uint8_t severity, const char* text);
-    void sendNamedValueFloat(const char* name, float value);
 
     // Map a gear name ("R"/"N"/"H"/"L") to its physical-sequence value [-1,0,1,2]
     static float encodeGear(const char* gear);

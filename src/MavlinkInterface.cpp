@@ -3,6 +3,7 @@
 
 // MAVLink C library (header-only). ArduPilotMega dialect (superset of common).
 #include <ardupilotmega/mavlink.h>
+#include <math.h>   // NAN
 
 MavlinkInterface::MavlinkInterface()
     : serial_(nullptr),
@@ -233,43 +234,41 @@ void MavlinkInterface::report(const StateReport& state) {
         serial_->write(buf, len);
     }
 
-    // Engine telemetry (5 Hz)
+    // All vehicle telemetry in ONE EFI_STATUS message from this component (25), so the values
+    // can never override one another (unlike same-named NAMED_VALUE_FLOAT, which share a single
+    // message id and collide in name-agnostic stores). Field mapping, read by the QuadBike MP
+    // plugin via a packet subscription:
+    //   rpm                        -> engine RPM
+    //   cylinder_head_temperature  -> coolant temperature (°C)
+    //   engine_load                -> GEAR, encoded by PHYSICAL SEQUENCE position
+    //                                 [R, N, H, L] = [-1, 0, 1, 2]; while the servo moves between
+    //                                 two gears the value is their MIDPOINT (0.5 staircase),
+    //                                 settling on the integer. (Sensorless, time-based ASSUMED gear.)
+    // ArduPilot won't surface a peripheral's EFI in MP's native efi_* fields, but the raw packet
+    // IS delivered, so the plugin's subscription receives it cleanly. RPM/coolant are NaN while
+    // CAN data is invalid (so the plugin shows "--" instead of misleading zeros).
     if (now - lastReportTx_ >= MAVLINK_REPORT_TX_MS) {
         lastReportTx_ = now;
 
-        // Gear value, encoded by PHYSICAL SEQUENCE position [R, N, H, L] = [-1, 0, 1, 2].
-        // While the servo is moving between two gears the value is their MIDPOINT, so a
-        // multi-step change renders as an even 0.5 staircase (e.g. -0.5 = between R and N);
-        // when settled it is the integer gear value. This is the controller's ASSUMED
-        // (commanded) gear — the transmission is sensorless and time-based.
-        float gearVal;
-        if (state.gearMoving) {
-            gearVal = (encodeGear(state.gearFrom) + encodeGear(state.gearTo)) * 0.5f;
-        } else {
-            gearVal = encodeGear(state.gearTo);
-        }
+        float gearVal = state.gearMoving
+            ? (encodeGear(state.gearFrom) + encodeGear(state.gearTo)) * 0.5f
+            : encodeGear(state.gearTo);
+        float rpmVal = state.canValid ? (float)state.engineRpm  : NAN;
+        float chtVal = state.canValid ? (float)state.coolantTemp : NAN;
 
-        // EFI_STATUS — engine RPM, coolant temperature, and gear.
-        // Sent as the AUTOPILOT component (MAVLINK_EFI_COMPONENT_ID) because Mission
-        // Planner only maps EFI_STATUS into its labeled efi_* fields from that component.
-        // Gear is carried in the otherwise-unused engine_load field so it appears as a
-        // selectable/gaugeable "efi_load" value in MP. Throttle is intentionally not sent:
-        // MP 1.3.83 does not surface EFI_STATUS.throttle_position, and the autopilot already
-        // knows the commanded throttle. Vehicle speed and oil temperature are unavailable
-        // from the ECU, so they are left zero.
-        mavlink_efi_status_t efi;
-        memset(&efi, 0, sizeof(efi));
-        efi.health = state.canValid ? 1 : 0;
-        efi.rpm = state.engineRpm;
-        efi.cylinder_head_temperature = (float)state.coolantTemp;
-        efi.engine_load = gearVal;   // gear -> MP "efi_load"
-        mavlink_msg_efi_status_encode(MAVLINK_SYSTEM_ID, MAVLINK_EFI_COMPONENT_ID, &msg, &efi);
+        mavlink_msg_efi_status_pack(
+            MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &msg,
+            1,          // health (1 = present)
+            0.0f,       // ecu_index
+            rpmVal,     // rpm
+            0.0f, 0.0f, // fuel_consumed, fuel_flow
+            gearVal,    // engine_load  <- GEAR
+            0.0f, 0.0f, 0.0f, 0.0f, 0.0f, // throttle_position, spark_dwell, baro, intake_press, intake_temp
+            chtVal,     // cylinder_head_temperature  <- coolant
+            0.0f, 0.0f, // ignition_timing, injection_time
+            0.0f, 0.0f, 0.0f, 0.0f, 0.0f); // exhaust, throttle_out, pt_comp, ign_voltage, fuel_pressure
         uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
         serial_->write(buf, len);
-
-        // GEAR also as a NAMED_VALUE_FLOAT — correctly labeled "GEAR" in the MP Tuning
-        // graph (and as a customField in the Status tab).
-        sendNamedValueFloat("GEAR", gearVal);
     }
 
     // STATUSTEXT on gear / ignition / fail-safe transitions (rate-limited).
@@ -304,17 +303,6 @@ void MavlinkInterface::sendStatusText(uint8_t severity, const char* text) {
     mavlink_msg_statustext_pack(
         MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &msg,
         severity, text, 0 /*id*/, 0 /*chunk_seq*/);
-    uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
-    serial_->write(buf, len);
-}
-
-void MavlinkInterface::sendNamedValueFloat(const char* name, float value) {
-    mavlink_message_t msg;
-    uint8_t buf[MAVLINK_MAX_PACKET_LEN];
-    // name is truncated to 10 chars by the message definition
-    mavlink_msg_named_value_float_pack(
-        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &msg,
-        millis(), name, value);
     uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
     serial_->write(buf, len);
 }

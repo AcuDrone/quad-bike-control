@@ -91,9 +91,6 @@ struct ServoChannelConfig {
 // ESP32 MAVLink identity (distinct component on the vehicle's system)
 #define MAVLINK_SYSTEM_ID             1      // Same system as the autopilot
 #define MAVLINK_COMPONENT_ID          25     // MAV_COMP_ID_USER1 (peripheral component)
-// EFI_STATUS is sent as the autopilot component so Mission Planner maps it into its
-// labeled efi_* fields (MP only does this for the autopilot component, not comp 25).
-#define MAVLINK_EFI_COMPONENT_ID      1      // MAV_COMP_ID_AUTOPILOT1
 
 // Command channel value range (microseconds) — SERVO_OUTPUT_RAW carries µs directly
 #define RC_US_MIN     1000   // Minimum command microseconds
