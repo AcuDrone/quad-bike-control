@@ -61,6 +61,7 @@
 
 // Cranking Parameters
 #define CRANKING_TIMEOUT           2000  // ms - maximum cranking duration
+#define ACC_PRECRANK_DWELL_MS      2000  // ms - ignition/ECU line (R1) must be powered this long before the starter (R2) engages
 #define ENGINE_RUNNING_RPM_THRESHOLD 1500  // RPM - engine considered running above this
 
 // ============================================================================

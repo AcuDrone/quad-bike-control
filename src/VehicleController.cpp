@@ -242,35 +242,30 @@ void VehicleController::processMavlinkCommands() {
     float brakePct = mavlink_.getBrake();
     applyBrake(brakePct);
 
-    // Apply ignition state with automatic cranking
+    // Apply ignition state. Cranking is sequenced inside RelayController, which enforces a
+    // pre-crank dwell: the starter (R2) does not engage until the ignition/ECU line (R1) has
+    // been powered for ACC_PRECRANK_DWELL_MS (immediately if R1 was already up that long).
     MavlinkInterface::IgnitionState ignitionState = mavlink_.getIgnitionState();
-    RelayController::IgnitionState relayIgnitionState;
 
     switch (ignitionState) {
         case MavlinkInterface::IgnitionState::OFF:
-            relayIgnitionState = RelayController::IgnitionState::OFF;
+            relayController_.setIgnitionState(RelayController::IgnitionState::OFF);
             break;
         case MavlinkInterface::IgnitionState::ACC:
-            relayIgnitionState = RelayController::IgnitionState::ACC;
+            relayController_.setIgnitionState(RelayController::IgnitionState::ACC);
             break;
         case MavlinkInterface::IgnitionState::IGNITION:
-            // Check if this is a fresh transition to IGNITION (from OFF or ACC)
+            // Arm the dwell-gated auto-crank only on a FRESH transition into IGNITION.
+            // Holding IGNITION does not re-crank; RelayController::update() runs the sequence
+            // (ACC hold -> dwell -> CRANKING -> IGNITION) and reports ACC while waiting.
             if (previousIgnitionState_ != MavlinkInterface::IgnitionState::IGNITION) {
-                // Fresh transition - start automatic cranking
-                relayIgnitionState = RelayController::IgnitionState::CRANKING;
-                Debug::printlnFeature(DebugFeature::VEHICLE, "[VEHICLE] IGNITION detected - starting automatic cranking");
-            } else {
-                // Already in IGNITION state - maintain current relay state
-                // (RelayController will auto-transition from CRANKING to IGNITION when ready)
-                relayIgnitionState = relayController_.getIgnitionState();
+                Debug::printlnFeature(DebugFeature::VEHICLE, "[VEHICLE] IGNITION selected - arming pre-crank dwell");
+                relayController_.requestCrank();
             }
             break;
     }
 
-    // Update relay state
-    relayController_.setIgnitionState(relayIgnitionState);
-
-    // Track state for next iteration
+    // Track state for next iteration (fresh-transition detection)
     previousIgnitionState_ = ignitionState;
 
     // Apply front light
