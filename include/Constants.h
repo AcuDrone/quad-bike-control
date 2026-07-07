@@ -139,13 +139,14 @@ struct ServoChannelConfig {
 #define STEER_STALL_TIMEOUT       500   // ms - time without encoder change = stall
 
 // Throttle Servo Parameters
-#define THROTTLE_SERVO_MIN_US    800   // Minimum pulse width (microseconds)
-#define THROTTLE_SERVO_MAX_US    2200  // Maximum pulse width (microseconds)
-#define THROTTLE_MIN_ANGLE       13    // degrees (idle) - measured 13% of full range
-#define THROTTLE_MAX_ANGLE       70    // degrees (full throttle) - measured 37% of full range
-#define THROTTLE_IDLE_ANGLE      13    // degrees (idle position)
-#define THROTTLE_IDLE_US  (THROTTLE_SERVO_MIN_US + (THROTTLE_IDLE_ANGLE * (THROTTLE_SERVO_MAX_US - THROTTLE_SERVO_MIN_US)) / 180)
-#define THROTTLE_FULL_US  (THROTTLE_SERVO_MIN_US + (THROTTLE_MAX_ANGLE  * (THROTTLE_SERVO_MAX_US - THROTTLE_SERVO_MIN_US)) / 180)
+#define THROTTLE_SERVO_MIN_US    800   // Minimum servo pulse width (µs) — mechanical range floor / slider bound
+#define THROTTLE_SERVO_MAX_US    2200  // Maximum servo pulse width (µs) — mechanical range ceiling / slider bound
+// Throttle calibration: 0..100% maps onto [idle_us, full_us]. These endpoints are runtime-editable
+// via the web calibration flow and persisted in NVS ("throttle" namespace); the values below are
+// only the defaults used on first boot / when stored values are missing or invalid.
+#define THROTTLE_DEFAULT_IDLE_US 901   // idle pulse width (previously 13° over the 800–2200µs range)
+#define THROTTLE_DEFAULT_FULL_US 1344  // full-throttle pulse width (previously 70° over the 800–2200µs range)
+#define THROTTLE_MIN_SPAN_US     100   // minimum accepted full_us - idle_us separation during calibration
 
 // ============================================================================
 // BTS7960 MOTOR DRIVER CONFIGURATION

@@ -3,7 +3,7 @@
 #include <Preferences.h>
 
 VehicleController::VehicleController(SteeringController& steering,
-                                     ServoController& throttle,
+                                     ThrottleController& throttle,
                                      TransmissionController& transmission,
                                      BTS7960Controller& brake,
                                      MavlinkInterface& mavlink,
@@ -30,7 +30,7 @@ VehicleController::VehicleController(SteeringController& steering,
       lastCanUpdateTime_(0),
       pidIntegral_(0.0f),
       pidPrevError_(0.0f),
-      lastPIDThrottleUs_(THROTTLE_IDLE_US),
+      lastPIDThrottleUs_(THROTTLE_DEFAULT_IDLE_US),
       previousIgnitionState_(MavlinkInterface::IgnitionState::OFF),
       lastCommandedGear_(TransmissionController::Gear::GEAR_UNKNOWN),
       transmissionInitialized_(false) {
@@ -133,6 +133,21 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
     } else if (cmd.cmd == "set_boost_rpm") {
         processSetBoostRpmCommand((int32_t)cmd.floatValue, webPortal);
         return;
+    } else if (cmd.cmd == "throttle_cal_begin") {
+        processThrottleCalBegin(webPortal);
+        return;
+    } else if (cmd.cmd == "throttle_cal_idle") {
+        processThrottleCalJog(false, (uint16_t)cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "throttle_cal_full") {
+        processThrottleCalJog(true, (uint16_t)cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "throttle_cal_save") {
+        processThrottleCalSave(webPortal);
+        return;
+    } else if (cmd.cmd == "throttle_cal_cancel") {
+        processThrottleCalCancel(webPortal);
+        return;
     }
 
     
@@ -193,7 +208,7 @@ void VehicleController::applyFailsafe() {
     if (currentInputSource_ == InputSource::FAILSAFE && !failsafeApplied_) {
         Debug::printlnFeature(DebugFeature::VEHICLE, "[FAILSAFE] Entering safe state");
         steering_.setSteeringPercent(0.0f);
-        throttle_.setMicroseconds(THROTTLE_IDLE_US);
+        throttle_.idle();
         brake_.stop();         // Stop brake actuator (hold position)
         brakeIsMoving_ = false;
         brakeSensorTriggerTime_ = 0;  // Reset sensor trigger
@@ -224,8 +239,7 @@ void VehicleController::processMavlinkCommands() {
         if (shouldClipThrottle()) {
             throttlePct = min(TRANS_UNKNOWN_GEAR_THROTTLE_MAX, throttlePct);
         }
-        uint16_t throttleUs = (uint16_t)map((long)throttlePct, 0, 100, THROTTLE_IDLE_US, THROTTLE_FULL_US);
-        throttle_.setMicroseconds(throttleUs);
+        throttle_.setThrottlePercent(throttlePct);
     }
 
     // Apply gear selection — retry until setGear() accepts the command
@@ -325,9 +339,40 @@ void VehicleController::processThrottleCommand(float value, WebPortal& webPortal
     if (shouldClipThrottle()) {
         value = min(TRANS_UNKNOWN_GEAR_THROTTLE_MAX, value);
     }
-    uint16_t us = (uint16_t)map((long)value, 0, 100, THROTTLE_IDLE_US, THROTTLE_FULL_US);
-    throttle_.setMicroseconds(us);
+    throttle_.setThrottlePercent(value);
     webPortal.sendResponse(true, "Throttle set");
+}
+
+void VehicleController::processThrottleCalBegin(WebPortal& webPortal) {
+    if (!throttle_.beginCalibration(isEngineRunning())) {
+        webPortal.sendResponse(false, "Cannot calibrate while engine is running");
+        return;
+    }
+    webPortal.sendResponse(true, "Throttle calibration started");
+}
+
+void VehicleController::processThrottleCalJog(bool isFull, uint16_t us, WebPortal& webPortal) {
+    if (!throttle_.isCalibrating()) {
+        webPortal.sendResponse(false, "Throttle calibration not active");
+        return;
+    }
+    if (isFull) throttle_.jogFull(us);
+    else        throttle_.jogIdle(us);
+    webPortal.sendResponse(true, "Throttle preview");
+}
+
+void VehicleController::processThrottleCalSave(WebPortal& webPortal) {
+    String err;
+    if (!throttle_.saveCalibration(err)) {
+        webPortal.sendResponse(false, err);
+        return;
+    }
+    webPortal.sendResponse(true, "Throttle calibration saved");
+}
+
+void VehicleController::processThrottleCalCancel(WebPortal& webPortal) {
+    throttle_.cancelCalibration();
+    webPortal.sendResponse(true, "Throttle calibration cancelled");
 }
 
 void VehicleController::processBrakeCommand(float value, WebPortal& webPortal) {
@@ -383,7 +428,7 @@ void VehicleController::processBoostTestCommand(bool enable, WebPortal& webPorta
         if (gearBoostActive_) {
             canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM);
             gearBoostActive_ = false;
-            throttle_.setMicroseconds(THROTTLE_IDLE_US);
+            throttle_.idle();
         }
         Debug::printlnFeature(DebugFeature::VEHICLE, "[BOOST] Manual test stopped");
         webPortal.sendResponse(true, "Boost test stopped");
@@ -615,7 +660,7 @@ void VehicleController::updateGearBoostPID() {
     if (gearBoostActive_ && !boostManualActive_ && !transmission_.needsThrottleBoost()) {
         Debug::printlnFeature(DebugFeature::VEHICLE, "[BOOST] Gear change complete, releasing PID");
         canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM);
-        throttle_.setMicroseconds(THROTTLE_IDLE_US);
+        throttle_.idle();
         gearBoostActive_ = false;
         return;
     }
@@ -631,7 +676,7 @@ void VehicleController::updateGearBoostPID() {
         lastCanUpdateTime_ = 0;
         pidIntegral_ = 0.0f;
         pidPrevError_ = 0.0f;
-        lastPIDThrottleUs_ = THROTTLE_IDLE_US;
+        lastPIDThrottleUs_ = throttle_.getIdleUs();
         canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM_BOOST);
         Debug::printfFeature(DebugFeature::VEHICLE, "[BOOST] PID activated, target=%ld RPM\n", boostTargetRpm_);
     }
@@ -641,19 +686,19 @@ void VehicleController::updateGearBoostPID() {
         Debug::printlnFeature(DebugFeature::VEHICLE, "[BOOST] Timeout, releasing gear boost PID");
         canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM);
         gearBoostActive_ = false;
-        throttle_.setMicroseconds(THROTTLE_IDLE_US);
+        throttle_.idle();
         return;
     }
 
     // CAN stale: hold last µs, don't accumulate integral
     if (!canData.dataValid) {
-        throttle_.setMicroseconds(THROTTLE_IDLE_US);
+        throttle_.idle();
         return;
     }
 
     // No new CAN sample since last compute: hold last µs, skip integral accumulation
     if (canData.lastUpdateTime == lastCanUpdateTime_) {
-        throttle_.setMicroseconds(lastPIDThrottleUs_);
+        throttle_.setThrottleUs(lastPIDThrottleUs_);
         return;
     }
     lastCanUpdateTime_ = canData.lastUpdateTime;
@@ -684,11 +729,11 @@ void VehicleController::updateGearBoostPID() {
                     + TRANS_GEAR_BOOST_PID_KD * derivative;
     outputPct = constrain(outputPct, 0.0f, TRANS_GEAR_BOOST_MAX_PCT);
 
-    uint16_t targetUs = (uint16_t)map((long)outputPct, 0, 100, THROTTLE_IDLE_US, THROTTLE_FULL_US);
+    uint16_t targetUs = throttle_.percentToUs(outputPct);
     int delta = constrain((int)targetUs - (int)lastPIDThrottleUs_, -TRANS_GEAR_BOOST_SLEW_RATE_US, TRANS_GEAR_BOOST_SLEW_RATE_US);
     uint16_t us = (uint16_t)((int)lastPIDThrottleUs_ + delta);
     lastPIDThrottleUs_ = us;
-    throttle_.setMicroseconds(us);
+    throttle_.setThrottleUs(us);
 
     static uint32_t lastProgressLog = 0;
     if (now - lastProgressLog > 250) {

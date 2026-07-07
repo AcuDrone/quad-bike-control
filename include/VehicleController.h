@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include "Constants.h"
 #include "ServoController.h"
+#include "ThrottleController.h"
 #include "SteeringController.h"
 #include "BTS7960Controller.h"
 #include "TransmissionController.h"
@@ -22,7 +23,7 @@
 class VehicleController {
 public:
     VehicleController(SteeringController& steering,
-                      ServoController& throttle,
+                      ThrottleController& throttle,
                       TransmissionController& transmission,
                       BTS7960Controller& brake,
                       MavlinkInterface& mavlink,
@@ -89,10 +90,16 @@ public:
     SteeringController& getSteering() { return steering_; }
 
     /**
-     * @brief Get throttle angle
-     * @return Throttle angle in degrees
+     * @brief Get current throttle servo pulse width (µs)
      */
-    float getThrottleAngle() const { return throttle_.getAngle(); }
+    uint16_t getThrottleUs() const { return throttle_.getCurrentUs(); }
+
+    /**
+     * @brief Get calibrated throttle idle/full endpoints (µs) and calibration state
+     */
+    uint16_t getThrottleIdleUs() const { return throttle_.getIdleUs(); }
+    uint16_t getThrottleFullUs() const { return throttle_.getFullUs(); }
+    bool isThrottleCalibrating() const { return throttle_.isCalibrating(); }
 
     /**
      * @brief Get transmission controller reference
@@ -156,7 +163,7 @@ public:
 private:
     // Actuator references
     SteeringController& steering_;
-    ServoController& throttle_;
+    ThrottleController& throttle_;
     TransmissionController& transmission_;
     BTS7960Controller& brake_;
 
@@ -243,6 +250,15 @@ private:
      * @param webPortal Reference to web portal for sending responses
      */
     void processThrottleCommand(float value, WebPortal& webPortal);
+
+    /**
+     * @brief Throttle calibration commands (RC-independent; drive the servo directly).
+     * Begin is refused while the engine is running.
+     */
+    void processThrottleCalBegin(WebPortal& webPortal);
+    void processThrottleCalJog(bool isFull, uint16_t us, WebPortal& webPortal);
+    void processThrottleCalSave(WebPortal& webPortal);
+    void processThrottleCalCancel(WebPortal& webPortal);
 
     /**
      * @brief Process brake command

@@ -42,7 +42,10 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
 
     telemetry.gear = vehicleController_.getCurrentGearString();
     telemetry.steering_pct = (int)vehicleController_.getSteeringPercent();
-    telemetry.throttle_angle = (int)vehicleController_.getThrottleAngle();
+    telemetry.throttle_us = vehicleController_.getThrottleUs();
+    telemetry.throttle_idle_us = vehicleController_.getThrottleIdleUs();
+    telemetry.throttle_full_us = vehicleController_.getThrottleFullUs();
+    telemetry.throttle_calibrating = vehicleController_.isThrottleCalibrating();
     telemetry.input_source = getInputSourceName(vehicleController_.getInputSource());
 
     // Transmission servo position (0.0–100.0 %)

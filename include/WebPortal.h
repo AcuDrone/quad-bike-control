@@ -49,7 +49,10 @@ public:
         String gear;              // Current gear: "R", "N", "L", "H"
         float hall_position;      // Transmission servo position (0.0–100.0 %)
         float brake_pct;          // Brake position percentage (0-100)
-        int throttle_angle;       // Throttle servo angle (degrees)
+        uint16_t throttle_us;         // Throttle servo pulse width (µs)
+        uint16_t throttle_idle_us;    // Calibrated idle endpoint (µs)
+        uint16_t throttle_full_us;    // Calibrated full-throttle endpoint (µs)
+        bool throttle_calibrating;    // True while a throttle calibration session is active
         int steering_pct;         // Steering percentage (-100 to +100)
         String input_source;      // Current input source: "MAVLINK", "WEB", "FAILSAFE"
         bool mav_active;          // True if MAVLink command stream is valid

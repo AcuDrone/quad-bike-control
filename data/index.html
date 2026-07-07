@@ -338,7 +338,7 @@
                     </div>
                     <div class="telemetry-item">
                         <div class="telemetry-label">Throttle</div>
-                        <div class="telemetry-value" id="telemetry-throttle">0°</div>
+                        <div class="telemetry-value" id="telemetry-throttle">0µs</div>
                     </div>
                     <div class="telemetry-item">
                         <div class="telemetry-label">Steering</div>
@@ -447,6 +447,31 @@
                     </div>
                 </div>
                 <div id="gear-default-status" style="margin-top: 10px; font-size: 0.8em; color: #4caf50; min-height: 1.2em;"></div>
+            </div>
+
+            <!-- Throttle Calibration -->
+            <div class="card">
+                <h2>🎚️ Throttle Calibration</h2>
+                <p style="font-size: 0.8em; color: #aaa; margin-bottom: 12px;">
+                    Sets the idle / full throttle servo endpoints (µs). <b>Engine must be OFF.</b>
+                    Press <b>Start</b>, drag a slider — the throttle servo follows live — then <b>Save</b>.
+                </p>
+                <button id="throttle-cal-start" onclick="throttleCalStart()" style="padding:8px 12px; border-radius:4px; border:none; background:#e65100; color:#fff; cursor:pointer; width:100%;">Start Calibration</button>
+                <div id="throttle-cal-controls" style="display:none; margin-top:12px; flex-direction:column; gap:12px;">
+                    <div>
+                        <label style="font-size: 0.8em; color: #aaa;">Idle endpoint: <span id="throttle-idle-val">901</span> µs</label>
+                        <input type="range" min="800" max="2200" step="1" value="901" class="slider" id="throttle-idle-slider" style="width:100%;">
+                    </div>
+                    <div>
+                        <label style="font-size: 0.8em; color: #aaa;">Full endpoint: <span id="throttle-full-val">1344</span> µs</label>
+                        <input type="range" min="800" max="2200" step="1" value="1344" class="slider" id="throttle-full-slider" style="width:100%;">
+                    </div>
+                    <div style="display:flex; gap:6px;">
+                        <button onclick="throttleCalSave()" style="flex:1; padding:8px; border-radius:4px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Save</button>
+                        <button onclick="throttleCalCancel()" style="flex:1; padding:8px; border-radius:4px; border:none; background:#555; color:#fff; cursor:pointer;">Cancel</button>
+                    </div>
+                </div>
+                <div id="throttle-cal-status" style="margin-top: 10px; font-size: 0.8em; color: #4caf50; min-height: 1.2em;"></div>
             </div>
 
             <!-- Ignition & Lighting Control -->
@@ -662,6 +687,12 @@
                     statusEl.textContent = data.success ? data.message : 'Error: ' + data.message;
                     statusEl.style.color = data.success ? '#4caf50' : '#f44336';
                 }
+                // Throttle calibration status
+                if (data.message && data.message.toLowerCase().includes('throttle') &&
+                    (data.message.toLowerCase().includes('calibrat') || data.message.toLowerCase().includes('preview'))) {
+                    throttleCalSetStatus(data.success ? data.message : 'Error: ' + data.message,
+                                         data.success ? '#4caf50' : '#f44336');
+                }
             }
         }
 
@@ -675,8 +706,30 @@
             // Update brake
             document.getElementById('telemetry-brake').textContent = (data.brake_pct || 0).toFixed(0) + '%';
 
-            // Update throttle
-            document.getElementById('telemetry-throttle').textContent = (data.throttle_angle || 0) + '°';
+            // Update throttle (servo pulse width in µs)
+            document.getElementById('telemetry-throttle').textContent = (data.throttle_us || 0) + 'µs';
+
+            // Throttle calibration UI state + slider sync
+            if (typeof data.throttle_calibrating !== 'undefined') {
+                throttleCalActive = data.throttle_calibrating;
+                const calControls = document.getElementById('throttle-cal-controls');
+                const calStartBtn = document.getElementById('throttle-cal-start');
+                if (calControls && calStartBtn) {
+                    calControls.style.display = throttleCalActive ? 'flex' : 'none';
+                    calStartBtn.style.display = throttleCalActive ? 'none' : 'block';
+                }
+                // When idle (not calibrating and not dragging), reflect the saved endpoints
+                if (!throttleCalActive && !throttleCalDragging) {
+                    if (typeof data.throttle_idle_us !== 'undefined') {
+                        document.getElementById('throttle-idle-slider').value = data.throttle_idle_us;
+                        document.getElementById('throttle-idle-val').textContent = data.throttle_idle_us;
+                    }
+                    if (typeof data.throttle_full_us !== 'undefined') {
+                        document.getElementById('throttle-full-slider').value = data.throttle_full_us;
+                        document.getElementById('throttle-full-val').textContent = data.throttle_full_us;
+                    }
+                }
+            }
 
             // Update steering
             document.getElementById('telemetry-steering').textContent = (data.steering_angle || 90) + '°';
@@ -943,6 +996,61 @@
                 document.getElementById('gear-default-status').style.color = '#aaa';
             }
         }
+
+        // ---- Throttle calibration ----
+        let throttleCalActive = false;
+        let throttleCalDragging = false;
+        let throttleCalLastSend = 0;
+
+        function throttleCalSetStatus(msg, color) {
+            const el = document.getElementById('throttle-cal-status');
+            if (el) { el.textContent = msg; el.style.color = color || '#aaa'; }
+        }
+
+        function throttleCalStart() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ cmd: 'throttle_cal_begin' }));
+                throttleCalSetStatus('Starting…', '#ff9800');
+            }
+        }
+
+        function throttleCalSendJog(which) {
+            const sliderId = which === 'full' ? 'throttle-full-slider' : 'throttle-idle-slider';
+            const valId = which === 'full' ? 'throttle-full-val' : 'throttle-idle-val';
+            const us = parseInt(document.getElementById(sliderId).value, 10);
+            document.getElementById(valId).textContent = us;
+            const now = Date.now();
+            if (now - throttleCalLastSend < 60) return;   // rate-limit ~16/s
+            throttleCalLastSend = now;
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ cmd: which === 'full' ? 'throttle_cal_full' : 'throttle_cal_idle', value: us }));
+            }
+        }
+
+        function throttleCalSave() {
+            if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ cmd: 'throttle_cal_save' }));
+        }
+        function throttleCalCancel() {
+            if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ cmd: 'throttle_cal_cancel' }));
+        }
+
+        (function initThrottleCalSliders() {
+            const idle = document.getElementById('throttle-idle-slider');
+            const full = document.getElementById('throttle-full-slider');
+            if (!idle || !full) return;
+            const startDrag = () => { throttleCalDragging = true; };
+            const endDrag = (which) => { throttleCalDragging = false; throttleCalLastSend = 0; throttleCalSendJog(which); };
+            idle.addEventListener('mousedown', startDrag);
+            idle.addEventListener('touchstart', startDrag);
+            idle.addEventListener('mouseup', () => endDrag('idle'));
+            idle.addEventListener('touchend', () => endDrag('idle'));
+            idle.addEventListener('input', () => throttleCalSendJog('idle'));
+            full.addEventListener('mousedown', startDrag);
+            full.addEventListener('touchstart', startDrag);
+            full.addEventListener('mouseup', () => endDrag('full'));
+            full.addEventListener('touchend', () => endDrag('full'));
+            full.addEventListener('input', () => throttleCalSendJog('full'));
+        })();
 
         function saveBoostRpm() {
             const val = parseInt(document.getElementById('boost-rpm-input').value, 10);

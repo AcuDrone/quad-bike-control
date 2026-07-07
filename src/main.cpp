@@ -2,6 +2,7 @@
 #include "Constants.h"
 #include "Debug.h"
 #include "ServoController.h"
+#include "ThrottleController.h"
 #include "SteeringController.h"
 #include "BTS7960Controller.h"
 #include "TransmissionController.h"
@@ -22,7 +23,7 @@ SteeringController steeringActuator;
 EncoderCounter steeringEncoder;
 
 // Throttle Servo
-ServoController throttleServo;
+ThrottleController throttle;
 
 // Transmission servo (PWM servo-based gear selector)
 TransmissionController transmissionActuator;
@@ -36,7 +37,7 @@ MavlinkInterface mavlinkInterface;
 RelayController relayController;
 
 // Vehicle Controller (coordinates all actuators and input sources)
-VehicleController vehicleController(steeringActuator, throttleServo, transmissionActuator, brakeActuator,
+VehicleController vehicleController(steeringActuator, throttle, transmissionActuator, brakeActuator,
                                      mavlinkInterface, relayController);
 
 // Web Portal for telemetry and manual control
@@ -83,11 +84,10 @@ void setup() {
 
     Debug::println("\n=== ESP32-C6 Quad Bike Control ===");
 
-    // Initialize throttle servo
-    if (!throttleServo.begin(PIN_THROTTLE_PWM, LEDC_CH_THROTTLE, THROTTLE_SERVO_MIN_US, THROTTLE_SERVO_MAX_US)) {
+    // Initialize throttle servo (loads calibration from NVS, moves to calibrated idle)
+    if (!throttle.begin(PIN_THROTTLE_PWM, LEDC_CH_THROTTLE)) {
         Debug::printlnFeature(DebugFeature::SERVO, "ERROR: Throttle servo failed");
     }
-    throttleServo.setAngle(THROTTLE_IDLE_ANGLE);
 
     // Initialize steering actuator (BTS7960 + encoder)
     if (!steeringEncoder.begin(PIN_STEER_ENCODER_A, PIN_STEER_ENCODER_B, PCNT_UNIT_STEER)) {
