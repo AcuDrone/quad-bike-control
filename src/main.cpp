@@ -191,6 +191,8 @@ void loop() {
     report.gearMoving   = vehicleController.getTransmission().isGearChangeActive();
     report.ignition     = getRelayIgnitionStateName(vehicleController.getIgnitionState());
     report.failsafe     = (vehicleController.getInputSource() == InputSource::FAILSAFE);
+    report.digitalFlags = (vehicleController.getWheelLock()  ? EFI_DIGITAL_FLAG_WHEEL_LOCK  : 0)
+                        | (vehicleController.getFrontLight() ? EFI_DIGITAL_FLAG_FRONT_LIGHT : 0);
     mavlinkInterface.report(report);
 
     // Broadcast telemetry to web clients

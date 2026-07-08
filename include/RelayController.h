@@ -58,6 +58,15 @@ public:
     void setFrontLight(bool on);
 
     /**
+     * @brief Set front-wheel lock relay state
+     * @param locked true to engage the lock (relay HIGH), false to release
+     *
+     * Independent of the ignition relays and deliberately NOT cleared by allOff(),
+     * so the lock holds its last state through a MAVLink failsafe / link drop.
+     */
+    void setWheelLock(bool locked);
+
+    /**
      * @brief Update cranking state based on engine RPM
      *
      * Call this method periodically (every loop iteration) to monitor cranking.
@@ -82,8 +91,14 @@ public:
     bool getFrontLight() const { return frontLightOn_; }
 
     /**
-     * @brief Fail-safe: turn all relays OFF
-     * Sets ignition to OFF and turns off front light
+     * @brief Get current front-wheel lock state
+     * @return true if locked
+     */
+    bool getWheelLock() const { return wheelLockOn_; }
+
+    /**
+     * @brief Fail-safe: turn ignition and front light OFF.
+     * The front-wheel lock is intentionally left untouched (holds last state).
      */
     void allOff();
 
@@ -92,6 +107,7 @@ private:
     // State tracking
     IgnitionState currentIgnitionState_;
     bool frontLightOn_;
+    bool wheelLockOn_;
 
     // Cranking state tracking
     uint32_t crankingStartTime_;   // Time when cranking started (milliseconds)

@@ -255,6 +255,9 @@ void MavlinkInterface::report(const StateReport& state) {
             : encodeGear(state.gearTo);
         float rpmVal = state.canValid ? (float)state.engineRpm  : NAN;
         float chtVal = state.canValid ? (float)state.coolantTemp : NAN;
+        // Digital output states packed as a bitmask (see EFI_DIGITAL_FLAG_* in Constants.h):
+        // bit0 = wheel lock, bit1 = front light. Always valid (relay ground-truth), never NaN.
+        float flagsVal = (float)state.digitalFlags;
 
         mavlink_msg_efi_status_pack(
             MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &msg,
@@ -266,7 +269,9 @@ void MavlinkInterface::report(const StateReport& state) {
             0.0f, 0.0f, 0.0f, 0.0f, 0.0f, // throttle_position, spark_dwell, baro, intake_press, intake_temp
             chtVal,     // cylinder_head_temperature  <- coolant
             0.0f, 0.0f, // ignition_timing, injection_time
-            0.0f, 0.0f, 0.0f, 0.0f, 0.0f); // exhaust, throttle_out, pt_comp, ign_voltage, fuel_pressure
+            0.0f, 0.0f, // exhaust_gas_temperature, throttle_out
+            flagsVal,   // pt_compensation  <- DIGITAL FLAGS bitmask
+            0.0f, 0.0f); // ignition_voltage, fuel_pressure
         uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
         serial_->write(buf, len);
     }
@@ -395,6 +400,11 @@ MavlinkInterface::IgnitionState MavlinkInterface::getIgnitionState() const {
 bool MavlinkInterface::getFrontLight() const {
     uint16_t valueUs = getChannel(ServoChannelConfig::FRONT_LIGHT);
     return (valueUs > RC_FRONT_LIGHT_THRESHOLD);
+}
+
+bool MavlinkInterface::getWheelLock() const {
+    uint16_t valueUs = getChannel(ServoChannelConfig::WHEEL_LOCK);
+    return (valueUs > RC_WHEEL_LOCK_THRESHOLD);
 }
 
 // ============================================================================

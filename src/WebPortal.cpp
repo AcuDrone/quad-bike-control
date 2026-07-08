@@ -626,6 +626,7 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["ignition_state"] = telemetry.ignition_state;
     doc["is_cranking"] = telemetry.is_cranking;
     doc["front_light_on"] = telemetry.front_light_on;
+    doc["wheel_lock_on"] = telemetry.wheel_lock_on;
 
     // Firmware version
     doc["firmware_version"] = telemetry.firmware_version;

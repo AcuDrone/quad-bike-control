@@ -40,6 +40,7 @@ The ESP32 reads command channels from `SERVO_OUTPUT_RAW.servoN_raw`. ArduPilot's
 | `servo3_raw` | Transmission | R <1200, N 1201–1520, L >1520 |
 | `servo4_raw` | Ignition | OFF <1200, ACC 1201–1520, IGNITION >1520 |
 | `servo6_raw` | Front light | >1520 = ON |
+| `servo7_raw` | Front-wheel lock | >1520 = LOCKED |
 
 (Channel 5 is intentionally unused.)
 

@@ -87,6 +87,7 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.ignition_state = getRelayIgnitionStateName(ignitionState);
     telemetry.is_cranking = (ignitionState == RelayController::IgnitionState::CRANKING);
     telemetry.front_light_on = vehicleController_.getFrontLight();
+    telemetry.wheel_lock_on = vehicleController_.getWheelLock();
 
     telemetry.firmware_version = FIRMWARE_VERSION;
 

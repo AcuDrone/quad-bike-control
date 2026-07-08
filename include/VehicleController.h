@@ -147,6 +147,18 @@ public:
     bool getFrontLight() const { return relayController_.getFrontLight(); }
 
     /**
+     * @brief Set front-wheel lock state
+     * @param locked true to engage the lock, false to release
+     */
+    void setWheelLock(bool locked);
+
+    /**
+     * @brief Get current front-wheel lock state
+     * @return true if locked
+     */
+    bool getWheelLock() const { return relayController_.getWheelLock(); }
+
+    /**
      * @brief Get current boost RPM target (NVS-backed, runtime-editable)
      */
     int32_t getBoostTargetRpm() const { return boostTargetRpm_; }
@@ -280,6 +292,13 @@ private:
      * @param webPortal Reference to web portal for sending responses
      */
     void processLightCommand(bool on, WebPortal& webPortal);
+
+    /**
+     * @brief Process front-wheel lock command
+     * @param locked true to engage the lock, false to release
+     * @param webPortal Reference to web portal for sending responses
+     */
+    void processWheelLockCommand(bool locked, WebPortal& webPortal);
 
     /**
      * @brief Process set_gear_default command

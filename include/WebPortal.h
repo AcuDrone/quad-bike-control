@@ -80,6 +80,7 @@ public:
         String ignition_state;    // Ignition state: "OFF", "ACC", "IGNITION", "CRANKING"
         bool is_cranking;         // True if starter motor is cranking
         bool front_light_on;      // True if front light is on
+        bool wheel_lock_on;       // True if front-wheel lock is engaged
 
         // Firmware information
         String firmware_version;  // Firmware version string (e.g., "1.0.0")

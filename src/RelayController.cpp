@@ -4,6 +4,7 @@
 RelayController::RelayController()
     : currentIgnitionState_(IgnitionState::OFF),
       frontLightOn_(false),
+      wheelLockOn_(false),
       crankingStartTime_(0),
       isCranking_(false),
       r1HighSince_(0),
@@ -14,15 +15,18 @@ bool RelayController::begin() {
     pinMode(PIN_RELAY1, OUTPUT);
     pinMode(PIN_RELAY2, OUTPUT);
     pinMode(PIN_RELAY3, OUTPUT);
+    pinMode(PIN_WHEEL_LOCK, OUTPUT);
 
     // Initialize all relays to OFF (safe state)
     digitalWrite(PIN_RELAY1, LOW);
     digitalWrite(PIN_RELAY2, LOW);
     digitalWrite(PIN_RELAY3, LOW);
+    digitalWrite(PIN_WHEEL_LOCK, LOW);
 
     // Set initial state
     currentIgnitionState_ = IgnitionState::OFF;
     frontLightOn_ = false;
+    wheelLockOn_ = false;
     r1HighSince_ = 0;
     crankArmed_ = false;
     isCranking_ = false;
@@ -89,6 +93,14 @@ void RelayController::setFrontLight(bool on) {
         Debug::printfFeature(DebugFeature::RELAY, "[RELAY] Front Light: %s\n", on ? "ON" : "OFF");
         frontLightOn_ = on;
         digitalWrite(PIN_RELAY3, on ? HIGH : LOW);
+    }
+}
+
+void RelayController::setWheelLock(bool locked) {
+    if (wheelLockOn_ != locked) {
+        Debug::printfFeature(DebugFeature::RELAY, "[RELAY] Front Wheel Lock: %s\n", locked ? "LOCKED" : "UNLOCKED");
+        wheelLockOn_ = locked;
+        digitalWrite(PIN_WHEEL_LOCK, locked ? HIGH : LOW);
     }
 }
 

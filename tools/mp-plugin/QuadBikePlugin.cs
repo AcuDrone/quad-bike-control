@@ -1,4 +1,4 @@
-// QuadBike Mission Planner plugin — v1.2: nav-header readout, reads EFI_STATUS from comp 25.
+// QuadBike Mission Planner plugin — v1.4: nav-header readout, reads EFI_STATUS from comp 25.
 //  - Subscribes to EFI_STATUS and reads GEAR (engine_load) / RPM (rpm) / TMP
 //    (cylinder_head_temperature) from component 25 (the ESP32). One packet carries all three
 //    as distinct fields, so values never override each other. customfields are NOT used.
@@ -34,6 +34,8 @@ namespace QuadBike
         public double GearValue = double.NaN;
         public double Rpm = double.NaN;
         public double Coolant = double.NaN;
+        public bool Lock = false;    // front-wheel lock engaged
+        public bool Light = false;   // front light on
 
         private double animIndex = 1.0;
         private double pulse = 0.0;
@@ -51,7 +53,7 @@ namespace QuadBike
         {
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
                      | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-            Size = new Size(padX + 4 * cellW + 12 + 102, 47);
+            Size = new Size(padX + 4 * cellW + 12 + 102 + 74, 47);
             Cursor = Cursors.SizeWE;   // horizontal move
             timer = new Timer();
             timer.Interval = 33;
@@ -191,6 +193,16 @@ namespace QuadBike
                 if (!double.IsNaN(Coolant)) { if (Coolant < 65) cc = Color.FromArgb(90, 160, 255); else if (Coolant > 102) cc = Color.FromArgb(220, 60, 60); }
                 using (SolidBrush cb = new SolidBrush(cc))
                     g.DrawString(tmpTxt, f2, cb, tx, 25);
+
+                // Digital-state badges (second column, row-aligned with RPM/TMP):
+                //   LOCK  — red when the front-wheel lock is engaged, dim grey otherwise
+                //   LIGHT — amber when the front light is on, dim grey otherwise
+                float bx = tx + 100;
+                Color dim = Color.FromArgb(105, 105, 112);
+                using (SolidBrush lk = new SolidBrush(Lock  ? Color.FromArgb(220, 60, 60)  : dim))
+                    g.DrawString("LOCK", f2, lk, bx, 3);
+                using (SolidBrush lt = new SolidBrush(Light ? Color.FromArgb(255, 165, 0) : dim))
+                    g.DrawString("LIGHT", f2, lt, bx, 25);
             }
         }
 
@@ -204,7 +216,7 @@ namespace QuadBike
     public class QuadBikePlugin : MissionPlanner.Plugin.Plugin
     {
         public override string Name { get { return "QuadBike Telemetry"; } }
-        public override string Version { get { return "1.3-efi"; } }
+        public override string Version { get { return "1.4-efi"; } }
         public override string Author { get { return "QuadBikeControl"; } }
         public override float loopratehz { get { return 5f; } }
 
@@ -214,7 +226,12 @@ namespace QuadBike
         private QbReadout view;
         private readonly object sync = new object();
         private double nvGear = double.NaN, nvRpm = double.NaN, nvTmp = double.NaN;
+        private bool nvLock = false, nvLight = false;
         private volatile bool sawComp25 = false;
+
+        // Digital-flag bit map (EFI_STATUS.pt_compensation) — MUST match EFI_DIGITAL_FLAG_* in firmware Constants.h
+        private const int FLAG_WHEEL_LOCK = 0x01;   // bit0
+        private const int FLAG_FRONT_LIGHT = 0x02;  // bit1
         private bool revealed = false;
         private int sub = 0;            // NVF subscription handle (0 = not subscribed)
         private int nvfLogCount = 0;
@@ -225,7 +242,7 @@ namespace QuadBike
                 DateTime.Now.ToString("HH:mm:ss.fff") + "  " + s + Environment.NewLine); } catch { }
         }
 
-        public override bool Init() { Log("Init v1.3-efi"); return true; }
+        public override bool Init() { Log("Init v1.4-efi"); return true; }
 
         public override bool Loaded()
         {
@@ -264,14 +281,19 @@ namespace QuadBike
                             double gear = efi.engine_load;
                             double rpm = efi.rpm;
                             double tmp = efi.cylinder_head_temperature;
+                            int flags = (int)Math.Round((double)efi.pt_compensation);   // digital-state bitmask
+                            bool lk = (flags & FLAG_WHEEL_LOCK) != 0;
+                            bool lt = (flags & FLAG_FRONT_LIGHT) != 0;
                             lock (sync)
                             {
                                 nvGear = gear;
                                 nvRpm = rpm;     // firmware sends NaN while CAN invalid -> "--"
                                 nvTmp = tmp;
+                                nvLock = lk;
+                                nvLight = lt;
                             }
                             sawComp25 = true;
-                            if (nvfLogCount < 10) { Log("EFI comp" + message.compid + " gear=" + gear + " rpm=" + rpm + " cht=" + tmp); nvfLogCount++; }
+                            if (nvfLogCount < 10) { Log("EFI comp" + message.compid + " gear=" + gear + " rpm=" + rpm + " cht=" + tmp + " flags=" + flags); nvfLogCount++; }
                         }
                         catch (Exception ex) { Log("EFI cb EX: " + ex.Message); }
                         return true;   // stay subscribed
@@ -341,12 +363,14 @@ namespace QuadBike
                 if (view == null) return true;
 
                 double g, r, c;
-                lock (sync) { g = nvGear; r = nvRpm; c = nvTmp; }
+                bool lk, lt;
+                lock (sync) { g = nvGear; r = nvRpm; c = nvTmp; lk = nvLock; lt = nvLight; }
                 bool seen = sawComp25;
 
                 Host.MainForm.BeginInvoke((MethodInvoker)delegate
                 {
                     view.GearValue = g; view.Rpm = r; view.Coolant = c;
+                    view.Lock = lk; view.Light = lt;
                     if (seen && !view.Visible) { view.Visible = true; view.BringToFront(); }
                 });
 

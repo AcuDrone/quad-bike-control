@@ -50,6 +50,7 @@
 #define PIN_RELAY1      GPIO_NUM_36
 #define PIN_RELAY2      GPIO_NUM_37
 #define PIN_RELAY3      GPIO_NUM_38
+#define PIN_WHEEL_LOCK  GPIO_NUM_39   // Relay 4 — front-wheel lock (also JTAG MTCK; JTAG unused here)
 
 #define PIN_GEAR_REVERSE  GPIO_NUM_19
 #define PIN_GEAR_NEUTRAL  GPIO_NUM_20
@@ -76,7 +77,8 @@ struct ServoChannelConfig {
     static constexpr uint8_t THROTTLE = 2;      // Throttle/Brake combined (above center=throttle, below=brake)
     static constexpr uint8_t TRANSMISSION = 3;  // Gear selector (3 positions: R/N/L)
     static constexpr uint8_t IGNITION = 4;      // Ignition state (OFF/ACC/IGNITION)
-    static constexpr uint8_t FRONT_LIGHT = 6;   // Front light (on/off)  — channel 5 intentionally unused
+    static constexpr uint8_t FRONT_LIGHT = 6;   // Front light (on/off)
+    static constexpr uint8_t WHEEL_LOCK  = 7;   // Front-wheel lock (on/off)
 };
 
 // MAVLink transport / link parameters
@@ -121,6 +123,13 @@ struct ServoChannelConfig {
 
 // Front Light Threshold (in microseconds)
 #define RC_FRONT_LIGHT_THRESHOLD 1520  // >1520 = ON, <=1520 = OFF
+#define RC_WHEEL_LOCK_THRESHOLD  1520  // >1520 = LOCKED, <=1520 = UNLOCKED
+
+// Digital output states reported back to the GCS as a bitmask carried in
+// EFI_STATUS.pt_compensation (float). MUST stay in sync with the MP plugin decode.
+// bit2+ reserved for future digital outputs.
+#define EFI_DIGITAL_FLAG_WHEEL_LOCK  0x01  // bit0 — front-wheel lock engaged
+#define EFI_DIGITAL_FLAG_FRONT_LIGHT 0x02  // bit1 — front light on
 
 // ============================================================================
 // SERVO CONFIGURATION

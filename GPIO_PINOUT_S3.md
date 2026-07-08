@@ -36,7 +36,7 @@
 | **36** | J3-12 | `PIN_RELAY1` — Digital Out | Relay 1 — main power |
 | **37** | J3-11 | `PIN_RELAY2` — Digital Out | Relay 2 — starter |
 | **38** | J3-10 | `PIN_RELAY3` — Digital Out | ⚠ Drives onboard WS2812B RGB LED too |
-| **39** | J3-9 | FREE | JTAG TCK |
+| **39** | J3-9 | `PIN_WHEEL_LOCK` — Digital Out | Relay 4 — front-wheel lock (⚠ JTAG TCK; JTAG unused) |
 | **40** | J3-8 | FREE | JTAG TDO |
 | **41** | J3-7 | `PIN_STEER_ENCODER_B` — PCNT Unit 1 | ⚠ JTAG TDI — disables hardware JTAG |
 | **42** | J3-6 | `PIN_STEER_ENCODER_A` — PCNT Unit 1 | ⚠ JTAG TMS — disables hardware JTAG |
@@ -55,7 +55,6 @@
 |------|--------|----------|
 | **16** | J1-9 | General I/O, ADC2, 32 kHz crystal |
 | **35** | J3-13 | General I/O, SPI |
-| **39** | J3-9 | General I/O (JTAG TCK if JTAG needed) |
 | **40** | J3-8 | General I/O (JTAG TDO if JTAG needed) |
 | **45** | J3-15 | General I/O — set HIGH before use (strapping) |
 | **46** | J1-14 | General I/O — set HIGH before use (strapping) |

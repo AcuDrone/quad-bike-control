@@ -492,6 +492,13 @@
                     </button>
                 </div>
 
+                <h3 style="margin-bottom: 10px;">Front Wheel Lock</h3>
+                <div style="margin-bottom: 20px;">
+                    <button class="upload-btn" id="wheel-lock-btn" onclick="toggleWheelLock()" style="background: #607d8b;">
+                        🔒 Wheel Lock: <span id="wheel-lock-status">UNLOCKED</span>
+                    </button>
+                </div>
+
                 <h3 style="margin-bottom: 10px;">Telemetry</h3>
                 <div class="telemetry-grid" style="grid-template-columns: repeat(2, 1fr);">
                     <div class="telemetry-item">
@@ -852,6 +859,10 @@
                 lightState = data.front_light_on;
                 updateLightButton(data.front_light_on);
             }
+            if (data.wheel_lock_on !== undefined) {
+                wheelLockState = data.wheel_lock_on;
+                updateWheelLockButton(data.wheel_lock_on);
+            }
 
             // Update control availability
             updateControlsAvailability();
@@ -917,6 +928,19 @@
             } else {
                 btn.style.background = '#607d8b';  // Grey when OFF
                 status.textContent = 'OFF';
+            }
+        }
+
+        function updateWheelLockButton(locked) {
+            const btn = document.getElementById('wheel-lock-btn');
+            const status = document.getElementById('wheel-lock-status');
+            if (!btn || !status) return;
+            if (locked) {
+                btn.style.background = '#f44336';  // Red when locked
+                status.textContent = 'LOCKED';
+            } else {
+                btn.style.background = '#607d8b';  // Grey when unlocked
+                status.textContent = 'UNLOCKED';
             }
         }
 
@@ -1074,6 +1098,12 @@
         function toggleLight() {
             lightState = !lightState;
             sendCommand('set_light', lightState);
+        }
+
+        let wheelLockState = false;
+        function toggleWheelLock() {
+            wheelLockState = !wheelLockState;
+            sendCommand('set_wheel_lock', wheelLockState);
         }
 
         let boostTestActive = false;

@@ -44,14 +44,15 @@ def post(url, msg, seq):
         return f"ERR {e}"
 
 
-def efi(gear, rpm, coolant):
-    # All telemetry in one EFI_STATUS: engine_load=GEAR, rpm=RPM, cyl_head_temp=TMP.
+def efi(gear, rpm, coolant, flags=0):
+    # All telemetry in one EFI_STATUS: engine_load=GEAR, rpm=RPM, cyl_head_temp=TMP,
+    # pt_compensation=digital-flags bitmask (bit0=wheel lock, bit1=front light).
     return {"type": "EFI_STATUS", "ecu_index": 0.0, "rpm": float(rpm), "fuel_consumed": 0.0,
             "fuel_flow": 0.0, "engine_load": float(gear), "throttle_position": 0.0,
             "spark_dwell_time": 0.0, "barometric_pressure": 0.0, "intake_manifold_pressure": 0.0,
             "intake_manifold_temperature": 0.0, "cylinder_head_temperature": float(coolant),
             "ignition_timing": 0.0, "injection_time": 0.0, "exhaust_gas_temperature": 0.0,
-            "throttle_out": 0.0, "pt_compensation": 0.0, "health": 1,
+            "throttle_out": 0.0, "pt_compensation": float(flags), "health": 1,
             "ignition_voltage": 0.0, "fuel_pressure": 0.0}
 
 
@@ -120,8 +121,15 @@ def main():
         # TMP: slow sweep 40 -> 115 -> 40 so you see blue / white / red bands (~40 s period)
         tmp = 77 + 38 * math.sin(t * 2 * math.pi / 40.0)
 
-        # ---- send (5 Hz): one EFI_STATUS carrying all three ----
-        post(url, efi(gear_val, rpm, tmp), seq); seq += 1
+        # ---- digital flags: toggle lock (every ~5s) and light (every ~3s) for the badge demo ----
+        flags = 0
+        if int(t / 5) % 2:
+            flags |= 0x01   # wheel lock
+        if int(t / 3) % 2:
+            flags |= 0x02   # front light
+
+        # ---- send (5 Hz): one EFI_STATUS carrying gear/rpm/tmp + digital flags ----
+        post(url, efi(gear_val, rpm, tmp, flags), seq); seq += 1
 
         # ---- HEARTBEAT (1 Hz) ----
         if now - last_hb >= 1.0:
@@ -129,7 +137,9 @@ def main():
             post(url, heartbeat(), seq); seq += 1
 
         band = "blue" if tmp < 65 else ("red" if tmp > 102 else "white")
-        print(f"\rGEAR {gear_val:+.1f} ({gear_lbl:<5})  RPM {rpm:5.0f}  TMP {tmp:5.1f}°C [{band}] ",
+        lk = "LOCK" if flags & 0x01 else "----"
+        lt = "LIGHT" if flags & 0x02 else "-----"
+        print(f"\rGEAR {gear_val:+.1f} ({gear_lbl:<5})  RPM {rpm:5.0f}  TMP {tmp:5.1f}°C [{band}]  {lk} {lt} ",
               end="", flush=True)
         time.sleep(DT)
 

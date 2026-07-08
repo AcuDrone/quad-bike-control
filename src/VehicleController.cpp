@@ -127,6 +127,10 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
         // Light control always available (not restricted by input source)
         processLightCommand(cmd.boolValue, webPortal);
         return;
+    } else if (cmd.cmd == "set_wheel_lock") {
+        // Front-wheel lock always available (not restricted by input source)
+        processWheelLockCommand(cmd.boolValue, webPortal);
+        return;
     } else if (cmd.cmd == "test_boost") {
         processBoostTestCommand(cmd.boolValue, webPortal);
         return;
@@ -285,6 +289,9 @@ void VehicleController::processMavlinkCommands() {
     // Apply front light
     bool frontLightOn = mavlink_.getFrontLight();
     relayController_.setFrontLight(frontLightOn);
+
+    // Apply front-wheel lock (channel 7)
+    relayController_.setWheelLock(mavlink_.getWheelLock());
 }
 
 void VehicleController::processGearCommand(const String& gearStr, WebPortal& webPortal) {
@@ -498,6 +505,16 @@ bool VehicleController::setIgnitionState(const String& state, String& errorMsg) 
 void VehicleController::setFrontLight(bool on) {
     relayController_.setFrontLight(on);
     Debug::printfFeature(DebugFeature::VEHICLE, "[LIGHT] Front light: %s\n", on ? "ON" : "OFF");
+}
+
+void VehicleController::setWheelLock(bool locked) {
+    relayController_.setWheelLock(locked);
+    Debug::printfFeature(DebugFeature::VEHICLE, "[WHEEL_LOCK] Front wheels: %s\n", locked ? "LOCKED" : "UNLOCKED");
+}
+
+void VehicleController::processWheelLockCommand(bool locked, WebPortal& webPortal) {
+    setWheelLock(locked);
+    webPortal.sendResponse(true, String("Front wheels ") + (locked ? "LOCKED" : "UNLOCKED"));
 }
 
 void VehicleController::processIgnitionCommand(const String& state, WebPortal& webPortal) {

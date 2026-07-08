@@ -55,6 +55,7 @@ public:
         bool        gearMoving;     // true while the servo is actively moving (a phase is active)
         const char* ignition;       // "OFF"/"ACC"/"IGNITION"/"CRANKING"
         bool        failsafe;       // true when in fail-safe
+        uint8_t     digitalFlags;   // digital output bitmask (EFI_DIGITAL_FLAG_* in Constants.h)
         // Note: vehicle speed and oil temperature are not available from the ECU
         // and are therefore not reported over MAVLink.
     };
@@ -96,6 +97,7 @@ public:
     float getBrake() const;                           // 0..100 (0 = released)
     IgnitionState getIgnitionState() const;           // OFF/ACC/IGNITION
     bool getFrontLight() const;                       // true = ON
+    bool getWheelLock() const;                        // true = front wheels LOCKED
 
     // ---- Link monitoring ----------------------------------------------------
 
