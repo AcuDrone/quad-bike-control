@@ -584,7 +584,9 @@ bool WebPortal::validateCommand(const WebCommand& cmd, InputSource inputSource) 
 // ============================================================================
 
 String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
-    StaticJsonDocument<1280> doc;
+    // Capacity headroom: ~34 top-level fields + a 16-element array + a 4-member object,
+    // plus copied String values. Sized to 2048 so trailing fields can't be silently dropped.
+    StaticJsonDocument<2048> doc;
 
     doc["timestamp"] = telemetry.timestamp;
     doc["gear"] = telemetry.gear;
@@ -595,8 +597,11 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["throttle_full_us"] = telemetry.throttle_full_us;
     doc["throttle_calibrating"] = telemetry.throttle_calibrating;
     doc["steering_pct"] = telemetry.steering_pct;
+    doc["steer_center"] = telemetry.steer_center;
+    doc["steer_position"] = telemetry.steer_position;
     doc["input_source"] = telemetry.input_source;
     doc["mav_active"] = telemetry.mav_active;
+    doc["web_control"] = telemetry.web_control;
 
     // CAN bus vehicle data
     if (telemetry.can_status == "connected") {
@@ -639,6 +644,10 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     gearDefaults["H"] = telemetry.gear_default_h;
 
     doc["boost_target_rpm"] = telemetry.boost_target_rpm;
+
+    if (doc.overflowed()) {
+        Debug::printlnFeature(DebugFeature::WEB, "[WEB] WARNING: telemetry JSON overflowed — increase capacity");
+    }
 
     String json;
     serializeJson(doc, json);

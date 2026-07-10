@@ -53,6 +53,14 @@ public:
     InputSource getInputSource() const { return currentInputSource_; }
 
     /**
+     * @brief Latched web-control override. When engaged, MAVLink commands are ignored and
+     * all control comes from the web portal. Not persisted (boots false = MAVLink in charge).
+     * Engaging snaps to a safe state (throttle idle, hold steering/gear/brake).
+     */
+    void setWebControl(bool on);
+    bool isWebControl() const { return webControl_; }
+
+    /**
      * @brief Process web command from web portal
      * @param cmd Web command structure
      * @param webPortal Reference to web portal for sending responses
@@ -88,6 +96,11 @@ public:
      * @brief Get steering controller reference
      */
     SteeringController& getSteering() { return steering_; }
+
+    /**
+     * @brief Get the calibrated steering center (encoder counts)
+     */
+    int32_t getSteerCenter() const { return steering_.getCenter(); }
 
     /**
      * @brief Get current throttle servo pulse width (µs)
@@ -187,6 +200,7 @@ private:
     // State tracking
     InputSource currentInputSource_;
     bool failsafeApplied_;
+    bool webControl_;   // latched web-control override (MAVLink ignored while true)
 
     // Brake actuator tracking
     float currentBrakeTarget_;          // Current brake percentage target (0-100)
@@ -299,6 +313,18 @@ private:
      * @param webPortal Reference to web portal for sending responses
      */
     void processWheelLockCommand(bool locked, WebPortal& webPortal);
+
+    /**
+     * @brief Steering-center calibration commands (web-only).
+     * Save persists + remaps live; Move drives to the typed raw count for visual check.
+     */
+    void processSteerCenterSaveCommand(int32_t count, WebPortal& webPortal);
+    void processSteerCenterMoveCommand(int32_t count, WebPortal& webPortal);
+
+    /**
+     * @brief Process web take/release control command (latched MAVLink override)
+     */
+    void processWebControlCommand(bool on, WebPortal& webPortal);
 
     /**
      * @brief Process set_gear_default command

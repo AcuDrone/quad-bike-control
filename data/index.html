@@ -358,6 +358,15 @@
                     MAVLink control is active. Manual control disabled.
                 </div>
 
+                <div style="margin-bottom: 16px;">
+                    <button class="upload-btn" id="web-control-btn" onclick="toggleWebControl()" style="background: #607d8b; width: 100%;">
+                        🕹️ <span id="web-control-label">Take Control</span>
+                    </button>
+                    <div style="font-size: 0.75em; color: #aaa; margin-top: 4px;">
+                        Engages web control — MAVLink is ignored until released or all browsers disconnect.
+                    </div>
+                </div>
+
                 <h3 style="margin-top: 20px; margin-bottom: 10px;">Gear Selection</h3>
                 <div class="gear-buttons">
                     <button class="gear-btn" id="gear-r" onclick="setGear('R')">R</button>
@@ -447,6 +456,24 @@
                     </div>
                 </div>
                 <div id="gear-default-status" style="margin-top: 10px; font-size: 0.8em; color: #4caf50; min-height: 1.2em;"></div>
+            </div>
+
+            <!-- Steering Center Calibration -->
+            <div class="card">
+                <h2>🎯 Steering Center</h2>
+                <p style="font-size: 0.8em; color: #aaa; margin-bottom: 12px;">
+                    Straight-ahead position in encoder counts (left home = 0, right limit = 2×center).
+                    Type a value, press <b>Move</b> to drive there and check visually, then <b>Save</b>.
+                </p>
+                <div style="display: flex; gap: 6px; align-items: center;">
+                    <input type="number" id="steer-center-input" min="1" step="1" style="flex:1; padding:6px; border-radius:4px; border:1px solid #555; background:#2a2a2a; color:#fff;">
+                    <button onclick="moveSteerCenter()" style="padding:6px 10px; border-radius:4px; border:none; background:#ff9800; color:#fff; cursor:pointer;">Move</button>
+                    <button onclick="saveSteerCenter()" style="padding:6px 10px; border-radius:4px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Save</button>
+                </div>
+                <div style="margin-top: 8px; font-size: 0.8em; color: #aaa;">
+                    Current position: <span id="steer-pos">--</span> &nbsp;|&nbsp; saved center: <span id="steer-center-cur">--</span>
+                </div>
+                <div id="steer-center-status" style="margin-top: 8px; font-size: 0.8em; color: #4caf50; min-height: 1.2em;"></div>
             </div>
 
             <!-- Throttle Calibration -->
@@ -700,6 +727,12 @@
                     throttleCalSetStatus(data.success ? data.message : 'Error: ' + data.message,
                                          data.success ? '#4caf50' : '#f44336');
                 }
+                // Steering center status
+                if (data.message && (data.message.includes('Steering center') ||
+                    data.message.startsWith('Moving to') || data.message.includes('Invalid center'))) {
+                    steerCenterStatus(data.success ? data.message : 'Error: ' + data.message,
+                                      data.success ? '#4caf50' : '#f44336');
+                }
             }
         }
 
@@ -819,6 +852,12 @@
             currentInputSource = data.input_source || 'FAILSAFE';
             updateInputSourceDisplay();
 
+            // Web-control latched state
+            if (data.web_control !== undefined) {
+                webControlState = data.web_control;
+                updateWebControlButton(data.web_control);
+            }
+
             // Update servo position near gear buttons
             document.getElementById('gear-encoder-pos').textContent = (data.hall_position || 0).toFixed(1) + '%';
 
@@ -862,6 +901,15 @@
             if (data.wheel_lock_on !== undefined) {
                 wheelLockState = data.wheel_lock_on;
                 updateWheelLockButton(data.wheel_lock_on);
+            }
+            if (data.steer_position !== undefined) {
+                document.getElementById('steer-pos').textContent = data.steer_position;
+            }
+            if (data.steer_center !== undefined) {
+                document.getElementById('steer-center-cur').textContent = data.steer_center;
+                // Pre-fill the input once (don't clobber the operator's typing)
+                const sci = document.getElementById('steer-center-input');
+                if (sci && sci.value === '') sci.value = data.steer_center;
             }
 
             // Update control availability
@@ -1104,6 +1152,53 @@
         function toggleWheelLock() {
             wheelLockState = !wheelLockState;
             sendCommand('set_wheel_lock', wheelLockState);
+        }
+
+        // ---- Web-control latched takeover ----
+        let webControlState = false;
+        function toggleWebControl() {
+            webControlState = !webControlState;
+            updateWebControlButton(webControlState);   // optimistic: instant feedback
+            sendCommand('set_web_control', webControlState);
+        }
+        function updateWebControlButton(on) {
+            const btn = document.getElementById('web-control-btn');
+            const label = document.getElementById('web-control-label');
+            if (!btn || !label) return;
+            if (on) {
+                btn.style.background = '#f44336';   // red = you hold control, MAVLink ignored
+                label.textContent = 'Release Control';
+            } else {
+                btn.style.background = '#607d8b';   // grey = MAVLink in charge
+                label.textContent = 'Take Control';
+            }
+        }
+
+        // ---- Steering center calibration ----
+        function steerCenterStatus(msg, color) {
+            const el = document.getElementById('steer-center-status');
+            if (el) { el.textContent = msg; el.style.color = color || '#aaa'; }
+        }
+        function steerCenterValue() {
+            const v = parseInt(document.getElementById('steer-center-input').value, 10);
+            if (isNaN(v) || v <= 0) { steerCenterStatus('Enter a value > 0', '#f44336'); return null; }
+            return v;
+        }
+        function moveSteerCenter() {
+            const v = steerCenterValue();
+            if (v === null) return;
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ cmd: 'move_steer_center', value: v }));
+                steerCenterStatus('Moving to ' + v + '…', '#ff9800');
+            }
+        }
+        function saveSteerCenter() {
+            const v = steerCenterValue();
+            if (v === null) return;
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ cmd: 'set_steer_center', value: v }));
+                steerCenterStatus('Saving ' + v + '…', '#aaa');
+            }
         }
 
         let boostTestActive = false;

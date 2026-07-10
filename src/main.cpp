@@ -96,12 +96,13 @@ void setup() {
 
     if (steeringActuator.begin(PIN_STEER_RPWM, PIN_STEER_LPWM)) {
         steeringActuator.attachEncoder(&steeringEncoder);
+        steeringActuator.loadCenter();   // NVS-backed center calibration
 
         // Auto-home to left limit, then move to center
         if (steeringActuator.autoHome()) {
             Debug::printlnFeature(DebugFeature::SERVO, "[STEER] Homed to left limit");
-            Debug::printfFeature(DebugFeature::SERVO, "[STEER] Moving to center (%d)\n", STEER_CENTER_POSITION);
-            steeringActuator.setPosition(STEER_CENTER_POSITION);
+            Debug::printfFeature(DebugFeature::SERVO, "[STEER] Moving to center (%ld)\n", (long)steeringActuator.getCenter());
+            steeringActuator.setPosition(steeringActuator.getCenter());
         } else {
             Debug::printlnFeature(DebugFeature::SERVO, "[STEER] ERROR: Auto-home failed");
         }

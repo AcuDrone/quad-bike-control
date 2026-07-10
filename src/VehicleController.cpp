@@ -16,6 +16,7 @@ VehicleController::VehicleController(SteeringController& steering,
       relayController_(relayController),
       currentInputSource_(InputSource::FAILSAFE),
       failsafeApplied_(false),
+      webControl_(false),
       currentBrakeTarget_(0.0f),
       currentBrakePosition_(100.0f),
       brakeMovementStartTime_(0),
@@ -107,6 +108,19 @@ void VehicleController::setInputSource(InputSource source) {
     currentInputSource_ = source;
 }
 
+void VehicleController::setWebControl(bool on) {
+    if (webControl_ == on) return;
+    webControl_ = on;
+    Debug::printfFeature(DebugFeature::VEHICLE, "[INPUT] Web control %s\n", on ? "ENGAGED (MAVLink ignored)" : "RELEASED");
+    if (on) {
+        // Snap to a safe state on takeover so we don't inherit the autopilot's live throttle.
+        // Steering / gear / brake hold their current positions (no lurch).
+        throttle_.idle();
+        gearBoostActive_ = false;
+        boostManualActive_ = false;
+    }
+}
+
 void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebPortal& webPortal) {
     if (!cmd.hasCommand) {
         return;
@@ -130,6 +144,15 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
     } else if (cmd.cmd == "set_wheel_lock") {
         // Front-wheel lock always available (not restricted by input source)
         processWheelLockCommand(cmd.boolValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_steer_center") {
+        processSteerCenterSaveCommand((int32_t)cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "move_steer_center") {
+        processSteerCenterMoveCommand((int32_t)cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_web_control") {
+        processWebControlCommand(cmd.boolValue, webPortal);
         return;
     } else if (cmd.cmd == "test_boost") {
         processBoostTestCommand(cmd.boolValue, webPortal);
@@ -333,8 +356,8 @@ void VehicleController::processSteeringCommand(float value, WebPortal& webPortal
 bool VehicleController::shouldClipThrottle() const {
     if (transmission_.isGearChangeActive())
         return true;
-    // if (transmission_.getTargetGear() == TransmissionController::Gear::GEAR_NEUTRAL)
-    //     return true;
+    if (transmission_.getTargetGear() == TransmissionController::Gear::GEAR_NEUTRAL)
+        return true;
     return false;
 }
 
@@ -515,6 +538,28 @@ void VehicleController::setWheelLock(bool locked) {
 void VehicleController::processWheelLockCommand(bool locked, WebPortal& webPortal) {
     setWheelLock(locked);
     webPortal.sendResponse(true, String("Front wheels ") + (locked ? "LOCKED" : "UNLOCKED"));
+}
+
+void VehicleController::processSteerCenterSaveCommand(int32_t count, WebPortal& webPortal) {
+    if (!steering_.setCenter(count)) {
+        webPortal.sendResponse(false, "Invalid center (must be > 0)");
+        return;
+    }
+    webPortal.sendResponse(true, "Steering center saved: " + String(count));
+}
+
+void VehicleController::processSteerCenterMoveCommand(int32_t count, WebPortal& webPortal) {
+    if (count <= 0) {
+        webPortal.sendResponse(false, "Invalid center (must be > 0)");
+        return;
+    }
+    steering_.moveToRawCount(count);
+    webPortal.sendResponse(true, "Moving to " + String(count));
+}
+
+void VehicleController::processWebControlCommand(bool on, WebPortal& webPortal) {
+    setWebControl(on);
+    webPortal.sendResponse(true, on ? "Web control engaged" : "Web control released");
 }
 
 void VehicleController::processIgnitionCommand(const String& state, WebPortal& webPortal) {

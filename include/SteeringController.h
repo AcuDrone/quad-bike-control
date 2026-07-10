@@ -11,7 +11,7 @@
  * Uses plain GPIO digital write for direction (no PWM/LEDC needed).
  * Position feedback via hall sensor encoder (PCNT).
  * Auto-homes to left physical limit on startup, then moves to center.
- * Left limit = 0 (home), right limit = STEER_RIGHT_LIMIT, center = STEER_CENTER_POSITION.
+ * Left limit = 0 (home), center = runtime-calibrated center_ (NVS), right limit = 2*center_.
  */
 class SteeringController {
 public:
@@ -70,10 +70,35 @@ public:
      */
     bool autoHome(uint32_t timeout = STEER_HOMING_TIMEOUT);
 
+    /**
+     * @brief Get the calibrated center (straight-ahead) position in encoder counts.
+     */
+    int32_t getCenter() const { return center_; }
+
+    /**
+     * @brief Set and persist the center position (encoder counts). Updates the live
+     * steering mapping immediately (right limit becomes 2*center). Rejects count <= 0.
+     * @return true if accepted and saved
+     */
+    bool setCenter(int32_t count);
+
+    /**
+     * @brief Drive the actuator to a raw encoder position for calibration preview.
+     * Bypasses the percent mapping; clamps to >= 0. Honors move/stall timeouts.
+     */
+    void moveToRawCount(int32_t count);
+
+    /**
+     * @brief Load the center position from NVS (default STEER_DEFAULT_CENTER). Call at init.
+     */
+    void loadCenter();
+
 private:
     gpio_num_t rpwmPin_;
     gpio_num_t lpwmPin_;
     EncoderCounter* encoder_;
+
+    int32_t center_;   // calibrated straight-ahead position (encoder counts); right limit = 2*center_
 
     // Position control state
     int32_t targetPosition_;

@@ -1,10 +1,12 @@
 #include "SteeringController.h"
 #include "Debug.h"
+#include <Preferences.h>
 
 SteeringController::SteeringController()
     : rpwmPin_(GPIO_NUM_NC),
       lpwmPin_(GPIO_NUM_NC),
       encoder_(nullptr),
+      center_(STEER_DEFAULT_CENTER),
       targetPosition_(0),
       isMoving_(false),
       moveStartTime_(0),
@@ -53,9 +55,9 @@ void SteeringController::stop() {
 // === Position control ===
 
 void SteeringController::setPosition(int32_t targetPosition) {
-    // Clamp to limits
+    // Clamp to limits (left home = 0, right limit = 2*center)
     if (targetPosition < 0) targetPosition = 0;
-    if (targetPosition > STEER_RIGHT_LIMIT) targetPosition = STEER_RIGHT_LIMIT;
+    if (targetPosition > 2 * center_) targetPosition = 2 * center_;
 
     targetPosition_ = targetPosition;
     isMoving_ = true;
@@ -125,19 +127,19 @@ void SteeringController::setSteeringPercent(float percent) {
     if (percent > 100.0f) percent = 100.0f;
 
     // Symmetric range based on smaller side from center
-    int32_t halfRange = (int32_t)STEER_CENTER_POSITION;
+    int32_t halfRange = center_;
 
-    int32_t target = STEER_CENTER_POSITION + (int32_t)((percent / 100.0f) * halfRange);
+    int32_t target = center_ + (int32_t)((percent / 100.0f) * halfRange);
     setPosition(target);
 }
 
 float SteeringController::getSteeringPercent() const {
     if (!encoder_) return 0.0f;
 
-    int32_t halfRange = (int32_t)STEER_CENTER_POSITION;
+    int32_t halfRange = center_;
     if (halfRange == 0) return 0.0f;
 
-    float percent = ((float)(encoder_->getPosition() - STEER_CENTER_POSITION) / halfRange) * 100.0f;
+    float percent = ((float)(encoder_->getPosition() - center_) / halfRange) * 100.0f;
     if (percent < -100.0f) percent = -100.0f;
     if (percent > 100.0f) percent = 100.0f;
     return percent;
@@ -179,4 +181,38 @@ bool SteeringController::autoHome(uint32_t timeout) {
     stop();
     Debug::printlnFeature(DebugFeature::SERVO, "[STEER] ERROR: Auto-home timeout");
     return false;
+}
+
+void SteeringController::loadCenter() {
+    Preferences prefs;
+    if (prefs.begin("steering", true)) {
+        center_ = prefs.getInt("center", STEER_DEFAULT_CENTER);
+        prefs.end();
+    }
+    if (center_ <= 0) center_ = STEER_DEFAULT_CENTER;   // sanity
+    Debug::printfFeature(DebugFeature::SERVO, "[STEER] Center loaded: %ld (right limit %ld)\n",
+                         (long)center_, (long)(2 * center_));
+}
+
+bool SteeringController::setCenter(int32_t count) {
+    if (count <= 0) return false;   // reject zero/negative (no upper restriction)
+    center_ = count;
+    Preferences prefs;
+    if (prefs.begin("steering", false)) {
+        prefs.putInt("center", center_);
+        prefs.end();
+    }
+    Debug::printfFeature(DebugFeature::SERVO, "[STEER] Center set to %ld (right limit %ld)\n",
+                         (long)center_, (long)(2 * center_));
+    return true;
+}
+
+void SteeringController::moveToRawCount(int32_t count) {
+    if (count < 0) count = 0;   // raw calibration preview; no upper clamp beyond the entered value
+    targetPosition_ = count;
+    isMoving_ = true;
+    moveStartTime_ = millis();
+    if (encoder_) lastStallPosition_ = encoder_->getPosition();
+    lastStallCheckTime_ = millis();
+    Debug::printfFeature(DebugFeature::SERVO, "[STEER] Preview move to raw %ld\n", (long)count);
 }

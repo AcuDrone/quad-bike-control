@@ -139,8 +139,10 @@ struct ServoChannelConfig {
 #define SERVO_PWM_FREQ        50     // Hz (20ms period)
 
 // Steering Actuator Parameters
-#define STEER_CENTER_POSITION     1775   // Encoder counts — center position (from left home)
-#define STEER_RIGHT_LIMIT         3400  // Encoder counts — maximum right travel (from left home)
+// Center (straight-ahead) is runtime-calibratable via the web UI and stored in NVS
+// ("steering"/"center"); STEER_DEFAULT_CENTER is only the first-boot fallback. The right
+// travel limit is derived as 2*center (symmetric about center; left home = 0).
+#define STEER_DEFAULT_CENTER      1775   // Encoder counts — default center position (from left home)
 #define STEER_POSITION_TOLERANCE  15    // +/- encoder counts for position match
 #define STEER_HOMING_TIMEOUT      30000 // ms - maximum time for auto-home
 #define STEER_MOVE_TIMEOUT        15000 // ms - maximum time for any movement

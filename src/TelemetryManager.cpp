@@ -26,6 +26,15 @@ void TelemetryManager::forceBroadcast() {
 }
 
 InputSource TelemetryManager::determineInputSource() {
+    // Latched web-control override: auto-release if all browsers have disconnected
+    // (Q11a — the link is considered lost when the client count drops to zero).
+    if (vehicleController_.isWebControl() && webPortal_.getClientCount() == 0) {
+        vehicleController_.setWebControl(false);
+    }
+    // While engaged (and a browser is present), web fully overrides MAVLink.
+    if (vehicleController_.isWebControl() && webPortal_.getClientCount() > 0) {
+        return InputSource::WEB;
+    }
     if (mavlink_.isSignalValid()) {
         return InputSource::MAVLINK;
     }
@@ -42,6 +51,8 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
 
     telemetry.gear = vehicleController_.getCurrentGearString();
     telemetry.steering_pct = (int)vehicleController_.getSteeringPercent();
+    telemetry.steer_center = vehicleController_.getSteerCenter();
+    telemetry.steer_position = vehicleController_.getSteering().getPosition();
     telemetry.throttle_us = vehicleController_.getThrottleUs();
     telemetry.throttle_idle_us = vehicleController_.getThrottleIdleUs();
     telemetry.throttle_full_us = vehicleController_.getThrottleFullUs();
@@ -53,6 +64,7 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
 
     telemetry.brake_pct = 0.0f;
     telemetry.mav_active = mavlink_.isSignalValid();
+    telemetry.web_control = vehicleController_.isWebControl();
 
     CANController::VehicleData vehicleData = vehicleController_.getVehicleData();
     if (vehicleData.dataValid) {

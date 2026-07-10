@@ -54,8 +54,11 @@ public:
         uint16_t throttle_full_us;    // Calibrated full-throttle endpoint (µs)
         bool throttle_calibrating;    // True while a throttle calibration session is active
         int steering_pct;         // Steering percentage (-100 to +100)
+        int32_t steer_center;     // Calibrated steering center (encoder counts)
+        int32_t steer_position;   // Current steering encoder position (counts)
         String input_source;      // Current input source: "MAVLINK", "WEB", "FAILSAFE"
         bool mav_active;          // True if MAVLink command stream is valid
+        bool web_control;         // True if latched web-control override is engaged
 
         // CAN bus vehicle data
         uint16_t engine_rpm;      // Engine RPM (0-16383)
