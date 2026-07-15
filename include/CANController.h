@@ -90,7 +90,7 @@ private:
         uint8_t retryCount;
     };
 
-    static constexpr uint8_t PID_COUNT = 6;
+    static constexpr uint8_t PID_COUNT = 3;
 
     // OBD-II PIDs (Mode 01 - Current Data)
     static constexpr uint8_t PID_ENGINE_RPM = 0x0C;

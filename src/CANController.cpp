@@ -19,13 +19,10 @@ CANController::CANController()
     vehicleData_.lastUpdateTime = 0;
     vehicleData_.dataValid = false;
 
-    // Initialize PID scheduling table
-    pidTable_[0] = {PID_ENGINE_RPM,    CAN_POLL_INTERVAL_RPM,  0, 0};
-    // pidTable_[1] = {PID_VEHICLE_SPEED, CAN_POLL_INTERVAL_RPM,  0, 0};
-    pidTable_[1] = {PID_COOLANT_TEMP,  CAN_POLL_INTERVAL_TEMP, 0, 0};
-    // pidTable_[3] = {PID_OIL_TEMP,      CAN_POLL_INTERVAL_TEMP, 0, 0};
-    pidTable_[4] = {PID_THROTTLE_POS,  CAN_POLL_INTERVAL_TEMP, 0, 0};
-    // pidTable_[5] = {PID_FUEL_LEVEL,    CAN_POLL_INTERVAL_TEMP, 0, 0};і
+    // Initialize PID scheduling table (all PID_COUNT entries must be initialized)
+    pidTable_[0] = {PID_ENGINE_RPM,   CAN_POLL_INTERVAL_RPM,  0, 0};
+    pidTable_[1] = {PID_COOLANT_TEMP, CAN_POLL_INTERVAL_TEMP, 0, 0};
+    pidTable_[2] = {PID_THROTTLE_POS, CAN_POLL_INTERVAL_TEMP, 0, 0};
 }
 
 CANController::~CANController() {
@@ -104,6 +101,15 @@ void CANController::update() {
                 vehicleData_.lastUpdateTime = millis();
                 vehicleData_.dataValid = true;
                 state_ = OBDState::IDLE;
+
+                static uint32_t lastDataLog = 0;
+                if (millis() - lastDataLog >= 1000) {
+                    lastDataLog = millis();
+                    Debug::printfFeature(DebugFeature::CAN,
+                        "[CAN] RPM=%u coolant=%dC throttle=%u%%\n",
+                        vehicleData_.engineRPM, vehicleData_.coolantTemp,
+                        vehicleData_.throttlePosition);
+                }
             } else if (millis() - requestSentTime_ >= CAN_RESPONSE_TIMEOUT) {
                 // Abort pending TX and wait for bus-off recovery before next send
                 // mcp_can_->abortTX();
