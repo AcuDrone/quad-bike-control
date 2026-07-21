@@ -19,12 +19,6 @@ void TelemetryManager::update() {
     lastBroadcast_ = millis();
 }
 
-void TelemetryManager::forceBroadcast() {
-    WebPortal::Telemetry telemetry = collectTelemetry();
-    broadcastToWeb(telemetry);
-    lastBroadcast_ = millis();
-}
-
 InputSource TelemetryManager::determineInputSource() {
     // Latched web-control override: auto-release if all browsers have disconnected
     // (Q11a — the link is considered lost when the client count drops to zero).
@@ -75,7 +69,6 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
         telemetry.throttle_position = vehicleData.throttlePosition;
         telemetry.fuel_level = vehicleData.fuelLevel;
         telemetry.can_status = "connected";
-        telemetry.can_data_age = millis() - vehicleData.lastUpdateTime;
     } else {
         telemetry.engine_rpm = 0;
         telemetry.vehicle_speed = 0;
@@ -84,7 +77,6 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
         telemetry.throttle_position = 0;
         telemetry.fuel_level = 0;
         telemetry.can_status = "disconnected";
-        telemetry.can_data_age = (vehicleData.lastUpdateTime == 0) ? 0 : (millis() - vehicleData.lastUpdateTime);
     }
 
     mavlink_.getRawChannels(telemetry.mav_channels);

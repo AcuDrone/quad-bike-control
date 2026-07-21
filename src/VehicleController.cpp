@@ -177,14 +177,6 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
         return;
     }
 
-    
-    // Normal control commands require WEB input source
-    // if (currentInputSource_ != InputSource::WEB) {
-    //     // Web control not active, ignore control commands
-    //     Debug::printfFeature(DebugFeature::VEHICLE, "[WEB] Command return %s\n", cmd.cmd);
-    //     return;
-    // }
-
     Debug::printfFeature(DebugFeature::VEHICLE, "[WEB] Command end %s\n", cmd.cmd);
     // Process control commands
     if (cmd.cmd == "set_gear") {
@@ -497,16 +489,6 @@ bool VehicleController::setIgnitionState(const String& state, String& errorMsg) 
     } else {
         errorMsg = "Invalid ignition state";
         return false;
-    }
-
-    // Safety interlock: require brake applied before powering on from OFF
-    if (currentState == RelayController::IgnitionState::OFF &&
-        targetState != RelayController::IgnitionState::OFF) {
-        // if (currentBrakeTarget_ < 20.0f) {
-        //     errorMsg = "Apply brake before ignition";
-        //     Debug::printlnFeature(DebugFeature::VEHICLE, "[IGNITION] Rejected: brake not applied (need >= 20%)");
-        //     return false;
-        // }
     }
 
     // Safety interlock: prevent cranking if engine already running

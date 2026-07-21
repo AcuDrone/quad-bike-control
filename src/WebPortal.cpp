@@ -71,15 +71,6 @@ void WebPortal::update() {
     ws.cleanupClients();
 }
 
-bool WebPortal::hasActiveControl() {
-    if (!currentCommand.hasCommand) {
-        return false;
-    }
-
-    // Check if command is still fresh (within timeout)
-    return (millis() - lastCommandTime) < WEB_COMMAND_TIMEOUT;
-}
-
 WebPortal::WebCommand WebPortal::getCommand() {
     return currentCommand;
 }
@@ -117,10 +108,6 @@ void WebPortal::sendResponse(bool success, const String& message) {
 
 uint8_t WebPortal::getClientCount() {
     return ws.count();
-}
-
-bool WebPortal::isAPActive() {
-    return WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA;
 }
 
 String WebPortal::getAPIP() {
@@ -613,7 +600,6 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
         doc["fuel_level"] = telemetry.fuel_level;
     }
     doc["can_status"] = telemetry.can_status;
-    doc["can_data_age"] = telemetry.can_data_age;
 
     // MAVLink command channel + link data
     JsonArray mavChannels = doc.createNestedArray("mav_channels");
@@ -663,8 +649,4 @@ String WebPortal::createResponseJSON(bool success, const String& message) {
     String json;
     serializeJson(doc, json);
     return json;
-}
-
-bool WebPortal::isOTAInProgress() {
-    return otaInProgress;
 }

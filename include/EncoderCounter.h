@@ -25,7 +25,7 @@ public:
      *
      * @param channelA GPIO pin for encoder channel A
      * @param channelB GPIO pin for encoder channel B
-     * @param unitId PCNT unit ID (0-3 on ESP32-C6)
+     * @param unitId PCNT unit ID (0-3 on ESP32-S3)
      * @return true if initialization successful
      */
     bool begin(gpio_num_t channelA, gpio_num_t channelB, int unitId = 0);
@@ -49,35 +49,6 @@ public:
      */
     void reset();
 
-    /**
-     * @brief Check if encoder is initialized
-     *
-     * @return true if initialized
-     */
-    bool isInitialized() const { return initialized_; }
-
-    /**
-     * @brief Get position change since last call
-     *
-     * @return Delta position (change since last getDelta() call)
-     */
-    int32_t getDelta();
-
-    /**
-     * @brief Get raw hardware counter value (for diagnostics)
-     *
-     * @return Raw PCNT counter value
-     */
-    int getRawCount() const { return readHardwareCounter(); }
-
-    /**
-     * @brief Read current GPIO pin states (for diagnostics)
-     *
-     * @param stateA Output: state of channel A (0 or 1)
-     * @param stateB Output: state of channel B (0 or 1)
-     */
-    void readGPIOStates(int& stateA, int& stateB) const;
-
 private:
     pcnt_unit_handle_t pcntUnit_;
     pcnt_channel_handle_t pcntChannelA_;
@@ -85,7 +56,6 @@ private:
     gpio_num_t channelA_;
     gpio_num_t channelB_;
     int32_t offsetPosition_;  // Offset for software position adjustment
-    int32_t lastPosition_;    // Last position for delta calculation
     bool initialized_;
 
     /**
@@ -94,11 +64,6 @@ private:
      * @return Raw PCNT counter value
      */
     int readHardwareCounter() const;
-
-    /**
-     * @brief Update internal position tracking
-     */
-    void updatePosition();
 };
 
 #endif // ENCODER_COUNTER_H

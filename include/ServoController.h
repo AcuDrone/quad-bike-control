@@ -18,7 +18,7 @@ public:
      * @brief Initialize the servo controller
      *
      * @param pin GPIO pin number for PWM output
-     * @param channel LEDC channel number (0-5 on ESP32-C6)
+     * @param channel LEDC channel number (0-7 on ESP32-S3)
      * @param minUs Minimum pulse width in microseconds (default 1000)
      * @param maxUs Maximum pulse width in microseconds (default 2000)
      * @return true if initialization successful
@@ -38,25 +38,11 @@ public:
     bool begin(gpio_num_t pin, uint8_t channel, uint16_t minUs, uint16_t maxUs, uint16_t initialUs);
 
     /**
-     * @brief Set servo position by angle
-     *
-     * @param degrees Angle in degrees (0-180)
-     */
-    void setAngle(float degrees);
-
-    /**
      * @brief Set servo position by pulse width
      *
      * @param us Pulse width in microseconds
      */
     void setMicroseconds(uint16_t us);
-
-    /**
-     * @brief Get current servo angle
-     *
-     * @return Current angle in degrees
-     */
-    float getAngle() const { return currentAngle_; }
 
     /**
      * @brief Get current pulse width
@@ -70,29 +56,13 @@ public:
      */
     void disable();
 
-    /**
-     * @brief Check if servo is initialized
-     *
-     * @return true if initialized
-     */
-    bool isInitialized() const { return initialized_; }
-
 private:
     gpio_num_t pin_;
     uint8_t channel_;
     uint16_t minUs_;
     uint16_t maxUs_;
-    float currentAngle_;
     uint16_t currentUs_;
     bool initialized_;
-
-    /**
-     * @brief Convert angle to pulse width
-     *
-     * @param degrees Angle in degrees
-     * @return Pulse width in microseconds
-     */
-    uint16_t angleToPulseWidth(float degrees) const;
 
     /**
      * @brief Convert pulse width to PWM duty cycle

@@ -29,23 +29,6 @@ public:
     void update();
 
     /**
-     * @brief Set telemetry broadcast interval
-     * @param intervalMs Interval in milliseconds (default: 200ms = 5Hz)
-     */
-    void setInterval(uint32_t intervalMs) { broadcastInterval_ = intervalMs; }
-
-    /**
-     * @brief Get current broadcast interval
-     * @return Interval in milliseconds
-     */
-    uint32_t getInterval() const { return broadcastInterval_; }
-
-    /**
-     * @brief Force immediate telemetry broadcast (bypasses rate limit)
-     */
-    void forceBroadcast();
-
-    /**
      * @brief Determine current input source based on priority: MAVLINK > WEB > FAILSAFE
      * @return Current input source
      */
@@ -72,11 +55,6 @@ private:
      * @param telemetry Telemetry data to broadcast
      */
     void broadcastToWeb(const WebPortal::Telemetry& telemetry);
-
-    // Future expansion points:
-    // void broadcastToCAN(const Telemetry& telemetry);
-    // void logToSD(const Telemetry& telemetry);
-    // void sendToSerial(const Telemetry& telemetry);
 };
 
 /**

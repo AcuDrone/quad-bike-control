@@ -109,11 +109,6 @@ void SteeringController::update() {
     }
 }
 
-bool SteeringController::isAtPosition(int32_t target, int32_t tolerance) const {
-    if (!encoder_) return false;
-    return abs(encoder_->getPosition() - target) <= tolerance;
-}
-
 int32_t SteeringController::getPosition() const {
     if (!encoder_) return 0;
     return encoder_->getPosition();

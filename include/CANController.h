@@ -58,22 +58,10 @@ public:
     VehicleData getVehicleData() const { return vehicleData_; }
 
     /**
-     * @brief Check if CAN controller is connected and responding
-     * @return true if MCP2515 is responding
-     */
-    bool isConnected() const { return initialized_; }
-
-    /**
      * @brief Set RPM PID poll interval at runtime
      * @param ms Poll interval in milliseconds (e.g. CAN_POLL_INTERVAL_RPM_BOOST during gear change)
      */
     void setRPMPollInterval(uint32_t ms);
-
-    /**
-     * @brief Get human-readable status string
-     * @return Status string (e.g., "Connected - 10 Hz", "Disconnected")
-     */
-    String getStatusString() const;
 
 private:
     // State machine states

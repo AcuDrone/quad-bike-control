@@ -33,12 +33,9 @@ public:
      * @brief MAVLink link quality / liveness metrics.
      */
     struct LinkQuality {
-        uint32_t totalCommands;   // SERVO_OUTPUT_RAW frames received since init
         float    commandRate;     // Command frame rate (Hz, rolling)
         uint32_t signalAge;       // ms since last command frame
         uint32_t heartbeatAge;    // ms since last autopilot HEARTBEAT
-        bool     isValid;         // Command stream within timeout
-        bool     linkUp;          // Heartbeat within timeout
     };
 
     /**
@@ -49,7 +46,6 @@ public:
         bool        canValid;       // CAN data fresh/valid
         uint16_t    engineRpm;      // RPM
         int8_t      coolantTemp;    // °C
-        uint8_t     throttlePct;    // %
         const char* gearFrom;       // gear the current step is leaving "R"/"N"/"L"/"H"
         const char* gearTo;         // current step / assumed gear "R"/"N"/"L"/"H"
         bool        gearMoving;     // true while the servo is actively moving (a phase is active)

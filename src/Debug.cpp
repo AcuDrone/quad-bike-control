@@ -36,23 +36,6 @@ void Debug::saveState() {
     preferences.end();
 }
 
-void Debug::printf(const char* format, ...) {
-    if (!g_debugEnabled) {
-        return;
-    }
-
-    va_list args;
-    va_start(args, format);
-
-    // Use vsnprintf to format the string
-    char buffer[256];
-    vsnprintf(buffer, sizeof(buffer), format, args);
-
-    va_end(args);
-
-    Serial.print(buffer);
-}
-
 bool Debug::isFeatureEnabled(DebugFeature feature) {
     return (featureFlags & featureBit(feature)) != 0;
 }

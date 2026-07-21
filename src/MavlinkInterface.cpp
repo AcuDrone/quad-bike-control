@@ -434,12 +434,9 @@ bool MavlinkInterface::isLinkUp() const {
 
 MavlinkInterface::LinkQuality MavlinkInterface::getLinkQuality() const {
     LinkQuality q;
-    q.totalCommands = totalCommands_;
     q.commandRate = lastCmdRate_;
     q.signalAge = getSignalAge();
     q.heartbeatAge = heartbeatSeen_ ? (millis() - lastHeartbeatTime_) : 0;
-    q.isValid = isSignalValid();
-    q.linkUp = isLinkUp();
     return q;
 }
 

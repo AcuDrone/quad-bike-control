@@ -56,14 +56,6 @@ public:
     // Enable/disable debug output for a specific feature
     static void setFeatureEnabled(DebugFeature feature, bool enabled);
 
-    // Print without newline (if debug enabled)
-    template<typename T>
-    static void print(T value) {
-        if (g_debugEnabled) {
-            Serial.print(value);
-        }
-    }
-
     // Print with newline (if debug enabled)
     template<typename T>
     static void println(T value) {
@@ -79,19 +71,8 @@ public:
         }
     }
 
-    // Printf-style formatted output (if debug enabled)
-    static void printf(const char* format, ...) __attribute__((format(printf, 1, 2)));
-
     // ===== Feature-Specific Logging Methods =====
     // These check BOTH master debug AND feature flag
-
-    // Print without newline (if master debug AND feature enabled)
-    template<typename T>
-    static void printFeature(DebugFeature feature, T value) {
-        if (g_debugEnabled && isFeatureEnabled(feature)) {
-            Serial.print(value);
-        }
-    }
 
     // Print with newline (if master debug AND feature enabled)
     template<typename T>

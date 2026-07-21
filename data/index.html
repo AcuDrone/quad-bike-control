@@ -342,7 +342,7 @@
                     </div>
                     <div class="telemetry-item">
                         <div class="telemetry-label">Steering</div>
-                        <div class="telemetry-value" id="telemetry-steering">90°</div>
+                        <div class="telemetry-value" id="telemetry-steering">0%</div>
                     </div>
                     <div class="telemetry-item">
                         <div class="telemetry-label">MAVLink Link</div>
@@ -772,7 +772,7 @@
             }
 
             // Update steering
-            document.getElementById('telemetry-steering').textContent = (data.steering_angle || 90) + '°';
+            document.getElementById('telemetry-steering').textContent = (data.steering_pct || 0) + '%';
 
             // Update MAVLink link status
             document.getElementById('telemetry-mav').textContent = data.mav_active ? 'Active' : 'Inactive';

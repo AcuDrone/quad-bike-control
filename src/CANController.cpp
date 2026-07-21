@@ -157,30 +157,6 @@ void CANController::setRPMPollInterval(uint32_t ms) {
     pidTable_[0].interval = ms;
 }
 
-String CANController::getStatusString() const {
-    if (!initialized_) {
-        return "Error - MCP2515 not responding";
-    }
-
-    if (!vehicleData_.dataValid) {
-        if (vehicleData_.lastUpdateTime == 0) {
-            return "Disconnected - no data";
-        } else {
-            return "Disconnected - timeout";
-        }
-    }
-
-    // Calculate update rate
-    uint32_t dataAge = millis() - vehicleData_.lastUpdateTime;
-    if (dataAge < 200) {
-        return "Connected - 10 Hz";
-    } else if (dataAge < 1000) {
-        return "Connected - slow";
-    } else {
-        return "Disconnected - stale";
-    }
-}
-
 bool CANController::sendOBDRequest(uint8_t pid) {
     if (!initialized_ || mcp_can_ == nullptr) {
         return false;

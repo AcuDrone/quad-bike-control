@@ -8,7 +8,6 @@ ServoController::ServoController()
     , channel_(0)
     , minUs_(1000)
     , maxUs_(2000)
-    , currentAngle_(90.0f)
     , currentUs_(1500)
     , initialized_(false)
 {
@@ -78,21 +77,6 @@ bool ServoController::begin(gpio_num_t pin, uint8_t channel, uint16_t minUs, uin
     return true;
 }
 
-void ServoController::setAngle(float degrees) {
-    if (!initialized_) {
-        Debug::printlnFeature(DebugFeature::SERVO, "ServoController: Not initialized");
-        return;
-    }
-
-    // Clamp angle to 0-180 range
-    degrees = clamp(degrees, 0.0f, 180.0f);
-    currentAngle_ = degrees;
-
-    // Convert angle to pulse width
-    uint16_t us = angleToPulseWidth(degrees);
-    setMicroseconds(us);
-}
-
 void ServoController::setMicroseconds(uint16_t us) {
     if (!initialized_) {
         Debug::printlnFeature(DebugFeature::SERVO, "ServoController: Not initialized");
@@ -118,20 +102,8 @@ void ServoController::disable() {
     Debug::printfFeature(DebugFeature::SERVO, "ServoController: Disabled channel %d\n", channel_);
 }
 
-uint16_t ServoController::angleToPulseWidth(float degrees) const {
-    // Map 0-180 degrees to minUs-maxUs microseconds
-    float ratio = degrees / 180.0f;
-    uint16_t us = minUs_ + (uint16_t)((maxUs_ - minUs_) * ratio);
-    return us;
-}
-
 uint32_t ServoController::usToDutyCycle(uint16_t us) const {
-    // Calculate duty cycle for 16-bit resolution at 50Hz
-    // Period = 1/50Hz = 20ms = 20000us
-    // Duty cycle = (pulse_width_us / 20000us) * 65535
-    // uint32_t duty = ((uint32_t)us * 65535UL) / 20000UL;
-
-    // Duty cycle = (pulse_width_us / 20000us) * 16383
+    // 14-bit resolution at 50Hz: duty = (pulse_width_us / 20000us) * 16383
     uint32_t duty = ((uint32_t)us * 16383UL) / 20000UL;
     return duty;
 }

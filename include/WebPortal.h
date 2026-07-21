@@ -68,7 +68,6 @@ public:
         uint8_t throttle_position; // Throttle position % (0-100)
         uint8_t fuel_level;       // Fuel tank level % (0-100)
         String can_status;        // CAN status: "connected", "disconnected"
-        uint32_t can_data_age;    // Time since last CAN update (ms)
 
         // MAVLink command channel + link data
         uint16_t mav_channels[16]; // Decoded command channel values in microseconds
@@ -114,12 +113,6 @@ public:
     void update();
 
     /**
-     * Check if web control has active commands
-     * @return true if web control commands received within timeout period
-     */
-    bool hasActiveControl();
-
-    /**
      * Get the most recent web command (if any)
      * @return WebCommand structure (hasCommand = false if no command)
      */
@@ -150,22 +143,10 @@ public:
     uint8_t getClientCount();
 
     /**
-     * Check if WiFi AP is active
-     * @return true if AP is running
-     */
-    bool isAPActive();
-
-    /**
      * Get WiFi AP IP address
      * @return IP address as string
      */
     String getAPIP();
-
-    /**
-     * Check if OTA update is in progress
-     * @return true if OTA firmware update is ongoing
-     */
-    bool isOTAInProgress();
 
 private:
     AsyncWebServer server;           // Async HTTP web server

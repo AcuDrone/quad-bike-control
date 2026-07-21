@@ -12,7 +12,6 @@
 #include "MavlinkInterface.h"
 #include "RelayController.h"
 #include "CANController.h"
-#include "MCP23017Controller.h"
 
 /**
  * @brief Vehicle control coordination layer

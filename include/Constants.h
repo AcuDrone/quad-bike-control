@@ -180,7 +180,6 @@ struct ServoChannelConfig {
 #define TRANS_SERVO_MAX_US                  2200
 #define TRANS_SERVO_MS_PER_PCT              35      // ms per 1% travel (180° @ 24V: 1110ms/100%)
 #define TRANS_SERVO_SETTLE_MIN_MS           300     // minimum settle time for short moves
-#define TRANS_GEAR_OVERSHOOT_DEFAULT_PCT    1.0f    // default % overshoot (used when no per-gear value saved)
 #define TRANS_GEAR_OVERSHOOT_R_PCT          4.5f
 #define TRANS_GEAR_OVERSHOOT_N_PCT          1.0f
 #define TRANS_GEAR_OVERSHOOT_L_PCT          5.0f
@@ -294,7 +293,7 @@ enum class InputSource {
 #define TRANS_GEAR_BOOST_PID_KP          0.015f // proportional gain (tunable)
 #define TRANS_GEAR_BOOST_PID_KI          0.01f // integral gain (tunable)
 #define TRANS_GEAR_BOOST_PID_KD          0.0f  // derivative gain (0 = disabled; noisy on RPM signal)
-#define TRANS_GEAR_BOOST_SLEW_RATE_US    16    // µs per CAN update °
+#define TRANS_GEAR_BOOST_SLEW_RATE_US    16    // µs per CAN update
 
 // ============================================================================
 // FIRMWARE VERSION

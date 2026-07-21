@@ -82,7 +82,7 @@ void setup() {
     Debug::begin();
     Serial.println("[INIT] Debug utility initialized");
 
-    Debug::println("\n=== ESP32-C6 Quad Bike Control ===");
+    Debug::println("\n=== ESP32-S3 Quad Bike Control ===");
 
     // Initialize throttle servo (loads calibration from NVS, moves to calibrated idle)
     if (!throttle.begin(PIN_THROTTLE_PWM, LEDC_CH_THROTTLE)) {
@@ -186,7 +186,6 @@ void loop() {
     report.canValid     = vd.dataValid;
     report.engineRpm    = vd.engineRPM;
     report.coolantTemp  = vd.coolantTemp;
-    report.throttlePct  = vd.throttlePosition;
     report.gearFrom     = gearFromStr.c_str();
     report.gearTo       = gearToStr.c_str();
     report.gearMoving   = vehicleController.getTransmission().isGearChangeActive();

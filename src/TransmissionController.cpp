@@ -434,26 +434,6 @@ void TransmissionController::moveToPercent(float pct) {
     commandServo(pct);
 }
 
-float TransmissionController::getGearOvershoot(Gear gear) const {
-    if (gear == Gear::GEAR_UNKNOWN) return 0.0f;
-    return overshootPcts_[(int)gear];
-}
-
-bool TransmissionController::setGearOvershoot(Gear gear, float overshootPct) {
-    if (gear == Gear::GEAR_UNKNOWN || (int)gear >= 4) return false;
-    if (overshootPct < 0.0f || overshootPct > 20.0f) return false;
-    overshootPcts_[(int)gear] = overshootPct;
-    static const char* keys[] = {"ovr_h", "ovr_l", "ovr_n", "ovr_r"};
-    Preferences prefs;
-    if (prefs.begin("transmission", false)) {
-        prefs.putFloat(keys[(int)gear], overshootPct);
-        prefs.end();
-    }
-    Debug::printfFeature(DebugFeature::TRANSMISSION,
-        "[TRANS] Overshoot for %s set to %.1f%%\n", getGearName(gear), overshootPct);
-    return true;
-}
-
 void TransmissionController::loadGearOvershoots() {
     Preferences prefs;
     if (!prefs.begin("transmission", true)) return;

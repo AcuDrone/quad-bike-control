@@ -9,7 +9,6 @@ EncoderCounter::EncoderCounter()
     , channelA_(GPIO_NUM_NC)
     , channelB_(GPIO_NUM_NC)
     , offsetPosition_(0)
-    , lastPosition_(0)
     , initialized_(false)
 {
 }
@@ -176,7 +175,6 @@ void EncoderCounter::setPosition(int32_t position) {
     // Clear hardware counter and set offset to achieve desired position
     pcnt_unit_clear_count(pcntUnit_);
     offsetPosition_ = position;
-    lastPosition_ = position;
 
     Debug::printfFeature(DebugFeature::TRANSMISSION, "EncoderCounter: Position set to %ld\n", position);
 }
@@ -185,28 +183,8 @@ void EncoderCounter::reset() {
     setPosition(0);
 }
 
-int32_t EncoderCounter::getDelta() {
-    if (!initialized_) {
-        return 0;
-    }
-
-    int32_t currentPos = getPosition();
-    int32_t delta = currentPos - lastPosition_;
-    lastPosition_ = currentPos;
-    return delta;
-}
-
 int EncoderCounter::readHardwareCounter() const {
     int count = 0;
     pcnt_unit_get_count(pcntUnit_, &count);
     return count;
-}
-
-void EncoderCounter::updatePosition() {
-    // Reserved for future use (e.g., handling counter overflow)
-}
-
-void EncoderCounter::readGPIOStates(int& stateA, int& stateB) const {
-    stateA = gpio_get_level(channelA_);
-    stateB = gpio_get_level(channelB_);
 }

@@ -25,8 +25,7 @@ public:
     RelayController();
 
     /**
-     * @brief Initialize relay controller with MCP23017 GPIO expander
-     * @param mcp Reference to initialized MCP23017Controller
+     * @brief Initialize relay controller (direct GPIO outputs)
      * @return true if initialization successful
      */
     bool begin();

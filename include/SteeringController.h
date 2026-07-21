@@ -48,9 +48,7 @@ public:
      */
     void update();
 
-    bool isAtPosition(int32_t target, int32_t tolerance = STEER_POSITION_TOLERANCE) const;
     int32_t getPosition() const;
-    bool isMoving() const { return isMoving_; }
 
     // === Steering interface ===
 

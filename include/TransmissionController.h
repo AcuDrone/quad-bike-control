@@ -154,17 +154,6 @@ public:
     void moveToPercent(float pct);
 
     /**
-     * @brief Get overshoot percent for a specific gear
-     */
-    float getGearOvershoot(Gear gear) const;
-
-    /**
-     * @brief Save and apply per-gear overshoot percent (0.0–20.0 %)
-     * @return true if saved successfully
-     */
-    bool setGearOvershoot(Gear gear, float overshootPct);
-
-    /**
      * @brief Load per-gear overshoot values from NVS
      */
     void loadGearOvershoots();
