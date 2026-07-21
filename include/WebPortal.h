@@ -54,8 +54,12 @@ public:
         uint16_t throttle_full_us;    // Calibrated full-throttle endpoint (µs)
         bool throttle_calibrating;    // True while a throttle calibration session is active
         int steering_pct;         // Steering percentage (-100 to +100)
-        int32_t steer_center;     // Calibrated steering center (encoder counts)
-        int32_t steer_position;   // Current steering encoder position (counts)
+        int32_t steer_center;     // Calibrated steering center (AS5600 raw counts, -1 if unset)
+        int32_t steer_left;       // Calibrated left limit (AS5600 raw counts, -1 if unset)
+        int32_t steer_right;      // Calibrated right limit (AS5600 raw counts, -1 if unset)
+        int32_t steer_position;   // Current AS5600 raw angle (0-4095)
+        bool steer_sensor_ok;     // True if the AS5600 reads OK and the magnet is detected
+        bool steer_calibrated;    // True when center + both limits are valid
         String input_source;      // Current input source: "MAVLINK", "WEB", "FAILSAFE"
         bool mav_active;          // True if MAVLink command stream is valid
         bool web_control;         // True if latched web-control override is engaged

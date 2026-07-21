@@ -45,8 +45,13 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
 
     telemetry.gear = vehicleController_.getCurrentGearString();
     telemetry.steering_pct = (int)vehicleController_.getSteeringPercent();
-    telemetry.steer_center = vehicleController_.getSteerCenter();
-    telemetry.steer_position = vehicleController_.getSteering().getPosition();
+    const SteeringController& steering = vehicleController_.getSteering();
+    telemetry.steer_center = steering.getCenter();
+    telemetry.steer_left = steering.getLeftLimit();
+    telemetry.steer_right = steering.getRightLimit();
+    telemetry.steer_position = steering.getRawAngle();
+    telemetry.steer_sensor_ok = steering.isSensorOk();
+    telemetry.steer_calibrated = steering.isCalibrated();
     telemetry.throttle_us = vehicleController_.getThrottleUs();
     telemetry.throttle_idle_us = vehicleController_.getThrottleIdleUs();
     telemetry.throttle_full_us = vehicleController_.getThrottleFullUs();

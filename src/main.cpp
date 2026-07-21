@@ -6,7 +6,6 @@
 #include "SteeringController.h"
 #include "BTS7960Controller.h"
 #include "TransmissionController.h"
-#include "EncoderCounter.h"
 #include "WebPortal.h"
 #include "VehicleController.h"
 #include "TelemetryManager.h"
@@ -18,9 +17,8 @@
 // ACTUATOR INSTANCES
 // ============================================================================
 
-// Steering Actuator (BTS7960 full speed + encoder)
+// Steering Actuator (BTS7960 proportional PWM + AS5600 absolute angle sensor)
 SteeringController steeringActuator;
-EncoderCounter steeringEncoder;
 
 // Throttle Servo
 ThrottleController throttle;
@@ -89,22 +87,19 @@ void setup() {
         Debug::printlnFeature(DebugFeature::SERVO, "ERROR: Throttle servo failed");
     }
 
-    // Initialize steering actuator (BTS7960 + encoder)
-    if (!steeringEncoder.begin(PIN_STEER_ENCODER_A, PIN_STEER_ENCODER_B, PCNT_UNIT_STEER)) {
-        Debug::printlnFeature(DebugFeature::SERVO, "ERROR: Steering encoder failed");
-    }
+    // Initialize steering actuator (BTS7960 + AS5600 absolute angle sensor — no homing)
+    if (steeringActuator.begin(PIN_STEER_RPWM, PIN_STEER_LPWM,
+                               LEDC_CH_STEER_RPWM, LEDC_CH_STEER_LPWM,
+                               PIN_STEER_SDA, PIN_STEER_SCL)) {
+        steeringActuator.loadCalibration();   // NVS-backed center + left/right limits
 
-    if (steeringActuator.begin(PIN_STEER_RPWM, PIN_STEER_LPWM)) {
-        steeringActuator.attachEncoder(&steeringEncoder);
-        steeringActuator.loadCenter();   // NVS-backed center calibration
-
-        // Auto-home to left limit, then move to center
-        if (steeringActuator.autoHome()) {
-            Debug::printlnFeature(DebugFeature::SERVO, "[STEER] Homed to left limit");
-            Debug::printfFeature(DebugFeature::SERVO, "[STEER] Moving to center (%ld)\n", (long)steeringActuator.getCenter());
-            steeringActuator.setPosition(steeringActuator.getCenter());
+        if (steeringActuator.isCalibrated() && steeringActuator.isSensorOk()) {
+            Debug::printlnFeature(DebugFeature::SERVO, "[STEER] Moving to center");
+            steeringActuator.setSteeringPercent(0.0f);
         } else {
-            Debug::printlnFeature(DebugFeature::SERVO, "[STEER] ERROR: Auto-home failed");
+            Debug::printlnFeature(DebugFeature::SERVO,
+                steeringActuator.isSensorOk() ? "[STEER] Not calibrated — holding position"
+                                              : "[STEER] Sensor fault — holding position");
         }
     } else {
         Debug::printlnFeature(DebugFeature::SERVO, "ERROR: Steering actuator failed");

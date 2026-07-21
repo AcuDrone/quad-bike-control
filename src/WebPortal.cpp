@@ -585,7 +585,11 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["throttle_calibrating"] = telemetry.throttle_calibrating;
     doc["steering_pct"] = telemetry.steering_pct;
     doc["steer_center"] = telemetry.steer_center;
+    doc["steer_left"] = telemetry.steer_left;
+    doc["steer_right"] = telemetry.steer_right;
     doc["steer_position"] = telemetry.steer_position;
+    doc["steer_sensor_ok"] = telemetry.steer_sensor_ok;
+    doc["steer_calibrated"] = telemetry.steer_calibrated;
     doc["input_source"] = telemetry.input_source;
     doc["mav_active"] = telemetry.mav_active;
     doc["web_control"] = telemetry.web_control;

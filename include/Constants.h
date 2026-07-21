@@ -16,15 +16,16 @@
 // Transmission Servo (HappyModel Super400 Plus)
 #define PIN_TRANS_SERVO     GPIO_NUM_9   // LEDC Channel 2
 
-// Steering Actuator (BTS7960 — full speed, no PWM needed, uses GPIO digital write)
+// Steering Actuator (BTS7960 — proportional PWM via LEDC)
 // Note: R_EN and L_EN hardwired to 5V (always enabled)
-#define PIN_STEER_RPWM      GPIO_NUM_17    // Digital out — move right
-#define PIN_STEER_LPWM      GPIO_NUM_18   // Digital out — move left
+#define PIN_STEER_RPWM      GPIO_NUM_17   // LEDC Channel 6 — move right
+#define PIN_STEER_LPWM      GPIO_NUM_18   // LEDC Channel 7 — move left
+#define LEDC_CH_STEER_RPWM  6
+#define LEDC_CH_STEER_LPWM  7
 
-// Steering Hall Sensor (Incremental Encoder - Quadrature)
-#define PIN_STEER_ENCODER_A GPIO_NUM_42   // Hall sensor channel A (PCNT)
-#define PIN_STEER_ENCODER_B GPIO_NUM_41      // Hall sensor channel B (PCNT)
-#define PCNT_UNIT_STEER     1             // PCNT unit ID for steering encoder
+// Steering Position Sensor (AS5600 absolute magnetic angle sensor, I2C addr 0x36)
+#define PIN_STEER_SDA       GPIO_NUM_41   // I2C SDA
+#define PIN_STEER_SCL       GPIO_NUM_42   // I2C SCL
 
 // Throttle Servo (PWM via LEDC)
 #define PIN_THROTTLE_PWM    GPIO_NUM_3   // LEDC Channel 1
@@ -139,15 +140,24 @@ struct ServoChannelConfig {
 #define SERVO_PWM_FREQ        50     // Hz (20ms period)
 
 // Steering Actuator Parameters
-// Center (straight-ahead) is runtime-calibratable via the web UI and stored in NVS
-// ("steering"/"center"); STEER_DEFAULT_CENTER is only the first-boot fallback. The right
-// travel limit is derived as 2*center (symmetric about center; left home = 0).
-#define STEER_DEFAULT_CENTER      1775   // Encoder counts — default center position (from left home)
-#define STEER_POSITION_TOLERANCE  15    // +/- encoder counts for position match
-#define STEER_HOMING_TIMEOUT      30000 // ms - maximum time for auto-home
-#define STEER_MOVE_TIMEOUT        15000 // ms - maximum time for any movement
-#define STEER_STALL_THRESHOLD     3     // Encoder counts - stall detection threshold
-#define STEER_STALL_TIMEOUT       500   // ms - time without encoder change = stall
+// Position feedback is an AS5600 absolute angle sensor: all positions are raw
+// 12-bit counts (0-4095, ~0.088°/LSB). Center and left/right travel limits are
+// calibrated via the web UI (capture current angle) and stored in NVS
+// ("steering"/"c_ang","l_ang","r_ang"). Uncalibrated => percent commands rejected.
+#define STEER_POSITION_TOLERANCE  10    // +/- AS5600 counts for position match (~0.9°)
+#define STEER_MOVE_TIMEOUT        7500 // ms - maximum time for any movement
+#define STEER_STALL_THRESHOLD     5     // AS5600 counts - stall detection threshold
+#define STEER_STALL_TIMEOUT       500   // ms - time without position change = stall
+#define STEER_CAL_MIN_SPAN        50    // AS5600 counts - min |limit - center| accepted at calibration (~4.4°)
+
+// Proportional PWM control: duty = clamp(|error| * STEER_KP, MIN, MAX)
+#define STEER_KP                  1.0f  // PWM duty (0-255) per AS5600 count of error
+#define STEER_PWM_MIN_DUTY        70    // enough to overcome static friction
+#define STEER_PWM_MAX_DUTY        255   // full speed for large errors
+
+// Calibration jog (momentary open-loop drive from the web UI)
+#define STEER_JOG_DUTY            120   // PWM duty while jogging
+#define STEER_JOG_TIMEOUT_MS      500   // ms - auto-stop if the jog command is not refreshed
 
 // Throttle Servo Parameters
 #define THROTTLE_SERVO_MIN_US    800   // Minimum servo pulse width (µs) — mechanical range floor / slider bound

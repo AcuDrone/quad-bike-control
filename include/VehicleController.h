@@ -97,9 +97,14 @@ public:
     SteeringController& getSteering() { return steering_; }
 
     /**
-     * @brief Get the calibrated steering center (encoder counts)
+     * @brief Get the calibrated steering center (AS5600 raw counts, -1 if unset)
      */
     int32_t getSteerCenter() const { return steering_.getCenter(); }
+
+    /**
+     * @brief Steering controller (const access for telemetry)
+     */
+    const SteeringController& getSteering() const { return steering_; }
 
     /**
      * @brief Get current throttle servo pulse width (µs)
@@ -314,11 +319,12 @@ private:
     void processWheelLockCommand(bool locked, WebPortal& webPortal);
 
     /**
-     * @brief Steering-center calibration commands (web-only).
-     * Save persists + remaps live; Move drives to the typed raw count for visual check.
+     * @brief Steering calibration commands (web-only).
+     * Capture commands persist the current AS5600 angle as center/left/right;
+     * jog drives the actuator open-loop (momentary, auto-stops on timeout).
      */
-    void processSteerCenterSaveCommand(int32_t count, WebPortal& webPortal);
-    void processSteerCenterMoveCommand(int32_t count, WebPortal& webPortal);
+    void processSteerCalCommand(const String& which, WebPortal& webPortal);
+    void processSteerJogCommand(int8_t direction, WebPortal& webPortal);
 
     /**
      * @brief Process web take/release control command (latched MAVLink override)

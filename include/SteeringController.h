@@ -3,109 +3,134 @@
 
 #include <Arduino.h>
 #include "Constants.h"
-#include "EncoderCounter.h"
+#include "AS5600Sensor.h"
+#include "BTS7960Controller.h"
 
 /**
- * @brief Steering actuator controller using BTS7960 H-bridge at full speed
+ * @brief Steering actuator controller: BTS7960 H-bridge with proportional PWM,
+ * absolute position feedback from an AS5600 magnetic angle sensor.
  *
- * Uses plain GPIO digital write for direction (no PWM/LEDC needed).
- * Position feedback via hall sensor encoder (PCNT).
- * Auto-homes to left physical limit on startup, then moves to center.
- * Left limit = 0 (home), center = runtime-calibrated center_ (NVS), right limit = 2*center_.
+ * All positions are AS5600 raw counts (0-4095, ~0.088°/LSB). Position control
+ * works in wrap-safe counts relative to the calibrated center; center and
+ * left/right travel limits are captured at the current wheel position via the
+ * web UI and persisted in NVS ("steering"/"c_ang","l_ang","r_ang").
+ *
+ * No homing: position is absolute. On sensor fault (I2C failure or magnet
+ * lost) the motor stops immediately and position commands are ignored until
+ * valid readings return.
  */
 class SteeringController {
 public:
     SteeringController();
 
     /**
-     * @brief Initialize GPIO pins for BTS7960 direction control
-     * @param rpwmPin GPIO pin for right movement
-     * @param lpwmPin GPIO pin for left movement
-     * @return true if initialization successful
+     * @brief Initialize the BTS7960 (LEDC PWM) and the AS5600 sensor
+     * @return true if both the motor driver and the sensor initialize
      */
-    bool begin(gpio_num_t rpwmPin, gpio_num_t lpwmPin);
+    bool begin(gpio_num_t rpwmPin, gpio_num_t lpwmPin,
+               uint8_t rpwmChannel, uint8_t lpwmChannel,
+               gpio_num_t sdaPin, gpio_num_t sclPin);
 
     /**
-     * @brief Attach encoder for position feedback
-     */
-    void attachEncoder(EncoderCounter* encoder);
-
-    // === Movement (full speed) ===
-
-    void moveRight();
-    void moveLeft();
-    void stop();
-
-    // === Position control ===
-
-    /**
-     * @brief Set target position and start moving
-     */
-    void setPosition(int32_t targetPosition);
-
-    /**
-     * @brief Update position control — call every loop iteration
+     * @brief Update sensor reading and position control — call every loop iteration
      */
     void update();
 
-    int32_t getPosition() const;
+    /**
+     * @brief Stop the motor and cancel any active move/jog
+     */
+    void stop();
 
     // === Steering interface ===
 
     /**
-     * @brief Set steering by percentage
-     * @param percent -100 (full left) to +100 (full right), 0 = center
+     * @brief Set steering by percentage: -100 (left limit) .. 0 (center) .. +100 (right limit).
+     * Left and right ranges may be asymmetric.
+     * @return false if rejected (not calibrated or sensor invalid)
      */
-    void setSteeringPercent(float percent);
+    bool setSteeringPercent(float percent);
     float getSteeringPercent() const;
 
     // === Calibration ===
 
     /**
-     * @brief Auto-home to physical left limit (stall detection)
-     * Resets encoder to 0 at the limit.
-     * @return true if home found, false on timeout
+     * @brief Momentary open-loop jog for calibration: -1 = left, +1 = right, 0 = stop.
+     * Auto-stops if not refreshed within STEER_JOG_TIMEOUT_MS.
      */
-    bool autoHome(uint32_t timeout = STEER_HOMING_TIMEOUT);
+    void jog(int8_t direction);
 
     /**
-     * @brief Get the calibrated center (straight-ahead) position in encoder counts.
+     * @brief Capture the current AS5600 angle as center / left limit / right limit
+     * and persist to NVS. Limits are validated against center (opposite sides,
+     * minimum STEER_CAL_MIN_SPAN counts).
+     * @return true if captured and saved
      */
+    bool captureCenter();
+    bool captureLeftLimit();
+    bool captureRightLimit();
+
+    /**
+     * @brief Load calibration from NVS. Call at init.
+     */
+    void loadCalibration();
+
+    // === State ===
+
+    bool isCalibrated() const { return calibrated_; }
+    bool isSensorOk() const { return sensorOk_; }
+
+    /** @brief Last AS5600 raw angle reading (0-4095) */
+    int32_t getRawAngle() const { return rawAngle_; }
+
+    /** @brief Calibrated raw angles (-1 if not set) */
     int32_t getCenter() const { return center_; }
-
-    /**
-     * @brief Set and persist the center position (encoder counts). Updates the live
-     * steering mapping immediately (right limit becomes 2*center). Rejects count <= 0.
-     * @return true if accepted and saved
-     */
-    bool setCenter(int32_t count);
-
-    /**
-     * @brief Drive the actuator to a raw encoder position for calibration preview.
-     * Bypasses the percent mapping; clamps to >= 0. Honors move/stall timeouts.
-     */
-    void moveToRawCount(int32_t count);
-
-    /**
-     * @brief Load the center position from NVS (default STEER_DEFAULT_CENTER). Call at init.
-     */
-    void loadCenter();
+    int32_t getLeftLimit() const { return leftLimit_; }
+    int32_t getRightLimit() const { return rightLimit_; }
 
 private:
-    gpio_num_t rpwmPin_;
-    gpio_num_t lpwmPin_;
-    EncoderCounter* encoder_;
+    AS5600Sensor sensor_;
+    BTS7960Controller motor_;
 
-    int32_t center_;   // calibrated straight-ahead position (encoder counts); right limit = 2*center_
+    // Sensor state
+    int32_t rawAngle_;          // last valid raw reading (0-4095)
+    bool sensorOk_;
 
-    // Position control state
-    int32_t targetPosition_;
+    // Calibration (raw angles, -1 = not set)
+    int32_t center_;
+    int32_t leftLimit_;
+    int32_t rightLimit_;
+    bool calibrated_;
+    bool invert_;               // sensor counts decrease when the wheel moves right
+    int32_t relLeft_;           // normalized left limit relative to center (< 0)
+    int32_t relRight_;          // normalized right limit relative to center (> 0)
+
+    // Position control state (normalized counts relative to center)
+    int32_t targetRel_;
     bool isMoving_;
     uint32_t moveStartTime_;
+
+    // Jog state
+    int8_t jogDir_;
+    uint32_t lastJogRefresh_;
 
     // Stall detection
     int32_t lastStallPosition_;
     uint32_t lastStallCheckTime_;
+
+    /** @brief Signed shortest delta from center, sensor-direction normalized (positive = right) */
+    int32_t relPosition() const;
+
+    /** @brief Signed shortest delta between two raw angles: ((a - b + 2048) & 4095) - 2048 */
+    static int32_t wrapDelta(int32_t a, int32_t b);
+
+    /** @brief Refresh sensor reading + magnet status (single I2C burst); stop the motor on fault */
+    bool refreshSensor();
+
+    /** @brief Recompute calibrated_/invert_/relLeft_/relRight_ from stored angles */
+    void revalidateCalibration();
+
+    /** @brief Persist calibration angles to NVS */
+    void saveCalibration();
 };
 
 #endif // STEERING_CONTROLLER_H

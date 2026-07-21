@@ -458,20 +458,31 @@
                 <div id="gear-default-status" style="margin-top: 10px; font-size: 0.8em; color: #4caf50; min-height: 1.2em;"></div>
             </div>
 
-            <!-- Steering Center Calibration -->
+            <!-- Steering Calibration (AS5600 absolute angle sensor) -->
             <div class="card">
-                <h2>🎯 Steering Center</h2>
+                <h2>🎯 Steering Calibration</h2>
                 <p style="font-size: 0.8em; color: #aaa; margin-bottom: 12px;">
-                    Straight-ahead position in encoder counts (left home = 0, right limit = 2×center).
-                    Type a value, press <b>Move</b> to drive there and check visually, then <b>Save</b>.
+                    Absolute AS5600 angle (0–4095 counts). Hold <b>◀ / ▶</b> to jog the wheel,
+                    then capture <b>Center</b> first, followed by <b>Left</b> and <b>Right</b> at the travel limits.
                 </p>
+                <div style="display: flex; gap: 6px; align-items: center; margin-bottom: 8px;">
+                    <button id="steer-jog-left" style="flex:1; padding:10px; border-radius:4px; border:none; background:#ff9800; color:#fff; cursor:pointer;">◀ Jog Left</button>
+                    <button id="steer-jog-right" style="flex:1; padding:10px; border-radius:4px; border:none; background:#ff9800; color:#fff; cursor:pointer;">Jog Right ▶</button>
+                </div>
                 <div style="display: flex; gap: 6px; align-items: center;">
-                    <input type="number" id="steer-center-input" min="1" step="1" style="flex:1; padding:6px; border-radius:4px; border:1px solid #555; background:#2a2a2a; color:#fff;">
-                    <button onclick="moveSteerCenter()" style="padding:6px 10px; border-radius:4px; border:none; background:#ff9800; color:#fff; cursor:pointer;">Move</button>
-                    <button onclick="saveSteerCenter()" style="padding:6px 10px; border-radius:4px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Save</button>
+                    <button onclick="steerCapture('steer_cal_left')" style="flex:1; padding:6px 10px; border-radius:4px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Set Left</button>
+                    <button onclick="steerCapture('steer_cal_center')" style="flex:1; padding:6px 10px; border-radius:4px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Set Center</button>
+                    <button onclick="steerCapture('steer_cal_right')" style="flex:1; padding:6px 10px; border-radius:4px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Set Right</button>
                 </div>
                 <div style="margin-top: 8px; font-size: 0.8em; color: #aaa;">
-                    Current position: <span id="steer-pos">--</span> &nbsp;|&nbsp; saved center: <span id="steer-center-cur">--</span>
+                    Angle: <span id="steer-pos">--</span> &nbsp;|&nbsp;
+                    L: <span id="steer-left-cur">--</span> &nbsp;
+                    C: <span id="steer-center-cur">--</span> &nbsp;
+                    R: <span id="steer-right-cur">--</span>
+                </div>
+                <div style="margin-top: 4px; font-size: 0.8em; color: #aaa;">
+                    Sensor: <span id="steer-sensor-status">--</span> &nbsp;|&nbsp;
+                    Calibration: <span id="steer-cal-status">--</span>
                 </div>
                 <div id="steer-center-status" style="margin-top: 8px; font-size: 0.8em; color: #4caf50; min-height: 1.2em;"></div>
             </div>
@@ -727,9 +738,10 @@
                     throttleCalSetStatus(data.success ? data.message : 'Error: ' + data.message,
                                          data.success ? '#4caf50' : '#f44336');
                 }
-                // Steering center status
+                // Steering calibration status
                 if (data.message && (data.message.includes('Steering center') ||
-                    data.message.startsWith('Moving to') || data.message.includes('Invalid center'))) {
+                    data.message.includes('Steering left limit') || data.message.includes('Steering right limit') ||
+                    data.message.includes('Capture ') || data.message.startsWith('Jog'))) {
                     steerCenterStatus(data.success ? data.message : 'Error: ' + data.message,
                                       data.success ? '#4caf50' : '#f44336');
                 }
@@ -906,10 +918,23 @@
                 document.getElementById('steer-pos').textContent = data.steer_position;
             }
             if (data.steer_center !== undefined) {
-                document.getElementById('steer-center-cur').textContent = data.steer_center;
-                // Pre-fill the input once (don't clobber the operator's typing)
-                const sci = document.getElementById('steer-center-input');
-                if (sci && sci.value === '') sci.value = data.steer_center;
+                document.getElementById('steer-center-cur').textContent = data.steer_center >= 0 ? data.steer_center : '--';
+            }
+            if (data.steer_left !== undefined) {
+                document.getElementById('steer-left-cur').textContent = data.steer_left >= 0 ? data.steer_left : '--';
+            }
+            if (data.steer_right !== undefined) {
+                document.getElementById('steer-right-cur').textContent = data.steer_right >= 0 ? data.steer_right : '--';
+            }
+            if (data.steer_sensor_ok !== undefined) {
+                const el = document.getElementById('steer-sensor-status');
+                el.textContent = data.steer_sensor_ok ? 'OK' : 'FAULT';
+                el.style.color = data.steer_sensor_ok ? '#4caf50' : '#f44336';
+            }
+            if (data.steer_calibrated !== undefined) {
+                const el = document.getElementById('steer-cal-status');
+                el.textContent = data.steer_calibrated ? 'CALIBRATED' : 'NOT CALIBRATED';
+                el.style.color = data.steer_calibrated ? '#4caf50' : '#ff9800';
             }
 
             // Update control availability
@@ -1174,32 +1199,43 @@
             }
         }
 
-        // ---- Steering center calibration ----
+        // ---- Steering calibration (AS5600) ----
         function steerCenterStatus(msg, color) {
             const el = document.getElementById('steer-center-status');
             if (el) { el.textContent = msg; el.style.color = color || '#aaa'; }
         }
-        function steerCenterValue() {
-            const v = parseInt(document.getElementById('steer-center-input').value, 10);
-            if (isNaN(v) || v <= 0) { steerCenterStatus('Enter a value > 0', '#f44336'); return null; }
-            return v;
-        }
-        function moveSteerCenter() {
-            const v = steerCenterValue();
-            if (v === null) return;
+        function steerCapture(cmd) {
             if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ cmd: 'move_steer_center', value: v }));
-                steerCenterStatus('Moving to ' + v + '…', '#ff9800');
+                ws.send(JSON.stringify({ cmd: cmd }));
+                steerCenterStatus('Capturing…', '#aaa');
             }
         }
-        function saveSteerCenter() {
-            const v = steerCenterValue();
-            if (v === null) return;
+        // Momentary jog: send the direction on press and refresh it every 250ms
+        // (firmware auto-stops after 500ms without refresh), send 0 on release.
+        let steerJogTimer = null;
+        function steerJogSend(dir) {
             if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ cmd: 'set_steer_center', value: v }));
-                steerCenterStatus('Saving ' + v + '…', '#aaa');
+                ws.send(JSON.stringify({ cmd: 'steer_jog', value: dir }));
             }
         }
+        function steerJogStart(dir) {
+            steerJogStop(false);
+            steerJogSend(dir);
+            steerJogTimer = setInterval(() => steerJogSend(dir), 250);
+        }
+        function steerJogStop(send = true) {
+            if (steerJogTimer) { clearInterval(steerJogTimer); steerJogTimer = null; }
+            if (send) steerJogSend(0);
+        }
+        function bindJogButton(id, dir) {
+            const btn = document.getElementById(id);
+            btn.addEventListener('pointerdown', (e) => { e.preventDefault(); steerJogStart(dir); });
+            btn.addEventListener('pointerup', () => steerJogStop());
+            btn.addEventListener('pointerleave', () => { if (steerJogTimer) steerJogStop(); });
+            btn.addEventListener('contextmenu', (e) => e.preventDefault());
+        }
+        bindJogButton('steer-jog-left', -1);
+        bindJogButton('steer-jog-right', 1);
 
         let boostTestActive = false;
         function toggleBoostTest() {

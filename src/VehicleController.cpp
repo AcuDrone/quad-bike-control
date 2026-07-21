@@ -145,11 +145,11 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
         // Front-wheel lock always available (not restricted by input source)
         processWheelLockCommand(cmd.boolValue, webPortal);
         return;
-    } else if (cmd.cmd == "set_steer_center") {
-        processSteerCenterSaveCommand((int32_t)cmd.floatValue, webPortal);
+    } else if (cmd.cmd == "steer_cal_center" || cmd.cmd == "steer_cal_left" || cmd.cmd == "steer_cal_right") {
+        processSteerCalCommand(cmd.cmd, webPortal);
         return;
-    } else if (cmd.cmd == "move_steer_center") {
-        processSteerCenterMoveCommand((int32_t)cmd.floatValue, webPortal);
+    } else if (cmd.cmd == "steer_jog") {
+        processSteerJogCommand((int8_t)cmd.floatValue, webPortal);
         return;
     } else if (cmd.cmd == "set_web_control") {
         processWebControlCommand(cmd.boolValue, webPortal);
@@ -341,7 +341,10 @@ void VehicleController::processGearCommand(const String& gearStr, WebPortal& web
 }
 
 void VehicleController::processSteeringCommand(float value, WebPortal& webPortal) {
-    steering_.setSteeringPercent(value);
+    if (!steering_.setSteeringPercent(value)) {
+        webPortal.sendResponse(false, "Steering rejected (not calibrated or sensor fault)");
+        return;
+    }
     webPortal.sendResponse(true, "Steering set");
 }
 
@@ -522,21 +525,31 @@ void VehicleController::processWheelLockCommand(bool locked, WebPortal& webPorta
     webPortal.sendResponse(true, String("Front wheels ") + (locked ? "LOCKED" : "UNLOCKED"));
 }
 
-void VehicleController::processSteerCenterSaveCommand(int32_t count, WebPortal& webPortal) {
-    if (!steering_.setCenter(count)) {
-        webPortal.sendResponse(false, "Invalid center (must be > 0)");
+void VehicleController::processSteerCalCommand(const String& which, WebPortal& webPortal) {
+    bool ok;
+    String what;
+    if (which == "steer_cal_center") {
+        ok = steering_.captureCenter();
+        what = "center";
+    } else if (which == "steer_cal_left") {
+        ok = steering_.captureLeftLimit();
+        what = "left limit";
+    } else {
+        ok = steering_.captureRightLimit();
+        what = "right limit";
+    }
+
+    if (!ok) {
+        webPortal.sendResponse(false, "Capture " + what + " failed (sensor fault, no center, or too close to center)");
         return;
     }
-    webPortal.sendResponse(true, "Steering center saved: " + String(count));
+    webPortal.sendResponse(true, "Steering " + what + " saved: " + String(steering_.getRawAngle()) +
+                                 (steering_.isCalibrated() ? "" : " (calibration incomplete)"));
 }
 
-void VehicleController::processSteerCenterMoveCommand(int32_t count, WebPortal& webPortal) {
-    if (count <= 0) {
-        webPortal.sendResponse(false, "Invalid center (must be > 0)");
-        return;
-    }
-    steering_.moveToRawCount(count);
-    webPortal.sendResponse(true, "Moving to " + String(count));
+void VehicleController::processSteerJogCommand(int8_t direction, WebPortal& webPortal) {
+    steering_.jog(direction);
+    webPortal.sendResponse(true, direction == 0 ? "Jog stop" : (direction > 0 ? "Jog right" : "Jog left"));
 }
 
 void VehicleController::processWebControlCommand(bool on, WebPortal& webPortal) {
