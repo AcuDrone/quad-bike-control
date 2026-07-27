@@ -56,8 +56,15 @@ public:
     /**
      * @brief Momentary open-loop jog for calibration: -1 = left, +1 = right, 0 = stop.
      * Auto-stops if not refreshed within STEER_JOG_TIMEOUT_MS.
+     * @param duty PWM duty 0-255; clamped up to STEER_PWM_MIN_DUTY (below it the actuator stalls)
      */
-    void jog(int8_t direction);
+    void jog(int8_t direction, uint8_t duty = STEER_JOG_DUTY);
+
+    /**
+     * @brief Precision nudge: one STEER_NUDGE_MS pulse at STEER_NUDGE_DUTY,
+     * moving a few counts per call. For landing exactly on center during calibration.
+     */
+    void nudge(int8_t direction);
 
     /**
      * @brief Capture the current AS5600 angle as center / left limit / right limit
@@ -94,6 +101,7 @@ private:
     // Sensor state
     int32_t rawAngle_;          // last valid raw reading (0-4095)
     bool sensorOk_;
+    uint8_t badSampleCount_;    // consecutive bad samples (fault debounce)
 
     // Calibration (raw angles, -1 = not set)
     int32_t center_;
@@ -108,10 +116,17 @@ private:
     int32_t targetRel_;
     bool isMoving_;
     uint32_t moveStartTime_;
+    uint32_t lastMoveLogTime_;   // rate limit for the while-moving debug log
+
+    // Anti-stall boost (extra duty above the P term while progress stalls under load)
+    int16_t dutyBoost_;
+    int32_t lastProgressPos_;
+    uint32_t lastProgressTime_;
 
     // Jog state
     int8_t jogDir_;
     uint32_t lastJogRefresh_;
+    uint32_t jogPulseUntil_;    // nudge mode: absolute ms to stop at (0 = normal hold-jog)
 
     // Stall detection
     int32_t lastStallPosition_;

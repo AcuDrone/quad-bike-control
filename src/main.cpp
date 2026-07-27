@@ -52,13 +52,6 @@ void setup() {
     // Initialize serial for debugging
     Serial.begin(SERIAL_BAUD_RATE);
 
-    // Debug::setFeatureEnabled(DebugFeature::CAN, true);
-    // Debug::setFeatureEnabled(DebugFeature::TRANSMISSION, true);
-    // Debug::setFeatureEnabled(DebugFeature::VEHICLE, true);
-    // Debug::setFeatureEnabled(DebugFeature::MAVLINK, true);  // diagnose command-stream / fail-safe flapping
-    // Debug::setFeatureEnabled(DebugFeature::SERVO, true);
-    
-
     // Initialize NVS first (required by Debug utility)
     Serial.println("[INIT] Initializing NVS...");
     esp_err_t err = nvs_flash_init();
@@ -79,6 +72,19 @@ void setup() {
     Serial.println("[INIT] Initializing Debug utility...");
     Debug::begin();
     Serial.println("[INIT] Debug utility initialized");
+
+    // Feature debug flags — MUST be set after Debug::begin(), which overwrites
+    // the in-memory flags with the NVS-stored state
+    // Debug::setFeatureEnabled(DebugFeature::CAN, true);
+    // Debug::setFeatureEnabled(DebugFeature::TRANSMISSION, true);
+    // Debug::setFeatureEnabled(DebugFeature::VEHICLE, true);
+    // Debug::setFeatureEnabled(DebugFeature::MAVLINK, true);  // diagnose command-stream / fail-safe flapping
+    Debug::setFeatureEnabled(DebugFeature::SERVO, true);
+
+    // Ungated state dump so a disabled master switch is visible on the monitor
+    Serial.printf("[INIT] Debug: master=%s SERVO=%s\n",
+                  Debug::isEnabled() ? "ON" : "OFF",
+                  Debug::isFeatureEnabled(DebugFeature::SERVO) ? "ON" : "OFF");
 
     Debug::println("\n=== ESP32-S3 Quad Bike Control ===");
 

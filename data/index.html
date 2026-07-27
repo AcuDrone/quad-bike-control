@@ -384,6 +384,11 @@
                         <span id="steering-value">0%</span>
                     </div>
                     <input type="range" min="-100" max="100" value="0" class="slider" id="steering-slider">
+                    <div style="display: flex; gap: 12px; align-items: center; margin-top: 12px; margin-bottom: 8px;">
+                        <button id="steer-test-left" onclick="steerTest(-100)" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:#607d8b; color:#fff; cursor:pointer;">⟸ Left</button>
+                        <button id="steer-test-center" onclick="steerTest(0)" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:#607d8b; color:#fff; cursor:pointer;">Center</button>
+                        <button id="steer-test-right" onclick="steerTest(100)" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:#607d8b; color:#fff; cursor:pointer;">Right ⟹</button>
+                    </div>
                 </div>
 
                 <div class="slider-container">
@@ -465,14 +470,24 @@
                     Absolute AS5600 angle (0–4095 counts). Hold <b>◀ / ▶</b> to jog the wheel,
                     then capture <b>Center</b> first, followed by <b>Left</b> and <b>Right</b> at the travel limits.
                 </p>
-                <div style="display: flex; gap: 6px; align-items: center; margin-bottom: 8px;">
-                    <button id="steer-jog-left" style="flex:1; padding:10px; border-radius:4px; border:none; background:#ff9800; color:#fff; cursor:pointer;">◀ Jog Left</button>
-                    <button id="steer-jog-right" style="flex:1; padding:10px; border-radius:4px; border:none; background:#ff9800; color:#fff; cursor:pointer;">Jog Right ▶</button>
+                <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 16px;">
+                    <button id="steer-jog-left" style="flex:1; padding:16px 10px; border-radius:6px; border:none; background:#ff9800; color:#fff; cursor:pointer; font-size:1em;">◀ Jog Left</button>
+                    <button id="steer-jog-right" style="flex:1; padding:16px 10px; border-radius:6px; border:none; background:#ff9800; color:#fff; cursor:pointer; font-size:1em;">Jog Right ▶</button>
                 </div>
-                <div style="display: flex; gap: 6px; align-items: center;">
-                    <button onclick="steerCapture('steer_cal_left')" style="flex:1; padding:6px 10px; border-radius:4px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Set Left</button>
-                    <button onclick="steerCapture('steer_cal_center')" style="flex:1; padding:6px 10px; border-radius:4px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Set Center</button>
-                    <button onclick="steerCapture('steer_cal_right')" style="flex:1; padding:6px 10px; border-radius:4px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Set Right</button>
+                <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 16px;">
+                    <button onclick="steerNudge(-1)" style="flex:1; padding:14px 10px; border-radius:6px; border:none; background:#795548; color:#fff; cursor:pointer; font-size:1em;">◂ Nudge</button>
+                    <button onclick="steerNudge(1)" style="flex:1; padding:14px 10px; border-radius:6px; border:none; background:#795548; color:#fff; cursor:pointer; font-size:1em;">Nudge ▸</button>
+                </div>
+                <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 16px; font-size: 0.85em; color: #aaa;">
+                    <span>Jog&nbsp;speed</span>
+                    <input type="range" min="140" max="255" value="180" id="steer-jog-speed" style="flex:1; height: 28px;"
+                           oninput="document.getElementById('steer-jog-speed-val').textContent = this.value">
+                    <span id="steer-jog-speed-val" style="color:#fff; min-width:2.2em; text-align:right;">180</span>
+                </div>
+                <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 4px;">
+                    <button onclick="steerCapture('steer_cal_left')" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Set Left</button>
+                    <button onclick="steerCapture('steer_cal_center')" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Set Center</button>
+                    <button onclick="steerCapture('steer_cal_right')" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Set Right</button>
                 </div>
                 <div style="margin-top: 8px; font-size: 0.8em; color: #aaa;">
                     Angle: <span id="steer-pos">--</span> &nbsp;|&nbsp;
@@ -944,6 +959,7 @@
         function updateInputSourceDisplay() {
             const statusElem = document.getElementById('input-source-status');
             const statusText = document.getElementById('input-source-text');
+            if (!statusElem || !statusText) return;   // indicator not present in current layout
 
             statusElem.classList.remove('mav-active', 'web-active', 'failsafe');
 
@@ -1031,6 +1047,9 @@
 
             // Enable/disable sliders
             document.getElementById('steering-slider').disabled = !controlsEnabled;
+            document.getElementById('steer-test-left').disabled = !controlsEnabled;
+            document.getElementById('steer-test-center').disabled = !controlsEnabled;
+            document.getElementById('steer-test-right').disabled = !controlsEnabled;
             document.getElementById('throttle-slider').disabled = !controlsEnabled;
             document.getElementById('brake-slider').disabled = !controlsEnabled;
         }
@@ -1210,12 +1229,29 @@
                 steerCenterStatus('Capturing…', '#aaa');
             }
         }
-        // Momentary jog: send the direction on press and refresh it every 250ms
+        function steerTest(pct) {
+            sendCommand('set_steering', pct);
+            const s = document.getElementById('steering-slider');
+            if (s) s.value = pct;
+            const v = document.getElementById('steering-value');
+            if (v) v.textContent = pct + '%';
+        }
+        // Momentary jog: send direction+speed on press and refresh every 250ms
         // (firmware auto-stops after 500ms without refresh), send 0 on release.
+        // Encoding: sign = direction, magnitude = PWM duty from the speed slider.
         let steerJogTimer = null;
+        function steerJogSpeed() {
+            const el = document.getElementById('steer-jog-speed');
+            return el ? parseInt(el.value, 10) : 180;
+        }
         function steerJogSend(dir) {
             if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ cmd: 'steer_jog', value: dir }));
+                ws.send(JSON.stringify({ cmd: 'steer_jog', value: dir * steerJogSpeed() }));
+            }
+        }
+        function steerNudge(dir) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ cmd: 'steer_nudge', value: dir }));
             }
         }
         function steerJogStart(dir) {

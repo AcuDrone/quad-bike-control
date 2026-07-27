@@ -321,10 +321,12 @@ private:
     /**
      * @brief Steering calibration commands (web-only).
      * Capture commands persist the current AS5600 angle as center/left/right;
-     * jog drives the actuator open-loop (momentary, auto-stops on timeout).
+     * jog drives the actuator open-loop (momentary, sign = direction, |value| = duty);
+     * nudge fires one short slow pulse for precise positioning.
      */
     void processSteerCalCommand(const String& which, WebPortal& webPortal);
-    void processSteerJogCommand(int8_t direction, WebPortal& webPortal);
+    void processSteerJogCommand(float value, WebPortal& webPortal);
+    void processSteerNudgeCommand(int8_t direction, WebPortal& webPortal);
 
     /**
      * @brief Process web take/release control command (latched MAVLink override)

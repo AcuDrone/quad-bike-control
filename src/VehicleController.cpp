@@ -149,7 +149,10 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
         processSteerCalCommand(cmd.cmd, webPortal);
         return;
     } else if (cmd.cmd == "steer_jog") {
-        processSteerJogCommand((int8_t)cmd.floatValue, webPortal);
+        processSteerJogCommand(cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "steer_nudge") {
+        processSteerNudgeCommand((int8_t)cmd.floatValue, webPortal);
         return;
     } else if (cmd.cmd == "set_web_control") {
         processWebControlCommand(cmd.boolValue, webPortal);
@@ -547,9 +550,23 @@ void VehicleController::processSteerCalCommand(const String& which, WebPortal& w
                                  (steering_.isCalibrated() ? "" : " (calibration incomplete)"));
 }
 
-void VehicleController::processSteerJogCommand(int8_t direction, WebPortal& webPortal) {
-    steering_.jog(direction);
+void VehicleController::processSteerJogCommand(float value, WebPortal& webPortal) {
+    // value encodes direction and speed: sign = direction, |value| = PWM duty.
+    // |value| <= 1 (legacy -1/0/1 form) uses the default jog duty.
+    int8_t direction = (value > 0.0f) ? 1 : (value < 0.0f) ? -1 : 0;
+    float mag = fabsf(value);
+    uint8_t duty = (mag > 1.0f) ? (uint8_t)min(mag, 255.0f) : STEER_JOG_DUTY;
+    steering_.jog(direction, duty);
     webPortal.sendResponse(true, direction == 0 ? "Jog stop" : (direction > 0 ? "Jog right" : "Jog left"));
+}
+
+void VehicleController::processSteerNudgeCommand(int8_t direction, WebPortal& webPortal) {
+    if (direction == 0) {
+        webPortal.sendResponse(false, "Nudge needs a direction");
+        return;
+    }
+    steering_.nudge(direction);
+    webPortal.sendResponse(true, direction > 0 ? "Nudge right" : "Nudge left");
 }
 
 void VehicleController::processWebControlCommand(bool on, WebPortal& webPortal) {

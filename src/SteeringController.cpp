@@ -5,6 +5,7 @@
 SteeringController::SteeringController()
     : rawAngle_(0),
       sensorOk_(false),
+      badSampleCount_(0),
       center_(-1),
       leftLimit_(-1),
       rightLimit_(-1),
@@ -15,8 +16,13 @@ SteeringController::SteeringController()
       targetRel_(0),
       isMoving_(false),
       moveStartTime_(0),
+      lastMoveLogTime_(0),
+      dutyBoost_(0),
+      lastProgressPos_(0),
+      lastProgressTime_(0),
       jogDir_(0),
       lastJogRefresh_(0),
+      jogPulseUntil_(0),
       lastStallPosition_(0),
       lastStallCheckTime_(0) {
 }
@@ -63,27 +69,36 @@ bool SteeringController::refreshSensor() {
     uint16_t raw;
     bool magnetOk = false;
     bool readOk = sensor_.read(raw, magnetOk);
-    if (readOk) {
-        rawAngle_ = raw;
-    }
 
-    bool ok = readOk && magnetOk;
-    if (ok != sensorOk_) {
-        sensorOk_ = ok;
-        if (!ok) {
-            Debug::printfFeature(DebugFeature::SERVO, "[STEER] SENSOR FAULT (%s) — motor stopped\n",
-                                 readOk ? "magnet lost" : "I2C read failed");
-        } else {
+    // A sample is good only when the bus read succeeded AND the magnet is seen;
+    // a read right after a bus glitch can carry garbage with the MD bit clear,
+    // so rawAngle_ is only updated from fully good samples.
+    if (readOk && magnetOk) {
+        rawAngle_ = raw;
+        badSampleCount_ = 0;
+        if (!sensorOk_) {
+            sensorOk_ = true;
             Debug::printlnFeature(DebugFeature::SERVO, "[STEER] Sensor recovered");
         }
+        return true;
+    }
+
+    // Debounce: single EMI glitches keep the last position for a few loop
+    // iterations (~ms) instead of stopping the motor and flapping fault logs.
+    if (badSampleCount_ < 255) badSampleCount_++;
+    if (badSampleCount_ >= STEER_SENSOR_FAULT_DEBOUNCE && sensorOk_) {
+        sensorOk_ = false;
+        Debug::printfFeature(DebugFeature::SERVO, "[STEER] SENSOR FAULT (%s) — motor stopped\n",
+                             readOk ? "magnet lost" : "I2C read failed");
     }
 
     if (!sensorOk_) {
         motor_.stop();
         isMoving_ = false;
         jogDir_ = 0;
+        return false;
     }
-    return sensorOk_;
+    return true;   // within the debounce window: control continues on the last good position
 }
 
 // === Movement ===
@@ -92,15 +107,18 @@ void SteeringController::stop() {
     motor_.stop();
     isMoving_ = false;
     jogDir_ = 0;
+    jogPulseUntil_ = 0;
 }
 
-void SteeringController::jog(int8_t direction) {
+void SteeringController::jog(int8_t direction, uint8_t duty) {
     if (direction != 0 && !sensorOk_) return;   // no open-loop drive without stall backstop data
 
     if (direction == 0) {
         if (jogDir_ != 0) stop();
         return;
     }
+
+    if (duty < STEER_PWM_MIN_DUTY) duty = STEER_PWM_MIN_DUTY;   // below this the actuator stalls
 
     isMoving_ = false;   // jog overrides position control
     if (jogDir_ != direction) {
@@ -109,7 +127,22 @@ void SteeringController::jog(int8_t direction) {
     }
     jogDir_ = (direction > 0) ? 1 : -1;
     lastJogRefresh_ = millis();
-    motor_.setSpeed(jogDir_ * STEER_JOG_DUTY);
+    jogPulseUntil_ = 0;
+    motor_.setSpeed(jogDir_ * (int16_t)duty);
+}
+
+void SteeringController::nudge(int8_t direction) {
+    if (direction == 0 || !sensorOk_) return;
+
+    isMoving_ = false;   // nudge overrides position control
+    if (jogDir_ != direction) {
+        lastStallPosition_ = relPosition();
+        lastStallCheckTime_ = millis();
+    }
+    jogDir_ = (direction > 0) ? 1 : -1;
+    lastJogRefresh_ = millis();
+    jogPulseUntil_ = millis() + STEER_NUDGE_MS;
+    motor_.setSpeed(jogDir_ * STEER_NUDGE_DUTY);
 }
 
 void SteeringController::update() {
@@ -134,6 +167,10 @@ void SteeringController::update() {
 
     // Jog mode (open loop, momentary)
     if (jogDir_ != 0) {
+        if (jogPulseUntil_ != 0 && (int32_t)(now - jogPulseUntil_) >= 0) {
+            stop();   // nudge pulse complete
+            return;
+        }
         if (now - lastJogRefresh_ >= STEER_JOG_TIMEOUT_MS) {
             Debug::printlnFeature(DebugFeature::SERVO, "[STEER] Jog timeout — stopping");
             stop();
@@ -144,7 +181,8 @@ void SteeringController::update() {
     if (!isMoving_) return;
 
     // Closed-loop proportional position control
-    int32_t error = targetRel_ - relPosition();
+    int32_t rel = relPosition();
+    int32_t error = targetRel_ - rel;
 
     if (abs(error) <= STEER_POSITION_TOLERANCE) {
         stop();
@@ -157,13 +195,33 @@ void SteeringController::update() {
         return;
     }
 
-    float duty = fabsf((float)error) * STEER_KP;
+    // Anti-stall boost: load rises toward the locks; if commanded motion makes
+    // no progress, escalate duty above the P term until movement resumes.
+    if (now - lastProgressTime_ >= STEER_BOOST_CHECK_MS) {
+        if (abs(rel - lastProgressPos_) < STEER_BOOST_MIN_PROGRESS) {
+            if (dutyBoost_ < STEER_PWM_MAX_DUTY) dutyBoost_ += STEER_BOOST_STEP;
+        } else if (dutyBoost_ > 0) {
+            dutyBoost_ -= (dutyBoost_ < STEER_BOOST_STEP) ? dutyBoost_ : STEER_BOOST_STEP;
+        }
+        lastProgressPos_ = rel;
+        lastProgressTime_ = now;
+    }
+
+    float duty = fabsf((float)error) * STEER_KP + dutyBoost_;
     if (duty < STEER_PWM_MIN_DUTY) duty = STEER_PWM_MIN_DUTY;
     if (duty > STEER_PWM_MAX_DUTY) duty = STEER_PWM_MAX_DUTY;
 
     // Motor positive = wheel right = normalized position increasing
     int16_t speed = (int16_t)duty;
     motor_.setSpeed(error > 0 ? speed : (int16_t)-speed);
+
+    if (now - lastMoveLogTime_ >= 100) {
+        lastMoveLogTime_ = now;
+        Debug::printfFeature(DebugFeature::SERVO,
+                             "[STEER] raw=%ld rel=%ld target=%ld err=%ld duty=%d boost=%d\n",
+                             (long)rawAngle_, (long)rel, (long)targetRel_,
+                             (long)error, (int)(error > 0 ? speed : -speed), (int)dutyBoost_);
+    }
 }
 
 // === Steering interface ===
@@ -194,6 +252,9 @@ bool SteeringController::setSteeringPercent(float percent) {
     moveStartTime_ = millis();
     lastStallPosition_ = relPosition();
     lastStallCheckTime_ = millis();
+    dutyBoost_ = 0;
+    lastProgressPos_ = lastStallPosition_;
+    lastProgressTime_ = millis();
     return true;
 }
 

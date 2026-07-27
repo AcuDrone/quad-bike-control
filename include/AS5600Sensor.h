@@ -35,9 +35,20 @@ public:
 
 private:
     bool initialized_;
+    gpio_num_t sdaPin_;
+    gpio_num_t sclPin_;
+    uint8_t failCount_;   // consecutive failed reads (triggers bus recovery)
 
     /** @brief Read consecutive registers; returns true on I2C success */
     bool readRegisters(uint8_t reg, uint8_t* buf, uint8_t len);
+
+    /**
+     * @brief Re-initialize the I2C bus after persistent failures.
+     * The ESP32 NG I2C driver can wedge into ESP_ERR_INVALID_STATE after a
+     * corrupted transaction (e.g. EMI glitch) and stays broken until Wire is
+     * torn down and restarted.
+     */
+    void recoverBus();
 };
 
 #endif // AS5600_SENSOR_H

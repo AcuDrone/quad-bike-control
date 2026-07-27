@@ -149,15 +149,25 @@ struct ServoChannelConfig {
 #define STEER_STALL_THRESHOLD     5     // AS5600 counts - stall detection threshold
 #define STEER_STALL_TIMEOUT       500   // ms - time without position change = stall
 #define STEER_CAL_MIN_SPAN        50    // AS5600 counts - min |limit - center| accepted at calibration (~4.4°)
+#define STEER_SENSOR_FAULT_DEBOUNCE 5   // consecutive bad samples before declaring a sensor fault (EMI glitch filter)
 
-// Proportional PWM control: duty = clamp(|error| * STEER_KP, MIN, MAX)
+// Proportional PWM control: duty = clamp(|error| * STEER_KP + boost, MIN, MAX)
 #define STEER_KP                  1.0f  // PWM duty (0-255) per AS5600 count of error
-#define STEER_PWM_MIN_DUTY        70    // enough to overcome static friction
+#define STEER_PWM_MIN_DUTY        140   // enough to overcome static friction (bench: no movement at 70)
 #define STEER_PWM_MAX_DUTY        255   // full speed for large errors
 
+// Anti-stall boost: steering load rises toward the locks; when commanded motion
+// makes no progress, duty escalates above the P term until movement resumes.
+// (Bench: closed-loop stalled ~72 counts short of the left lock at MIN duty.)
+#define STEER_BOOST_CHECK_MS      100   // ms - progress check period
+#define STEER_BOOST_MIN_PROGRESS  3     // counts per check period considered "moving"
+#define STEER_BOOST_STEP          30    // duty added (stalled) or removed (moving) per check
+
 // Calibration jog (momentary open-loop drive from the web UI)
-#define STEER_JOG_DUTY            120   // PWM duty while jogging
+#define STEER_JOG_DUTY            180   // PWM duty while jogging (default when the UI sends no speed; min working duty is ~140)
 #define STEER_JOG_TIMEOUT_MS      500   // ms - auto-stop if the jog command is not refreshed
+#define STEER_NUDGE_DUTY          150   // PWM duty for a precision nudge pulse (just above friction)
+#define STEER_NUDGE_MS            70    // ms - nudge pulse length (finer: ~1-2 counts per tap)
 
 // Throttle Servo Parameters
 #define THROTTLE_SERVO_MIN_US    800   // Minimum servo pulse width (µs) — mechanical range floor / slider bound
