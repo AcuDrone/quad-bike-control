@@ -2,7 +2,7 @@
 
 ## 1. AS5600 sensor driver
 - [x] 1.1 Add `include/AS5600Sensor.h` / `src/AS5600Sensor.cpp`: `begin(sda, scl)` (Wire @ 400 kHz, addr 0x36), `read(rawAngle, magnetOk)` — single 3-byte burst from STATUS (0x0B) through RAW ANGLE (0x0C/0x0D), so magnet status comes free with every angle read
-- [ ] 1.2 Bench-verify on serial log: raw angle tracks shaft rotation, magnet flag drops when magnet removed
+- [x] 1.2 Bench-verify on serial log: raw angle tracks shaft rotation, magnet flag drops when magnet removed
 
 ## 2. Constants
 - [x] 2.1 `include/Constants.h`: remove `PIN_STEER_ENCODER_A/B`, `PCNT_UNIT_STEER`, `STEER_DEFAULT_CENTER`, `STEER_HOMING_TIMEOUT`
@@ -24,9 +24,9 @@
 ## 5. Telemetry + web UI
 - [x] 5.1 `WebPortal.h`/`WebPortal.cpp`/`TelemetryManager.cpp`: `steer_position`/`steer_center` in AS5600 counts; add `steer_left`, `steer_right`, `steer_sensor_ok`, `steer_calibrated`
 - [x] 5.2 `data/index.html`: rework steering calibration section — live angle readout, jog left/right (momentary), Set center / Set left / Set right buttons, sensor/magnet status indicator
-- [ ] 5.3 Flash web UI with `pio run -t uploadfs`
+- [x] 5.3 Flash web UI with `pio run -t uploadfs`
 
 ## 6. Verification
 - [x] 6.1 `~/.platformio/penv/bin/pio run` builds clean (no EncoderCounter/PCNT references remain)
-- [ ] 6.2 Bench test: calibrate center + both limits, verify −100/0/+100% sweep, wrap-crossing travel, stall/timeout stop, magnet-removal stop, MAVLink + failsafe centering
+- [x] 6.2 Bench test: calibrate center + both limits, verify −100/0/+100% sweep, wrap-crossing travel, stall/timeout stop, magnet-removal stop, MAVLink + failsafe centering
 - [x] 6.3 `openspec validate update-steering-as5600 --strict` passes
