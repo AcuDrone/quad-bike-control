@@ -79,7 +79,7 @@ void setup() {
     // Debug::setFeatureEnabled(DebugFeature::TRANSMISSION, true);
     // Debug::setFeatureEnabled(DebugFeature::VEHICLE, true);
     // Debug::setFeatureEnabled(DebugFeature::MAVLINK, true);  // diagnose command-stream / fail-safe flapping
-    Debug::setFeatureEnabled(DebugFeature::SERVO, true);
+    Debug::setFeatureEnabled(DebugFeature::SERVO, false);
 
     // Ungated state dump so a disabled master switch is visible on the monitor
     Serial.printf("[INIT] Debug: master=%s SERVO=%s\n",
