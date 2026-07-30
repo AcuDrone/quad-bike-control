@@ -2,13 +2,37 @@
 #include "Debug.h"
 #include <SPI.h>
 
+// Candidate PIDs test-requested during a probe (order matters for reporting)
+static const uint8_t kProbeCandidates[CANController::PROBE_CANDIDATE_COUNT] = {
+    0x04,  // calculated engine load
+    0x0B,  // manifold absolute pressure
+    0x0E,  // timing advance
+    0x0F,  // intake air temperature
+    0x42,  // control module voltage
+    0x0D,  // vehicle speed
+    0x2F,  // fuel tank level
+    0x5C,  // engine oil temperature
+    0x14   // O2 sensor 1 (voltage + trim)
+};
+
+// Supported-PID bitmap group request PIDs (Mode 01)
+static const uint8_t kBitmapGroups[4] = {0x00, 0x20, 0x40, 0x60};
+
 CANController::CANController()
     : mcp_can_(nullptr),
       initialized_(false),
       state_(OBDState::IDLE),
       activePIDIndex_(0),
       requestSentTime_(0),
-      responseLen_(0) {
+      responseLen_(0),
+      mode_(Mode::NORMAL),
+      probePhase_(ProbePhase::DONE),
+      probeBitmapGroup_(0),
+      probeMaxBitmapGroups_(1),
+      probeCandidateIdx_(0),
+      probeRequestInFlight_(false),
+      probeRequestSentTime_(0),
+      probeRetryCount_(0) {
     // Initialize vehicle data to safe defaults
     vehicleData_.engineRPM = 0;
     vehicleData_.vehicleSpeed = 0;
@@ -16,13 +40,22 @@ CANController::CANController()
     vehicleData_.oilTemp = 0;
     vehicleData_.throttlePosition = 0;
     vehicleData_.fuelLevel = 0;
+    vehicleData_.mapKpa = 0;
     vehicleData_.lastUpdateTime = 0;
     vehicleData_.dataValid = false;
+
+    // Initialize probe results to an empty/idle snapshot
+    probeResults_ = {};
+    for (uint8_t i = 0; i < PROBE_CANDIDATE_COUNT; i++) {
+        probeResults_.pids[i].pid = kProbeCandidates[i];
+    }
+    strncpy(probeResults_.status, "idle", sizeof(probeResults_.status) - 1);
 
     // Initialize PID scheduling table (all PID_COUNT entries must be initialized)
     pidTable_[0] = {PID_ENGINE_RPM,   CAN_POLL_INTERVAL_RPM,  0, 0};
     pidTable_[1] = {PID_COOLANT_TEMP, CAN_POLL_INTERVAL_TEMP, 0, 0};
     pidTable_[2] = {PID_THROTTLE_POS, CAN_POLL_INTERVAL_TEMP, 0, 0};
+    pidTable_[3] = {PID_MAP,          CAN_POLL_INTERVAL_TEMP, 0, 0};
 }
 
 CANController::~CANController() {
@@ -70,6 +103,16 @@ bool CANController::begin(gpio_num_t csPin, gpio_num_t sckPin, gpio_num_t mosiPi
 
 void CANController::update() {
     if (!initialized_) {
+        return;
+    }
+
+    // While probing, run the capability sweep instead of the normal scheduler.
+    // VehicleData is left untouched so normal polling resumes where it left off.
+    if (mode_ == Mode::PROBING) {
+        updateProbe();
+        if (isDataStale()) {
+            vehicleData_.dataValid = false;
+        }
         return;
     }
 
@@ -257,6 +300,11 @@ void CANController::parseAndStore(uint8_t index, const uint8_t* data, uint8_t le
                 vehicleData_.throttlePosition = (data[0] * 100) / 255;
             }
             break;
+        case PID_MAP:
+            if (len >= 1) {
+                vehicleData_.mapKpa = data[0];  // kPa absolute (0-255)
+            }
+            break;
         // case PID_FUEL_LEVEL:
         //     if (len >= 1) {
         //         vehicleData_.fuelLevel = (data[0] * 100) / 255;
@@ -272,4 +320,372 @@ bool CANController::isDataStale() const {
 
     uint32_t age = millis() - vehicleData_.lastUpdateTime;
     return (age > CAN_DATA_STALE_TIMEOUT);
+}
+
+// ============================================================================
+// ECU CAPABILITY PROBE
+// ============================================================================
+
+// Format a raw 2-byte OBD-II DTC into the standard P/C/B/U code string.
+static void formatDtc(uint16_t code, char* out, size_t outLen) {
+    const char letters[4] = {'P', 'C', 'B', 'U'};
+    uint8_t hi = (code >> 8) & 0xFF;
+    uint8_t lo = code & 0xFF;
+    snprintf(out, outLen, "%c%X%X%X%X",
+             letters[(hi >> 6) & 0x03],
+             (hi >> 4) & 0x03,
+             hi & 0x0F,
+             (lo >> 4) & 0x0F,
+             lo & 0x0F);
+}
+
+bool CANController::sendMode03Request() {
+    if (!initialized_ || mcp_can_ == nullptr) {
+        return false;
+    }
+
+    // Mode 03 = request stored DTCs (no PID byte)
+    uint8_t requestData[8] = {0x01, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    byte result = mcp_can_->sendMsgBuf(0x7DF, 0, 8, requestData);
+
+    if (result != CAN_OK) {
+        Debug::printlnFeature(DebugFeature::CAN, "[CAN] ERROR: Failed to send Mode 03 request");
+        return false;
+    }
+    return true;
+}
+
+bool CANController::tryReceiveProbeResponse(uint8_t expectedMode, uint8_t expectedPid,
+                                            uint8_t* outBuf, uint8_t& outLen) {
+    if (mcp_can_ == nullptr) {
+        return false;
+    }
+
+    unsigned long canId;
+    uint8_t len = 0;
+    uint8_t rxBuf[8];
+
+    // Drain up to 5 messages to prevent MCP2515 RX buffer overflow
+    for (uint8_t i = 0; i < 5; i++) {
+        if (mcp_can_->checkReceive() != CAN_MSGAVAIL) {
+            break;  // No more messages
+        }
+
+        mcp_can_->readMsgBuf(&canId, &len, rxBuf);
+
+        // OBD-II responses are from 0x7E8 to 0x7EF (ECU response IDs)
+        if (canId >= 0x7E8 && canId <= 0x7EF && len >= 2) {
+            bool match = false;
+            if (expectedMode == 0x01) {
+                // Mode 01 positive response (0x41) for the expected PID
+                match = (len >= 3 && rxBuf[1] == 0x41 && rxBuf[2] == expectedPid);
+            } else if (expectedMode == 0x03) {
+                // Mode 03 positive response (0x43)
+                match = (rxBuf[1] == 0x43);
+            }
+            if (match) {
+                outLen = len;
+                for (uint8_t j = 0; j < len && j < 8; j++) {
+                    outBuf[j] = rxBuf[j];
+                }
+                return true;
+            }
+        }
+        // Non-matching message — discard and continue draining
+    }
+
+    return false;
+}
+
+CANController::ProbeStart CANController::startProbe(bool gearChangeActive) {
+    // Reject if a probe is already running
+    if (mode_ == Mode::PROBING) {
+        return ProbeStart::BUSY;
+    }
+
+    // Defer while a gear change is active (protects the high-rate RPM feedback the shift relies on)
+    if (gearChangeActive) {
+        return ProbeStart::BUSY;
+    }
+
+    // Reset the results snapshot for a fresh sweep
+    probeResults_ = {};
+    for (uint8_t i = 0; i < PROBE_CANDIDATE_COUNT; i++) {
+        probeResults_.pids[i].pid = kProbeCandidates[i];
+    }
+
+    // Short-circuit if the ECU is not answering (no bus traffic generated)
+    if (!vehicleData_.dataValid) {
+        probeResults_.running = false;
+        probeResults_.complete = true;
+        probeResults_.completedAtMs = millis();
+        strncpy(probeResults_.status, "no ECU", sizeof(probeResults_.status) - 1);
+        Debug::printlnFeature(DebugFeature::CAN, "[CAN][PROBE] Aborted: no ECU / disconnected");
+        return ProbeStart::NO_ECU;
+    }
+
+    // Enter probe mode and initialize the sequencer cursor
+    probeResults_.running = true;
+    probeResults_.complete = false;
+    strncpy(probeResults_.status, "probing", sizeof(probeResults_.status) - 1);
+    probePhase_ = ProbePhase::BITMAP;
+    probeBitmapGroup_ = 0;
+    probeMaxBitmapGroups_ = 1;
+    probeCandidateIdx_ = 0;
+    probeRequestInFlight_ = false;
+    probeRetryCount_ = 0;
+    mode_ = Mode::PROBING;
+
+    Debug::printlnFeature(DebugFeature::CAN, "[CAN][PROBE] Started ECU capability probe");
+    return ProbeStart::STARTED;
+}
+
+bool CANController::probeCurrentRequest(uint8_t& mode, uint8_t& pid) const {
+    switch (probePhase_) {
+        case ProbePhase::BITMAP:
+            mode = 0x01;
+            pid = kBitmapGroups[probeBitmapGroup_];
+            return true;
+        case ProbePhase::CANDIDATE:
+            mode = 0x01;
+            pid = kProbeCandidates[probeCandidateIdx_];
+            return true;
+        case ProbePhase::DTC:
+            mode = 0x03;
+            pid = 0x00;
+            return true;
+        case ProbePhase::DONE:
+        default:
+            return false;
+    }
+}
+
+void CANController::probeAdvanceCursor() {
+    probeRetryCount_ = 0;
+    switch (probePhase_) {
+        case ProbePhase::BITMAP:
+            probeBitmapGroup_++;
+            if (probeBitmapGroup_ >= probeMaxBitmapGroups_ || probeBitmapGroup_ >= 4) {
+                probePhase_ = ProbePhase::CANDIDATE;
+                probeCandidateIdx_ = 0;
+            }
+            break;
+        case ProbePhase::CANDIDATE:
+            probeCandidateIdx_++;
+            if (probeCandidateIdx_ >= PROBE_CANDIDATE_COUNT) {
+                probePhase_ = ProbePhase::DTC;
+            }
+            break;
+        case ProbePhase::DTC:
+            probePhase_ = ProbePhase::DONE;
+            break;
+        case ProbePhase::DONE:
+        default:
+            break;
+    }
+}
+
+void CANController::recordProbeResponse(uint8_t mode, uint8_t pid, const uint8_t* buf, uint8_t len) {
+    if (mode == 0x01 && pid <= 0x60 && (pid % 0x20) == 0) {
+        // Supported-PID bitmap group response: buf = [len][0x41][pid][A][B][C][D]
+        ProbeBitmap& bm = probeResults_.bitmaps[probeBitmapGroup_];
+        bm.queried = true;
+        bm.answered = true;
+        for (uint8_t j = 0; j < 4; j++) {
+            bm.raw[j] = (len >= (uint8_t)(3 + j + 1)) ? buf[3 + j] : 0;
+        }
+
+        // Mark which candidate PIDs this group reports as supported.
+        uint8_t base = pid;  // group covers PIDs base+1 .. base+0x20
+        for (uint8_t c = 0; c < PROBE_CANDIDATE_COUNT; c++) {
+            uint8_t cand = probeResults_.pids[c].pid;
+            if (cand > base && cand <= (uint8_t)(base + 0x20)) {
+                uint8_t offset = cand - base;              // 1..32
+                uint8_t byteIdx = (offset - 1) / 8;        // 0..3
+                uint8_t bit = 7 - ((offset - 1) % 8);      // MSB first
+                if (bm.raw[byteIdx] & (1 << bit)) {
+                    probeResults_.pids[c].supportedByBitmap = true;
+                }
+            }
+        }
+
+        // Continuation bit (bit0 of D) indicates the next group is supported.
+        if ((bm.raw[3] & 0x01) && (probeBitmapGroup_ + 1) < 4) {
+            probeMaxBitmapGroups_ = probeBitmapGroup_ + 2;
+        }
+
+        Debug::printfFeature(DebugFeature::CAN,
+            "[CAN][PROBE] Bitmap 0x%02X = %02X %02X %02X %02X\n",
+            pid, bm.raw[0], bm.raw[1], bm.raw[2], bm.raw[3]);
+        return;
+    }
+
+    if (mode == 0x01) {
+        // Candidate PID positive response: buf = [len][0x41][pid][payload...]
+        ProbePidResult& pr = probeResults_.pids[probeCandidateIdx_];
+        pr.answered = true;
+        pr.rawLen = (len > 3) ? (len - 3) : 0;
+        if (pr.rawLen > 4) pr.rawLen = 4;
+        for (uint8_t j = 0; j < pr.rawLen; j++) {
+            pr.raw[j] = buf[3 + j];
+        }
+
+        // Decode using standard OBD-II formulas for the PIDs we know.
+        float A = (pr.rawLen >= 1) ? pr.raw[0] : 0.0f;
+        float B = (pr.rawLen >= 2) ? pr.raw[1] : 0.0f;
+        pr.hasDecoded = true;
+        switch (pid) {
+            case 0x04: pr.decoded = A * 100.0f / 255.0f; break;   // calc load %
+            case 0x0B: pr.decoded = A; break;                     // MAP kPa
+            case 0x0E: pr.decoded = A / 2.0f - 64.0f; break;      // timing advance °
+            case 0x0F: pr.decoded = A - 40.0f; break;             // IAT °C
+            case 0x42: pr.decoded = ((A * 256.0f) + B) / 1000.0f; break; // module V
+            case 0x0D: pr.decoded = A; break;                     // speed km/h
+            case 0x2F: pr.decoded = A * 100.0f / 255.0f; break;   // fuel level %
+            case 0x5C: pr.decoded = A - 40.0f; break;             // oil temp °C
+            case 0x14: pr.decoded = A / 200.0f; break;            // O2 S1 voltage V
+            default:   pr.hasDecoded = false; break;
+        }
+
+        Debug::printfFeature(DebugFeature::CAN,
+            "[CAN][PROBE] PID 0x%02X answered (%u bytes)%s\n",
+            pid, pr.rawLen,
+            pr.hasDecoded ? "" : " [raw only]");
+        return;
+    }
+
+    if (mode == 0x03) {
+        // Stored-DTC response: buf = [len][0x43][count][DTC1_hi][DTC1_lo][DTC2_hi][DTC2_lo]...
+        ProbeDtc& d = probeResults_.dtc;
+        d.queried = true;
+        d.answered = true;
+        d.count = (len >= 3) ? buf[2] : 0;
+
+        uint8_t availPairs = (len > 3) ? ((len - 3) / 2) : 0;   // DTC pairs in this frame
+        uint8_t capture = d.count;
+        if (capture > availPairs) capture = availPairs;
+        if (capture > PROBE_MAX_DTC) capture = PROBE_MAX_DTC;
+        d.codeCount = capture;
+        for (uint8_t k = 0; k < capture; k++) {
+            d.codes[k] = ((uint16_t)buf[3 + 2 * k] << 8) | buf[3 + 2 * k + 1];
+        }
+        if (d.count > d.codeCount) {
+            probeResults_.multiFrameTruncated = true;
+        }
+
+        Debug::printfFeature(DebugFeature::CAN,
+            "[CAN][PROBE] DTC count=%u captured=%u%s\n",
+            d.count, d.codeCount, probeResults_.multiFrameTruncated ? " (truncated)" : "");
+        return;
+    }
+}
+
+void CANController::recordProbeTimeout(uint8_t mode, uint8_t pid) {
+    if (mode == 0x01 && pid <= 0x60 && (pid % 0x20) == 0) {
+        probeResults_.bitmaps[probeBitmapGroup_].queried = true;
+        probeResults_.bitmaps[probeBitmapGroup_].answered = false;
+        Debug::printfFeature(DebugFeature::CAN, "[CAN][PROBE] Bitmap 0x%02X timeout\n", pid);
+    } else if (mode == 0x01) {
+        probeResults_.pids[probeCandidateIdx_].answered = false;
+        Debug::printfFeature(DebugFeature::CAN, "[CAN][PROBE] PID 0x%02X no response\n", pid);
+    } else if (mode == 0x03) {
+        probeResults_.dtc.queried = true;
+        probeResults_.dtc.answered = false;
+        Debug::printlnFeature(DebugFeature::CAN, "[CAN][PROBE] Mode 03 (DTC) no response");
+    }
+}
+
+void CANController::finishProbe() {
+    probeResults_.running = false;
+    probeResults_.complete = true;
+    probeResults_.completedAtMs = millis();
+    strncpy(probeResults_.status, "complete", sizeof(probeResults_.status) - 1);
+    mode_ = Mode::NORMAL;
+    state_ = OBDState::IDLE;
+
+    // Mirror the final results table to the serial log
+    Debug::printlnFeature(DebugFeature::CAN, "[CAN][PROBE] ===== Probe results =====");
+    for (uint8_t g = 0; g < 4; g++) {
+        const ProbeBitmap& bm = probeResults_.bitmaps[g];
+        if (bm.queried) {
+            Debug::printfFeature(DebugFeature::CAN,
+                "[CAN][PROBE] bitmap 0x%02X: %s %02X %02X %02X %02X\n",
+                kBitmapGroups[g], bm.answered ? "ok " : "---",
+                bm.raw[0], bm.raw[1], bm.raw[2], bm.raw[3]);
+        }
+    }
+    for (uint8_t i = 0; i < PROBE_CANDIDATE_COUNT; i++) {
+        const ProbePidResult& pr = probeResults_.pids[i];
+        if (pr.hasDecoded) {
+            Debug::printfFeature(DebugFeature::CAN,
+                "[CAN][PROBE] PID 0x%02X sup=%d ans=%d decoded=%.2f\n",
+                pr.pid, pr.supportedByBitmap, pr.answered, pr.decoded);
+        } else {
+            Debug::printfFeature(DebugFeature::CAN,
+                "[CAN][PROBE] PID 0x%02X sup=%d ans=%d raw=%u bytes\n",
+                pr.pid, pr.supportedByBitmap, pr.answered, pr.rawLen);
+        }
+    }
+    if (probeResults_.dtc.queried) {
+        Debug::printfFeature(DebugFeature::CAN, "[CAN][PROBE] DTC count=%u:\n", probeResults_.dtc.count);
+        char code[8];
+        for (uint8_t k = 0; k < probeResults_.dtc.codeCount; k++) {
+            formatDtc(probeResults_.dtc.codes[k], code, sizeof(code));
+            Debug::printfFeature(DebugFeature::CAN, "[CAN][PROBE]   %s\n", code);
+        }
+        if (probeResults_.multiFrameTruncated) {
+            Debug::printlnFeature(DebugFeature::CAN, "[CAN][PROBE]   (additional DTCs truncated - multi-frame)");
+        }
+    }
+    Debug::printlnFeature(DebugFeature::CAN, "[CAN][PROBE] =========================");
+}
+
+void CANController::updateProbe() {
+    uint8_t mode = 0x01;
+    uint8_t pid = 0x00;
+
+    if (probePhase_ == ProbePhase::DONE) {
+        finishProbe();
+        return;
+    }
+
+    if (!probeCurrentRequest(mode, pid)) {
+        finishProbe();
+        return;
+    }
+
+    if (!probeRequestInFlight_) {
+        // Send the current request (retry on send failure like the normal machine)
+        bool ok = (mode == 0x03) ? sendMode03Request() : sendOBDRequest(pid);
+        if (ok) {
+            probeRequestInFlight_ = true;
+            probeRequestSentTime_ = millis();
+        } else {
+            if (probeRetryCount_ >= CAN_PROBE_RETRY_ATTEMPTS) {
+                recordProbeTimeout(mode, pid);
+                probeAdvanceCursor();
+            } else {
+                probeRetryCount_++;
+            }
+        }
+        return;
+    }
+
+    // Waiting for a response
+    uint8_t rxBuf[8];
+    uint8_t rxLen = 0;
+    if (tryReceiveProbeResponse(mode, pid, rxBuf, rxLen)) {
+        recordProbeResponse(mode, pid, rxBuf, rxLen);
+        probeRequestInFlight_ = false;
+        probeAdvanceCursor();
+    } else if (millis() - probeRequestSentTime_ >= CAN_RESPONSE_TIMEOUT) {
+        probeRequestInFlight_ = false;
+        if (probeRetryCount_ >= CAN_PROBE_RETRY_ATTEMPTS) {
+            recordProbeTimeout(mode, pid);
+            probeAdvanceCursor();
+        } else {
+            probeRetryCount_++;  // re-send the same request next iteration
+        }
+    }
+    // else: no response yet — return and poll again next loop
 }

@@ -138,6 +138,11 @@ public:
     CANController::VehicleData getVehicleData() const { return canController_.getVehicleData(); }
 
     /**
+     * @brief Get the latest ECU capability probe snapshot (for telemetry)
+     */
+    CANController::ProbeResults getProbeResults() const { return canController_.getProbeResults(); }
+
+    /**
      * @brief Set ignition state with safety interlocks
      * @param state Ignition state string (OFF/ACC/IGNITION/START)
      * @param errorMsg Output parameter for error message if operation fails
@@ -343,6 +348,13 @@ private:
     void processMoveToPositionCommand(float positionPct, WebPortal& webPortal);
     void processBoostTestCommand(bool enable, WebPortal& webPortal);
     void processSetBoostRpmCommand(int32_t rpm, WebPortal& webPortal);
+
+    /**
+     * @brief Process can_probe command — trigger a one-shot ECU capability probe.
+     * Deferred while a gear change is active; short-circuits with a no-ECU result when
+     * CAN data is invalid.
+     */
+    void processCanProbeCommand(WebPortal& webPortal);
 
     // Returns true when throttle should be clamped to TRANS_UNKNOWN_GEAR_THROTTLE_MAX.
     // Clips when gear position is invalid and physical gear is not neutral

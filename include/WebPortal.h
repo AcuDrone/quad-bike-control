@@ -12,6 +12,7 @@
 #include <LittleFS.h>
 #include <ArduinoJson.h>
 #include "Constants.h"
+#include "CANController.h"
 
 #define FILESYSTEM LittleFS
 
@@ -71,6 +72,7 @@ public:
         int8_t oil_temp;          // Oil temperature °C (-40 to +215)
         uint8_t throttle_position; // Throttle position % (0-100)
         uint8_t fuel_level;       // Fuel tank level % (0-100)
+        uint8_t map_kpa;          // Manifold absolute pressure, kPa (0-255)
         String can_status;        // CAN status: "connected", "disconnected"
 
         // MAVLink command channel + link data
@@ -99,6 +101,10 @@ public:
 
         // Boost PID configuration
         int32_t boost_target_rpm; // RPM target for gear boost PID
+
+        // ECU capability probe results (emitted transiently while fresh)
+        bool probe_present;                 // true when the probe object should be serialized
+        CANController::ProbeResults probe;  // latest probe snapshot
     };
 
     WebPortal();

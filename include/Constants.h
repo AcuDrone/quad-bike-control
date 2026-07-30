@@ -303,6 +303,10 @@ enum class InputSource {
 #define CAN_DATA_STALE_TIMEOUT    5000  // ms - Mark data invalid if not updated
 #define CAN_RETRY_ATTEMPTS        3     // Number of retry attempts on error
 
+// ECU Capability Probe (on-demand diagnostic sweep)
+#define CAN_PROBE_RETRY_ATTEMPTS  1     // Retries per probe request (keeps worst-case sweep duration bounded)
+#define PROBE_RESULT_TTL          8000  // ms - window during which completed probe results are embedded in telemetry
+
 // Transmission Safety (CAN-based)
 #define TRANS_SPEED_INTERLOCK_THRESHOLD  5     // km/h - Block gear changes above this speed
 #define TRANS_CAN_TIMEOUT                5000  // ms - Allow gear change if CAN fails this long

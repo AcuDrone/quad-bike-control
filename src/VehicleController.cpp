@@ -178,6 +178,10 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
     } else if (cmd.cmd == "throttle_cal_cancel") {
         processThrottleCalCancel(webPortal);
         return;
+    } else if (cmd.cmd == "can_probe") {
+        // ECU capability probe — available regardless of input source (diagnostic)
+        processCanProbeCommand(webPortal);
+        return;
     }
 
     Debug::printfFeature(DebugFeature::VEHICLE, "[WEB] Command end %s\n", cmd.cmd);
@@ -478,6 +482,27 @@ void VehicleController::processSetBoostRpmCommand(int32_t rpm, WebPortal& webPor
     webPortal.sendResponse(true, "Boost RPM set to " + String(rpm));
 }
 
+
+void VehicleController::processCanProbeCommand(WebPortal& webPortal) {
+    // Defer while a gear change is active to protect the high-rate RPM feedback the shift relies on.
+    bool gearChangeActive = transmission_.isGearChangeActive() || transmission_.needsThrottleBoost();
+    CANController::ProbeStart result = canController_.startProbe(gearChangeActive);
+
+    switch (result) {
+        case CANController::ProbeStart::STARTED:
+            Debug::printlnFeature(DebugFeature::VEHICLE, "[WEB] ECU probe started");
+            webPortal.sendResponse(true, "ECU probe started");
+            break;
+        case CANController::ProbeStart::BUSY:
+            Debug::printlnFeature(DebugFeature::VEHICLE, "[WEB] ECU probe deferred (busy)");
+            webPortal.sendResponse(false, "ECU probe busy (gear change or probe in progress)");
+            break;
+        case CANController::ProbeStart::NO_ECU:
+            Debug::printlnFeature(DebugFeature::VEHICLE, "[WEB] ECU probe: no ECU / disconnected");
+            webPortal.sendResponse(false, "No ECU / CAN disconnected");
+            break;
+    }
+}
 
 bool VehicleController::setIgnitionState(const String& state, String& errorMsg) {
     RelayController::IgnitionState currentState = relayController_.getIgnitionState();

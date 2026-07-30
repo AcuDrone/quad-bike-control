@@ -73,6 +73,7 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
         telemetry.oil_temp = vehicleData.oilTemp;
         telemetry.throttle_position = vehicleData.throttlePosition;
         telemetry.fuel_level = vehicleData.fuelLevel;
+        telemetry.map_kpa = vehicleData.mapKpa;
         telemetry.can_status = "connected";
     } else {
         telemetry.engine_rpm = 0;
@@ -81,8 +82,15 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
         telemetry.oil_temp = 0;
         telemetry.throttle_position = 0;
         telemetry.fuel_level = 0;
+        telemetry.map_kpa = 0;
         telemetry.can_status = "disconnected";
     }
+
+    // ECU capability probe: embed results only while running or freshly completed.
+    telemetry.probe = vehicleController_.getProbeResults();
+    telemetry.probe_present = telemetry.probe.running ||
+        (telemetry.probe.complete &&
+         (millis() - telemetry.probe.completedAtMs) < PROBE_RESULT_TTL);
 
     mavlink_.getRawChannels(telemetry.mav_channels);
     MavlinkInterface::LinkQuality linkQuality = mavlink_.getLinkQuality();

@@ -572,8 +572,9 @@ bool WebPortal::validateCommand(const WebCommand& cmd, InputSource inputSource) 
 
 String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // Capacity headroom: ~34 top-level fields + a 16-element array + a 4-member object,
-    // plus copied String values. Sized to 2048 so trailing fields can't be silently dropped.
-    StaticJsonDocument<2048> doc;
+    // plus copied String values. Sized to 3072 to leave room for the transient `probe`
+    // object (only present while probe results are fresh; steady-state wire size is unchanged).
+    StaticJsonDocument<3072> doc;
 
     doc["timestamp"] = telemetry.timestamp;
     doc["gear"] = telemetry.gear;
@@ -602,6 +603,7 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
         doc["oil_temp"] = telemetry.oil_temp;
         doc["throttle_position"] = telemetry.throttle_position;
         doc["fuel_level"] = telemetry.fuel_level;
+        doc["map_kpa"] = telemetry.map_kpa;
     }
     doc["can_status"] = telemetry.can_status;
 
@@ -634,6 +636,72 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     gearDefaults["H"] = telemetry.gear_default_h;
 
     doc["boost_target_rpm"] = telemetry.boost_target_rpm;
+
+    // ECU capability probe results — emitted only while running or freshly completed.
+    if (telemetry.probe_present) {
+        const CANController::ProbeResults& p = telemetry.probe;
+        JsonObject probe = doc.createNestedObject("probe");
+        probe["running"] = p.running;
+        probe["complete"] = p.complete;
+        probe["status"] = p.status;
+        probe["trunc"] = p.multiFrameTruncated;
+
+        static const char hex[] = "0123456789ABCDEF";
+        static const uint8_t groupPids[4] = {0x00, 0x20, 0x40, 0x60};
+
+        JsonArray bitmaps = probe.createNestedArray("bitmaps");
+        for (uint8_t g = 0; g < 4; g++) {
+            if (!p.bitmaps[g].queried) continue;
+            JsonObject bm = bitmaps.createNestedObject();
+            bm["g"] = groupPids[g];
+            bm["ans"] = p.bitmaps[g].answered;
+            char raw[9];
+            for (uint8_t j = 0; j < 4; j++) {
+                raw[j * 2]     = hex[(p.bitmaps[g].raw[j] >> 4) & 0x0F];
+                raw[j * 2 + 1] = hex[p.bitmaps[g].raw[j] & 0x0F];
+            }
+            raw[8] = '\0';
+            bm["raw"] = raw;
+        }
+
+        JsonArray pids = probe.createNestedArray("pids");
+        for (uint8_t i = 0; i < CANController::PROBE_CANDIDATE_COUNT; i++) {
+            const CANController::ProbePidResult& pr = p.pids[i];
+            JsonObject po = pids.createNestedObject();
+            po["pid"] = pr.pid;
+            po["sup"] = pr.supportedByBitmap;
+            po["ans"] = pr.answered;
+            char raw[9];
+            for (uint8_t j = 0; j < pr.rawLen && j < 4; j++) {
+                raw[j * 2]     = hex[(pr.raw[j] >> 4) & 0x0F];
+                raw[j * 2 + 1] = hex[pr.raw[j] & 0x0F];
+            }
+            raw[pr.rawLen * 2] = '\0';
+            po["raw"] = raw;
+            if (pr.hasDecoded) {
+                po["dec"] = pr.decoded;
+            }
+        }
+
+        JsonObject dtc = probe.createNestedObject("dtc");
+        dtc["q"] = p.dtc.queried;
+        dtc["ans"] = p.dtc.answered;
+        dtc["n"] = p.dtc.count;
+        JsonArray codes = dtc.createNestedArray("codes");
+        const char letters[4] = {'P', 'C', 'B', 'U'};
+        for (uint8_t k = 0; k < p.dtc.codeCount; k++) {
+            uint8_t hi = (p.dtc.codes[k] >> 8) & 0xFF;
+            uint8_t lo = p.dtc.codes[k] & 0xFF;
+            char code[6];
+            code[0] = letters[(hi >> 6) & 0x03];
+            code[1] = hex[(hi >> 4) & 0x03];
+            code[2] = hex[hi & 0x0F];
+            code[3] = hex[(lo >> 4) & 0x0F];
+            code[4] = hex[lo & 0x0F];
+            code[5] = '\0';
+            codes.add(code);
+        }
+    }
 
     if (doc.overflowed()) {
         Debug::printlnFeature(DebugFeature::WEB, "[WEB] WARNING: telemetry JSON overflowed — increase capacity");

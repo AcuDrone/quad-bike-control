@@ -667,6 +667,10 @@
                         <div class="telemetry-value" id="can-throttle-pos">0%</div>
                     </div>
                     <div class="telemetry-item">
+                        <div class="telemetry-label">MAP</div>
+                        <div class="telemetry-value" id="can-map">-- kPa</div>
+                    </div>
+                    <div class="telemetry-item">
                         <div class="telemetry-label">Fuel Level</div>
                         <div class="telemetry-value" id="can-fuel">--%</div>
                     </div>
@@ -675,6 +679,15 @@
                         <div class="telemetry-value" id="can-status-text">disconnected</div>
                     </div>
                 </div>
+
+                <!-- ECU Capability Probe -->
+                <div class="slider-container" style="margin-top: 12px;">
+                    <button class="upload-btn" id="probe-btn" onclick="probeECU()" style="background: color-mix(in srgb, var(--info) 65%, black);">
+                        🔍 Probe ECU
+                    </button>
+                </div>
+                <div id="probe-status" style="margin-top: 8px; font-size: 0.8em; color: var(--muted-foreground); min-height: 1.2em;"></div>
+                <div id="probe-results" style="display: none; margin-top: 10px; font-size: 0.82em;"></div>
             </div>
 
             <!-- System Maintenance -->
@@ -892,6 +905,7 @@
                 }
 
                 document.getElementById('can-fuel').textContent = (data.fuel_level || 0) + '%';
+                document.getElementById('can-map').textContent = (data.map_kpa != null ? data.map_kpa : '--') + ' kPa';
 
                 document.getElementById('can-status-text').textContent = 'connected';
                 document.getElementById('can-status-text').style.color = 'var(--success)';
@@ -901,9 +915,15 @@
                 document.getElementById('can-coolant').textContent = '--°C';
                 document.getElementById('can-oil').textContent = '--°C';
                 document.getElementById('can-throttle-pos').textContent = '--%';
+                document.getElementById('can-map').textContent = '-- kPa';
                 document.getElementById('can-fuel').textContent = '--%';
                 document.getElementById('can-status-text').textContent = 'disconnected';
                 document.getElementById('can-status-text').style.color = 'var(--danger)';
+            }
+
+            // Update ECU probe results (present transiently while running / fresh)
+            if (data.probe) {
+                renderProbe(data.probe);
             }
 
             // Update gear switching indicator
@@ -1112,6 +1132,101 @@
             };
 
             ws.send(JSON.stringify(command));
+        }
+
+        // ECU capability probe --------------------------------------------------
+        const PROBE_PID_INFO = {
+            0x04: { name: 'Calc Load', unit: '%' },
+            0x0B: { name: 'MAP',       unit: 'kPa' },
+            0x0E: { name: 'Timing Adv', unit: '°' },
+            0x0F: { name: 'IAT',       unit: '°C' },
+            0x42: { name: 'Module V',  unit: 'V' },
+            0x0D: { name: 'Speed',     unit: 'km/h' },
+            0x2F: { name: 'Fuel Lvl',  unit: '%' },
+            0x5C: { name: 'Oil Temp',  unit: '°C' },
+            0x14: { name: 'O2 S1',     unit: 'V' }
+        };
+
+        function probeECU() {
+            if (!wsConnected) return;
+            const btn = document.getElementById('probe-btn');
+            if (btn.disabled) return;  // already running
+            ws.send(JSON.stringify({ cmd: 'can_probe' }));
+            document.getElementById('probe-status').textContent = 'Probe requested…';
+            document.getElementById('probe-status').style.color = 'var(--info)';
+        }
+
+        function renderProbe(p) {
+            const btn = document.getElementById('probe-btn');
+            const statusEl = document.getElementById('probe-status');
+            const panel = document.getElementById('probe-results');
+
+            // Button + status reflect running state
+            btn.disabled = !!p.running;
+            btn.textContent = p.running ? '🔍 Probing…' : '🔍 Probe ECU';
+            if (p.running) {
+                statusEl.textContent = 'Probing ECU…';
+                statusEl.style.color = 'var(--info)';
+            } else if (p.status === 'no ECU') {
+                statusEl.textContent = 'No ECU / CAN disconnected';
+                statusEl.style.color = 'var(--danger)';
+            } else if (p.complete) {
+                statusEl.textContent = 'Probe complete';
+                statusEl.style.color = 'var(--success)';
+            }
+
+            if (!p.complete) { panel.style.display = 'none'; return; }
+
+            let html = '';
+
+            // Supported-PID bitmaps
+            if (p.bitmaps && p.bitmaps.length) {
+                html += '<div style="color: var(--muted-foreground); margin-bottom:4px;">Supported-PID bitmaps</div>';
+                p.bitmaps.forEach(b => {
+                    const grp = '0x' + ('0' + (b.g).toString(16).toUpperCase()).slice(-2);
+                    html += '<div>' + grp + ': <code>' + (b.ans ? b.raw : 'no response') + '</code></div>';
+                });
+            }
+
+            // Per-candidate PID results
+            if (p.pids && p.pids.length) {
+                html += '<div style="color: var(--muted-foreground); margin:8px 0 4px;">Candidate PIDs</div>';
+                html += '<table style="width:100%; border-collapse:collapse;">';
+                p.pids.forEach(pr => {
+                    const info = PROBE_PID_INFO[pr.pid] || { name: '', unit: '' };
+                    const pidHex = '0x' + ('0' + (pr.pid).toString(16).toUpperCase()).slice(-2);
+                    let val = '—';
+                    if (pr.ans) {
+                        if (pr.dec != null) val = pr.dec.toFixed(1) + (info.unit ? ' ' + info.unit : '');
+                        else val = pr.raw ? ('0x' + pr.raw) : 'ok';
+                    }
+                    const color = pr.ans ? 'var(--success)' : 'var(--muted-foreground)';
+                    const supMark = pr.sup ? ' <span style="color:var(--info);">•bmp</span>' : '';
+                    html += '<tr style="color:' + color + ';">' +
+                            '<td style="padding:2px 6px 2px 0;">' + pidHex + ' ' + info.name + supMark + '</td>' +
+                            '<td style="padding:2px 0; text-align:right;">' + val + '</td></tr>';
+                });
+                html += '</table>';
+            }
+
+            // DTC summary
+            if (p.dtc) {
+                html += '<div style="color: var(--muted-foreground); margin:8px 0 4px;">Diagnostic Trouble Codes</div>';
+                if (!p.dtc.q || !p.dtc.ans) {
+                    html += '<div style="color: var(--muted-foreground);">No Mode 03 response</div>';
+                } else if (p.dtc.n === 0) {
+                    html += '<div style="color: var(--success);">No stored DTCs</div>';
+                } else {
+                    html += '<div style="color: var(--warning);">' + p.dtc.n + ' DTC(s): ' +
+                            (p.dtc.codes || []).join(', ') + '</div>';
+                    if (p.trunc) {
+                        html += '<div style="color: var(--warning); font-size:0.9em;">⚠ Additional codes truncated (multi-frame not read)</div>';
+                    }
+                }
+            }
+
+            panel.innerHTML = html;
+            panel.style.display = 'block';
         }
 
         function setGear(gear) {
