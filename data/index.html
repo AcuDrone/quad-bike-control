@@ -5,6 +5,50 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>QuadBike Control Portal</title>
     <style>
+        :root {
+            /* Sage Garden dark palette (tweakcn) — authoritative oklch values */
+            --background: oklch(0.1448 0 0);
+            --foreground: oklch(0.9702 0 0);
+            --card: oklch(0.1822 0 0);
+            --card-foreground: oklch(0.9702 0 0);
+            --popover: oklch(0.1822 0 0);
+            --popover-foreground: oklch(0.9702 0 0);
+            --primary: oklch(0.6333 0.0309 154.9039);
+            --primary-foreground: oklch(0.9702 0 0);
+            --secondary: oklch(0.2178 0 0);
+            --secondary-foreground: oklch(0.9702 0 0);
+            --muted: oklch(0.2178 0 0);
+            --muted-foreground: oklch(0.7058 0 0);
+            --accent: oklch(0.3709 0.0248 153.9823);
+            --accent-foreground: oklch(0.9702 0 0);
+            --destructive: oklch(0.6368 0.2078 25.3313);
+            --destructive-foreground: oklch(1.0000 0 0);
+            --border: oklch(0.2850 0 0);
+            --input: oklch(0.1822 0 0);
+            --ring: oklch(0.6333 0.0309 154.9039);
+            --radius: 0.35rem;
+            --chart-1: oklch(0.6333 0.0309 154.9039);
+            --chart-2: oklch(0.7209 0.0489 120.9474);
+            --chart-3: oklch(0.6744 0.0427 136.0110);
+            --chart-4: oklch(0.5510 0.0234 264.3637);
+            --chart-5: oklch(0.5096 0.0289 152.3460);
+            --sidebar: oklch(0.1684 0 0);
+            --sidebar-foreground: oklch(0.9702 0 0);
+            --sidebar-primary: oklch(0.6333 0.0309 154.9039);
+            --sidebar-accent: oklch(0.2178 0 0);
+            --sidebar-border: oklch(0.2850 0 0);
+
+            /* Semantic status tokens (vehicle-safety states must stay distinct) */
+            --success: var(--primary);   /* sage green — connected / OK / active */
+            --warning: oklch(0.72 0.13 70); /* muted ochre — failsafe / caution */
+            --info: #2196f3;             /* blue — MAVLink / info / set */
+            --danger: var(--destructive);/* red — disconnected / fault / error */
+
+            /* Font stacks — system fonts only, no remote @font-face / CDN */
+            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            --font-mono: "Courier New", monospace;
+        }
+
         * {
             margin: 0;
             padding: 0;
@@ -12,9 +56,9 @@
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-            color: #ffffff;
+            font-family: var(--font-sans);
+            background: linear-gradient(135deg, var(--background) 0%, var(--sidebar) 100%);
+            color: var(--foreground);
             min-height: 100vh;
             padding: 20px;
         }
@@ -44,36 +88,36 @@
         }
 
         .status-item {
-            background: rgba(255, 255, 255, 0.1);
+            background: var(--card);
             padding: 10px 20px;
             border-radius: 8px;
             backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.2);
+            border: 1px solid var(--border);
         }
 
         .status-item.connected {
-            background: rgba(76, 175, 80, 0.3);
-            border-color: #4caf50;
+            background: color-mix(in srgb, var(--success) 22%, var(--card));
+            border-color: var(--success);
         }
 
         .status-item.disconnected {
-            background: rgba(244, 67, 54, 0.3);
-            border-color: #f44336;
+            background: color-mix(in srgb, var(--danger) 22%, var(--card));
+            border-color: var(--danger);
         }
 
         .status-item.mav-active {
-            background: rgba(33, 150, 243, 0.3);
-            border-color: #2196f3;
+            background: color-mix(in srgb, var(--info) 22%, var(--card));
+            border-color: var(--info);
         }
 
         .status-item.web-active {
-            background: rgba(76, 175, 80, 0.3);
-            border-color: #4caf50;
+            background: color-mix(in srgb, var(--success) 22%, var(--card));
+            border-color: var(--success);
         }
 
         .status-item.failsafe {
-            background: rgba(255, 152, 0, 0.3);
-            border-color: #ff9800;
+            background: color-mix(in srgb, var(--warning) 22%, var(--card));
+            border-color: var(--warning);
         }
 
         .main-grid {
@@ -84,17 +128,17 @@
         }
 
         .card {
-            background: rgba(255, 255, 255, 0.1);
+            background: var(--card);
             backdrop-filter: blur(10px);
             border-radius: 12px;
             padding: 20px;
-            border: 1px solid rgba(255, 255, 255, 0.2);
+            border: 1px solid var(--border);
         }
 
         .card h2 {
             font-size: 1.5em;
             margin-bottom: 20px;
-            border-bottom: 2px solid rgba(255, 255, 255, 0.3);
+            border-bottom: 2px solid var(--border);
             padding-bottom: 10px;
         }
 
@@ -105,7 +149,7 @@
         }
 
         .telemetry-item {
-            background: rgba(0, 0, 0, 0.2);
+            background: var(--secondary);
             padding: 15px;
             border-radius: 8px;
         }
@@ -137,16 +181,16 @@
             padding: 20px;
             font-size: 1.5em;
             font-weight: bold;
-            background: rgba(255, 255, 255, 0.2);
-            border: 2px solid rgba(255, 255, 255, 0.3);
+            background: var(--secondary);
+            border: 2px solid var(--border);
             border-radius: 8px;
-            color: white;
+            color: var(--foreground);
             cursor: pointer;
             transition: all 0.3s;
         }
 
         .gear-btn:hover:not(:disabled) {
-            background: rgba(255, 255, 255, 0.3);
+            background: var(--accent);
             transform: translateY(-2px);
         }
 
@@ -156,8 +200,8 @@
         }
 
         .gear-btn.active {
-            background: rgba(76, 175, 80, 0.5);
-            border-color: #4caf50;
+            background: color-mix(in srgb, var(--success) 40%, var(--card));
+            border-color: var(--success);
         }
 
         .slider-container {
@@ -175,7 +219,8 @@
             width: 100%;
             height: 40px;
             border-radius: 8px;
-            background: rgba(0, 0, 0, 0.3);
+            background: color-mix(in srgb, var(--border) 60%, var(--input));
+            border: 1px solid var(--border);
             outline: none;
             -webkit-appearance: none;
             appearance: none;
@@ -187,7 +232,7 @@
             width: 25px;
             height: 40px;
             border-radius: 5px;
-            background: #4caf50;
+            background: var(--primary);
             cursor: pointer;
         }
 
@@ -195,7 +240,7 @@
             width: 25px;
             height: 40px;
             border-radius: 5px;
-            background: #4caf50;
+            background: var(--primary);
             cursor: pointer;
             border: none;
         }
@@ -225,8 +270,8 @@
         .file-input-label {
             display: block;
             padding: 15px;
-            background: rgba(33, 150, 243, 0.3);
-            border: 2px dashed rgba(33, 150, 243, 0.5);
+            background: color-mix(in srgb, var(--info) 22%, var(--card));
+            border: 2px dashed var(--info);
             border-radius: 8px;
             text-align: center;
             cursor: pointer;
@@ -234,7 +279,7 @@
         }
 
         .file-input-label:hover {
-            background: rgba(33, 150, 243, 0.4);
+            background: color-mix(in srgb, var(--info) 30%, var(--card));
         }
 
         .upload-btn {
@@ -242,16 +287,16 @@
             padding: 15px;
             font-size: 1.1em;
             font-weight: bold;
-            background: #4caf50;
+            background: color-mix(in srgb, var(--primary) 45%, black);
             border: none;
             border-radius: 8px;
-            color: white;
+            color: var(--primary-foreground);
             cursor: pointer;
             transition: all 0.3s;
         }
 
         .upload-btn:hover:not(:disabled) {
-            background: #45a049;
+            background: color-mix(in srgb, var(--primary) 60%, black);
         }
 
         .upload-btn:disabled {
@@ -262,7 +307,8 @@
         .progress-bar {
             width: 100%;
             height: 30px;
-            background: rgba(0, 0, 0, 0.3);
+            background: color-mix(in srgb, var(--border) 60%, var(--input));
+            border: 1px solid var(--border);
             border-radius: 15px;
             overflow: hidden;
             margin-top: 10px;
@@ -270,7 +316,7 @@
 
         .progress-fill {
             height: 100%;
-            background: linear-gradient(90deg, #4caf50 0%, #8bc34a 100%);
+            background: linear-gradient(90deg, var(--chart-1) 0%, var(--chart-2) 100%);
             width: 0%;
             transition: width 0.3s;
             display: flex;
@@ -280,8 +326,8 @@
         }
 
         .warning {
-            background: rgba(255, 152, 0, 0.3);
-            border: 2px solid #ff9800;
+            background: color-mix(in srgb, var(--warning) 22%, var(--card));
+            border: 2px solid var(--warning);
             border-radius: 8px;
             padding: 15px;
             margin-top: 20px;
@@ -326,7 +372,7 @@
                     <div class="telemetry-item">
                         <div class="telemetry-label">Current Gear</div>
                         <div class="telemetry-value gear-display" id="telemetry-gear">N</div>
-                        <div id="gear-switching-indicator" style="display: none; font-size: 0.6em; color: #ffa500; margin-top: 5px;">⚙️ Switching...</div>
+                        <div id="gear-switching-indicator" style="display: none; font-size: 0.6em; color: var(--warning); margin-top: 5px;">⚙️ Switching...</div>
                     </div>
                     <div class="telemetry-item">
                         <div class="telemetry-label">Servo Position</div>
@@ -359,10 +405,10 @@
                 </div>
 
                 <div style="margin-bottom: 16px;">
-                    <button class="upload-btn" id="web-control-btn" onclick="toggleWebControl()" style="background: #607d8b; width: 100%;">
+                    <button class="upload-btn" id="web-control-btn" onclick="toggleWebControl()" style="background: var(--secondary); width: 100%;">
                         🕹️ <span id="web-control-label">Take Control</span>
                     </button>
-                    <div style="font-size: 0.75em; color: #aaa; margin-top: 4px;">
+                    <div style="font-size: 0.75em; color: var(--muted-foreground); margin-top: 4px;">
                         Engages web control — MAVLink is ignored until released or all browsers disconnect.
                     </div>
                 </div>
@@ -374,8 +420,8 @@
                     <button class="gear-btn" id="gear-h" onclick="setGear('H')">H</button>
                     <button class="gear-btn" id="gear-l" onclick="setGear('L')">L</button>
                 </div>
-                <div style="font-size: 0.75em; color: #aaa; margin-top: 6px;">
-                    Servo: <span id="gear-encoder-pos" style="color: #fff; font-weight: bold;">0.0%</span>
+                <div style="font-size: 0.75em; color: var(--muted-foreground); margin-top: 6px;">
+                    Servo: <span id="gear-encoder-pos" style="color: var(--foreground); font-weight: bold;">0.0%</span>
                 </div>
 
                 <div class="slider-container">
@@ -385,9 +431,9 @@
                     </div>
                     <input type="range" min="-100" max="100" value="0" class="slider" id="steering-slider">
                     <div style="display: flex; gap: 12px; align-items: center; margin-top: 12px; margin-bottom: 8px;">
-                        <button id="steer-test-left" onclick="steerTest(-100)" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:#607d8b; color:#fff; cursor:pointer;">⟸ Left</button>
-                        <button id="steer-test-center" onclick="steerTest(0)" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:#607d8b; color:#fff; cursor:pointer;">Center</button>
-                        <button id="steer-test-right" onclick="steerTest(100)" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:#607d8b; color:#fff; cursor:pointer;">Right ⟹</button>
+                        <button id="steer-test-left" onclick="steerTest(-100)" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">⟸ Left</button>
+                        <button id="steer-test-center" onclick="steerTest(0)" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">Center</button>
+                        <button id="steer-test-right" onclick="steerTest(100)" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">Right ⟹</button>
                     </div>
                 </div>
 
@@ -411,120 +457,120 @@
             <!-- Gear Position Defaults -->
             <div class="card">
                 <h2>⚙️ Gear Position Defaults</h2>
-                <p style="font-size: 0.8em; color: #aaa; margin-bottom: 12px;">
+                <p style="font-size: 0.8em; color: var(--muted-foreground); margin-bottom: 12px;">
                     Press <b>📍</b> to capture the current servo position (0.0–100.0%), then <b>Save</b>.
                     <b>Move</b> drives the servo to the entered value.
                 </p>
                 <div id="gear-defaults-grid" style="display: flex; flex-direction: column; gap: 10px;">
                     <div>
-                        <label style="font-size: 0.8em; color: #aaa;">REVERSE (R)</label>
+                        <label style="font-size: 0.8em; color: var(--muted-foreground);">REVERSE (R)</label>
                         <div style="display: flex; gap: 6px; margin-top: 4px;">
-                            <input type="number" id="default-r" min="0" max="100" step="0.1" style="flex:1; padding:6px; border-radius:4px; border:1px solid #555; background:#2a2a2a; color:#fff;">
-                            <button onclick="captureServoPosition('R')" title="Use current servo position" style="padding:6px 10px; border-radius:4px; border:none; background:#555; color:#fff; cursor:pointer;">📍</button>
-                            <button onclick="moveToGearPosition('R')" style="padding:6px 10px; border-radius:4px; border:none; background:#ff9800; color:#fff; cursor:pointer;">Move</button>
-                            <button onclick="saveGearDefault('R')" style="padding:6px 10px; border-radius:4px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Save</button>
+                            <input type="number" id="default-r" min="0" max="100" step="0.1" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                            <button onclick="captureServoPosition('R')" title="Use current servo position" style="padding:6px 10px; border-radius:4px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">📍</button>
+                            <button onclick="moveToGearPosition('R')" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer;">Move</button>
+                            <button onclick="saveGearDefault('R')" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
                         </div>
                     </div>
                     <div>
-                        <label style="font-size: 0.8em; color: #aaa;">NEUTRAL (N)</label>
+                        <label style="font-size: 0.8em; color: var(--muted-foreground);">NEUTRAL (N)</label>
                         <div style="display: flex; gap: 6px; margin-top: 4px;">
-                            <input type="number" id="default-n" min="0" max="100" step="0.1" style="flex:1; padding:6px; border-radius:4px; border:1px solid #555; background:#2a2a2a; color:#fff;">
-                            <button onclick="captureServoPosition('N')" title="Use current servo position" style="padding:6px 10px; border-radius:4px; border:none; background:#555; color:#fff; cursor:pointer;">📍</button>
-                            <button onclick="moveToGearPosition('N')" style="padding:6px 10px; border-radius:4px; border:none; background:#ff9800; color:#fff; cursor:pointer;">Move</button>
-                            <button onclick="saveGearDefault('N')" style="padding:6px 10px; border-radius:4px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Save</button>
+                            <input type="number" id="default-n" min="0" max="100" step="0.1" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                            <button onclick="captureServoPosition('N')" title="Use current servo position" style="padding:6px 10px; border-radius:4px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">📍</button>
+                            <button onclick="moveToGearPosition('N')" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer;">Move</button>
+                            <button onclick="saveGearDefault('N')" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
                         </div>
                     </div>
                     <div>
-                        <label style="font-size: 0.8em; color: #aaa;">HIGH (H)</label>
+                        <label style="font-size: 0.8em; color: var(--muted-foreground);">HIGH (H)</label>
                         <div style="display: flex; gap: 6px; margin-top: 4px;">
-                            <input type="number" id="default-h" min="0" max="100" step="0.1" style="flex:1; padding:6px; border-radius:4px; border:1px solid #555; background:#2a2a2a; color:#fff;">
-                            <button onclick="captureServoPosition('H')" title="Use current servo position" style="padding:6px 10px; border-radius:4px; border:none; background:#555; color:#fff; cursor:pointer;">📍</button>
-                            <button onclick="moveToGearPosition('H')" style="padding:6px 10px; border-radius:4px; border:none; background:#ff9800; color:#fff; cursor:pointer;">Move</button>
-                            <button onclick="saveGearDefault('H')" style="padding:6px 10px; border-radius:4px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Save</button>
+                            <input type="number" id="default-h" min="0" max="100" step="0.1" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                            <button onclick="captureServoPosition('H')" title="Use current servo position" style="padding:6px 10px; border-radius:4px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">📍</button>
+                            <button onclick="moveToGearPosition('H')" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer;">Move</button>
+                            <button onclick="saveGearDefault('H')" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
                         </div>
                     </div>
                     <div>
-                        <label style="font-size: 0.8em; color: #aaa;">LOW (L)</label>
+                        <label style="font-size: 0.8em; color: var(--muted-foreground);">LOW (L)</label>
                         <div style="display: flex; gap: 6px; margin-top: 4px;">
-                            <input type="number" id="default-l" min="0" max="100" step="0.1" style="flex:1; padding:6px; border-radius:4px; border:1px solid #555; background:#2a2a2a; color:#fff;">
-                            <button onclick="captureServoPosition('L')" title="Use current servo position" style="padding:6px 10px; border-radius:4px; border:none; background:#555; color:#fff; cursor:pointer;">📍</button>
-                            <button onclick="moveToGearPosition('L')" style="padding:6px 10px; border-radius:4px; border:none; background:#ff9800; color:#fff; cursor:pointer;">Move</button>
-                            <button onclick="saveGearDefault('L')" style="padding:6px 10px; border-radius:4px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Save</button>
+                            <input type="number" id="default-l" min="0" max="100" step="0.1" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                            <button onclick="captureServoPosition('L')" title="Use current servo position" style="padding:6px 10px; border-radius:4px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">📍</button>
+                            <button onclick="moveToGearPosition('L')" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer;">Move</button>
+                            <button onclick="saveGearDefault('L')" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
                         </div>
                     </div>
                 </div>
-                <div style="margin-top: 14px; border-top: 1px solid #444; padding-top: 12px;">
-                    <label style="font-size: 0.8em; color: #aaa;">RPM Boost Target</label>
+                <div style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px;">
+                    <label style="font-size: 0.8em; color: var(--muted-foreground);">RPM Boost Target</label>
                     <div style="display: flex; gap: 6px; margin-top: 4px;">
-                        <input type="number" id="boost-rpm-input" min="500" max="5000" step="50" style="flex:1; padding:6px; border-radius:4px; border:1px solid #555; background:#2a2a2a; color:#fff;">
-                        <button onclick="saveBoostRpm()" style="padding:6px 10px; border-radius:4px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Save</button>
+                        <input type="number" id="boost-rpm-input" min="500" max="5000" step="50" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button onclick="saveBoostRpm()" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
                     </div>
                 </div>
-                <div id="gear-default-status" style="margin-top: 10px; font-size: 0.8em; color: #4caf50; min-height: 1.2em;"></div>
+                <div id="gear-default-status" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
             </div>
 
             <!-- Steering Calibration (AS5600 absolute angle sensor) -->
             <div class="card">
                 <h2>🎯 Steering Calibration</h2>
-                <p style="font-size: 0.8em; color: #aaa; margin-bottom: 12px;">
+                <p style="font-size: 0.8em; color: var(--muted-foreground); margin-bottom: 12px;">
                     Absolute AS5600 angle (0–4095 counts). Hold <b>◀ / ▶</b> to jog the wheel,
                     then capture <b>Center</b> first, followed by <b>Left</b> and <b>Right</b> at the travel limits.
                 </p>
                 <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 16px;">
-                    <button id="steer-jog-left" style="flex:1; padding:16px 10px; border-radius:6px; border:none; background:#ff9800; color:#fff; cursor:pointer; font-size:1em;">◀ Jog Left</button>
-                    <button id="steer-jog-right" style="flex:1; padding:16px 10px; border-radius:6px; border:none; background:#ff9800; color:#fff; cursor:pointer; font-size:1em;">Jog Right ▶</button>
+                    <button id="steer-jog-left" style="flex:1; padding:16px 10px; border-radius:6px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer; font-size:1em;">◀ Jog Left</button>
+                    <button id="steer-jog-right" style="flex:1; padding:16px 10px; border-radius:6px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer; font-size:1em;">Jog Right ▶</button>
                 </div>
                 <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 16px;">
-                    <button onclick="steerNudge(-1)" style="flex:1; padding:14px 10px; border-radius:6px; border:none; background:#795548; color:#fff; cursor:pointer; font-size:1em;">◂ Nudge</button>
-                    <button onclick="steerNudge(1)" style="flex:1; padding:14px 10px; border-radius:6px; border:none; background:#795548; color:#fff; cursor:pointer; font-size:1em;">Nudge ▸</button>
+                    <button onclick="steerNudge(-1)" style="flex:1; padding:14px 10px; border-radius:6px; border:none; background:var(--accent); color:var(--foreground); cursor:pointer; font-size:1em;">◂ Nudge</button>
+                    <button onclick="steerNudge(1)" style="flex:1; padding:14px 10px; border-radius:6px; border:none; background:var(--accent); color:var(--foreground); cursor:pointer; font-size:1em;">Nudge ▸</button>
                 </div>
-                <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 16px; font-size: 0.85em; color: #aaa;">
+                <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 16px; font-size: 0.85em; color: var(--muted-foreground);">
                     <span>Jog&nbsp;speed</span>
                     <input type="range" min="140" max="255" value="180" id="steer-jog-speed" style="flex:1; height: 28px;"
                            oninput="document.getElementById('steer-jog-speed-val').textContent = this.value">
-                    <span id="steer-jog-speed-val" style="color:#fff; min-width:2.2em; text-align:right;">180</span>
+                    <span id="steer-jog-speed-val" style="color:var(--foreground); min-width:2.2em; text-align:right;">180</span>
                 </div>
                 <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 4px;">
-                    <button onclick="steerCapture('steer_cal_left')" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Set Left</button>
-                    <button onclick="steerCapture('steer_cal_center')" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Set Center</button>
-                    <button onclick="steerCapture('steer_cal_right')" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Set Right</button>
+                    <button onclick="steerCapture('steer_cal_left')" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Set Left</button>
+                    <button onclick="steerCapture('steer_cal_center')" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Set Center</button>
+                    <button onclick="steerCapture('steer_cal_right')" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Set Right</button>
                 </div>
-                <div style="margin-top: 8px; font-size: 0.8em; color: #aaa;">
+                <div style="margin-top: 8px; font-size: 0.8em; color: var(--muted-foreground);">
                     Angle: <span id="steer-pos">--</span> &nbsp;|&nbsp;
                     L: <span id="steer-left-cur">--</span> &nbsp;
                     C: <span id="steer-center-cur">--</span> &nbsp;
                     R: <span id="steer-right-cur">--</span>
                 </div>
-                <div style="margin-top: 4px; font-size: 0.8em; color: #aaa;">
+                <div style="margin-top: 4px; font-size: 0.8em; color: var(--muted-foreground);">
                     Sensor: <span id="steer-sensor-status">--</span> &nbsp;|&nbsp;
                     Calibration: <span id="steer-cal-status">--</span>
                 </div>
-                <div id="steer-center-status" style="margin-top: 8px; font-size: 0.8em; color: #4caf50; min-height: 1.2em;"></div>
+                <div id="steer-center-status" style="margin-top: 8px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
             </div>
 
             <!-- Throttle Calibration -->
             <div class="card">
                 <h2>🎚️ Throttle Calibration</h2>
-                <p style="font-size: 0.8em; color: #aaa; margin-bottom: 12px;">
+                <p style="font-size: 0.8em; color: var(--muted-foreground); margin-bottom: 12px;">
                     Sets the idle / full throttle servo endpoints (µs). <b>Engine must be OFF.</b>
                     Press <b>Start</b>, drag a slider — the throttle servo follows live — then <b>Save</b>.
                 </p>
-                <button id="throttle-cal-start" onclick="throttleCalStart()" style="padding:8px 12px; border-radius:4px; border:none; background:#e65100; color:#fff; cursor:pointer; width:100%;">Start Calibration</button>
+                <button id="throttle-cal-start" onclick="throttleCalStart()" style="padding:8px 12px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer; width:100%;">Start Calibration</button>
                 <div id="throttle-cal-controls" style="display:none; margin-top:12px; flex-direction:column; gap:12px;">
                     <div>
-                        <label style="font-size: 0.8em; color: #aaa;">Idle endpoint: <span id="throttle-idle-val">901</span> µs</label>
+                        <label style="font-size: 0.8em; color: var(--muted-foreground);">Idle endpoint: <span id="throttle-idle-val">901</span> µs</label>
                         <input type="range" min="800" max="2200" step="1" value="901" class="slider" id="throttle-idle-slider" style="width:100%;">
                     </div>
                     <div>
-                        <label style="font-size: 0.8em; color: #aaa;">Full endpoint: <span id="throttle-full-val">1344</span> µs</label>
+                        <label style="font-size: 0.8em; color: var(--muted-foreground);">Full endpoint: <span id="throttle-full-val">1344</span> µs</label>
                         <input type="range" min="800" max="2200" step="1" value="1344" class="slider" id="throttle-full-slider" style="width:100%;">
                     </div>
                     <div style="display:flex; gap:6px;">
-                        <button onclick="throttleCalSave()" style="flex:1; padding:8px; border-radius:4px; border:none; background:#2196F3; color:#fff; cursor:pointer;">Save</button>
-                        <button onclick="throttleCalCancel()" style="flex:1; padding:8px; border-radius:4px; border:none; background:#555; color:#fff; cursor:pointer;">Cancel</button>
+                        <button onclick="throttleCalSave()" style="flex:1; padding:8px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                        <button onclick="throttleCalCancel()" style="flex:1; padding:8px; border-radius:4px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">Cancel</button>
                     </div>
                 </div>
-                <div id="throttle-cal-status" style="margin-top: 10px; font-size: 0.8em; color: #4caf50; min-height: 1.2em;"></div>
+                <div id="throttle-cal-status" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
             </div>
 
             <!-- Ignition & Lighting Control -->
@@ -540,14 +586,14 @@
 
                 <h3 style="margin-bottom: 10px;">Front Light</h3>
                 <div style="margin-bottom: 20px;">
-                    <button class="upload-btn" id="light-toggle-btn" onclick="toggleLight()" style="background: #607d8b;">
+                    <button class="upload-btn" id="light-toggle-btn" onclick="toggleLight()" style="background: var(--secondary);">
                         💡 Light: <span id="light-status">OFF</span>
                     </button>
                 </div>
 
                 <h3 style="margin-bottom: 10px;">Front Wheel Lock</h3>
                 <div style="margin-bottom: 20px;">
-                    <button class="upload-btn" id="wheel-lock-btn" onclick="toggleWheelLock()" style="background: #607d8b;">
+                    <button class="upload-btn" id="wheel-lock-btn" onclick="toggleWheelLock()" style="background: var(--secondary);">
                         🔒 Wheel Lock: <span id="wheel-lock-status">UNLOCKED</span>
                     </button>
                 </div>
@@ -568,8 +614,8 @@
             <!-- MAVLink Command Channels -->
             <div class="card">
                 <h2>📡 MAVLink Command Channels</h2>
-                <div class="telemetry-grid" style="grid-template-columns: repeat(4, 1fr); font-size: 0.85em;">
-                    <div class="telemetry-item" style="grid-column: span 4;">
+                <div class="telemetry-grid" style="font-size: 0.85em;">
+                    <div class="telemetry-item" style="grid-column: 1 / -1;">
                         <div class="telemetry-label">Link Status</div>
                         <div style="font-size: 0.9em;">
                             <span id="mav-cmd-rate">0</span> Hz |
@@ -635,12 +681,12 @@
             <div class="card">
                 <h2>🔧 System Maintenance</h2>
                 <div class="slider-container">
-                    <button class="upload-btn" id="debug-toggle-btn" onclick="toggleDebug()" style="background: #9c27b0;">
+                    <button class="upload-btn" id="debug-toggle-btn" onclick="toggleDebug()" style="background: var(--secondary);">
                         🐛 <span id="debug-toggle-text">Debug: Loading...</span>
                     </button>
                 </div>
                 <div class="slider-container" style="margin-top: 10px;">
-                    <button class="upload-btn" id="boost-test-btn" onclick="toggleBoostTest()" style="background: #e65100;">
+                    <button class="upload-btn" id="boost-test-btn" onclick="toggleBoostTest()" style="background: color-mix(in srgb, var(--warning) 60%, black);">
                         ⚡ RPM Boost Test: <span id="boost-test-status">OFF</span>
                     </button>
                 </div>
@@ -745,20 +791,20 @@
                 const statusEl = document.getElementById('gear-default-status');
                 if (statusEl && data.message && data.message.includes('Default for')) {
                     statusEl.textContent = data.success ? data.message : 'Error: ' + data.message;
-                    statusEl.style.color = data.success ? '#4caf50' : '#f44336';
+                    statusEl.style.color = data.success ? 'var(--success)' : 'var(--danger)';
                 }
                 // Throttle calibration status
                 if (data.message && data.message.toLowerCase().includes('throttle') &&
                     (data.message.toLowerCase().includes('calibrat') || data.message.toLowerCase().includes('preview'))) {
                     throttleCalSetStatus(data.success ? data.message : 'Error: ' + data.message,
-                                         data.success ? '#4caf50' : '#f44336');
+                                         data.success ? 'var(--success)' : 'var(--danger)');
                 }
                 // Steering calibration status
                 if (data.message && (data.message.includes('Steering center') ||
                     data.message.includes('Steering left limit') || data.message.includes('Steering right limit') ||
                     data.message.includes('Capture ') || data.message.startsWith('Jog'))) {
                     steerCenterStatus(data.success ? data.message : 'Error: ' + data.message,
-                                      data.success ? '#4caf50' : '#f44336');
+                                      data.success ? 'var(--success)' : 'var(--danger)');
                 }
             }
         }
@@ -826,11 +872,11 @@
                 const coolantElem = document.getElementById('can-coolant');
                 coolantElem.textContent = coolantTemp + '°C';
                 if (coolantTemp > 105) {
-                    coolantElem.style.color = '#f44336';  // Red
+                    coolantElem.style.color = 'var(--danger)';  // Red
                 } else if (coolantTemp > 90) {
-                    coolantElem.style.color = '#ff9800';  // Yellow
+                    coolantElem.style.color = 'var(--warning)';  // Yellow
                 } else {
-                    coolantElem.style.color = '#4caf50';  // Green
+                    coolantElem.style.color = 'var(--success)';  // Green
                 }
 
                 // Oil temperature with color coding
@@ -838,17 +884,17 @@
                 const oilElem = document.getElementById('can-oil');
                 oilElem.textContent = oilTemp + '°C';
                 if (oilTemp > 130) {
-                    oilElem.style.color = '#f44336';  // Red
+                    oilElem.style.color = 'var(--danger)';  // Red
                 } else if (oilTemp > 110) {
-                    oilElem.style.color = '#ff9800';  // Yellow
+                    oilElem.style.color = 'var(--warning)';  // Yellow
                 } else {
-                    oilElem.style.color = '#4caf50';  // Green
+                    oilElem.style.color = 'var(--success)';  // Green
                 }
 
                 document.getElementById('can-fuel').textContent = (data.fuel_level || 0) + '%';
 
                 document.getElementById('can-status-text').textContent = 'connected';
-                document.getElementById('can-status-text').style.color = '#4caf50';
+                document.getElementById('can-status-text').style.color = 'var(--success)';
             } else {
                 document.getElementById('can-rpm').textContent = '--';
                 document.getElementById('can-speed').textContent = '-- km/h';
@@ -857,7 +903,7 @@
                 document.getElementById('can-throttle-pos').textContent = '--%';
                 document.getElementById('can-fuel').textContent = '--%';
                 document.getElementById('can-status-text').textContent = 'disconnected';
-                document.getElementById('can-status-text').style.color = '#f44336';
+                document.getElementById('can-status-text').style.color = 'var(--danger)';
             }
 
             // Update gear switching indicator
@@ -917,7 +963,7 @@
             // Update cranking indicator
             if (data.is_cranking !== undefined) {
                 document.getElementById('telemetry-cranking').textContent = data.is_cranking ? 'Yes' : 'No';
-                document.getElementById('telemetry-cranking').style.color = data.is_cranking ? '#ffa500' : '#4caf50';
+                document.getElementById('telemetry-cranking').style.color = data.is_cranking ? 'var(--warning)' : 'var(--success)';
             }
 
             // Update light state
@@ -944,12 +990,12 @@
             if (data.steer_sensor_ok !== undefined) {
                 const el = document.getElementById('steer-sensor-status');
                 el.textContent = data.steer_sensor_ok ? 'OK' : 'FAULT';
-                el.style.color = data.steer_sensor_ok ? '#4caf50' : '#f44336';
+                el.style.color = data.steer_sensor_ok ? 'var(--success)' : 'var(--danger)';
             }
             if (data.steer_calibrated !== undefined) {
                 const el = document.getElementById('steer-cal-status');
                 el.textContent = data.steer_calibrated ? 'CALIBRATED' : 'NOT CALIBRATED';
-                el.style.color = data.steer_calibrated ? '#4caf50' : '#ff9800';
+                el.style.color = data.steer_calibrated ? 'var(--success)' : 'var(--warning)';
             }
 
             // Update control availability
@@ -1012,10 +1058,10 @@
             const status = document.getElementById('light-status');
 
             if (lightOn) {
-                btn.style.background = '#ffa500';  // Orange when ON
+                btn.style.background = 'color-mix(in srgb, var(--warning) 60%, black)';  // Orange when ON
                 status.textContent = 'ON';
             } else {
-                btn.style.background = '#607d8b';  // Grey when OFF
+                btn.style.background = 'var(--secondary)';  // Grey when OFF
                 status.textContent = 'OFF';
             }
         }
@@ -1025,10 +1071,10 @@
             const status = document.getElementById('wheel-lock-status');
             if (!btn || !status) return;
             if (locked) {
-                btn.style.background = '#f44336';  // Red when locked
+                btn.style.background = 'color-mix(in srgb, var(--danger) 65%, black)';  // Red when locked
                 status.textContent = 'LOCKED';
             } else {
-                btn.style.background = '#607d8b';  // Grey when unlocked
+                btn.style.background = 'var(--secondary)';  // Grey when unlocked
                 status.textContent = 'UNLOCKED';
             }
         }
@@ -1079,7 +1125,7 @@
             if (!isNaN(pos)) {
                 document.getElementById(idMap[gear]).value = pos.toFixed(1);
                 document.getElementById('gear-default-status').textContent = 'Captured ' + pos.toFixed(1) + '% for ' + gear;
-                document.getElementById('gear-default-status').style.color = '#aaa';
+                document.getElementById('gear-default-status').style.color = 'var(--muted-foreground)';
             }
         }
 
@@ -1088,13 +1134,13 @@
             const val = parseFloat(document.getElementById(idMap[gear]).value);
             if (isNaN(val) || val < 0 || val > 100) {
                 document.getElementById('gear-default-status').textContent = 'Invalid position (0.0–100.0)';
-                document.getElementById('gear-default-status').style.color = '#f44336';
+                document.getElementById('gear-default-status').style.color = 'var(--danger)';
                 return;
             }
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ cmd: 'move_to_position', value: val }));
                 document.getElementById('gear-default-status').textContent = 'Moving to ' + val.toFixed(1) + '%...';
-                document.getElementById('gear-default-status').style.color = '#ff9800';
+                document.getElementById('gear-default-status').style.color = 'var(--warning)';
             }
         }
 
@@ -1103,13 +1149,13 @@
             const val = parseFloat(document.getElementById(idMap[gear]).value);
             if (isNaN(val) || val < 0 || val > 100) {
                 document.getElementById('gear-default-status').textContent = 'Invalid value (0.0–100.0)';
-                document.getElementById('gear-default-status').style.color = '#f44336';
+                document.getElementById('gear-default-status').style.color = 'var(--danger)';
                 return;
             }
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ cmd: 'set_gear_default', value: val, strValue: gear }));
                 document.getElementById('gear-default-status').textContent = 'Saving ' + gear + '...';
-                document.getElementById('gear-default-status').style.color = '#aaa';
+                document.getElementById('gear-default-status').style.color = 'var(--muted-foreground)';
             }
         }
 
@@ -1120,13 +1166,13 @@
 
         function throttleCalSetStatus(msg, color) {
             const el = document.getElementById('throttle-cal-status');
-            if (el) { el.textContent = msg; el.style.color = color || '#aaa'; }
+            if (el) { el.textContent = msg; el.style.color = color || 'var(--muted-foreground)'; }
         }
 
         function throttleCalStart() {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ cmd: 'throttle_cal_begin' }));
-                throttleCalSetStatus('Starting…', '#ff9800');
+                throttleCalSetStatus('Starting…', 'var(--warning)');
             }
         }
 
@@ -1172,13 +1218,13 @@
             const val = parseInt(document.getElementById('boost-rpm-input').value, 10);
             if (isNaN(val) || val < 500 || val > 5000) {
                 document.getElementById('gear-default-status').textContent = 'Invalid RPM (500–5000)';
-                document.getElementById('gear-default-status').style.color = '#f44336';
+                document.getElementById('gear-default-status').style.color = 'var(--danger)';
                 return;
             }
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ cmd: 'set_boost_rpm', value: val }));
                 document.getElementById('gear-default-status').textContent = 'Boost RPM saving...';
-                document.getElementById('gear-default-status').style.color = '#aaa';
+                document.getElementById('gear-default-status').style.color = 'var(--muted-foreground)';
             }
         }
 
@@ -1210,10 +1256,10 @@
             const label = document.getElementById('web-control-label');
             if (!btn || !label) return;
             if (on) {
-                btn.style.background = '#f44336';   // red = you hold control, MAVLink ignored
+                btn.style.background = 'color-mix(in srgb, var(--danger) 65%, black)';   // red = you hold control, MAVLink ignored
                 label.textContent = 'Release Control';
             } else {
-                btn.style.background = '#607d8b';   // grey = MAVLink in charge
+                btn.style.background = 'var(--secondary)';   // grey = MAVLink in charge
                 label.textContent = 'Take Control';
             }
         }
@@ -1221,12 +1267,12 @@
         // ---- Steering calibration (AS5600) ----
         function steerCenterStatus(msg, color) {
             const el = document.getElementById('steer-center-status');
-            if (el) { el.textContent = msg; el.style.color = color || '#aaa'; }
+            if (el) { el.textContent = msg; el.style.color = color || 'var(--muted-foreground)'; }
         }
         function steerCapture(cmd) {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ cmd: cmd }));
-                steerCenterStatus('Capturing…', '#aaa');
+                steerCenterStatus('Capturing…', 'var(--muted-foreground)');
             }
         }
         function steerTest(pct) {
@@ -1280,10 +1326,10 @@
             const btn = document.getElementById('boost-test-btn');
             const status = document.getElementById('boost-test-status');
             if (boostTestActive) {
-                btn.style.background = '#ff6d00';
+                btn.style.background = 'color-mix(in srgb, var(--warning) 75%, black)';
                 status.textContent = 'ON';
             } else {
-                btn.style.background = '#e65100';
+                btn.style.background = 'color-mix(in srgb, var(--warning) 60%, black)';
                 status.textContent = 'OFF';
             }
         }
@@ -1461,7 +1507,7 @@
 
             btn.dataset.state = enabled;
             text.textContent = enabled ? 'Debug: ON' : 'Debug: OFF';
-            btn.style.background = enabled ? '#4caf50' : '#9c27b0';
+            btn.style.background = enabled ? 'color-mix(in srgb, var(--success) 45%, black)' : 'var(--secondary)';
         }
 
         // Initialize WebSocket connection on page load
