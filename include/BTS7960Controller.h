@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include "Constants.h"
+#include "IMotorDriver.h"
 
 /**
  * @brief Controller for BTS7960 dual H-bridge driver for linear actuators
@@ -19,7 +20,7 @@
  * - Only one direction can be active at a time (extend OR retract, never both)
  * - BTS7960 does NOT support electrical braking via simultaneous PWM
  */
-class BTS7960Controller {
+class BTS7960Controller : public IMotorDriver {
 public:
     BTS7960Controller();
     ~BTS7960Controller();
@@ -40,14 +41,14 @@ public:
      *
      * @param speed Speed value: -255 (full retract) to +255 (full extend), 0 = stop
      */
-    void setSpeed(int16_t speed);
+    void setSpeed(int16_t speed) override;
 
     /**
      * @brief Stop actuator (coast)
      *
      * Sets both PWM outputs to 0, actuator coasts to stop
      */
-    void stop();
+    void stop() override;
 
 private:
     gpio_num_t rpwmPin_;

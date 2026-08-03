@@ -16,12 +16,22 @@
 // Transmission Servo (HappyModel Super400 Plus)
 #define PIN_TRANS_SERVO     GPIO_NUM_9   // LEDC Channel 2
 
-// Steering Actuator (BTS7960 — proportional PWM via LEDC)
-// Note: R_EN and L_EN hardwired to 5V (always enabled)
-#define PIN_STEER_RPWM      GPIO_NUM_17   // LEDC Channel 6 — move right
-#define PIN_STEER_LPWM      GPIO_NUM_18   // LEDC Channel 7 — move left
-#define LEDC_CH_STEER_RPWM  6
-#define LEDC_CH_STEER_LPWM  7
+// Steering Actuator — driven by a Flipsky 75200 VESC over UART2 (brushed-DC mode).
+// See "VESC STEERING DRIVER CONFIGURATION" below.
+//
+// RESERVED / FREED: the former BTS7960 steering PWM pins (GPIO17/18) and their
+// LEDC channels (6/7) are freed by this change and left reserved — NOT reused —
+// so the wiring change stays localized and the freed channels remain available.
+#define PIN_STEER_RPWM      GPIO_NUM_17   // RESERVED/FREED (was steering RPWM, LEDC ch6)
+#define PIN_STEER_LPWM      GPIO_NUM_18   // RESERVED/FREED (was steering LPWM, LEDC ch7)
+#define LEDC_CH_STEER_RPWM  6             // RESERVED/FREED
+#define LEDC_CH_STEER_LPWM  7             // RESERVED/FREED
+
+// VESC steering driver UART (UART_NUM_2; UART0 = debug console, UART1 = MAVLink)
+#define PIN_VESC_TX         GPIO_NUM_4    // ESP TX -> VESC RX (3.3V logic, direct wiring)
+#define PIN_VESC_RX         GPIO_NUM_5    // ESP RX <- VESC TX
+#define VESC_UART_NUM       2             // UART_NUM_2
+#define VESC_UART_BAUD      115200        // VESC app default baud
 
 // Steering Position Sensor (AS5600 absolute magnetic angle sensor, I2C addr 0x36)
 #define PIN_STEER_SDA       GPIO_NUM_41   // I2C SDA
@@ -169,6 +179,17 @@ struct ServoChannelConfig {
 #define STEER_JOG_TIMEOUT_MS      500   // ms - auto-stop if the jog command is not refreshed
 #define STEER_NUDGE_DUTY          150   // PWM duty for a precision nudge pulse (just above friction)
 #define STEER_NUDGE_MS            70    // ms - nudge pulse length (finer: ~1-2 counts per tap)
+
+// Re-command guard + stall latch (MAVLink streams steering at ~25 Hz; without
+// these the stall/move timers never elapse — the fixed re-command bug).
+#define STEER_RETARGET_TOLERANCE  10    // AS5600 counts — re-command within this of the current target is a no-op (timers keep running)
+#define STEER_STALL_COOLDOWN_MS   1500  // ms — same-direction moves refused after a stall; opposite direction always allowed
+
+// VESC steering driver telemetry monitor + failsafe
+#define STEER_VESC_TELEM_MS         300   // ms — COMM_GET_VALUES poll period (~3 Hz)
+#define STEER_VESC_OVERCURRENT_A    18.0f // A — motor current above this (sustained) trips a stall-stop (below the VESC hardware limit)
+#define STEER_VESC_OVERCURRENT_MS   400   // ms — over-current must persist this long before tripping
+#define STEER_VESC_COMM_TIMEOUT_MS  1000  // ms — no valid GET_VALUES reply for this long -> driver fault (stop, reject moves)
 
 // Throttle Servo Parameters
 #define THROTTLE_SERVO_MIN_US    800   // Minimum servo pulse width (µs) — mechanical range floor / slider bound

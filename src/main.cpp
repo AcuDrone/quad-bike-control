@@ -5,6 +5,7 @@
 #include "ThrottleController.h"
 #include "SteeringController.h"
 #include "BTS7960Controller.h"
+#include "VescMotorDriver.h"
 #include "TransmissionController.h"
 #include "WebPortal.h"
 #include "VehicleController.h"
@@ -17,8 +18,11 @@
 // ACTUATOR INSTANCES
 // ============================================================================
 
-// Steering Actuator (BTS7960 proportional PWM + AS5600 absolute angle sensor)
-SteeringController steeringActuator;
+// Steering Actuator (Flipsky 75200 VESC over UART2 + AS5600 absolute angle sensor).
+// The VESC driver MUST be constructed before the steering controller that
+// references it (global init order is top-to-bottom within this file).
+VescMotorDriver steeringVesc(VESC_UART_NUM);
+SteeringController steeringActuator(steeringVesc);
 
 // Throttle Servo
 ThrottleController throttle;
@@ -93,10 +97,12 @@ void setup() {
         Debug::printlnFeature(DebugFeature::SERVO, "ERROR: Throttle servo failed");
     }
 
-    // Initialize steering actuator (BTS7960 + AS5600 absolute angle sensor — no homing)
-    if (steeringActuator.begin(PIN_STEER_RPWM, PIN_STEER_LPWM,
-                               LEDC_CH_STEER_RPWM, LEDC_CH_STEER_LPWM,
-                               PIN_STEER_SDA, PIN_STEER_SCL)) {
+    // Initialize the steering VESC UART (structural success even if the VESC is
+    // silent; the controller stays driver-down until the first valid reply).
+    steeringVesc.begin(PIN_VESC_RX, PIN_VESC_TX, VESC_UART_BAUD);
+
+    // Initialize steering actuator (VESC driver + AS5600 absolute angle sensor — no homing)
+    if (steeringActuator.begin(PIN_STEER_SDA, PIN_STEER_SCL)) {
         steeringActuator.loadCalibration();   // NVS-backed center + left/right limits
 
         if (steeringActuator.isCalibrated() && steeringActuator.isSensorOk()) {

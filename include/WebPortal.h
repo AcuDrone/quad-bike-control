@@ -61,6 +61,12 @@ public:
         int32_t steer_position;   // Current AS5600 raw angle (0-4095)
         bool steer_sensor_ok;     // True if the AS5600 reads OK and the magnet is detected
         bool steer_calibrated;    // True when center + both limits are valid
+
+        // Steering VESC driver telemetry
+        float steer_motor_current; // Steering motor current (A) from the VESC
+        float steer_fet_temp;      // VESC FET temperature (°C)
+        uint8_t steer_vesc_fault;  // VESC fault code (0 = no fault)
+        bool steer_driver_ok;      // True if the VESC telemetry link is healthy
         String input_source;      // Current input source: "MAVLINK", "WEB", "FAILSAFE"
         bool mav_active;          // True if MAVLink command stream is valid
         bool web_control;         // True if latched web-control override is engaged

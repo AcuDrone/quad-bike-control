@@ -52,6 +52,10 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.steer_position = steering.getRawAngle();
     telemetry.steer_sensor_ok = steering.isSensorOk();
     telemetry.steer_calibrated = steering.isCalibrated();
+    telemetry.steer_motor_current = steering.getMotorCurrent();
+    telemetry.steer_fet_temp = steering.getFetTemp();
+    telemetry.steer_vesc_fault = steering.getVescFault();
+    telemetry.steer_driver_ok = steering.isDriverOk();
     telemetry.throttle_us = vehicleController_.getThrottleUs();
     telemetry.throttle_idle_us = vehicleController_.getThrottleIdleUs();
     telemetry.throttle_full_us = vehicleController_.getThrottleFullUs();

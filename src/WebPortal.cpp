@@ -571,10 +571,11 @@ bool WebPortal::validateCommand(const WebCommand& cmd, InputSource inputSource) 
 // ============================================================================
 
 String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
-    // Capacity headroom: ~34 top-level fields + a 16-element array + a 4-member object,
-    // plus copied String values. Sized to 3072 to leave room for the transient `probe`
-    // object (only present while probe results are fresh; steady-state wire size is unchanged).
-    StaticJsonDocument<3072> doc;
+    // Capacity headroom: ~38 top-level fields (incl. 4 steering-VESC fields) + a
+    // 16-element array + a 4-member object, plus copied String values. Sized to
+    // 3584 to leave room for the transient `probe` object (only present while
+    // probe results are fresh; steady-state wire size is unchanged).
+    StaticJsonDocument<3584> doc;
 
     doc["timestamp"] = telemetry.timestamp;
     doc["gear"] = telemetry.gear;
@@ -591,6 +592,10 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["steer_position"] = telemetry.steer_position;
     doc["steer_sensor_ok"] = telemetry.steer_sensor_ok;
     doc["steer_calibrated"] = telemetry.steer_calibrated;
+    doc["steer_motor_current"] = telemetry.steer_motor_current;
+    doc["steer_fet_temp"] = telemetry.steer_fet_temp;
+    doc["steer_vesc_fault"] = telemetry.steer_vesc_fault;
+    doc["steer_driver_ok"] = telemetry.steer_driver_ok;
     doc["input_source"] = telemetry.input_source;
     doc["mav_active"] = telemetry.mav_active;
     doc["web_control"] = telemetry.web_control;

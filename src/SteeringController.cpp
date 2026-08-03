@@ -2,8 +2,9 @@
 #include "Debug.h"
 #include <Preferences.h>
 
-SteeringController::SteeringController()
-    : rawAngle_(0),
+SteeringController::SteeringController(IMotorDriver& motor)
+    : motor_(motor),
+      rawAngle_(0),
       sensorOk_(false),
       badSampleCount_(0),
       center_(-1),
@@ -24,16 +25,18 @@ SteeringController::SteeringController()
       lastJogRefresh_(0),
       jogPulseUntil_(0),
       lastStallPosition_(0),
-      lastStallCheckTime_(0) {
+      lastStallCheckTime_(0),
+      lastDriveDir_(0),
+      stallLatched_(false),
+      stallLatchDir_(0),
+      stallLatchTime_(0),
+      steerDriverOk_(false),
+      overCurrentStart_(0) {
 }
 
-bool SteeringController::begin(gpio_num_t rpwmPin, gpio_num_t lpwmPin,
-                               uint8_t rpwmChannel, uint8_t lpwmChannel,
-                               gpio_num_t sdaPin, gpio_num_t sclPin) {
-    if (!motor_.begin(rpwmPin, lpwmPin, rpwmChannel, lpwmChannel)) {
-        Debug::printlnFeature(DebugFeature::SERVO, "[STEER] ERROR: BTS7960 init failed");
-        return false;
-    }
+bool SteeringController::begin(gpio_num_t sdaPin, gpio_num_t sclPin) {
+    // The motor driver is initialized by the caller (e.g. VESC UART begin())
+    // before this point; command a coast so the actuator starts safe.
     motor_.stop();
 
     if (!sensor_.begin(sdaPin, sclPin)) {
@@ -111,12 +114,16 @@ void SteeringController::stop() {
 }
 
 void SteeringController::jog(int8_t direction, uint8_t duty) {
-    if (direction != 0 && !sensorOk_) return;   // no open-loop drive without stall backstop data
+    if (direction != 0 && (!sensorOk_ || !steerDriverOk_)) return;   // no open-loop drive without stall backstop / driver link
 
     if (direction == 0) {
         if (jogDir_ != 0) stop();
         return;
     }
+
+    int8_t d = (direction > 0) ? 1 : -1;
+    if (latchBlocks(d, millis())) return;   // stalled in this direction, still in cooldown
+    stallLatched_ = false;                  // accepted move clears the latch
 
     if (duty < STEER_PWM_MIN_DUTY) duty = STEER_PWM_MIN_DUTY;   // below this the actuator stalls
 
@@ -125,39 +132,54 @@ void SteeringController::jog(int8_t direction, uint8_t duty) {
         lastStallPosition_ = relPosition();
         lastStallCheckTime_ = millis();
     }
-    jogDir_ = (direction > 0) ? 1 : -1;
+    jogDir_ = d;
+    lastDriveDir_ = d;
     lastJogRefresh_ = millis();
     jogPulseUntil_ = 0;
     motor_.setSpeed(jogDir_ * (int16_t)duty);
 }
 
 void SteeringController::nudge(int8_t direction) {
-    if (direction == 0 || !sensorOk_) return;
+    if (direction == 0 || !sensorOk_ || !steerDriverOk_) return;
+
+    int8_t d = (direction > 0) ? 1 : -1;
+    if (latchBlocks(d, millis())) return;   // same-direction refusal during cooldown
+    stallLatched_ = false;
 
     isMoving_ = false;   // nudge overrides position control
     if (jogDir_ != direction) {
         lastStallPosition_ = relPosition();
         lastStallCheckTime_ = millis();
     }
-    jogDir_ = (direction > 0) ? 1 : -1;
+    jogDir_ = d;
+    lastDriveDir_ = d;
     lastJogRefresh_ = millis();
     jogPulseUntil_ = millis() + STEER_NUDGE_MS;
     motor_.setSpeed(jogDir_ * STEER_NUDGE_DUTY);
 }
 
 void SteeringController::update() {
+    uint32_t now = millis();
+
+    // Service the motor driver first: pump VESC UART, refresh telemetry, and run
+    // the fault / over-current / comm-timeout monitors. Returns false when the
+    // driver link is down (mirrors the sensor-fault path: stop + reject).
+    if (!serviceDriver(now)) return;
+
     if (!refreshSensor()) return;
 
-    uint32_t now = millis();
+    now = millis();
 
     // Stall detection — applies to any active drive (position move or jog)
     if (isMoving_ || jogDir_ != 0) {
         int32_t currentPos = relPosition();
         if (now - lastStallCheckTime_ >= STEER_STALL_TIMEOUT) {
             if (abs(currentPos - lastStallPosition_) < STEER_STALL_THRESHOLD) {
-                Debug::printfFeature(DebugFeature::SERVO, "[STEER] Stall detected at %ld — stopping\n",
-                                     (long)currentPos);
-                stop();
+                // Direction that was being driven into the jam (jog dir, else
+                // the sign of the remaining position error).
+                int8_t dir = (jogDir_ != 0) ? jogDir_
+                             : ((targetRel_ - currentPos) > 0 ? 1 : -1);
+                triggerStallStop(dir, "position");
                 return;
             }
             lastStallPosition_ = currentPos;
@@ -213,6 +235,7 @@ void SteeringController::update() {
 
     // Motor positive = wheel right = normalized position increasing
     int16_t speed = (int16_t)duty;
+    lastDriveDir_ = (error > 0) ? 1 : -1;
     motor_.setSpeed(error > 0 ? speed : (int16_t)-speed);
 
     if (now - lastMoveLogTime_ >= 100) {
@@ -224,10 +247,82 @@ void SteeringController::update() {
     }
 }
 
+// === Stall latch + VESC driver monitors ===
+
+bool SteeringController::latchBlocks(int8_t d, uint32_t now) const {
+    return stallLatched_ && d != 0 && d == stallLatchDir_ &&
+           (now - stallLatchTime_) < STEER_STALL_COOLDOWN_MS;
+}
+
+void SteeringController::triggerStallStop(int8_t dir, const char* reason) {
+    motor_.stop();
+    isMoving_ = false;
+    jogDir_ = 0;
+    jogPulseUntil_ = 0;
+    dutyBoost_ = 0;
+    stallLatched_ = true;
+    stallLatchDir_ = dir;
+    stallLatchTime_ = millis();
+    Debug::printfFeature(DebugFeature::SERVO,
+                         "[STEER] Stall-stop (%s) dir=%d — latched for %d ms\n",
+                         reason, (int)dir, STEER_STALL_COOLDOWN_MS);
+}
+
+bool SteeringController::serviceDriver(uint32_t now) {
+    motor_.poll();   // non-blocking: pump VESC UART + periodic GET_VALUES (no-op for BTS7960)
+
+    // Comm failsafe (mirror the sensor-fault path): no valid telemetry link ->
+    // stop, reject moves, flag driver down. Auto-recovers when replies resume.
+    bool ok = motor_.driverOk();
+    if (!ok) {
+        if (steerDriverOk_) {
+            Debug::printlnFeature(DebugFeature::SERVO,
+                                  "[STEER] VESC driver fault (no telemetry) — motor stopped");
+        }
+        steerDriverOk_ = false;
+        motor_.stop();
+        isMoving_ = false;
+        jogDir_ = 0;
+        jogPulseUntil_ = 0;
+        overCurrentStart_ = 0;
+        return false;
+    }
+    if (!steerDriverOk_) {
+        Debug::printlnFeature(DebugFeature::SERVO, "[STEER] VESC driver recovered");
+    }
+    steerDriverOk_ = true;
+
+    // Nonzero VESC fault code -> immediate stop + latch (current drive direction).
+    if (motor_.hasFault()) {
+        overCurrentStart_ = 0;
+        if (isMoving_ || jogDir_ != 0) {
+            triggerStallStop(lastDriveDir_, "vesc-fault");
+        } else {
+            motor_.stop();
+        }
+        return false;
+    }
+
+    // Sustained over-current -> stall-stop + latch (real over-current backstop).
+    if (motor_.motorCurrentA() > STEER_VESC_OVERCURRENT_A) {
+        if (overCurrentStart_ == 0) {
+            overCurrentStart_ = now;
+        } else if (now - overCurrentStart_ >= STEER_VESC_OVERCURRENT_MS) {
+            overCurrentStart_ = 0;
+            triggerStallStop(lastDriveDir_, "over-current");
+            return false;
+        }
+    } else {
+        overCurrentStart_ = 0;
+    }
+
+    return true;
+}
+
 // === Steering interface ===
 
 bool SteeringController::setSteeringPercent(float percent) {
-    if (!calibrated_ || !sensorOk_) {
+    if (!calibrated_ || !sensorOk_ || !steerDriverOk_) {
         return false;
     }
 
@@ -246,15 +341,36 @@ bool SteeringController::setSteeringPercent(float percent) {
     if (target < relLeft_) target = relLeft_;
     if (target > relRight_) target = relRight_;
 
+    // Re-command no-op guard: if a move is already in progress and the new
+    // target is within tolerance of the current target, keep the in-flight move
+    // untouched (do NOT reset moveStartTime_/stall timers/dutyBoost_). This lets
+    // the 500 ms stall window and 7500 ms move timeout actually elapse under the
+    // continuous ~25 Hz MAVLink command stream (the fixed re-command bug). Not a
+    // rejection — the command is honored as a no-op.
+    if (isMoving_ && abs(target - targetRel_) <= STEER_RETARGET_TOLERANCE) {
+        return true;
+    }
+
+    // Stall latch: refuse a fresh move that would push further into a recent jam
+    // (same direction, within cooldown). Opposite-direction and post-cooldown
+    // moves are accepted and clear the latch.
+    uint32_t now = millis();
+    int32_t rel = relPosition();
+    int8_t d = (target > rel) ? 1 : (target < rel ? -1 : 0);
+    if (latchBlocks(d, now)) {
+        return false;
+    }
+    stallLatched_ = false;   // accepted move clears the latch
+
     targetRel_ = target;
     jogDir_ = 0;
     isMoving_ = true;
-    moveStartTime_ = millis();
-    lastStallPosition_ = relPosition();
-    lastStallCheckTime_ = millis();
+    moveStartTime_ = now;
+    lastStallPosition_ = rel;
+    lastStallCheckTime_ = now;
     dutyBoost_ = 0;
-    lastProgressPos_ = lastStallPosition_;
-    lastProgressTime_ = millis();
+    lastProgressPos_ = rel;
+    lastProgressTime_ = now;
     return true;
 }
 
