@@ -104,13 +104,14 @@ struct ServoChannelConfig {
 #define RC_STEERING_DEADBAND  2.0f   // % center deadband for steering
 #define RC_THROTTLE_DEADBAND  2.0f   // % idle deadband for throttle
 
-// Gear Selection Ranges (in microseconds) - 3-position switch: R/N/L
-#define RC_GEAR_REVERSE_MIN   880
-#define RC_GEAR_REVERSE_MAX   1200
-#define RC_GEAR_NEUTRAL_MIN   1201
-#define RC_GEAR_NEUTRAL_MAX   1520
-#define RC_GEAR_LOW_MIN       1521
-#define RC_GEAR_LOW_MAX       2160
+// Gear Selection Ranges (in microseconds) - 3-position switch: L/N/R
+// Full span 880-2160 divided into three equal ~427µs bands, LOW at low PWM
+#define RC_GEAR_LOW_MIN       880
+#define RC_GEAR_LOW_MAX       1306
+#define RC_GEAR_NEUTRAL_MIN   1307
+#define RC_GEAR_NEUTRAL_MAX   1733
+#define RC_GEAR_REVERSE_MIN   1734
+#define RC_GEAR_REVERSE_MAX   2160
 
 // Ignition State Ranges (in microseconds) - 3-position switch: OFF/ACC/IGNITION
 // Note: IGNITION automatically triggers cranking (auto-stops when engine starts)
@@ -142,7 +143,7 @@ struct ServoChannelConfig {
 // Center (straight-ahead) is runtime-calibratable via the web UI and stored in NVS
 // ("steering"/"center"); STEER_DEFAULT_CENTER is only the first-boot fallback. The right
 // travel limit is derived as 2*center (symmetric about center; left home = 0).
-#define STEER_DEFAULT_CENTER      1775   // Encoder counts — default center position (from left home)
+#define STEER_DEFAULT_CENTER      1775  // Encoder counts — default center position (from left home)
 #define STEER_POSITION_TOLERANCE  15    // +/- encoder counts for position match
 #define STEER_HOMING_TIMEOUT      30000 // ms - maximum time for auto-home
 #define STEER_MOVE_TIMEOUT        15000 // ms - maximum time for any movement
