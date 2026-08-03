@@ -351,47 +351,49 @@
 </head>
 <body>
     <div class="container">
-        <header>
-            <h1>🏍️ QuadBike Control Portal</h1>
+        <header style="position: relative;">
+            <button id="lang-toggle" onclick="toggleLanguage()" aria-label="Switch language"
+                    style="position:absolute; top:0; right:0; padding:8px 14px; border-radius:8px; border:1px solid var(--border); background:var(--card); color:var(--foreground); cursor:pointer; font-weight:bold; font-size:0.95em;">УК</button>
+            <h1>🏍️ <span data-i18n="app_title">QuadBike Control Portal</span></h1>
         </header>
 
         <div class="status-bar">
             <div class="status-item" id="ws-status">
-                <strong>WebSocket:</strong> <span id="ws-status-text">Connecting...</span>
+                <strong data-i18n="ws_label">WebSocket:</strong> <span id="ws-status-text" data-i18n="ws_connecting">Connecting...</span>
             </div>
             <div class="status-item" id="fw-version">
-                <strong>Firmware:</strong> <span id="fw-version-text">Loading...</span>
+                <strong data-i18n="fw_label">Firmware:</strong> <span id="fw-version-text" data-i18n="fw_loading">Loading...</span>
             </div>
         </div>
 
         <div class="main-grid">
             <!-- Telemetry Display -->
             <div class="card">
-                <h2>📊 Telemetry</h2>
+                <h2 data-i18n="card_telemetry">📊 Telemetry</h2>
                 <div class="telemetry-grid">
                     <div class="telemetry-item">
-                        <div class="telemetry-label">Current Gear</div>
+                        <div class="telemetry-label" data-i18n="lbl_current_gear">Current Gear</div>
                         <div class="telemetry-value gear-display" id="telemetry-gear">N</div>
-                        <div id="gear-switching-indicator" style="display: none; font-size: 0.6em; color: var(--warning); margin-top: 5px;">⚙️ Switching...</div>
+                        <div id="gear-switching-indicator" data-i18n="switching_static" style="display: none; font-size: 0.6em; color: var(--warning); margin-top: 5px;">⚙️ Switching...</div>
                     </div>
                     <div class="telemetry-item">
-                        <div class="telemetry-label">Servo Position</div>
+                        <div class="telemetry-label" data-i18n="lbl_servo_position">Servo Position</div>
                         <div class="telemetry-value" id="telemetry-hall">0.0%</div>
                     </div>
                     <div class="telemetry-item">
-                        <div class="telemetry-label">Brake</div>
+                        <div class="telemetry-label" data-i18n="lbl_brake">Brake</div>
                         <div class="telemetry-value" id="telemetry-brake">0%</div>
                     </div>
                     <div class="telemetry-item">
-                        <div class="telemetry-label">Throttle</div>
+                        <div class="telemetry-label" data-i18n="lbl_throttle">Throttle</div>
                         <div class="telemetry-value" id="telemetry-throttle">0µs</div>
                     </div>
                     <div class="telemetry-item">
-                        <div class="telemetry-label">Steering</div>
+                        <div class="telemetry-label" data-i18n="lbl_steering">Steering</div>
                         <div class="telemetry-value" id="telemetry-steering">0%</div>
                     </div>
                     <div class="telemetry-item">
-                        <div class="telemetry-label">MAVLink Link</div>
+                        <div class="telemetry-label" data-i18n="lbl_mav_link">MAVLink Link</div>
                         <div class="telemetry-value" id="telemetry-mav">Inactive</div>
                     </div>
                 </div>
@@ -399,21 +401,21 @@
 
             <!-- Manual Control -->
             <div class="card">
-                <h2>🎮 Manual Control</h2>
-                <div id="control-warning" class="warning" style="display: none;">
+                <h2 data-i18n="card_manual_control">🎮 Manual Control</h2>
+                <div id="control-warning" class="warning" data-i18n="warn_mav_active" style="display: none;">
                     MAVLink control is active. Manual control disabled.
                 </div>
 
                 <div style="margin-bottom: 16px;">
                     <button class="upload-btn" id="web-control-btn" onclick="toggleWebControl()" style="background: var(--secondary); width: 100%;">
-                        🕹️ <span id="web-control-label">Take Control</span>
+                        🕹️ <span id="web-control-label" data-i18n="btn_take_control">Take Control</span>
                     </button>
-                    <div style="font-size: 0.75em; color: var(--muted-foreground); margin-top: 4px;">
+                    <div data-i18n="web_control_hint" style="font-size: 0.75em; color: var(--muted-foreground); margin-top: 4px;">
                         Engages web control — MAVLink is ignored until released or all browsers disconnect.
                     </div>
                 </div>
 
-                <h3 style="margin-top: 20px; margin-bottom: 10px;">Gear Selection</h3>
+                <h3 data-i18n="h_gear_selection" style="margin-top: 20px; margin-bottom: 10px;">Gear Selection</h3>
                 <div class="gear-buttons">
                     <button class="gear-btn" id="gear-r" onclick="setGear('R')">R</button>
                     <button class="gear-btn" id="gear-n" onclick="setGear('N')">N</button>
@@ -421,25 +423,25 @@
                     <button class="gear-btn" id="gear-l" onclick="setGear('L')">L</button>
                 </div>
                 <div style="font-size: 0.75em; color: var(--muted-foreground); margin-top: 6px;">
-                    Servo: <span id="gear-encoder-pos" style="color: var(--foreground); font-weight: bold;">0.0%</span>
+                    <span data-i18n="lbl_servo">Servo:</span> <span id="gear-encoder-pos" style="color: var(--foreground); font-weight: bold;">0.0%</span>
                 </div>
 
                 <div class="slider-container">
                     <div class="slider-label">
-                        <span>Steering</span>
+                        <span data-i18n="lbl_steering">Steering</span>
                         <span id="steering-value">0%</span>
                     </div>
                     <input type="range" min="-100" max="100" value="0" class="slider" id="steering-slider">
                     <div style="display: flex; gap: 12px; align-items: center; margin-top: 12px; margin-bottom: 8px;">
-                        <button id="steer-test-left" onclick="steerTest(-100)" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">⟸ Left</button>
-                        <button id="steer-test-center" onclick="steerTest(0)" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">Center</button>
-                        <button id="steer-test-right" onclick="steerTest(100)" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">Right ⟹</button>
+                        <button id="steer-test-left" onclick="steerTest(-100)" data-i18n="steer_test_left" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">⟸ Left</button>
+                        <button id="steer-test-center" onclick="steerTest(0)" data-i18n="steer_test_center" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">Center</button>
+                        <button id="steer-test-right" onclick="steerTest(100)" data-i18n="steer_test_right" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">Right ⟹</button>
                     </div>
                 </div>
 
                 <div class="slider-container">
                     <div class="slider-label">
-                        <span>Throttle</span>
+                        <span data-i18n="lbl_throttle">Throttle</span>
                         <span id="throttle-value">0%</span>
                     </div>
                     <input type="range" min="0" max="100" value="0" class="slider" id="throttle-slider">
@@ -447,7 +449,7 @@
 
                 <div class="slider-container">
                     <div class="slider-label">
-                        <span>Brake</span>
+                        <span data-i18n="lbl_brake">Brake</span>
                         <span id="brake-value">0%</span>
                     </div>
                     <input type="range" min="0" max="100" value="0" class="slider" id="brake-slider">
@@ -456,54 +458,54 @@
 
             <!-- Gear Position Defaults -->
             <div class="card">
-                <h2>⚙️ Gear Position Defaults</h2>
-                <p style="font-size: 0.8em; color: var(--muted-foreground); margin-bottom: 12px;">
+                <h2 data-i18n="card_gear_defaults">⚙️ Gear Position Defaults</h2>
+                <p data-i18n-html="gear_defaults_help" style="font-size: 0.8em; color: var(--muted-foreground); margin-bottom: 12px;">
                     Press <b>📍</b> to capture the current servo position (0.0–100.0%), then <b>Save</b>.
                     <b>Move</b> drives the servo to the entered value.
                 </p>
                 <div id="gear-defaults-grid" style="display: flex; flex-direction: column; gap: 10px;">
                     <div>
-                        <label style="font-size: 0.8em; color: var(--muted-foreground);">REVERSE (R)</label>
+                        <label data-i18n="gear_reverse" style="font-size: 0.8em; color: var(--muted-foreground);">REVERSE (R)</label>
                         <div style="display: flex; gap: 6px; margin-top: 4px;">
                             <input type="number" id="default-r" min="0" max="100" step="0.1" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
-                            <button onclick="captureServoPosition('R')" title="Use current servo position" style="padding:6px 10px; border-radius:4px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">📍</button>
-                            <button onclick="moveToGearPosition('R')" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer;">Move</button>
-                            <button onclick="saveGearDefault('R')" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                            <button onclick="captureServoPosition('R')" data-i18n-title="title_use_current_servo" title="Use current servo position" style="padding:6px 10px; border-radius:4px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">📍</button>
+                            <button onclick="moveToGearPosition('R')" data-i18n="btn_move" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer;">Move</button>
+                            <button onclick="saveGearDefault('R')" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
                         </div>
                     </div>
                     <div>
-                        <label style="font-size: 0.8em; color: var(--muted-foreground);">NEUTRAL (N)</label>
+                        <label data-i18n="gear_neutral" style="font-size: 0.8em; color: var(--muted-foreground);">NEUTRAL (N)</label>
                         <div style="display: flex; gap: 6px; margin-top: 4px;">
                             <input type="number" id="default-n" min="0" max="100" step="0.1" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
-                            <button onclick="captureServoPosition('N')" title="Use current servo position" style="padding:6px 10px; border-radius:4px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">📍</button>
-                            <button onclick="moveToGearPosition('N')" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer;">Move</button>
-                            <button onclick="saveGearDefault('N')" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                            <button onclick="captureServoPosition('N')" data-i18n-title="title_use_current_servo" title="Use current servo position" style="padding:6px 10px; border-radius:4px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">📍</button>
+                            <button onclick="moveToGearPosition('N')" data-i18n="btn_move" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer;">Move</button>
+                            <button onclick="saveGearDefault('N')" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
                         </div>
                     </div>
                     <div>
-                        <label style="font-size: 0.8em; color: var(--muted-foreground);">HIGH (H)</label>
+                        <label data-i18n="gear_high" style="font-size: 0.8em; color: var(--muted-foreground);">HIGH (H)</label>
                         <div style="display: flex; gap: 6px; margin-top: 4px;">
                             <input type="number" id="default-h" min="0" max="100" step="0.1" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
-                            <button onclick="captureServoPosition('H')" title="Use current servo position" style="padding:6px 10px; border-radius:4px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">📍</button>
-                            <button onclick="moveToGearPosition('H')" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer;">Move</button>
-                            <button onclick="saveGearDefault('H')" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                            <button onclick="captureServoPosition('H')" data-i18n-title="title_use_current_servo" title="Use current servo position" style="padding:6px 10px; border-radius:4px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">📍</button>
+                            <button onclick="moveToGearPosition('H')" data-i18n="btn_move" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer;">Move</button>
+                            <button onclick="saveGearDefault('H')" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
                         </div>
                     </div>
                     <div>
-                        <label style="font-size: 0.8em; color: var(--muted-foreground);">LOW (L)</label>
+                        <label data-i18n="gear_low" style="font-size: 0.8em; color: var(--muted-foreground);">LOW (L)</label>
                         <div style="display: flex; gap: 6px; margin-top: 4px;">
                             <input type="number" id="default-l" min="0" max="100" step="0.1" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
-                            <button onclick="captureServoPosition('L')" title="Use current servo position" style="padding:6px 10px; border-radius:4px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">📍</button>
-                            <button onclick="moveToGearPosition('L')" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer;">Move</button>
-                            <button onclick="saveGearDefault('L')" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                            <button onclick="captureServoPosition('L')" data-i18n-title="title_use_current_servo" title="Use current servo position" style="padding:6px 10px; border-radius:4px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">📍</button>
+                            <button onclick="moveToGearPosition('L')" data-i18n="btn_move" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer;">Move</button>
+                            <button onclick="saveGearDefault('L')" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
                         </div>
                     </div>
                 </div>
                 <div style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px;">
-                    <label style="font-size: 0.8em; color: var(--muted-foreground);">RPM Boost Target</label>
+                    <label data-i18n="lbl_boost_rpm_target" style="font-size: 0.8em; color: var(--muted-foreground);">RPM Boost Target</label>
                     <div style="display: flex; gap: 6px; margin-top: 4px;">
                         <input type="number" id="boost-rpm-input" min="500" max="5000" step="50" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
-                        <button onclick="saveBoostRpm()" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                        <button onclick="saveBoostRpm()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
                     </div>
                 </div>
                 <div id="gear-default-status" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
@@ -511,63 +513,68 @@
 
             <!-- Steering Calibration (AS5600 absolute angle sensor) -->
             <div class="card">
-                <h2>🎯 Steering Calibration</h2>
-                <p style="font-size: 0.8em; color: var(--muted-foreground); margin-bottom: 12px;">
+                <h2 data-i18n="card_steer_cal">🎯 Steering Calibration</h2>
+                <p data-i18n-html="steer_cal_help" style="font-size: 0.8em; color: var(--muted-foreground); margin-bottom: 12px;">
                     Absolute AS5600 angle (0–4095 counts). Hold <b>◀ / ▶</b> to jog the wheel,
                     then capture <b>Center</b> first, followed by <b>Left</b> and <b>Right</b> at the travel limits.
                 </p>
                 <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 16px;">
-                    <button id="steer-jog-left" style="flex:1; padding:16px 10px; border-radius:6px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer; font-size:1em;">◀ Jog Left</button>
-                    <button id="steer-jog-right" style="flex:1; padding:16px 10px; border-radius:6px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer; font-size:1em;">Jog Right ▶</button>
+                    <button id="steer-jog-left" data-i18n="btn_jog_left" style="flex:1; padding:16px 10px; border-radius:6px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer; font-size:1em;">◀ Jog Left</button>
+                    <button id="steer-jog-right" data-i18n="btn_jog_right" style="flex:1; padding:16px 10px; border-radius:6px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer; font-size:1em;">Jog Right ▶</button>
                 </div>
                 <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 16px;">
-                    <button onclick="steerNudge(-1)" style="flex:1; padding:14px 10px; border-radius:6px; border:none; background:var(--accent); color:var(--foreground); cursor:pointer; font-size:1em;">◂ Nudge</button>
-                    <button onclick="steerNudge(1)" style="flex:1; padding:14px 10px; border-radius:6px; border:none; background:var(--accent); color:var(--foreground); cursor:pointer; font-size:1em;">Nudge ▸</button>
+                    <button onclick="steerNudge(-1)" data-i18n="btn_nudge_left" style="flex:1; padding:14px 10px; border-radius:6px; border:none; background:var(--accent); color:var(--foreground); cursor:pointer; font-size:1em;">◂ Nudge</button>
+                    <button onclick="steerNudge(1)" data-i18n="btn_nudge_right" style="flex:1; padding:14px 10px; border-radius:6px; border:none; background:var(--accent); color:var(--foreground); cursor:pointer; font-size:1em;">Nudge ▸</button>
                 </div>
                 <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 16px; font-size: 0.85em; color: var(--muted-foreground);">
-                    <span>Jog&nbsp;speed</span>
+                    <span data-i18n="lbl_jog_speed">Jog&nbsp;speed</span>
                     <input type="range" min="140" max="255" value="180" id="steer-jog-speed" style="flex:1; height: 28px;"
                            oninput="document.getElementById('steer-jog-speed-val').textContent = this.value">
                     <span id="steer-jog-speed-val" style="color:var(--foreground); min-width:2.2em; text-align:right;">180</span>
                 </div>
                 <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 4px;">
-                    <button onclick="steerCapture('steer_cal_left')" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Set Left</button>
-                    <button onclick="steerCapture('steer_cal_center')" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Set Center</button>
-                    <button onclick="steerCapture('steer_cal_right')" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Set Right</button>
+                    <button onclick="steerCapture('steer_cal_left')" data-i18n="btn_set_left" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Set Left</button>
+                    <button onclick="steerCapture('steer_cal_center')" data-i18n="btn_set_center" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Set Center</button>
+                    <button onclick="steerCapture('steer_cal_right')" data-i18n="btn_set_right" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Set Right</button>
                 </div>
                 <div style="margin-top: 8px; font-size: 0.8em; color: var(--muted-foreground);">
-                    Angle: <span id="steer-pos">--</span> &nbsp;|&nbsp;
-                    L: <span id="steer-left-cur">--</span> &nbsp;
-                    C: <span id="steer-center-cur">--</span> &nbsp;
-                    R: <span id="steer-right-cur">--</span>
+                    <span data-i18n="lbl_angle">Angle:</span> <span id="steer-pos">--</span> &nbsp;|&nbsp;
+                    <span data-i18n="lbl_pos_left">L:</span> <span id="steer-left-cur">--</span> &nbsp;
+                    <span data-i18n="lbl_pos_center">C:</span> <span id="steer-center-cur">--</span> &nbsp;
+                    <span data-i18n="lbl_pos_right">R:</span> <span id="steer-right-cur">--</span>
                 </div>
                 <div style="margin-top: 4px; font-size: 0.8em; color: var(--muted-foreground);">
-                    Sensor: <span id="steer-sensor-status">--</span> &nbsp;|&nbsp;
-                    Calibration: <span id="steer-cal-status">--</span>
+                    <span data-i18n="lbl_sensor">Sensor:</span> <span id="steer-sensor-status">--</span> &nbsp;|&nbsp;
+                    <span data-i18n="lbl_calibration">Calibration:</span> <span id="steer-cal-status">--</span>
+                </div>
+                <div style="margin-top: 4px; font-size: 0.8em; color: var(--muted-foreground);">
+                    <span data-i18n="lbl_steer_motor_current">Motor:</span> <span id="steer-motor-current">--</span>&nbsp;A &nbsp;|&nbsp;
+                    <span data-i18n="lbl_steer_fet_temp">FET:</span> <span id="steer-fet-temp">--</span>&nbsp;°C &nbsp;|&nbsp;
+                    <span data-i18n="lbl_steer_driver">Driver:</span> <span id="steer-driver-status">--</span>
                 </div>
                 <div id="steer-center-status" style="margin-top: 8px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
             </div>
 
             <!-- Throttle Calibration -->
             <div class="card">
-                <h2>🎚️ Throttle Calibration</h2>
-                <p style="font-size: 0.8em; color: var(--muted-foreground); margin-bottom: 12px;">
+                <h2 data-i18n="card_throttle_cal">🎚️ Throttle Calibration</h2>
+                <p data-i18n-html="throttle_cal_help" style="font-size: 0.8em; color: var(--muted-foreground); margin-bottom: 12px;">
                     Sets the idle / full throttle servo endpoints (µs). <b>Engine must be OFF.</b>
                     Press <b>Start</b>, drag a slider — the throttle servo follows live — then <b>Save</b>.
                 </p>
-                <button id="throttle-cal-start" onclick="throttleCalStart()" style="padding:8px 12px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer; width:100%;">Start Calibration</button>
+                <button id="throttle-cal-start" onclick="throttleCalStart()" data-i18n="btn_start_calibration" style="padding:8px 12px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer; width:100%;">Start Calibration</button>
                 <div id="throttle-cal-controls" style="display:none; margin-top:12px; flex-direction:column; gap:12px;">
                     <div>
-                        <label style="font-size: 0.8em; color: var(--muted-foreground);">Idle endpoint: <span id="throttle-idle-val">901</span> µs</label>
+                        <label style="font-size: 0.8em; color: var(--muted-foreground);"><span data-i18n="lbl_idle_endpoint">Idle endpoint:</span> <span id="throttle-idle-val">901</span> µs</label>
                         <input type="range" min="800" max="2200" step="1" value="901" class="slider" id="throttle-idle-slider" style="width:100%;">
                     </div>
                     <div>
-                        <label style="font-size: 0.8em; color: var(--muted-foreground);">Full endpoint: <span id="throttle-full-val">1344</span> µs</label>
+                        <label style="font-size: 0.8em; color: var(--muted-foreground);"><span data-i18n="lbl_full_endpoint">Full endpoint:</span> <span id="throttle-full-val">1344</span> µs</label>
                         <input type="range" min="800" max="2200" step="1" value="1344" class="slider" id="throttle-full-slider" style="width:100%;">
                     </div>
                     <div style="display:flex; gap:6px;">
-                        <button onclick="throttleCalSave()" style="flex:1; padding:8px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
-                        <button onclick="throttleCalCancel()" style="flex:1; padding:8px; border-radius:4px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">Cancel</button>
+                        <button onclick="throttleCalSave()" data-i18n="btn_save" style="flex:1; padding:8px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                        <button onclick="throttleCalCancel()" data-i18n="btn_cancel" style="flex:1; padding:8px; border-radius:4px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">Cancel</button>
                     </div>
                 </div>
                 <div id="throttle-cal-status" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
@@ -575,37 +582,37 @@
 
             <!-- Ignition & Lighting Control -->
             <div class="card">
-                <h2>🔑 Vehicle Ignition & Lighting</h2>
+                <h2 data-i18n="card_ignition">🔑 Vehicle Ignition & Lighting</h2>
 
-                <h3 style="margin-top: 0; margin-bottom: 10px;">Ignition Control</h3>
+                <h3 data-i18n="h_ignition_control" style="margin-top: 0; margin-bottom: 10px;">Ignition Control</h3>
                 <div class="gear-buttons" style="margin-bottom: 20px;">
-                    <button class="gear-btn" id="ignition-off" onclick="setIgnition('OFF')">OFF</button>
-                    <button class="gear-btn" id="ignition-acc" onclick="setIgnition('ACC')">ACC</button>
-                    <button class="gear-btn" id="ignition-start" onclick="setIgnition('START')">START</button>
+                    <button class="gear-btn" id="ignition-off" onclick="setIgnition('OFF')" data-i18n="ign_OFF">OFF</button>
+                    <button class="gear-btn" id="ignition-acc" onclick="setIgnition('ACC')" data-i18n="ign_ACC">ACC</button>
+                    <button class="gear-btn" id="ignition-start" onclick="setIgnition('START')" data-i18n="ign_START">START</button>
                 </div>
 
-                <h3 style="margin-bottom: 10px;">Front Light</h3>
+                <h3 data-i18n="h_front_light" style="margin-bottom: 10px;">Front Light</h3>
                 <div style="margin-bottom: 20px;">
                     <button class="upload-btn" id="light-toggle-btn" onclick="toggleLight()" style="background: var(--secondary);">
-                        💡 Light: <span id="light-status">OFF</span>
+                        💡 <span data-i18n="lbl_light">Light:</span> <span id="light-status">OFF</span>
                     </button>
                 </div>
 
-                <h3 style="margin-bottom: 10px;">Front Wheel Lock</h3>
+                <h3 data-i18n="h_wheel_lock" style="margin-bottom: 10px;">Front Wheel Lock</h3>
                 <div style="margin-bottom: 20px;">
                     <button class="upload-btn" id="wheel-lock-btn" onclick="toggleWheelLock()" style="background: var(--secondary);">
-                        🔒 Wheel Lock: <span id="wheel-lock-status">UNLOCKED</span>
+                        🔒 <span data-i18n="lbl_wheel_lock">Wheel Lock:</span> <span id="wheel-lock-status">UNLOCKED</span>
                     </button>
                 </div>
 
-                <h3 style="margin-bottom: 10px;">Telemetry</h3>
+                <h3 data-i18n="h_telemetry" style="margin-bottom: 10px;">Telemetry</h3>
                 <div class="telemetry-grid" style="grid-template-columns: repeat(2, 1fr);">
                     <div class="telemetry-item">
-                        <div class="telemetry-label">Ignition State</div>
+                        <div class="telemetry-label" data-i18n="lbl_ignition_state">Ignition State</div>
                         <div class="telemetry-value" id="telemetry-ignition" style="font-size: 1.3em;">OFF</div>
                     </div>
                     <div class="telemetry-item">
-                        <div class="telemetry-label">Cranking</div>
+                        <div class="telemetry-label" data-i18n="lbl_cranking">Cranking</div>
                         <div class="telemetry-value" id="telemetry-cranking" style="font-size: 1.3em;">No</div>
                     </div>
                 </div>
@@ -613,76 +620,92 @@
 
             <!-- MAVLink Command Channels -->
             <div class="card">
-                <h2>📡 MAVLink Command Channels</h2>
+                <h2 data-i18n="card_mav_channels">📡 MAVLink Command Channels</h2>
                 <div class="telemetry-grid" style="font-size: 0.85em;">
                     <div class="telemetry-item" style="grid-column: 1 / -1;">
-                        <div class="telemetry-label">Link Status</div>
+                        <div class="telemetry-label" data-i18n="lbl_link_status">Link Status</div>
                         <div style="font-size: 0.9em;">
                             <span id="mav-cmd-rate">0</span> Hz |
-                            Link age: <span id="mav-link-age">0</span>ms |
-                            HB age: <span id="mav-hb-age">0</span>ms
+                            <span data-i18n="lbl_link_age">Link age:</span> <span id="mav-link-age">0</span>ms |
+                            <span data-i18n="lbl_hb_age">HB age:</span> <span id="mav-hb-age">0</span>ms
                         </div>
                     </div>
                     <div class="telemetry-item">
-                        <div class="telemetry-label">Ch1 (Steer)</div>
+                        <div class="telemetry-label" data-i18n="lbl_ch1">Ch1 (Steer)</div>
                         <div class="telemetry-value" id="mav-ch1">1500</div>
                     </div>
                     <div class="telemetry-item">
-                        <div class="telemetry-label">Ch2 (Thr)</div>
+                        <div class="telemetry-label" data-i18n="lbl_ch2">Ch2 (Thr)</div>
                         <div class="telemetry-value" id="mav-ch2">1500</div>
                     </div>
                     <div class="telemetry-item">
-                        <div class="telemetry-label">Ch3 (Gear)</div>
+                        <div class="telemetry-label" data-i18n="lbl_ch3">Ch3 (Gear)</div>
                         <div class="telemetry-value" id="mav-ch3">1500</div>
                     </div>
                     <div class="telemetry-item">
-                        <div class="telemetry-label">Ch4 (Brake)</div>
+                        <div class="telemetry-label" data-i18n="lbl_ch4">Ch4 (Brake)</div>
                         <div class="telemetry-value" id="mav-ch4">1500</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_ch5">Ch5</div>
+                        <div class="telemetry-value" id="mav-ch5">1500</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_ch6">Ch6 (Light)</div>
+                        <div class="telemetry-value" id="mav-ch6">1500</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_ch7">Ch7 (Lock)</div>
+                        <div class="telemetry-value" id="mav-ch7">1500</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_ch8">Ch8</div>
+                        <div class="telemetry-value" id="mav-ch8">1500</div>
                     </div>
                 </div>
             </div>
 
             <!-- Vehicle Data (CAN) -->
             <div class="card">
-                <h2>🚗 Vehicle Data (CAN)</h2>
+                <h2 data-i18n="card_can">🚗 Vehicle Data (CAN)</h2>
                 <div class="telemetry-grid">
                     <div class="telemetry-item">
-                        <div class="telemetry-label">Engine RPM</div>
+                        <div class="telemetry-label" data-i18n="lbl_engine_rpm">Engine RPM</div>
                         <div class="telemetry-value" id="can-rpm">0</div>
                     </div>
                     <div class="telemetry-item">
-                        <div class="telemetry-label">Speed</div>
+                        <div class="telemetry-label" data-i18n="lbl_speed">Speed</div>
                         <div class="telemetry-value" id="can-speed">0 km/h</div>
                     </div>
                     <div class="telemetry-item">
-                        <div class="telemetry-label">Coolant Temp</div>
+                        <div class="telemetry-label" data-i18n="lbl_coolant_temp">Coolant Temp</div>
                         <div class="telemetry-value" id="can-coolant">--°C</div>
                     </div>
                     <div class="telemetry-item">
-                        <div class="telemetry-label">Oil Temp</div>
+                        <div class="telemetry-label" data-i18n="lbl_oil_temp">Oil Temp</div>
                         <div class="telemetry-value" id="can-oil">--°C</div>
                     </div>
                     <div class="telemetry-item">
-                        <div class="telemetry-label">Throttle Pos</div>
+                        <div class="telemetry-label" data-i18n="lbl_throttle_pos">Throttle Pos</div>
                         <div class="telemetry-value" id="can-throttle-pos">0%</div>
                     </div>
                     <div class="telemetry-item">
-                        <div class="telemetry-label">MAP</div>
+                        <div class="telemetry-label" data-i18n="lbl_map">MAP</div>
                         <div class="telemetry-value" id="can-map">-- kPa</div>
                     </div>
                     <div class="telemetry-item">
-                        <div class="telemetry-label">Fuel Level</div>
+                        <div class="telemetry-label" data-i18n="lbl_fuel_level">Fuel Level</div>
                         <div class="telemetry-value" id="can-fuel">--%</div>
                     </div>
                     <div class="telemetry-item">
-                        <div class="telemetry-label">CAN Status</div>
-                        <div class="telemetry-value" id="can-status-text">disconnected</div>
+                        <div class="telemetry-label" data-i18n="lbl_can_status">CAN Status</div>
+                        <div class="telemetry-value" id="can-status-text" data-i18n="can_disconnected">disconnected</div>
                     </div>
                 </div>
 
                 <!-- ECU Capability Probe -->
                 <div class="slider-container" style="margin-top: 12px;">
-                    <button class="upload-btn" id="probe-btn" onclick="probeECU()" style="background: color-mix(in srgb, var(--info) 65%, black);">
+                    <button class="upload-btn" id="probe-btn" onclick="probeECU()" data-i18n="btn_probe_ecu" style="background: color-mix(in srgb, var(--info) 65%, black);">
                         🔍 Probe ECU
                     </button>
                 </div>
@@ -692,34 +715,32 @@
 
             <!-- System Maintenance -->
             <div class="card">
-                <h2>🔧 System Maintenance</h2>
+                <h2 data-i18n="card_maintenance">🔧 System Maintenance</h2>
                 <div class="slider-container">
                     <button class="upload-btn" id="debug-toggle-btn" onclick="toggleDebug()" style="background: var(--secondary);">
-                        🐛 <span id="debug-toggle-text">Debug: Loading...</span>
+                        🐛 <span id="debug-toggle-text" data-i18n="debug_loading">Debug: Loading...</span>
                     </button>
                 </div>
                 <div class="slider-container" style="margin-top: 10px;">
                     <button class="upload-btn" id="boost-test-btn" onclick="toggleBoostTest()" style="background: color-mix(in srgb, var(--warning) 60%, black);">
-                        ⚡ RPM Boost Test: <span id="boost-test-status">OFF</span>
+                        ⚡ <span data-i18n="lbl_boost_test">RPM Boost Test:</span> <span id="boost-test-status">OFF</span>
                     </button>
                 </div>
-            </div>
 
-            <!-- OTA Update -->
-            <div class="card">
-                <h2>⬆️ Firmware Update</h2>
+                <!-- Firmware Update (OTA) -->
+                <h3 data-i18n="card_fw_update" style="margin-top: 20px; margin-bottom: 10px;">⬆️ Firmware Update</h3>
                 <div class="ota-section">
                     <div class="file-input-wrapper">
                         <input type="file" id="firmware-file" accept=".bin" onchange="updateFileName()">
-                        <label for="firmware-file" class="file-input-label" id="file-label">
+                        <label for="firmware-file" class="file-input-label" id="file-label" data-i18n="fw_select_prompt">
                             Click to select firmware (.bin)
                         </label>
                     </div>
-                    <button class="upload-btn" id="upload-btn" onclick="uploadFirmware()">Upload Firmware</button>
+                    <button class="upload-btn" id="upload-btn" onclick="uploadFirmware()" data-i18n="btn_upload_firmware">Upload Firmware</button>
                     <div class="progress-bar" id="progress-bar" style="display: none;">
                         <div class="progress-fill" id="progress-fill">0%</div>
                     </div>
-                    <div class="warning" style="margin-top: 15px;">
+                    <div class="warning" data-i18n="fw_update_warning" style="margin-top: 15px;">
                         ⚠️ Vehicle will enter safe state during update and reboot automatically.
                     </div>
                 </div>
@@ -728,6 +749,490 @@
     </div>
 
     <script>
+        // ===================================================================
+        // Localization (i18n) — inline dictionary, no external files/fetches.
+        // English is the ultimate fallback for any missing key.
+        // ===================================================================
+        const I18N = {
+            en: {
+                // Header / status bar
+                app_title: 'QuadBike Control Portal',
+                lang_toggle_aria: 'Switch language',
+                ws_label: 'WebSocket:',
+                ws_connecting: 'Connecting...',
+                ws_connected: 'Connected',
+                ws_disconnected: 'Disconnected',
+                fw_label: 'Firmware:',
+                fw_loading: 'Loading...',
+
+                // Telemetry card
+                card_telemetry: '📊 Telemetry',
+                lbl_current_gear: 'Current Gear',
+                lbl_servo_position: 'Servo Position',
+                lbl_brake: 'Brake',
+                lbl_throttle: 'Throttle',
+                lbl_steering: 'Steering',
+                lbl_mav_link: 'MAVLink Link',
+                mav_active: 'Active',
+                mav_inactive: 'Inactive',
+                switching_static: '⚙️ Switching...',
+                switching_to: '⚙️ Switching to %s...',
+
+                // Manual control card
+                card_manual_control: '🎮 Manual Control',
+                warn_mav_active: 'MAVLink control is active. Manual control disabled.',
+                btn_take_control: 'Take Control',
+                btn_release_control: 'Release Control',
+                web_control_hint: 'Engages web control — MAVLink is ignored until released or all browsers disconnect.',
+                h_gear_selection: 'Gear Selection',
+                lbl_servo: 'Servo:',
+                steer_test_left: '⟸ Left',
+                steer_test_center: 'Center',
+                steer_test_right: 'Right ⟹',
+
+                // Gear position defaults card
+                card_gear_defaults: '⚙️ Gear Position Defaults',
+                gear_defaults_help: 'Press <b>📍</b> to capture the current servo position (0.0–100.0%), then <b>Save</b>. <b>Move</b> drives the servo to the entered value.',
+                gear_reverse: 'REVERSE (R)',
+                gear_neutral: 'NEUTRAL (N)',
+                gear_high: 'HIGH (H)',
+                gear_low: 'LOW (L)',
+                title_use_current_servo: 'Use current servo position',
+                btn_move: 'Move',
+                btn_save: 'Save',
+                btn_cancel: 'Cancel',
+                lbl_boost_rpm_target: 'RPM Boost Target',
+                captured_for: 'Captured %s% for %s',
+                invalid_position: 'Invalid position (0.0–100.0)',
+                moving_to: 'Moving to %s%...',
+                invalid_value: 'Invalid value (0.0–100.0)',
+                saving_gear: 'Saving %s...',
+                invalid_rpm: 'Invalid RPM (500–5000)',
+                boost_rpm_saving: 'Boost RPM saving...',
+
+                // Steering calibration card
+                card_steer_cal: '🎯 Steering Calibration',
+                steer_cal_help: 'Absolute AS5600 angle (0–4095 counts). Hold <b>◀ / ▶</b> to jog the wheel, then capture <b>Center</b> first, followed by <b>Left</b> and <b>Right</b> at the travel limits.',
+                btn_jog_left: '◀ Jog Left',
+                btn_jog_right: 'Jog Right ▶',
+                btn_nudge_left: '◂ Nudge',
+                btn_nudge_right: 'Nudge ▸',
+                lbl_jog_speed: 'Jog speed',
+                btn_set_left: 'Set Left',
+                btn_set_center: 'Set Center',
+                btn_set_right: 'Set Right',
+                lbl_angle: 'Angle:',
+                lbl_pos_left: 'L:',
+                lbl_pos_center: 'C:',
+                lbl_pos_right: 'R:',
+                lbl_sensor: 'Sensor:',
+                lbl_calibration: 'Calibration:',
+                capturing: 'Capturing…',
+                sensor_ok: 'OK',
+                sensor_fault: 'FAULT',
+                cal_calibrated: 'CALIBRATED',
+                cal_not_calibrated: 'NOT CALIBRATED',
+                lbl_steer_motor_current: 'Motor:',
+                lbl_steer_fet_temp: 'FET:',
+                lbl_steer_driver: 'Driver:',
+                driver_ok: 'OK',
+                driver_fault: 'FAULT',
+                driver_down: 'NO LINK',
+
+                // Throttle calibration card
+                card_throttle_cal: '🎚️ Throttle Calibration',
+                throttle_cal_help: 'Sets the idle / full throttle servo endpoints (µs). <b>Engine must be OFF.</b> Press <b>Start</b>, drag a slider — the throttle servo follows live — then <b>Save</b>.',
+                btn_start_calibration: 'Start Calibration',
+                lbl_idle_endpoint: 'Idle endpoint:',
+                lbl_full_endpoint: 'Full endpoint:',
+                throttle_starting: 'Starting…',
+
+                // Ignition & lighting card
+                card_ignition: '🔑 Vehicle Ignition & Lighting',
+                h_ignition_control: 'Ignition Control',
+                ign_OFF: 'OFF',
+                ign_ACC: 'ACC',
+                ign_START: 'START',
+                ign_CRANKING: 'CRANKING',
+                h_front_light: 'Front Light',
+                lbl_light: 'Light:',
+                h_wheel_lock: 'Front Wheel Lock',
+                lbl_wheel_lock: 'Wheel Lock:',
+                lock_locked: 'LOCKED',
+                lock_unlocked: 'UNLOCKED',
+                h_telemetry: 'Telemetry',
+                lbl_ignition_state: 'Ignition State',
+                lbl_cranking: 'Cranking',
+                on: 'ON',
+                off: 'OFF',
+                yes: 'Yes',
+                no: 'No',
+
+                // MAVLink command channels card
+                card_mav_channels: '📡 MAVLink Command Channels',
+                lbl_link_status: 'Link Status',
+                lbl_link_age: 'Link age:',
+                lbl_hb_age: 'HB age:',
+                lbl_ch1: 'Ch1 (Steer)',
+                lbl_ch2: 'Ch2 (Thr)',
+                lbl_ch3: 'Ch3 (Gear)',
+                lbl_ch4: 'Ch4 (Brake)',
+                lbl_ch5: 'Ch5',
+                lbl_ch6: 'Ch6 (Light)',
+                lbl_ch7: 'Ch7 (Lock)',
+                lbl_ch8: 'Ch8',
+
+                // Vehicle data (CAN) card
+                card_can: '🚗 Vehicle Data (CAN)',
+                lbl_engine_rpm: 'Engine RPM',
+                lbl_speed: 'Speed',
+                lbl_coolant_temp: 'Coolant Temp',
+                lbl_oil_temp: 'Oil Temp',
+                lbl_throttle_pos: 'Throttle Pos',
+                lbl_map: 'MAP',
+                lbl_fuel_level: 'Fuel Level',
+                lbl_can_status: 'CAN Status',
+                can_connected: 'connected',
+                can_disconnected: 'disconnected',
+                unit_kmh: 'km/h',
+
+                // ECU probe
+                btn_probe_ecu: '🔍 Probe ECU',
+                probe_probing_btn: '🔍 Probing…',
+                probe_requested: 'Probe requested…',
+                probe_probing: 'Probing ECU…',
+                probe_no_ecu: 'No ECU / CAN disconnected',
+                probe_complete: 'Probe complete',
+                probe_bitmaps: 'Supported-PID bitmaps',
+                probe_no_response: 'no response',
+                probe_ok: 'ok',
+                probe_candidates: 'Candidate PIDs',
+                probe_dtc_header: 'Diagnostic Trouble Codes',
+                probe_no_mode03: 'No Mode 03 response',
+                probe_no_dtcs: 'No stored DTCs',
+                probe_dtc_count: '%s DTC(s): ',
+                probe_truncated: '⚠ Additional codes truncated (multi-frame not read)',
+                pid_calc_load: 'Calc Load',
+                pid_map: 'MAP',
+                pid_timing_adv: 'Timing Adv',
+                pid_iat: 'IAT',
+                pid_module_v: 'Module V',
+                pid_speed: 'Speed',
+                pid_fuel_lvl: 'Fuel Lvl',
+                pid_oil_temp: 'Oil Temp',
+                pid_o2_s1: 'O2 S1',
+
+                // System maintenance card
+                card_maintenance: '🔧 System Maintenance',
+                debug_loading: 'Debug: Loading...',
+                debug_on: 'Debug: ON',
+                debug_off: 'Debug: OFF',
+                debug_error: 'Debug: Error',
+                debug_enabled: 'Debug enabled',
+                debug_disabled: 'Debug disabled',
+                debug_toggle_failed: 'Failed to toggle debug',
+                debug_toggle_error: 'Error toggling debug',
+                lbl_boost_test: 'RPM Boost Test:',
+
+                // Firmware update card
+                card_fw_update: '⬆️ Firmware Update',
+                fw_select_prompt: 'Click to select firmware (.bin)',
+                btn_upload_firmware: 'Upload Firmware',
+                fw_update_warning: '⚠️ Vehicle will enter safe state during update and reboot automatically.',
+                fw_select_first: 'Please select a firmware file first',
+                fw_confirm_upload: 'Upload firmware? Vehicle will enter safe state and reboot.',
+                fw_upload_success: 'Firmware uploaded successfully! Device will reboot.',
+                fw_upload_failed: 'Upload failed: %s',
+                fw_upload_error: 'Upload error occurred',
+
+                // Input source (client-side indicator, if present)
+                src_mavlink: 'MAVLink',
+                src_web: 'Web',
+                src_failsafe: 'Fail-safe',
+
+                // Generic
+                error_prefix: 'Error: '
+            },
+            uk: {
+                // Header / status bar
+                app_title: 'Панель керування QuadBike',
+                lang_toggle_aria: 'Переключити мову',
+                ws_label: 'WebSocket:',
+                ws_connecting: 'Підключення...',
+                ws_connected: 'Підключено',
+                ws_disconnected: 'Відключено',
+                fw_label: 'Прошивка:',
+                fw_loading: 'Завантаження...',
+
+                // Telemetry card
+                card_telemetry: '📊 Телеметрія',
+                lbl_current_gear: 'Поточна передача',
+                lbl_servo_position: 'Положення серво',
+                lbl_brake: 'Гальмо',
+                lbl_throttle: 'Дросель',
+                lbl_steering: 'Кермо',
+                lbl_mav_link: "Зв'язок MAVLink",
+                mav_active: 'Активний',
+                mav_inactive: 'Неактивний',
+                switching_static: '⚙️ Перемикання...',
+                switching_to: '⚙️ Перемикання на %s...',
+
+                // Manual control card
+                card_manual_control: '🎮 Ручне керування',
+                warn_mav_active: 'Активне керування через MAVLink. Ручне керування вимкнено.',
+                btn_take_control: 'Взяти керування',
+                btn_release_control: 'Звільнити керування',
+                web_control_hint: "Вмикає веб-керування — MAVLink ігнорується, доки не звільните або всі браузери не від'єднаються.",
+                h_gear_selection: 'Вибір передачі',
+                lbl_servo: 'Серво:',
+                steer_test_left: '⟸ Вліво',
+                steer_test_center: 'Центр',
+                steer_test_right: 'Вправо ⟹',
+
+                // Gear position defaults card
+                card_gear_defaults: '⚙️ Типові положення передач',
+                gear_defaults_help: 'Натисніть <b>📍</b>, щоб зафіксувати поточне положення серво (0.0–100.0%), потім <b>Зберегти</b>. <b>Перемістити</b> переводить серво в задане значення.',
+                gear_reverse: 'ЗАДНЯ (R)',
+                gear_neutral: 'НЕЙТРАЛЬ (N)',
+                gear_high: 'ВИСОКА (H)',
+                gear_low: 'НИЗЬКА (L)',
+                title_use_current_servo: 'Використати поточне положення серво',
+                btn_move: 'Перемістити',
+                btn_save: 'Зберегти',
+                btn_cancel: 'Скасувати',
+                lbl_boost_rpm_target: 'Цільові оберти буста',
+                captured_for: 'Зафіксовано %s% для %s',
+                invalid_position: 'Неприпустиме положення (0.0–100.0)',
+                moving_to: 'Переміщення до %s%...',
+                invalid_value: 'Неприпустиме значення (0.0–100.0)',
+                saving_gear: 'Збереження %s...',
+                invalid_rpm: 'Неприпустимі оберти (500–5000)',
+                boost_rpm_saving: 'Збереження обертів буста...',
+
+                // Steering calibration card
+                card_steer_cal: '🎯 Калібрування керма',
+                steer_cal_help: 'Абсолютний кут AS5600 (0–4095 відліків). Утримуйте <b>◀ / ▶</b>, щоб провертати кермо, спершу зафіксуйте <b>Центр</b>, потім <b>Ліво</b> та <b>Право</b> на межах ходу.',
+                btn_jog_left: '◀ Проворот вліво',
+                btn_jog_right: 'Проворот вправо ▶',
+                btn_nudge_left: '◂ Підштовхнути',
+                btn_nudge_right: 'Підштовхнути ▸',
+                lbl_jog_speed: 'Швидкість провороту',
+                btn_set_left: 'Задати ліво',
+                btn_set_center: 'Задати центр',
+                btn_set_right: 'Задати право',
+                lbl_angle: 'Кут:',
+                lbl_pos_left: 'Л:',
+                lbl_pos_center: 'Ц:',
+                lbl_pos_right: 'П:',
+                lbl_sensor: 'Датчик:',
+                lbl_calibration: 'Калібрування:',
+                capturing: 'Фіксація…',
+                sensor_ok: 'OK',
+                sensor_fault: 'ПОМИЛКА',
+                cal_calibrated: 'ВІДКАЛІБРОВАНО',
+                cal_not_calibrated: 'НЕ ВІДКАЛІБРОВАНО',
+                lbl_steer_motor_current: 'Двигун:',
+                lbl_steer_fet_temp: 'FET:',
+                lbl_steer_driver: 'Драйвер:',
+                driver_ok: 'OK',
+                driver_fault: 'НЕСПРАВНІСТЬ',
+                driver_down: 'НЕДОСТУПНИЙ',
+
+                // Throttle calibration card
+                card_throttle_cal: '🎚️ Калібрування дроселя',
+                throttle_cal_help: 'Задає крайні точки серво дроселя: холостий хід / повний газ (µs). <b>Двигун має бути вимкнено.</b> Натисніть <b>Почати</b>, потягніть повзунок — серво дроселя рухається наживо — потім <b>Зберегти</b>.',
+                btn_start_calibration: 'Почати калібрування',
+                lbl_idle_endpoint: 'Точка холостого ходу:',
+                lbl_full_endpoint: 'Точка повного газу:',
+                throttle_starting: 'Запуск…',
+
+                // Ignition & lighting card
+                card_ignition: '🔑 Запалювання та освітлення',
+                h_ignition_control: 'Керування запалюванням',
+                ign_OFF: 'ВИМК',
+                ign_ACC: 'ACC',
+                ign_START: 'ПУСК',
+                ign_CRANKING: 'ПРОКРУТКА',
+                h_front_light: 'Переднє світло',
+                lbl_light: 'Світло:',
+                h_wheel_lock: 'Блокування переднього колеса',
+                lbl_wheel_lock: 'Блок. колеса:',
+                lock_locked: 'ЗАБЛОКОВАНО',
+                lock_unlocked: 'РОЗБЛОКОВАНО',
+                h_telemetry: 'Телеметрія',
+                lbl_ignition_state: 'Стан запалювання',
+                lbl_cranking: 'Прокрутка',
+                on: 'УВІМК',
+                off: 'ВИМК',
+                yes: 'Так',
+                no: 'Ні',
+
+                // MAVLink command channels card
+                card_mav_channels: '📡 Командні канали MAVLink',
+                lbl_link_status: "Стан зв'язку",
+                lbl_link_age: 'Вік лінка:',
+                lbl_hb_age: 'Вік HB:',
+                lbl_ch1: 'Кан1 (Кермо)',
+                lbl_ch2: 'Кан2 (Дрос.)',
+                lbl_ch3: 'Кан3 (Передача)',
+                lbl_ch4: 'Кан4 (Гальмо)',
+                lbl_ch5: 'Кан5',
+                lbl_ch6: 'Кан6 (Світло)',
+                lbl_ch7: 'Кан7 (Блокув.)',
+                lbl_ch8: 'Кан8',
+
+                // Vehicle data (CAN) card
+                card_can: '🚗 Дані авто (CAN)',
+                lbl_engine_rpm: 'Оберти двигуна',
+                lbl_speed: 'Швидкість',
+                lbl_coolant_temp: 'Темп. охол. рідини',
+                lbl_oil_temp: 'Темп. оливи',
+                lbl_throttle_pos: 'Полож. дроселя',
+                lbl_map: 'MAP',
+                lbl_fuel_level: 'Рівень пального',
+                lbl_can_status: 'Стан CAN',
+                can_connected: 'підключено',
+                can_disconnected: 'відключено',
+                unit_kmh: 'км/год',
+
+                // ECU probe
+                btn_probe_ecu: '🔍 Опитати ЕБК',
+                probe_probing_btn: '🔍 Опитування…',
+                probe_requested: 'Запит на опитування…',
+                probe_probing: 'Опитування ЕБК…',
+                probe_no_ecu: 'Немає ЕБК / CAN відключено',
+                probe_complete: 'Опитування завершено',
+                probe_bitmaps: 'Бітові маски підтримки PID',
+                probe_no_response: 'немає відповіді',
+                probe_ok: 'ok',
+                probe_candidates: 'Кандидати PID',
+                probe_dtc_header: 'Діагностичні коди несправностей',
+                probe_no_mode03: 'Немає відповіді Mode 03',
+                probe_no_dtcs: 'Немає збережених DTC',
+                probe_dtc_count: '%s DTC: ',
+                probe_truncated: '⚠ Додаткові коди обрізано (мультифрейм не зчитано)',
+                pid_calc_load: 'Розрах. навант.',
+                pid_map: 'MAP',
+                pid_timing_adv: 'Кут випередж.',
+                pid_iat: 'IAT',
+                pid_module_v: 'Напруга модуля',
+                pid_speed: 'Швидкість',
+                pid_fuel_lvl: 'Рівень пального',
+                pid_oil_temp: 'Темп. оливи',
+                pid_o2_s1: 'O2 S1',
+
+                // System maintenance card
+                card_maintenance: '🔧 Обслуговування системи',
+                debug_loading: 'Діагностика: завантаження...',
+                debug_on: 'Діагностика: УВІМК',
+                debug_off: 'Діагностика: ВИМК',
+                debug_error: 'Діагностика: помилка',
+                debug_enabled: 'Діагностику увімкнено',
+                debug_disabled: 'Діагностику вимкнено',
+                debug_toggle_failed: 'Не вдалося перемкнути діагностику',
+                debug_toggle_error: 'Помилка перемикання діагностики',
+                lbl_boost_test: 'Тест буста обертів:',
+
+                // Firmware update card
+                card_fw_update: '⬆️ Оновлення прошивки',
+                fw_select_prompt: 'Натисніть, щоб обрати прошивку (.bin)',
+                btn_upload_firmware: 'Завантажити прошивку',
+                fw_update_warning: '⚠️ Під час оновлення авто перейде в безпечний стан і автоматично перезавантажиться.',
+                fw_select_first: 'Спершу оберіть файл прошивки',
+                fw_confirm_upload: 'Завантажити прошивку? Авто перейде в безпечний стан і перезавантажиться.',
+                fw_upload_success: 'Прошивку успішно завантажено! Пристрій перезавантажиться.',
+                fw_upload_failed: 'Помилка завантаження: %s',
+                fw_upload_error: 'Сталася помилка завантаження',
+
+                // Input source (client-side indicator, if present)
+                src_mavlink: 'MAVLink',
+                src_web: 'Веб',
+                src_failsafe: 'Безпечний режим',
+
+                // Generic
+                error_prefix: 'Помилка: '
+            }
+        };
+
+        let currentLang = 'en';
+
+        // Active-locale lookup with en fallback then key fallback; %s substitution.
+        function t(key, ...args) {
+            const dict = I18N[currentLang] || I18N.en;
+            let s = (dict[key] !== undefined) ? dict[key]
+                  : (I18N.en[key] !== undefined ? I18N.en[key] : key);
+            if (args.length) {
+                let i = 0;
+                s = s.replace(/%s/g, () => (i < args.length ? args[i++] : '%s'));
+            }
+            return s;
+        }
+
+        // Walk data-i18n* attributes and fill text / html / title / placeholder.
+        function applyStaticTranslations() {
+            document.querySelectorAll('[data-i18n]').forEach(el => {
+                el.textContent = t(el.getAttribute('data-i18n'));
+            });
+            document.querySelectorAll('[data-i18n-html]').forEach(el => {
+                el.innerHTML = t(el.getAttribute('data-i18n-html'));
+            });
+            document.querySelectorAll('[data-i18n-title]').forEach(el => {
+                el.title = t(el.getAttribute('data-i18n-title'));
+            });
+            document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+                el.placeholder = t(el.getAttribute('data-i18n-placeholder'));
+            });
+        }
+
+        // Re-apply runtime/dynamic labels after a language switch.
+        function refreshDynamicLabels() {
+            if (wsStatusKnown) updateConnectionStatus(wsConnected);
+            updateWebControlButton(webControlState);
+            updateLightButton(lightState);
+            updateWheelLockButton(wheelLockState);
+            const boostStatus = document.getElementById('boost-test-status');
+            if (boostStatus) boostStatus.textContent = boostTestActive ? t('on') : t('off');
+            const dbgBtn = document.getElementById('debug-toggle-btn');
+            if (dbgBtn && (dbgBtn.dataset.state === 'true' || dbgBtn.dataset.state === 'false')) {
+                updateDebugButton(dbgBtn.dataset.state === 'true');
+            }
+            if (lastTelemetry) updateTelemetry(lastTelemetry);
+        }
+
+        function updateLangToggle() {
+            const btn = document.getElementById('lang-toggle');
+            if (!btn) return;
+            btn.textContent = (currentLang === 'en') ? 'УК' : 'EN';
+            btn.setAttribute('aria-label', t('lang_toggle_aria'));
+        }
+
+        function applyLanguage(lang, persist) {
+            currentLang = (lang === 'uk') ? 'uk' : 'en';
+            if (persist) localStorage.setItem('lang', currentLang);
+            document.documentElement.lang = currentLang;
+            document.title = t('app_title');
+            applyStaticTranslations();
+            refreshDynamicLabels();
+            updateLangToggle();
+        }
+
+        function detectLanguage() {
+            const stored = localStorage.getItem('lang');
+            if (stored === 'en' || stored === 'uk') return stored;
+            const langs = navigator.languages || [navigator.language || 'en'];
+            for (const l of langs) {
+                if (l && l.toLowerCase().indexOf('uk') === 0) return 'uk';
+            }
+            return 'en';
+        }
+
+        function toggleLanguage() {
+            applyLanguage(currentLang === 'en' ? 'uk' : 'en', true);
+        }
+
+        let lastTelemetry = null;
+        let wsStatusKnown = false;
+
         let ws;
         let wsConnected = false;
         let currentInputSource = 'FAILSAFE';
@@ -778,15 +1283,16 @@
         function updateConnectionStatus(connected) {
             const statusElem = document.getElementById('ws-status');
             const statusText = document.getElementById('ws-status-text');
+            wsStatusKnown = true;
 
             if (connected) {
                 statusElem.classList.add('connected');
                 statusElem.classList.remove('disconnected');
-                statusText.textContent = 'Connected';
+                statusText.textContent = t('ws_connected');
             } else {
                 statusElem.classList.remove('connected');
                 statusElem.classList.add('disconnected');
-                statusText.textContent = 'Disconnected';
+                statusText.textContent = t('ws_disconnected');
             }
         }
 
@@ -796,33 +1302,38 @@
                 updateTelemetry(data);
             }
 
-            // Handle response messages
+            // Handle response messages.
+            // NOTE: data.message is a free-form firmware string kept in English —
+            // the routing below matches its English wording and the protocol is frozen.
+            // Only the client-added "Error: " prefix is localized.
             if (data.success !== undefined) {
                 console.log('Response:', data.message);
                 showCalibrationStatus(data.success, data.message);
                 // Also show in gear defaults status if relevant
                 const statusEl = document.getElementById('gear-default-status');
                 if (statusEl && data.message && data.message.includes('Default for')) {
-                    statusEl.textContent = data.success ? data.message : 'Error: ' + data.message;
+                    statusEl.textContent = data.success ? data.message : t('error_prefix') + data.message;
                     statusEl.style.color = data.success ? 'var(--success)' : 'var(--danger)';
                 }
                 // Throttle calibration status
                 if (data.message && data.message.toLowerCase().includes('throttle') &&
                     (data.message.toLowerCase().includes('calibrat') || data.message.toLowerCase().includes('preview'))) {
-                    throttleCalSetStatus(data.success ? data.message : 'Error: ' + data.message,
+                    throttleCalSetStatus(data.success ? data.message : t('error_prefix') + data.message,
                                          data.success ? 'var(--success)' : 'var(--danger)');
                 }
                 // Steering calibration status
                 if (data.message && (data.message.includes('Steering center') ||
                     data.message.includes('Steering left limit') || data.message.includes('Steering right limit') ||
                     data.message.includes('Capture ') || data.message.startsWith('Jog'))) {
-                    steerCenterStatus(data.success ? data.message : 'Error: ' + data.message,
+                    steerCenterStatus(data.success ? data.message : t('error_prefix') + data.message,
                                       data.success ? 'var(--success)' : 'var(--danger)');
                 }
             }
         }
 
         function updateTelemetry(data) {
+            lastTelemetry = data;   // remember for re-render on language switch
+
             // Update gear display
             document.getElementById('telemetry-gear').textContent = data.gear || 'N';
 
@@ -861,7 +1372,7 @@
             document.getElementById('telemetry-steering').textContent = (data.steering_pct || 0) + '%';
 
             // Update MAVLink link status
-            document.getElementById('telemetry-mav').textContent = data.mav_active ? 'Active' : 'Inactive';
+            document.getElementById('telemetry-mav').textContent = data.mav_active ? t('mav_active') : t('mav_inactive');
 
             // Update MAVLink command channels
             if (data.mav_channels && data.mav_channels.length === 16) {
@@ -869,6 +1380,10 @@
                 document.getElementById('mav-ch2').textContent = data.mav_channels[1];
                 document.getElementById('mav-ch3').textContent = data.mav_channels[2];
                 document.getElementById('mav-ch4').textContent = data.mav_channels[3];
+                document.getElementById('mav-ch5').textContent = data.mav_channels[4];
+                document.getElementById('mav-ch6').textContent = data.mav_channels[5];
+                document.getElementById('mav-ch7').textContent = data.mav_channels[6];
+                document.getElementById('mav-ch8').textContent = data.mav_channels[7];
             }
             document.getElementById('mav-cmd-rate').textContent = (data.mav_cmd_rate || 0).toFixed(1);
             document.getElementById('mav-link-age').textContent = data.mav_link_age || 0;
@@ -877,7 +1392,7 @@
             // Update CAN data
             if (data.can_status === 'connected') {
                 document.getElementById('can-rpm').textContent = data.engine_rpm || 0;
-                document.getElementById('can-speed').textContent = (data.vehicle_speed || 0) + ' km/h';
+                document.getElementById('can-speed').textContent = (data.vehicle_speed || 0) + ' ' + t('unit_kmh');
                 document.getElementById('can-throttle-pos').textContent = (data.throttle_position || 0) + '%';
 
                 // Coolant temperature with color coding
@@ -907,17 +1422,17 @@
                 document.getElementById('can-fuel').textContent = (data.fuel_level || 0) + '%';
                 document.getElementById('can-map').textContent = (data.map_kpa != null ? data.map_kpa : '--') + ' kPa';
 
-                document.getElementById('can-status-text').textContent = 'connected';
+                document.getElementById('can-status-text').textContent = t('can_connected');
                 document.getElementById('can-status-text').style.color = 'var(--success)';
             } else {
                 document.getElementById('can-rpm').textContent = '--';
-                document.getElementById('can-speed').textContent = '-- km/h';
+                document.getElementById('can-speed').textContent = '-- ' + t('unit_kmh');
                 document.getElementById('can-coolant').textContent = '--°C';
                 document.getElementById('can-oil').textContent = '--°C';
                 document.getElementById('can-throttle-pos').textContent = '--%';
                 document.getElementById('can-map').textContent = '-- kPa';
                 document.getElementById('can-fuel').textContent = '--%';
-                document.getElementById('can-status-text').textContent = 'disconnected';
+                document.getElementById('can-status-text').textContent = t('can_disconnected');
                 document.getElementById('can-status-text').style.color = 'var(--danger)';
             }
 
@@ -930,7 +1445,7 @@
             const switchingIndicator = document.getElementById('gear-switching-indicator');
             if (data.gear_switching) {
                 switchingIndicator.style.display = 'block';
-                switchingIndicator.textContent = '⚙️ Switching to ' + (data.gear || 'N') + '...';
+                switchingIndicator.textContent = t('switching_to', data.gear || 'N');
             } else {
                 switchingIndicator.style.display = 'none';
             }
@@ -974,15 +1489,15 @@
             // Update gear button active state
             updateGearButtons(data.gear);
 
-            // Update ignition state
+            // Update ignition state (map the enum token to a localized label)
             if (data.ignition_state) {
-                document.getElementById('telemetry-ignition').textContent = data.ignition_state;
+                document.getElementById('telemetry-ignition').textContent = t('ign_' + data.ignition_state);
                 updateIgnitionButtons(data.ignition_state);
             }
 
             // Update cranking indicator
             if (data.is_cranking !== undefined) {
-                document.getElementById('telemetry-cranking').textContent = data.is_cranking ? 'Yes' : 'No';
+                document.getElementById('telemetry-cranking').textContent = data.is_cranking ? t('yes') : t('no');
                 document.getElementById('telemetry-cranking').style.color = data.is_cranking ? 'var(--warning)' : 'var(--success)';
             }
 
@@ -1009,13 +1524,33 @@
             }
             if (data.steer_sensor_ok !== undefined) {
                 const el = document.getElementById('steer-sensor-status');
-                el.textContent = data.steer_sensor_ok ? 'OK' : 'FAULT';
+                el.textContent = data.steer_sensor_ok ? t('sensor_ok') : t('sensor_fault');
                 el.style.color = data.steer_sensor_ok ? 'var(--success)' : 'var(--danger)';
             }
             if (data.steer_calibrated !== undefined) {
                 const el = document.getElementById('steer-cal-status');
-                el.textContent = data.steer_calibrated ? 'CALIBRATED' : 'NOT CALIBRATED';
+                el.textContent = data.steer_calibrated ? t('cal_calibrated') : t('cal_not_calibrated');
                 el.style.color = data.steer_calibrated ? 'var(--success)' : 'var(--warning)';
+            }
+            if (data.steer_motor_current !== undefined) {
+                document.getElementById('steer-motor-current').textContent = data.steer_motor_current.toFixed(1);
+            }
+            if (data.steer_fet_temp !== undefined) {
+                document.getElementById('steer-fet-temp').textContent = data.steer_fet_temp.toFixed(1);
+            }
+            if (data.steer_driver_ok !== undefined) {
+                const el = document.getElementById('steer-driver-status');
+                const fault = data.steer_vesc_fault || 0;
+                if (!data.steer_driver_ok) {
+                    el.textContent = t('driver_down');
+                    el.style.color = 'var(--danger)';
+                } else if (fault) {
+                    el.textContent = t('driver_fault') + ' ' + fault;
+                    el.style.color = 'var(--danger)';
+                } else {
+                    el.textContent = t('driver_ok');
+                    el.style.color = 'var(--success)';
+                }
             }
 
             // Update control availability
@@ -1031,13 +1566,13 @@
 
             if (currentInputSource === 'MAVLINK') {
                 statusElem.classList.add('mav-active');
-                statusText.textContent = 'MAVLink';
+                statusText.textContent = t('src_mavlink');
             } else if (currentInputSource === 'WEB') {
                 statusElem.classList.add('web-active');
-                statusText.textContent = 'Web';
+                statusText.textContent = t('src_web');
             } else {
                 statusElem.classList.add('failsafe');
-                statusText.textContent = 'Fail-safe';
+                statusText.textContent = t('src_failsafe');
             }
         }
 
@@ -1079,10 +1614,10 @@
 
             if (lightOn) {
                 btn.style.background = 'color-mix(in srgb, var(--warning) 60%, black)';  // Orange when ON
-                status.textContent = 'ON';
+                status.textContent = t('on');
             } else {
                 btn.style.background = 'var(--secondary)';  // Grey when OFF
-                status.textContent = 'OFF';
+                status.textContent = t('off');
             }
         }
 
@@ -1092,10 +1627,10 @@
             if (!btn || !status) return;
             if (locked) {
                 btn.style.background = 'color-mix(in srgb, var(--danger) 65%, black)';  // Red when locked
-                status.textContent = 'LOCKED';
+                status.textContent = t('lock_locked');
             } else {
                 btn.style.background = 'var(--secondary)';  // Grey when unlocked
-                status.textContent = 'UNLOCKED';
+                status.textContent = t('lock_unlocked');
             }
         }
 
@@ -1135,16 +1670,17 @@
         }
 
         // ECU capability probe --------------------------------------------------
+        // PID descriptive names are resolved via t(nameKey); unit symbols stay language-neutral.
         const PROBE_PID_INFO = {
-            0x04: { name: 'Calc Load', unit: '%' },
-            0x0B: { name: 'MAP',       unit: 'kPa' },
-            0x0E: { name: 'Timing Adv', unit: '°' },
-            0x0F: { name: 'IAT',       unit: '°C' },
-            0x42: { name: 'Module V',  unit: 'V' },
-            0x0D: { name: 'Speed',     unit: 'km/h' },
-            0x2F: { name: 'Fuel Lvl',  unit: '%' },
-            0x5C: { name: 'Oil Temp',  unit: '°C' },
-            0x14: { name: 'O2 S1',     unit: 'V' }
+            0x04: { nameKey: 'pid_calc_load',  unit: '%' },
+            0x0B: { nameKey: 'pid_map',        unit: 'kPa' },
+            0x0E: { nameKey: 'pid_timing_adv', unit: '°' },
+            0x0F: { nameKey: 'pid_iat',        unit: '°C' },
+            0x42: { nameKey: 'pid_module_v',   unit: 'V' },
+            0x0D: { nameKey: 'pid_speed',      unit: 'km/h' },
+            0x2F: { nameKey: 'pid_fuel_lvl',   unit: '%' },
+            0x5C: { nameKey: 'pid_oil_temp',   unit: '°C' },
+            0x14: { nameKey: 'pid_o2_s1',      unit: 'V' }
         };
 
         function probeECU() {
@@ -1152,7 +1688,7 @@
             const btn = document.getElementById('probe-btn');
             if (btn.disabled) return;  // already running
             ws.send(JSON.stringify({ cmd: 'can_probe' }));
-            document.getElementById('probe-status').textContent = 'Probe requested…';
+            document.getElementById('probe-status').textContent = t('probe_requested');
             document.getElementById('probe-status').style.color = 'var(--info)';
         }
 
@@ -1163,15 +1699,15 @@
 
             // Button + status reflect running state
             btn.disabled = !!p.running;
-            btn.textContent = p.running ? '🔍 Probing…' : '🔍 Probe ECU';
+            btn.textContent = p.running ? t('probe_probing_btn') : t('btn_probe_ecu');
             if (p.running) {
-                statusEl.textContent = 'Probing ECU…';
+                statusEl.textContent = t('probe_probing');
                 statusEl.style.color = 'var(--info)';
             } else if (p.status === 'no ECU') {
-                statusEl.textContent = 'No ECU / CAN disconnected';
+                statusEl.textContent = t('probe_no_ecu');
                 statusEl.style.color = 'var(--danger)';
             } else if (p.complete) {
-                statusEl.textContent = 'Probe complete';
+                statusEl.textContent = t('probe_complete');
                 statusEl.style.color = 'var(--success)';
             }
 
@@ -1181,29 +1717,30 @@
 
             // Supported-PID bitmaps
             if (p.bitmaps && p.bitmaps.length) {
-                html += '<div style="color: var(--muted-foreground); margin-bottom:4px;">Supported-PID bitmaps</div>';
+                html += '<div style="color: var(--muted-foreground); margin-bottom:4px;">' + t('probe_bitmaps') + '</div>';
                 p.bitmaps.forEach(b => {
                     const grp = '0x' + ('0' + (b.g).toString(16).toUpperCase()).slice(-2);
-                    html += '<div>' + grp + ': <code>' + (b.ans ? b.raw : 'no response') + '</code></div>';
+                    html += '<div>' + grp + ': <code>' + (b.ans ? b.raw : t('probe_no_response')) + '</code></div>';
                 });
             }
 
             // Per-candidate PID results
             if (p.pids && p.pids.length) {
-                html += '<div style="color: var(--muted-foreground); margin:8px 0 4px;">Candidate PIDs</div>';
+                html += '<div style="color: var(--muted-foreground); margin:8px 0 4px;">' + t('probe_candidates') + '</div>';
                 html += '<table style="width:100%; border-collapse:collapse;">';
                 p.pids.forEach(pr => {
-                    const info = PROBE_PID_INFO[pr.pid] || { name: '', unit: '' };
+                    const info = PROBE_PID_INFO[pr.pid] || { nameKey: '', unit: '' };
+                    const pidName = info.nameKey ? t(info.nameKey) : '';
                     const pidHex = '0x' + ('0' + (pr.pid).toString(16).toUpperCase()).slice(-2);
                     let val = '—';
                     if (pr.ans) {
                         if (pr.dec != null) val = pr.dec.toFixed(1) + (info.unit ? ' ' + info.unit : '');
-                        else val = pr.raw ? ('0x' + pr.raw) : 'ok';
+                        else val = pr.raw ? ('0x' + pr.raw) : t('probe_ok');
                     }
                     const color = pr.ans ? 'var(--success)' : 'var(--muted-foreground)';
                     const supMark = pr.sup ? ' <span style="color:var(--info);">•bmp</span>' : '';
                     html += '<tr style="color:' + color + ';">' +
-                            '<td style="padding:2px 6px 2px 0;">' + pidHex + ' ' + info.name + supMark + '</td>' +
+                            '<td style="padding:2px 6px 2px 0;">' + pidHex + ' ' + pidName + supMark + '</td>' +
                             '<td style="padding:2px 0; text-align:right;">' + val + '</td></tr>';
                 });
                 html += '</table>';
@@ -1211,16 +1748,16 @@
 
             // DTC summary
             if (p.dtc) {
-                html += '<div style="color: var(--muted-foreground); margin:8px 0 4px;">Diagnostic Trouble Codes</div>';
+                html += '<div style="color: var(--muted-foreground); margin:8px 0 4px;">' + t('probe_dtc_header') + '</div>';
                 if (!p.dtc.q || !p.dtc.ans) {
-                    html += '<div style="color: var(--muted-foreground);">No Mode 03 response</div>';
+                    html += '<div style="color: var(--muted-foreground);">' + t('probe_no_mode03') + '</div>';
                 } else if (p.dtc.n === 0) {
-                    html += '<div style="color: var(--success);">No stored DTCs</div>';
+                    html += '<div style="color: var(--success);">' + t('probe_no_dtcs') + '</div>';
                 } else {
-                    html += '<div style="color: var(--warning);">' + p.dtc.n + ' DTC(s): ' +
+                    html += '<div style="color: var(--warning);">' + t('probe_dtc_count', p.dtc.n) +
                             (p.dtc.codes || []).join(', ') + '</div>';
                     if (p.trunc) {
-                        html += '<div style="color: var(--warning); font-size:0.9em;">⚠ Additional codes truncated (multi-frame not read)</div>';
+                        html += '<div style="color: var(--warning); font-size:0.9em;">' + t('probe_truncated') + '</div>';
                     }
                 }
             }
@@ -1239,7 +1776,7 @@
             const pos = parseFloat(raw);
             if (!isNaN(pos)) {
                 document.getElementById(idMap[gear]).value = pos.toFixed(1);
-                document.getElementById('gear-default-status').textContent = 'Captured ' + pos.toFixed(1) + '% for ' + gear;
+                document.getElementById('gear-default-status').textContent = t('captured_for', pos.toFixed(1), gear);
                 document.getElementById('gear-default-status').style.color = 'var(--muted-foreground)';
             }
         }
@@ -1248,13 +1785,13 @@
             const idMap = { R: 'default-r', N: 'default-n', L: 'default-l', H: 'default-h' };
             const val = parseFloat(document.getElementById(idMap[gear]).value);
             if (isNaN(val) || val < 0 || val > 100) {
-                document.getElementById('gear-default-status').textContent = 'Invalid position (0.0–100.0)';
+                document.getElementById('gear-default-status').textContent = t('invalid_position');
                 document.getElementById('gear-default-status').style.color = 'var(--danger)';
                 return;
             }
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ cmd: 'move_to_position', value: val }));
-                document.getElementById('gear-default-status').textContent = 'Moving to ' + val.toFixed(1) + '%...';
+                document.getElementById('gear-default-status').textContent = t('moving_to', val.toFixed(1));
                 document.getElementById('gear-default-status').style.color = 'var(--warning)';
             }
         }
@@ -1263,13 +1800,13 @@
             const idMap = { R: 'default-r', N: 'default-n', L: 'default-l', H: 'default-h' };
             const val = parseFloat(document.getElementById(idMap[gear]).value);
             if (isNaN(val) || val < 0 || val > 100) {
-                document.getElementById('gear-default-status').textContent = 'Invalid value (0.0–100.0)';
+                document.getElementById('gear-default-status').textContent = t('invalid_value');
                 document.getElementById('gear-default-status').style.color = 'var(--danger)';
                 return;
             }
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ cmd: 'set_gear_default', value: val, strValue: gear }));
-                document.getElementById('gear-default-status').textContent = 'Saving ' + gear + '...';
+                document.getElementById('gear-default-status').textContent = t('saving_gear', gear);
                 document.getElementById('gear-default-status').style.color = 'var(--muted-foreground)';
             }
         }
@@ -1287,7 +1824,7 @@
         function throttleCalStart() {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ cmd: 'throttle_cal_begin' }));
-                throttleCalSetStatus('Starting…', 'var(--warning)');
+                throttleCalSetStatus(t('throttle_starting'), 'var(--warning)');
             }
         }
 
@@ -1332,13 +1869,13 @@
         function saveBoostRpm() {
             const val = parseInt(document.getElementById('boost-rpm-input').value, 10);
             if (isNaN(val) || val < 500 || val > 5000) {
-                document.getElementById('gear-default-status').textContent = 'Invalid RPM (500–5000)';
+                document.getElementById('gear-default-status').textContent = t('invalid_rpm');
                 document.getElementById('gear-default-status').style.color = 'var(--danger)';
                 return;
             }
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ cmd: 'set_boost_rpm', value: val }));
-                document.getElementById('gear-default-status').textContent = 'Boost RPM saving...';
+                document.getElementById('gear-default-status').textContent = t('boost_rpm_saving');
                 document.getElementById('gear-default-status').style.color = 'var(--muted-foreground)';
             }
         }
@@ -1372,10 +1909,10 @@
             if (!btn || !label) return;
             if (on) {
                 btn.style.background = 'color-mix(in srgb, var(--danger) 65%, black)';   // red = you hold control, MAVLink ignored
-                label.textContent = 'Release Control';
+                label.textContent = t('btn_release_control');
             } else {
                 btn.style.background = 'var(--secondary)';   // grey = MAVLink in charge
-                label.textContent = 'Take Control';
+                label.textContent = t('btn_take_control');
             }
         }
 
@@ -1387,7 +1924,7 @@
         function steerCapture(cmd) {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ cmd: cmd }));
-                steerCenterStatus('Capturing…', 'var(--muted-foreground)');
+                steerCenterStatus(t('capturing'), 'var(--muted-foreground)');
             }
         }
         function steerTest(pct) {
@@ -1442,10 +1979,10 @@
             const status = document.getElementById('boost-test-status');
             if (boostTestActive) {
                 btn.style.background = 'color-mix(in srgb, var(--warning) 75%, black)';
-                status.textContent = 'ON';
+                status.textContent = t('on');
             } else {
                 btn.style.background = 'color-mix(in srgb, var(--warning) 60%, black)';
-                status.textContent = 'OFF';
+                status.textContent = t('off');
             }
         }
 
@@ -1511,18 +2048,18 @@
             if (fileInput.files.length > 0) {
                 label.textContent = fileInput.files[0].name;
             } else {
-                label.textContent = 'Click to select firmware (.bin)';
+                label.textContent = t('fw_select_prompt');
             }
         }
 
         function uploadFirmware() {
             const fileInput = document.getElementById('firmware-file');
             if (fileInput.files.length === 0) {
-                alert('Please select a firmware file first');
+                alert(t('fw_select_first'));
                 return;
             }
 
-            if (!confirm('Upload firmware? Vehicle will enter safe state and reboot.')) {
+            if (!confirm(t('fw_confirm_upload'))) {
                 return;
             }
 
@@ -1541,16 +2078,16 @@
 
             xhr.addEventListener('load', function() {
                 if (xhr.status === 200) {
-                    alert('Firmware uploaded successfully! Device will reboot.');
+                    alert(t('fw_upload_success'));
                     updateProgress(100);
                 } else {
-                    alert('Upload failed: ' + xhr.statusText);
+                    alert(t('fw_upload_failed', xhr.statusText));
                     hideProgress();
                 }
             });
 
             xhr.addEventListener('error', function() {
-                alert('Upload error occurred');
+                alert(t('fw_upload_error'));
                 hideProgress();
             });
 
@@ -1586,7 +2123,7 @@
                 })
                 .catch(error => {
                     console.error('Failed to load debug state:', error);
-                    document.getElementById('debug-toggle-text').textContent = 'Debug: Error';
+                    document.getElementById('debug-toggle-text').textContent = t('debug_error');
                 });
         }
 
@@ -1605,14 +2142,14 @@
             .then(data => {
                 if (data.success) {
                     updateDebugButton(data.enabled);
-                    showCalibrationStatus(true, data.message || `Debug ${data.enabled ? 'enabled' : 'disabled'}`);
+                    showCalibrationStatus(true, data.message || (data.enabled ? t('debug_enabled') : t('debug_disabled')));
                 } else {
-                    showCalibrationStatus(false, 'Failed to toggle debug');
+                    showCalibrationStatus(false, t('debug_toggle_failed'));
                 }
             })
             .catch(error => {
                 console.error('Failed to toggle debug:', error);
-                showCalibrationStatus(false, 'Error toggling debug');
+                showCalibrationStatus(false, t('debug_toggle_error'));
             });
         }
 
@@ -1621,12 +2158,13 @@
             const text = document.getElementById('debug-toggle-text');
 
             btn.dataset.state = enabled;
-            text.textContent = enabled ? 'Debug: ON' : 'Debug: OFF';
+            text.textContent = enabled ? t('debug_on') : t('debug_off');
             btn.style.background = enabled ? 'color-mix(in srgb, var(--success) 45%, black)' : 'var(--secondary)';
         }
 
         // Initialize WebSocket connection on page load
         window.addEventListener('load', function() {
+            applyLanguage(detectLanguage(), false);   // auto-detect on first visit; no persist
             connectWebSocket();
             loadDebugState();
         });
