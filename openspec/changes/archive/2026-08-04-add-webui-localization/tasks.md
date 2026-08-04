@@ -47,9 +47,9 @@
       (grep audit); confirm every key exists in both `en` and `uk`.
 - [x] 6.2 Confirm the page still has zero external/network dependencies (no CDN, no fetch,
       no remote fonts) and the Sage Garden theme is visually unchanged.
-- [ ] 6.3 Deploy the web UI to LittleFS with `pio run -t uploadfs` (firmware flash alone
+- [x] 6.3 Deploy the web UI to LittleFS with `pio run -t uploadfs` (firmware flash alone
       does not update the served page).
-- [ ] 6.4 On-device review by the native Ukrainian-speaking operator: switch EN⇄УК, verify
+- [x] 6.4 On-device review by the native Ukrainian-speaking operator: switch EN⇄УК, verify
       persistence across reloads, first-visit auto-detection, `<html lang>` update, and
       Ukrainian quality/terminology on every card.
 - [x] 6.5 Run `openspec validate add-webui-localization --strict` and resolve any issues.

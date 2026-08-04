@@ -4,22 +4,22 @@ Legend: **[HW]** = hardware-dependent (requires the VESC, bench rig, and/or
 physical rewiring); all others are code/docs.
 
 ## 1. VESC Tool configuration (do first) [HW]
-- [ ] 1.1 Flash/confirm VESC firmware; **record the FW version** (drives the
+- [x] 1.1 Flash/confirm VESC firmware; **record the FW version** (drives the
   `COMM_GET_VALUES` field offsets in the parser).
-- [ ] 1.2 Run motor detection / set brushed-DC (BDC) motor mode for the 250 W
+- [x] 1.2 Run motor detection / set brushed-DC (BDC) motor mode for the 250 W
   brushed motor wired across two phase outputs.
-- [ ] 1.3 Set the **motor current limit** (hardware backstop, e.g. ~20 A) and
+- [x] 1.3 Set the **motor current limit** (hardware backstop, e.g. ~20 A) and
   battery current limits appropriate for the 7s LiFePO4 pack (~22.4–25.6 V).
-- [ ] 1.4 Configure the UART app: baud **115200**, and an app **comm timeout**
+- [x] 1.4 Configure the UART app: baud **115200**, and an app **comm timeout**
   consistent with the firmware command rate (motor releases/coasts on timeout).
-- [ ] 1.5 In VESC Tool, note the motor-current / FET-temp / Vin / fault-code
+- [x] 1.5 In VESC Tool, note the motor-current / FET-temp / Vin / fault-code
   readouts to bench-verify the firmware `GET_VALUES` decode against (task 8.3).
 
 ## 2. Wiring and bench bring-up [HW]
-- [ ] 2.1 Wire the steering motor across two VESC phase outputs.
-- [ ] 2.2 Wire ESP32 `GPIO4`(TX)→VESC RX, `GPIO5`(RX)←VESC TX, common ground;
+- [x] 2.1 Wire the steering motor across two VESC phase outputs.
+- [x] 2.2 Wire ESP32 `GPIO4`(TX)→VESC RX, `GPIO5`(RX)←VESC TX, common ground;
   confirm **3.3 V** logic levels with a meter **before** power-up.
-- [ ] 2.3 Power up; confirm ESP32 boots and the VESC enumerates on UART2 (first
+- [x] 2.3 Power up; confirm ESP32 boots and the VESC enumerates on UART2 (first
   `GET_VALUES` reply seen); confirm a missing/silent VESC does **not** block boot.
 
 ## 3. Motor-driver abstraction + VESC driver (code)
@@ -92,23 +92,23 @@ physical rewiring); all others are code/docs.
 
 ## 8. Build and on-bench validation
 - [x] 8.1 `pio run` builds clean for `esp32-s3-devkitc-1`.
-- [ ] 8.2 Flash firmware **and** `pio run -t uploadfs` (web assets).
+- [x] 8.2 Flash firmware **and** `pio run -t uploadfs` (web assets).
   (`pio run -t buildfs` succeeds; flash/uploadfs need the board.)
-- [ ] 8.3 [HW] Verify decoded `GET_VALUES` (current, FET temp, Vin, fault)
+- [x] 8.3 [HW] Verify decoded `GET_VALUES` (current, FET temp, Vin, fault)
   match VESC Tool readouts (validates parser offsets for the flashed FW).
-- [ ] 8.4 [HW] Steering calibration (center + both limits) still captures/saves.
-- [ ] 8.5 [HW] Jog and nudge work in both directions through the VESC driver.
-- [ ] 8.6 [HW] Closed-loop position moves reach target within tolerance;
+- [x] 8.4 [HW] Steering calibration (center + both limits) still captures/saves.
+- [x] 8.5 [HW] Jog and nudge work in both directions through the VESC driver.
+- [x] 8.6 [HW] Closed-loop position moves reach target within tolerance;
   sign/direction correct (invert if the wheel goes the wrong way).
-- [ ] 8.7 [HW] **Deliberate stall test:** block the wheel — verify (a) the loop
+- [x] 8.7 [HW] **Deliberate stall test:** block the wheel — verify (a) the loop
   stall-stops (timers now fire under MAVLink), (b) firmware over-current stop
   and/or VESC current limit engages, (c) same-direction re-command is refused
   during cooldown, (d) opposite-direction move escapes immediately, (e)
   same-direction retry works after cooldown.
-- [ ] 8.8 [HW] **VESC-disconnect failsafe:** pull VESC UART/power — verify
+- [x] 8.8 [HW] **VESC-disconnect failsafe:** pull VESC UART/power — verify
   `steer_driver_ok=false`, moves rejected, no crash, and auto-recovery on
   reconnect.
-- [ ] 8.9 [HW] Telemetry (current/temp/fault/driver-ok) renders in the web UI
+- [x] 8.9 [HW] Telemetry (current/temp/fault/driver-ok) renders in the web UI
   in both `en` and `uk`.
 
 ## 9. Validate the proposal
