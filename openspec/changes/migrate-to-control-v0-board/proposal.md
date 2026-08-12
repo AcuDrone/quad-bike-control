@@ -33,8 +33,10 @@ USB data lines, so they cannot coexist.
   `VehicleController::isBrakeReleased()`) read the cached snapshot instead of `digitalRead()`.
 - **BREAKING — `RelayController` moves off GPIO.** `PIN_RELAY1-3` and `PIN_WHEEL_LOCK` are deleted;
   the relays are driven over a **second I2C bus (`Wire1`, SDA GPIO48 / SCL GPIO47)** on the external
-  relay board's PCA9557 @ 0x18. Mapping: Relay_1 = ignition/ECU line, Relay_2 = starter,
-  Relay_3 = front light, Relay_4 = front-wheel lock, Relay_5-8 spare. The public
+  relay board's PCA9557 @ 0x18. The board's IO routing is **not** 1:1 (`Relay_1=IO4 … Relay_8=IO1`),
+  and two functions drive a paralleled pair, so firmware uses port masks: ignition/ECU line =
+  Relay_1 + Relay_2 (IO4+IO5), starter = Relay_3 (IO6), front light = Relay_4 (IO7), front-wheel
+  lock = Relay_5 + Relay_6 (IO3+IO2), Relay_7/Relay_8 (IO0/IO1) spare. The public
   `RelayController` API (`begin`, `setIgnitionState`, `requestCrank`, `setFrontLight`,
   `setWheelLock`, `update`, `allOff`, getters) is unchanged, so callers do not move.
 - **New — expander fault policy.** Input reads that fail hold the last-known snapshot, mark it stale
@@ -72,7 +74,7 @@ Stated explicitly so reviewers do not expect them here:
 - **S-BUS input** — dropped for good (no UART was available for it). GPIO8 / the X2 6N137 opto input
   is reallocated to the driveline speed sensor, but that pin is allocated and used by the separate
   `add-hall-speed-sensor` change, not here; this change leaves GPIO8 unused.
-- **Relay_5-8 and opto In6-8** — wired to the connectors, no firmware function assigned.
+- **Relay_7/Relay_8 and opto In6-8** — wired to the connectors, no firmware function assigned.
 - **Hall_2 / Hall_3 channels (GPIO10-13), GPIO21, GPIO0 system LED** — left spare.
 
 ## Impact
@@ -89,7 +91,8 @@ Stated explicitly so reviewers do not expect them here:
     on board I/O expander fault; **MODIFIED** `Brake Control System` (brake retraction endstop now
     comes from opto In5 through the expander).
   - `mavlink-interface` — **MODIFIED** `Relay Controller for Ignition and Lights` (expander-backed
-    relays, corrected relay truth table, `Relay_4` wheel lock).
+    relays, corrected relay truth table keyed on `RELAY_MASK_*`, paired ignition and wheel-lock
+    relays).
   - `web-telemetry` — **ADDED** 24V rail voltage telemetry and board I/O health telemetry.
   - `web-control` — **ADDED** guarded 24V boost rail control via the web interface.
   - `debug-logging` — **ADDED** the USB-CDC serial console requirement (UART0 reserved).

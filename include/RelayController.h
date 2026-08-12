@@ -11,9 +11,16 @@
  *
  * Manages relay outputs for vehicle ignition states (OFF/ACC/IGNITION/CRANKING),
  * front light and front-wheel lock. The relays live on the external relay board's
- * PCA9557 @ `PCA9557_ADDR_RELAYS` (0x18) on I2C2 (`Wire1`), not on ESP32 GPIO:
- * Relay_1 = ignition/ECU line, Relay_2 = starter, Relay_3 = front light,
- * Relay_4 = front-wheel lock, Relay_5-8 spare (always written off).
+ * PCA9557 @ `PCA9557_ADDR_RELAYS` (0x18) on I2C2 (`Wire1`), not on ESP32 GPIO.
+ *
+ * The board's IO routing is NOT 1:1 (Relay_1=IO4 … Relay_8=IO1), and two functions
+ * drive a paralleled PAIR of relays, so each function is a whole-port MASK from
+ * `Constants.h` rather than a single bit:
+ *   ignition/ECU line = Relay_1 + Relay_2 (RELAY_MASK_IGNITION, two paralleled relays),
+ *   starter           = Relay_3           (RELAY_MASK_STARTER),
+ *   front light       = Relay_4           (RELAY_MASK_FRONT_LIGHT),
+ *   front-wheel lock  = Relay_5 + Relay_6 (RELAY_MASK_WHEEL_LOCK, two paralleled relays),
+ *   Relay_7 / Relay_8 = spare (always written off).
  *
  * The whole 8-bit port is written from a single shadow byte and verified by
  * reading the output register back, because over I2C a write can fail silently
@@ -31,10 +38,10 @@ public:
      * @brief Ignition state enum
      */
     enum class IgnitionState {
-        OFF,        // All power off (Relay_1 LOW, Relay_2 LOW)
-        ACC,        // Ignition/ECU line powered (Relay_1 HIGH, Relay_2 LOW)
-        IGNITION,   // Ignition/ECU line powered, starter off (Relay_1 HIGH, Relay_2 LOW)
-        CRANKING    // Starter engaged (Relay_1 HIGH, Relay_2 HIGH); auto-stops on RPM or CRANKING_TIMEOUT
+        OFF,        // All power off (ignition mask LOW, starter mask LOW)
+        ACC,        // Ignition/ECU line powered (ignition mask HIGH, starter mask LOW)
+        IGNITION,   // Ignition/ECU line powered, starter off (ignition mask HIGH, starter mask LOW)
+        CRANKING    // Starter engaged (ignition mask HIGH, starter mask HIGH); auto-stops on RPM or CRANKING_TIMEOUT
     };
 
     /**
@@ -61,7 +68,7 @@ public:
      * @param state Desired ignition state (OFF/ACC/IGNITION)
      *
      * Moving to OFF or ACC cancels any pending or active crank. Only OFF resets the
-     * R1 pre-crank dwell timer (ACC<->IGNITION jitter keeps R1 powered).
+     * ignition-line pre-crank dwell timer (ACC<->IGNITION jitter keeps it powered).
      */
     void setIgnitionState(IgnitionState state);
 
@@ -70,7 +77,7 @@ public:
      *
      * Call once on a FRESH operator selection of IGNITION. Brings up the ignition/ECU
      * line (ACC) if it was off, then arms a dwell-gated crank: update() engages the
-     * starter only once R1 has been powered for ACC_PRECRANK_DWELL_MS (immediately if
+     * starter only once the ignition line has been powered for ACC_PRECRANK_DWELL_MS (immediately if
      * it already has), and suppresses the crank if the engine is already running.
      * While waiting, the reported state is ACC. Does not re-crank while held.
      * Refused while the expander is unavailable or a starter fault is latched.
@@ -144,7 +151,7 @@ public:
 
 private:
     PCA9557Expander expander_;
-    uint8_t outputShadow_;   // whole-port shadow; bits per RELAY_BIT_* in Constants.h
+    uint8_t outputShadow_;   // whole-port shadow; bits per RELAY_MASK_* in Constants.h
 
     bool initialized_;       // begin() succeeded
     bool faulted_;           // a port write could not be verified
@@ -161,7 +168,7 @@ private:
     bool isCranking_;              // True if currently in cranking state
 
     // Pre-crank dwell tracking
-    uint32_t r1HighSince_;         // millis() when R1 (ignition/ECU) went LOW->HIGH; 0 while OFF
+    uint32_t ignitionHighSince_;   // millis() when the ignition/ECU line (Relay_1+Relay_2) went LOW->HIGH; 0 while OFF
     bool crankArmed_;              // True if a dwell-gated crank is pending
 
     /** @brief Recompute the shadow byte from the tracked state and write the port */
@@ -170,8 +177,8 @@ private:
     /**
      * @brief Write the whole port and verify it by reading the output register back.
      * Retries up to `attempts` times. On persistent failure raises the fault and,
-     * if the starter bit was set, runs the starter escalation (all-off, ignition OFF,
-     * crank inhibit).
+     * if any `RELAY_MASK_STARTER` bit was set, runs the starter escalation (all-off,
+     * ignition OFF, crank inhibit).
      * @param value    port byte to write
      * @param attempts verification attempts (the faulted-path retry in update() uses
      *                 1, so a wedged bus cannot cost the control loop several I2C
@@ -183,9 +190,14 @@ private:
     /** @brief Immediate best-effort all-relays-off write (no retry loop) */
     void forceAllOffWrite();
 
-    /** @brief Set/clear one bit of the shadow byte */
-    static uint8_t withBit(uint8_t value, uint8_t bit, bool on) {
-        return on ? (uint8_t)(value | (1u << bit)) : (uint8_t)(value & ~(1u << bit));
+    /**
+     * @brief Set or clear a whole function mask in the shadow byte.
+     *
+     * A mask can cover more than one relay (ignition and wheel lock each drive two
+     * paralleled relays), so every bit of the mask moves together.
+     */
+    static uint8_t withMask(uint8_t value, uint8_t mask, bool on) {
+        return on ? (uint8_t)(value | mask) : (uint8_t)(value & (uint8_t)~mask);
     }
 };
 

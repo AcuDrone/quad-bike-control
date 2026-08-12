@@ -24,8 +24,10 @@
 - [x] 2.5 Add the I2C/expander block: `PIN_RELAY_SDA` (48), `PIN_RELAY_SCL` (47), `I2C_BUS_FREQ_HZ`
   (100000 — 100 kHz, long AS5600 cable run to X14), `PCA9557_ADDR_INPUTS` (0x1A), `PCA9557_ADDR_RELAYS` (0x18), `PCA9557_ADDR_MUX_RESERVED`
   (0x1C, documented as never-addressed), and the opto-input bit indices In1-In5 →
-  REVERSE/NEUTRAL/LOW/HIGH/BRAKE plus the relay bit indices Relay_1-4 →
-  IGNITION/STARTER/FRONT_LIGHT/WHEEL_LOCK.
+  REVERSE/NEUTRAL/LOW/HIGH/BRAKE plus the relay port masks `RELAY_MASK_IGNITION` (`0b00110000`,
+  Relay_1 IO4 + Relay_2 IO5), `RELAY_MASK_STARTER` (`0b01000000`, Relay_3 IO6),
+  `RELAY_MASK_FRONT_LIGHT` (`0b10000000`, Relay_4 IO7) and `RELAY_MASK_WHEEL_LOCK` (`0b00001100`,
+  Relay_5 IO3 + Relay_6 IO2). ⚠ The board's IO routing is NOT 1:1 — do not use per-relay bit indices.
 - [x] 2.6 Add the timing/policy constants: `BOARD_INPUT_POLL_MS` (25), `BOARD_INPUT_STALE_MS` (250),
   `BOARD_INPUT_RECOVER_MS` (1000), `RELAY_WRITE_RETRIES` (3), `RAIL_SAMPLE_INTERVAL_MS` (500),
   `RAIL_24V_DIVIDER_RATIO` (9.33f), `RAIL_24V_LOW_THRESHOLD` (21.0f), `BOOST_STARTUP_GRACE_MS` (1000).
@@ -65,18 +67,20 @@
   `PCA9557_ADDR_RELAYS`; keep an 8-bit output shadow byte and always write the whole port.
   **The public API (`begin`, `setIgnitionState`, `requestCrank`, `setFrontLight`, `setWheelLock`,
   `update`, `allOff`, all getters) and the `IgnitionState` semantics must not change.**
-- [x] 5.2 Map Relay_1 = ignition/ECU line, Relay_2 = starter, Relay_3 = front light,
-  Relay_4 = front-wheel lock; Relay_5-8 stay LOW. Preserve the existing truth table
-  (OFF: R1 LOW/R2 LOW; ACC and IGNITION: R1 HIGH/R2 LOW; CRANKING: R1 HIGH/R2 HIGH) and the
-  `ACC_PRECRANK_DWELL_MS` / `CRANKING_TIMEOUT` / RPM-exit crank logic untouched.
+- [x] 5.2 Build the shadow byte from the `RELAY_MASK_*` masks: ignition/ECU line = Relay_1 + Relay_2
+  (IO4+IO5, paralleled pair), starter = Relay_3 (IO6), front light = Relay_4 (IO7), front-wheel lock
+  = Relay_5 + Relay_6 (IO3+IO2, paralleled pair); spares Relay_7/Relay_8 (IO0/IO1) stay LOW.
+  Preserve the existing truth table (OFF: ignition mask LOW / starter mask LOW; ACC and IGNITION:
+  ignition mask HIGH / starter mask LOW; CRANKING: both HIGH) and the `ACC_PRECRANK_DWELL_MS` /
+  `CRANKING_TIMEOUT` / RPM-exit crank logic untouched.
 - [x] 5.3 In `begin()`, configure all eight pins as outputs and drive the port to 0x00 (all relays
   off) **before** returning; probe 0x18 and, if absent, additionally probe 0x1C and log the distinct
   "relay board strapped to the mux address (0x1C)" error. Return `false` on failure.
 - [x] 5.4 Implement write verification: after every port write, read the output register back and
   compare; retry up to `RELAY_WRITE_RETRIES`; on persistent mismatch set `isFaulted()` and log.
-- [x] 5.5 Implement the starter escalation from `design.md` Decision 3: the starter bit is only ever
-  set in `CRANKING`; a crank aborts if the read-back does not confirm engagement; any relay fault
-  while the starter bit is set triggers an immediate repeated all-off write, latches ignition to
+- [x] 5.5 Implement the starter escalation from `design.md` Decision 3: `RELAY_MASK_STARTER` is only
+  ever set in `CRANKING`; a crank aborts if the read-back does not confirm engagement; any relay fault
+  while a starter-mask bit is set triggers an immediate repeated all-off write, latches ignition to
   `OFF`, and refuses new crank requests until the expander verifies clean again.
 - [x] 5.6 When `begin()` failed or the driver is faulted, all setters become logging no-ops and
   `getIgnitionState()` reports `OFF`; the rest of the vehicle continues running degraded.
@@ -196,10 +200,13 @@
   gear goes `UNKNOWN` within `BOARD_INPUT_STALE_MS`, throttle is capped at 5%, `io_input_fault`
   appears in telemetry, and everything recovers automatically on reconnect.
 - [ ] 11.6 **[USER/MANUAL]** Relays, engine disabled (starter lead disconnected or fuel/ignition
-  isolated): click each of Relay_1-4 from the web UI / MAVLink and confirm the correct relay clicks,
-  the read-back verifies, and Relay_5-8 never move.
+  isolated): exercise each function from the web UI / MAVLink and confirm the correct relays click —
+  ignition clicks **both** Relay_1 (X4) and Relay_2 (X5), the wheel lock clicks **both** Relay_5 (X8)
+  and Relay_6 (X9), starter is Relay_3 (X6) alone, front light is Relay_4 (X7) alone — the read-back
+  verifies, and Relay_7 (X10) / Relay_8 (X11) never move.
 - [ ] 11.7 **[USER/MANUAL]** Crank sequence with the starter lead still disconnected: confirm the
-  `ACC_PRECRANK_DWELL_MS` dwell before Relay_2, and that Relay_2 releases on `CRANKING_TIMEOUT`.
+  `ACC_PRECRANK_DWELL_MS` dwell before Relay_3 (starter) engages, and that Relay_3 releases on
+  `CRANKING_TIMEOUT`.
   Then unplug X15 mid-crank and confirm the all-off escalation, ignition latching to `OFF`, and
   `io_relay_fault` in telemetry.
 - [ ] 11.8 **[USER/MANUAL]** Servos: confirm throttle (GPIO15) and transmission (GPIO16) move on the

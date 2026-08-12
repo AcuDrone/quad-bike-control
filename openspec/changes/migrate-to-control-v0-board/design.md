@@ -127,18 +127,29 @@ gear-flap glitch on a single NACK. Consumer degradation is specified in the `veh
 The PCA9557 output register is readable. Every `RelayController` write therefore does
 write → read-back-and-compare → retry (up to `RELAY_WRITE_RETRIES`, 3, on the same `update()` pass,
 which is bounded and short even at 100 kHz — a retry is a few one-byte transactions) → on persistent mismatch raise `relayFault` and log. The
-whole 8-bit output port is written from a single shadow byte, so the four used relays and the four
+whole 8-bit output port is written from a single shadow byte, so the six used relays and the two
 spares are always consistent and there is no read-modify-write race.
 
-**The starter (Relay_2) is treated as more dangerous than the others.** A stuck-on starter destroys
+**The relay board's PCA9557 routing is not 1:1** (`Relay_1=IO4, Relay_2=IO5, Relay_3=IO6,
+Relay_4=IO7, Relay_5=IO3, Relay_6=IO2, Relay_7=IO0, Relay_8=IO1`, from the `Relay.PrjPcb` netlist),
+and two functions drive a paralleled *pair* of relays that switch together — the ignition/ECU line
+(Relay_1 + Relay_2, harness X4 + X5) and the front-wheel lock (Relay_5 + Relay_6, harness X8 + X9).
+Firmware therefore names each function by a whole-port mask (`RELAY_MASK_IGNITION` `0b00110000`,
+`RELAY_MASK_STARTER` `0b01000000`, `RELAY_MASK_FRONT_LIGHT` `0b10000000`, `RELAY_MASK_WHEEL_LOCK`
+`0b00001100`; spares Relay_7/Relay_8 = `0b00000011`, always 0) instead of per-relay bit indices.
+A mask is set or cleared in one operation, so a pair can never be left half-energized, and the
+"obvious" `Relay_N = bit N` shortcut — which would fire the starter on a front-light command — has
+no place to hide.
+
+**The starter (Relay_3, IO6) is treated as more dangerous than the others.** A stuck-on starter destroys
 the starter motor and can move the vehicle. Its handling:
 
-- The starter bit is never set unless `RelayController` is in `CRANKING`, and the existing
+- `RELAY_MASK_STARTER` is never set unless `RelayController` is in `CRANKING`, and the existing
   `CRANKING_TIMEOUT` / RPM-based exit is unchanged.
-- A verified read-back is **required** before the starter bit is considered engaged; if the
-  read-back after engaging does not confirm, the crank is aborted and the port is rewritten with
-  the starter bit clear.
-- On any relay-write fault while the starter bit is set, the driver immediately attempts an
+- A verified read-back is **required** before the starter is considered engaged; if the read-back
+  after engaging does not confirm, the crank is aborted and the port is rewritten with
+  `RELAY_MASK_STARTER` clear.
+- On any relay-write fault while a `RELAY_MASK_STARTER` bit is set, the driver immediately attempts an
   "all-relays-off" port write, repeats it every `update()` while the fault persists, latches the
   ignition state to `OFF`, and refuses new crank requests until the expander verifies clean again.
 - Any expander failure at `begin()` leaves the driver un-initialized; `begin()` returns `false`,

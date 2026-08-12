@@ -224,15 +224,41 @@ All inputs are 5V, PC817-isolated, each an `In_Plus` / `In_Minus` pair. They are
 ## 6. Relay Board Assignment
 
 `Relay.PrjPcb` — 8× SRD-12VDC relays (NO / COM / NC per relay), board powered from 12V, driven by its
-own PCA9557 over X15 / I2C2.
+own PCA9557 over X15 / I2C2. **X4..X11 below are the RELAY BOARD's own connectors** — not the main
+board's X4/X5 Hall headers in §3.
 
-| Relay | Function |
-|-------|----------|
-| Relay_1 | Ignition |
-| Relay_2 | Starter |
-| Relay_3 | Front light |
-| Relay_4 | Front-wheel lock |
-| Relay_5-8 | Spare |
+| Relay | PCA9557 IO | Port bit | Connector | Function |
+|-------|-----------|----------|-----------|----------|
+| Relay_1 | **IO4** | `0b00010000` | X4 | Ignition / ECU line — **pair with Relay_2** |
+| Relay_2 | **IO5** | `0b00100000` | X5 | Ignition / ECU line — **pair with Relay_1** |
+| Relay_3 | **IO6** | `0b01000000` | X6 | Starter solenoid |
+| Relay_4 | **IO7** | `0b10000000` | X7 | Front light |
+| Relay_5 | **IO3** | `0b00001000` | X8 | Front-wheel lock — **pair with Relay_6** |
+| Relay_6 | **IO2** | `0b00000100` | X9 | Front-wheel lock — **pair with Relay_5** |
+| Relay_7 | **IO0** | `0b00000001` | X10 | Spare — always driven off |
+| Relay_8 | **IO1** | `0b00000010` | X11 | Spare — always driven off |
+
+> ⚠ **The PCA9557 IO routing is NOT 1:1 with the relay numbers.** Verified from the `Relay.PrjPcb`
+> schematic netlist: `Relay_1=IO4, Relay_2=IO5, Relay_3=IO6, Relay_4=IO7, Relay_5=IO3, Relay_6=IO2,
+> Relay_7=IO0, Relay_8=IO1`. Do **not** "fix" firmware back to `Relay_N = bit N` — that mapping is
+> wrong and would fire the starter when the front light is commanded. The firmware encodes this in
+> `RELAY_MASK_*` in `include/Constants.h`, never in per-relay bit indices.
+
+**Duplicate (paralleled) relays are intentional.** Two functions are split across two relay contacts
+that always energize together:
+
+| Function | Mask (`include/Constants.h`) | Value | Relays / IO |
+|----------|------------------------------|-------|-------------|
+| Ignition / ECU line | `RELAY_MASK_IGNITION` | `0b00110000` | Relay_1 (IO4) + Relay_2 (IO5) |
+| Starter | `RELAY_MASK_STARTER` | `0b01000000` | Relay_3 (IO6) |
+| Front light | `RELAY_MASK_FRONT_LIGHT` | `0b10000000` | Relay_4 (IO7) |
+| Front-wheel lock | `RELAY_MASK_WHEEL_LOCK` | `0b00001100` | Relay_5 (IO3) + Relay_6 (IO2) |
+| Spare | — | `0b00000011` | Relay_7 (IO0) + Relay_8 (IO1), always 0 |
+
+**Harness wiring note.** The ignition/ECU load is wired to **X4 + X5**, the front-wheel lock to
+**X8 + X9**, the starter solenoid to **X6**, and the front light to **X7**. Nothing is landed on X10
+or X11. The whole 8-bit port is written from a single shadow byte and read back for verification,
+so a paired relay can never be left half-energized by firmware.
 
 ---
 
@@ -278,6 +304,14 @@ A separate 7s LiFePO4 battery also exists in the vehicle power system.
    currently has no `build_flags` for it); use the serial monitor over USB-C.
 8. **Relay-board PCA9557 address straps must differ from on-board U2 (0x1C)** — populate
    A2A1A0 = 000 → **0x18**.
+   - ⚠ **The relay board's IO routing is NOT 1:1** (§6): `Relay_1=IO4, Relay_2=IO5, Relay_3=IO6,
+     Relay_4=IO7, Relay_5=IO3, Relay_6=IO2, Relay_7=IO0, Relay_8=IO1`, verified from the
+     `Relay.PrjPcb` netlist. Never "simplify" the firmware back to `Relay_N = bit N` — that would
+     command the starter when the front light is requested. Firmware uses `RELAY_MASK_*`.
+   - Two loads are deliberately split across **paired** relays that switch together: the
+     ignition/ECU line on **X4 + X5** (Relay_1 + Relay_2) and the front-wheel lock on **X8 + X9**
+     (Relay_5 + Relay_6). Starter is **X6** (Relay_3), front light **X7** (Relay_4). X10/X11
+     (Relay_7/Relay_8) stay unconnected and are always written off.
 9. **Driveline speed sensor is on GPIO8 — the X2 6N137 opto input, not a Hall channel.** The fitted
    sensor outputs **12V**; the Hall channels are scaled for 5V (warning 5), while the opto input is
    current-driven and galvanically isolated, so it takes 12V with a single external series resistor.
@@ -333,10 +367,10 @@ A separate 7s LiFePO4 battery also exists in the vehicle power system.
 | `PIN_GEAR_NEUTRAL` | 20 | Opto input **In2** |
 | `PIN_GEAR_LOW` | 21 | Opto input **In3** |
 | `PIN_GEAR_HIGH` | 47 | Opto input **In4** |
-| `PIN_RELAY1` | 36 | Relay board **Relay_1** (ignition) |
-| `PIN_RELAY2` | 37 | Relay board **Relay_2** (starter) |
-| `PIN_RELAY3` | 38 | Relay board **Relay_3** (front light) |
-| `PIN_WHEEL_LOCK` | 39 | Relay board **Relay_4** (front-wheel lock) |
+| `PIN_RELAY1` | 36 | Relay board ignition/ECU line — **Relay_1 + Relay_2** (IO4+IO5, `RELAY_MASK_IGNITION`) |
+| `PIN_RELAY2` | 37 | Relay board starter — **Relay_3** (IO6, `RELAY_MASK_STARTER`) |
+| `PIN_RELAY3` | 38 | Relay board front light — **Relay_4** (IO7, `RELAY_MASK_FRONT_LIGHT`) |
+| `PIN_WHEEL_LOCK` | 39 | Relay board front-wheel lock — **Relay_5 + Relay_6** (IO3+IO2, `RELAY_MASK_WHEEL_LOCK`) |
 | `PIN_STEER_RPWM` / `PIN_STEER_LPWM` | 17 / 18 | Fully released — GPIO17/18 are now MAVLink UART1. The "RESERVED/FREED" placeholders (and `LEDC_CH_STEER_RPWM`/`LEDC_CH_STEER_LPWM`) must be deleted, not kept reserved |
 
 ### New / reworked drivers

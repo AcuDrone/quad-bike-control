@@ -127,12 +127,23 @@
 // ONE place to flip if the bench check (task 11.4) shows the opposite sense.
 #define BOARD_INPUT_ACTIVE_LOW     1     // 1 = asserted input reads 0, 0 = asserted reads 1
 
-// Relay bit indices on the relay board's PCA9557 (Relay_1..Relay_8 = bits 0..7).
-// Relay_5-8 are wired to the board but always driven off.
-#define RELAY_BIT_IGNITION         0     // Relay_1 — ignition / ECU line
-#define RELAY_BIT_STARTER          1     // Relay_2 — starter
-#define RELAY_BIT_FRONT_LIGHT      2     // Relay_3 — front light
-#define RELAY_BIT_WHEEL_LOCK       3     // Relay_4 — front-wheel lock
+// Relay port masks on the relay board's PCA9557.
+//
+// ⚠ The relay board's IO routing is NOT 1:1 — do NOT "simplify" these back to
+//   Relay_N = bit N. Verified against the Relay.PrjPcb schematic netlist:
+//     Relay_1=IO4  Relay_2=IO5  Relay_3=IO6  Relay_4=IO7
+//     Relay_5=IO3  Relay_6=IO2  Relay_7=IO0  Relay_8=IO1
+//
+// Two functions drive a PAIR of relays that always energize together (the load is
+// split across two contacts in the harness), so each function is a whole-port MASK,
+// not a single bit.
+#define RELAY_MASK_IGNITION     0b00110000  // Relay_1 (IO4, X4) + Relay_2 (IO5, X5) — ignition/ECU line, paralleled pair
+#define RELAY_MASK_STARTER      0b01000000  // Relay_3 (IO6, X6) — starter solenoid
+#define RELAY_MASK_FRONT_LIGHT  0b10000000  // Relay_4 (IO7, X7) — front light
+#define RELAY_MASK_WHEEL_LOCK   0b00001100  // Relay_5 (IO3, X8) + Relay_6 (IO2, X9) — front-wheel lock, paralleled pair
+// Relay_7 (IO0, X10) and Relay_8 (IO1, X11) are spare: mask 0b00000011 is always
+// written 0. Connectors X4..X11 above are the RELAY BOARD's connectors, not the
+// main board's X4/X5 Hall headers.
 
 // Expander timing / fault policy
 #define BOARD_INPUT_POLL_MS        25    // ms between opto-input polls
@@ -156,7 +167,7 @@
 
 // Cranking Parameters
 #define CRANKING_TIMEOUT           2000  // ms - maximum cranking duration
-#define ACC_PRECRANK_DWELL_MS      2000  // ms - ignition/ECU line (R1) must be powered this long before the starter (R2) engages
+#define ACC_PRECRANK_DWELL_MS      2000  // ms - ignition/ECU line (Relay_1+Relay_2) must be powered this long before the starter (Relay_3) engages
 #define ENGINE_RUNNING_RPM_THRESHOLD 1500  // RPM - engine considered running above this
 
 // ============================================================================

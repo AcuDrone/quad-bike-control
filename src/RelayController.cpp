@@ -13,7 +13,7 @@ RelayController::RelayController(TwoWire& bus)
       wheelLockOn_(false),
       crankingStartTime_(0),
       isCranking_(false),
-      r1HighSince_(0),
+      ignitionHighSince_(0),
       crankArmed_(false) {
 }
 
@@ -63,7 +63,7 @@ bool RelayController::begin() {
     currentIgnitionState_ = IgnitionState::OFF;
     frontLightOn_ = false;
     wheelLockOn_ = false;
-    r1HighSince_ = 0;
+    ignitionHighSince_ = 0;
     crankArmed_ = false;
     isCranking_ = false;
 
@@ -93,15 +93,16 @@ void RelayController::setIgnitionState(IgnitionState state) {
             return;
         }
 
-        // R1 (ignition/ECU line) is HIGH in ACC/IGNITION/CRANKING, LOW only in OFF.
-        // Start the pre-crank dwell clock on the LOW->HIGH edge; reset it only on OFF
-        // (jitter between ACC and IGNITION keeps R1 powered, so it must NOT reset).
-        bool r1WasHigh = (currentIgnitionState_ != IgnitionState::OFF);
-        bool r1WillBeHigh = (state != IgnitionState::OFF);
-        if (!r1WasHigh && r1WillBeHigh) {
-            r1HighSince_ = millis();
-        } else if (!r1WillBeHigh) {
-            r1HighSince_ = 0;
+        // The ignition/ECU line (Relay_1 + Relay_2, RELAY_MASK_IGNITION) is HIGH in
+        // ACC/IGNITION/CRANKING, LOW only in OFF. Start the pre-crank dwell clock on the
+        // LOW->HIGH edge; reset it only on OFF (jitter between ACC and IGNITION keeps the
+        // ignition line powered, so it must NOT reset).
+        bool ignitionWasHigh = (currentIgnitionState_ != IgnitionState::OFF);
+        bool ignitionWillBeHigh = (state != IgnitionState::OFF);
+        if (!ignitionWasHigh && ignitionWillBeHigh) {
+            ignitionHighSince_ = millis();
+        } else if (!ignitionWillBeHigh) {
+            ignitionHighSince_ = 0;
         }
 
         // If entering CRANKING state, start timer
@@ -140,7 +141,7 @@ void RelayController::requestCrank() {
         return;
     }
     crankArmed_ = true;
-    Debug::printlnFeature(DebugFeature::RELAY, "[RELAY] Crank armed - waiting for R1 pre-crank dwell");
+    Debug::printlnFeature(DebugFeature::RELAY, "[RELAY] Crank armed - waiting for ignition-line pre-crank dwell");
 }
 
 void RelayController::setFrontLight(bool on) {
@@ -178,7 +179,7 @@ void RelayController::allOff() {
     currentIgnitionState_ = IgnitionState::OFF;
     frontLightOn_ = false;
     isCranking_ = false;
-    r1HighSince_ = 0;      // OFF resets the pre-crank dwell
+    ignitionHighSince_ = 0;      // OFF resets the pre-crank dwell
     crankArmed_ = false;   // abort any pending crank
 
     if (!initialized_) {
@@ -206,7 +207,7 @@ void RelayController::update(uint16_t engineRpm) {
         return;  // no crank logic while the port cannot be trusted
     }
 
-    // Fire a pending (armed) crank once the R1 pre-crank dwell is satisfied.
+    // Fire a pending (armed) crank once the ignition-line pre-crank dwell is satisfied.
     if (crankArmed_ && !isCranking_) {
         if (engineRpm >= ENGINE_RUNNING_RPM_THRESHOLD) {
             // Engine already running — suppress the crank, settle into IGNITION.
@@ -215,12 +216,12 @@ void RelayController::update(uint16_t engineRpm) {
             setIgnitionState(IgnitionState::IGNITION);
             return;
         }
-        if (r1HighSince_ != 0 && (millis() - r1HighSince_) >= ACC_PRECRANK_DWELL_MS) {
+        if (ignitionHighSince_ != 0 && (millis() - ignitionHighSince_) >= ACC_PRECRANK_DWELL_MS) {
             crankArmed_ = false;
             Debug::printlnFeature(DebugFeature::RELAY, "[RELAY] Pre-crank dwell satisfied - engaging starter");
             setIgnitionState(IgnitionState::CRANKING);  // sets isCranking_ / crankingStartTime_
         }
-        // else: keep holding ACC (R1 high, R2 low) until the dwell elapses
+        // else: keep holding ACC (ignition mask high, starter mask low) until the dwell elapses
     }
 
     // Only monitor if currently cranking
@@ -251,11 +252,13 @@ void RelayController::updateRelays() {
     // The starter bit is ONLY ever set in CRANKING.
     bool starter = (currentIgnitionState_ == IgnitionState::CRANKING);
 
-    uint8_t shadow = 0x00;   // Relay_5-8 are always written off
-    shadow = withBit(shadow, RELAY_BIT_IGNITION,    ignitionLine);
-    shadow = withBit(shadow, RELAY_BIT_STARTER,     starter);
-    shadow = withBit(shadow, RELAY_BIT_FRONT_LIGHT, frontLightOn_);
-    shadow = withBit(shadow, RELAY_BIT_WHEEL_LOCK,  wheelLockOn_);
+    // Start from all-off so the spares (Relay_7 IO0 / Relay_8 IO1) are always written off.
+    // Ignition and wheel lock each set/clear TWO paralleled relays via their mask.
+    uint8_t shadow = 0x00;
+    shadow = withMask(shadow, RELAY_MASK_IGNITION,    ignitionLine);   // Relay_1 + Relay_2
+    shadow = withMask(shadow, RELAY_MASK_STARTER,     starter);        // Relay_3
+    shadow = withMask(shadow, RELAY_MASK_FRONT_LIGHT, frontLightOn_);  // Relay_4
+    shadow = withMask(shadow, RELAY_MASK_WHEEL_LOCK,  wheelLockOn_);   // Relay_5 + Relay_6
 
     outputShadow_ = shadow;
     writePort(shadow);
@@ -283,7 +286,9 @@ bool RelayController::writePort(uint8_t value, uint8_t attempts) {
         }
     }
 
-    bool starterWasSet = (value & (1u << RELAY_BIT_STARTER)) != 0;
+    // Any starter bit set in the failed write escalates (the mask is one relay today,
+    // but treat it as a mask so a paralleled starter would still escalate).
+    bool starterWasSet = (value & RELAY_MASK_STARTER) != 0;
     if (!faulted_) {
         Debug::printfFeature(DebugFeature::RELAY,
             "[RELAY] FAULT: port write 0x%02X did not verify after %d attempts%s\n",
@@ -305,7 +310,7 @@ bool RelayController::writePort(uint8_t value, uint8_t attempts) {
         currentIgnitionState_ = IgnitionState::OFF;
         isCranking_ = false;
         crankArmed_ = false;
-        r1HighSince_ = 0;
+        ignitionHighSince_ = 0;
     }
 
     return false;

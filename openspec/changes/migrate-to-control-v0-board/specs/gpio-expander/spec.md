@@ -149,15 +149,20 @@ The system SHALL drive the external relay board's eight relays through its PCA95
 on `Wire1`, replacing direct GPIO relay outputs, while preserving the existing `RelayController`
 public API and ignition semantics.
 
-Relay assignment:
+Relay assignment. The board's IO routing is **not** 1:1 with the relay numbers (verified from the
+`Relay.PrjPcb` netlist), and two functions drive a paralleled PAIR of relays that always energize
+together, so the firmware SHALL address each function by a whole-port mask:
 
-| Relay | Function |
-|-------|----------|
-| Relay_1 | Ignition / ECU line |
-| Relay_2 | Starter |
-| Relay_3 | Front light |
-| Relay_4 | Front-wheel lock |
-| Relay_5-8 | Spare — always driven off |
+| Relay | PCA9557 IO | Relay-board connector | Function | Mask constant |
+|-------|-----------|-----------------------|----------|---------------|
+| Relay_1 | IO4 | X4 | Ignition / ECU line | `RELAY_MASK_IGNITION` (`0b00110000`) |
+| Relay_2 | IO5 | X5 | Ignition / ECU line (paired duplicate) | `RELAY_MASK_IGNITION` |
+| Relay_3 | IO6 | X6 | Starter solenoid | `RELAY_MASK_STARTER` (`0b01000000`) |
+| Relay_4 | IO7 | X7 | Front light | `RELAY_MASK_FRONT_LIGHT` (`0b10000000`) |
+| Relay_5 | IO3 | X8 | Front-wheel lock | `RELAY_MASK_WHEEL_LOCK` (`0b00001100`) |
+| Relay_6 | IO2 | X9 | Front-wheel lock (paired duplicate) | `RELAY_MASK_WHEEL_LOCK` |
+| Relay_7 | IO0 | X10 | Spare — always driven off | — |
+| Relay_8 | IO1 | X11 | Spare — always driven off | — |
 
 #### Scenario: Initialize relays to the safe state
 - **WHEN** `RelayController::begin()` is called with the `Wire1` bus
@@ -176,8 +181,19 @@ Relay assignment:
 #### Scenario: Whole-port writes from a shadow byte
 - **WHEN** any relay state changes
 - **THEN** the driver SHALL update an 8-bit output shadow byte and write the entire output port
-- **AND** unused relays 5-8 SHALL always be written as off
+- **AND** each function SHALL be set or cleared as a whole `RELAY_MASK_*` mask, so both relays of a
+  paired function (ignition Relay_1+Relay_2, wheel lock Relay_5+Relay_6) always change together
+- **AND** the spare relays Relay_7 (IO0) and Relay_8 (IO1) SHALL always be written as off
 - **AND** no read-modify-write of the output register SHALL be used
+
+#### Scenario: The non-1:1 IO routing is honored
+- **WHEN** the firmware computes the output shadow byte
+- **THEN** it SHALL use the `Relay.PrjPcb` routing `Relay_1=IO4, Relay_2=IO5, Relay_3=IO6,
+  Relay_4=IO7, Relay_5=IO3, Relay_6=IO2, Relay_7=IO0, Relay_8=IO1`
+- **AND** it SHALL NOT assume `Relay_N` maps to port bit `N`, because that would command the starter
+  when the front light is requested
+- **AND** the routing SHALL be recorded in `Constants.h` and `GPIO_PINOUT_CUSTOM_BOARD_S3.md` §6 with
+  an explicit warning against "correcting" it
 
 #### Scenario: Public API is unchanged for callers
 - **WHEN** existing callers use `setIgnitionState()`, `requestCrank()`, `setFrontLight()`,
@@ -201,14 +217,14 @@ latched starter is destructive.
   logged
 
 #### Scenario: Starter engagement requires a verified read-back
-- **WHEN** the ignition state enters `CRANKING` and the starter bit is written
-- **AND** the read-back does not confirm the starter bit is set
+- **WHEN** the ignition state enters `CRANKING` and `RELAY_MASK_STARTER` is written
+- **AND** the read-back does not confirm the starter mask is set
 - **THEN** the crank SHALL be aborted
-- **AND** the output port SHALL be rewritten with the starter bit clear
+- **AND** the output port SHALL be rewritten with `RELAY_MASK_STARTER` clear
 - **AND** the ignition state SHALL leave `CRANKING`
 
 #### Scenario: Relay fault while the starter is engaged
-- **WHEN** a write verification fails while the starter bit is set in the shadow byte
+- **WHEN** a write verification fails while any `RELAY_MASK_STARTER` bit is set in the written byte
 - **THEN** an all-relays-off port write SHALL be attempted immediately
 - **AND** it SHALL be repeated on every `update()` while the fault persists
 - **AND** the ignition state SHALL be latched to `OFF`
@@ -268,5 +284,6 @@ board. `Control_v0` splits the same functions across two 8-bit PCA9557 devices o
 buses.
 
 **Migration**: Superseded by the input assignment table (In1-In5 → REVERSE/NEUTRAL/LOW/HIGH/brake
-limit) in `Opto-Isolated Input Expander` and the relay assignment table (Relay_1-4 →
-ignition/starter/front light/wheel lock) in `Relay Output Expander`.
+limit) in `Opto-Isolated Input Expander` and the relay assignment table (Relay_1+Relay_2 →
+ignition/ECU line, Relay_3 → starter, Relay_4 → front light, Relay_5+Relay_6 → front-wheel lock,
+Relay_7/Relay_8 spare) in `Relay Output Expander`.
