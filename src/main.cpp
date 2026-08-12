@@ -12,7 +12,10 @@
 #include "TelemetryManager.h"
 #include "MavlinkInterface.h"
 #include "RelayController.h"
+#include "BoardInputs.h"
+#include "SpeedSensor.h"
 #include "nvs_flash.h"
+#include <Wire.h>
 
 // ============================================================================
 // ACTUATOR INSTANCES
@@ -35,12 +38,18 @@ BTS7960Controller brakeActuator;
 // MAVLink interface to Pixhawk (TELEM2)
 MavlinkInterface mavlinkInterface;
 
-// Relay Controller for ignition and lights
-RelayController relayController;
+// Opto-isolated board inputs (gear switches In1-In4, brake endstop In5) on I2C1
+BoardInputs boardInputs(Wire);
+
+// Relay Controller for ignition, starter, lights and wheel lock on I2C2
+RelayController relayController(Wire1);
+
+// Driveline speed sensor (12V hall via the X2 opto input, PCNT on GPIO8)
+SpeedSensor speedSensor;
 
 // Vehicle Controller (coordinates all actuators and input sources)
 VehicleController vehicleController(steeringActuator, throttle, transmissionActuator, brakeActuator,
-                                     mavlinkInterface, relayController);
+                                     mavlinkInterface, relayController, boardInputs, speedSensor);
 
 // Web Portal for telemetry and manual control
 WebPortal webPortal;
@@ -53,8 +62,16 @@ TelemetryManager telemetryManager(vehicleController, webPortal, mavlinkInterface
 // ============================================================================
 
 void setup() {
-    // Initialize serial for debugging
+    // 24V boost rail FIRST: it feeds the steering VESC, the Jetson, Starlink and
+    // the cameras, so it must be up before any subsystem that depends on it.
+    // GPIO46 has a 100K pulldown (R7) so the rail is off through reset.
+    pinMode(PIN_BOOST_EN, OUTPUT);
+    digitalWrite(PIN_BOOST_EN, HIGH);
+
+    // Console is USB-CDC (ARDUINO_USB_CDC_ON_BOOT=1). Never wait for a host —
+    // the vehicle must boot with no laptop attached; early output may be lost.
     Serial.begin(SERIAL_BAUD_RATE);
+    Serial.println("[INIT] 24V boost rail enabled (GPIO46)");
 
     // Initialize NVS first (required by Debug utility)
     Serial.println("[INIT] Initializing NVS...");
@@ -90,7 +107,33 @@ void setup() {
                   Debug::isEnabled() ? "ON" : "OFF",
                   Debug::isFeatureEnabled(DebugFeature::SERVO) ? "ON" : "OFF");
 
-    Debug::println("\n=== ESP32-S3 Quad Bike Control ===");
+    Debug::println("\n=== ESP32-S3 Quad Bike Control (Control_v0) ===");
+
+    // Record the boost enable and start rail monitoring (grace window + ADC setup)
+    vehicleController.initBoostRail();
+
+    // ── I2C buses ────────────────────────────────────────────────────────────
+    // main.cpp is the single owner of both buses: they are opened here, before any
+    // consumer, so no driver depends on another driver's initialization succeeding.
+    //   I2C1 (Wire)  GPIO1/2   : AS5600 0x36 + opto-input PCA9557 0x1A
+    //   I2C2 (Wire1) GPIO48/47 : relay-board PCA9557 0x18 (0x1C = mux, never addressed)
+    if (!Wire.begin(PIN_STEER_SDA, PIN_STEER_SCL, I2C_BUS_FREQ_HZ)) {
+        Debug::println("[INIT] ERROR: I2C1 (Wire) init failed");
+    }
+    if (!Wire1.begin(PIN_RELAY_SDA, PIN_RELAY_SCL, I2C_BUS_FREQ_HZ)) {
+        Debug::println("[INIT] ERROR: I2C2 (Wire1) init failed");
+    }
+
+    // Opto-isolated inputs (gear switches + brake limit sensor)
+    if (!boardInputs.begin()) {
+        Debug::println("[INIT] ERROR: Board input expander failed — gear will report UNKNOWN");
+    }
+    {
+        BoardInputs::Snapshot snap = boardInputs.getSnapshot();
+        Debug::printfFeature(DebugFeature::BRAKE, "Brake endstop: %s\n",
+            !snap.valid ? "UNKNOWN (input expander unavailable)"
+                        : (snap.brakeReleased ? "Released (endstop reached)" : "Not released"));
+    }
 
     // Initialize throttle servo (loads calibration from NVS, moves to calibrated idle)
     if (!throttle.begin(PIN_THROTTLE_PWM, LEDC_CH_THROTTLE)) {
@@ -119,7 +162,7 @@ void setup() {
 
     // Initialize transmission servo
     if (transmissionActuator.begin()) {
-        transmissionActuator.initGearSensors();
+        transmissionActuator.initGearSensors(boardInputs);
         transmissionActuator.loadDefaultPositions();
         transmissionActuator.loadGearOvershoots();
     } else {
@@ -134,10 +177,6 @@ void setup() {
 
     brakeActuator.stop();
 
-    pinMode(PIN_BRAKE_SENSOR, INPUT);
-    Debug::printfFeature(DebugFeature::BRAKE, "Brake sensor: %s\n",
-        digitalRead(PIN_BRAKE_SENSOR) ? "Released (HIGH)" : "Pressed (LOW)");
- 
     // Initialize MAVLink interface (Pixhawk TELEM2)
     if (!mavlinkInterface.begin()) {
         Debug::printlnFeature(DebugFeature::MAVLINK, "ERROR: MAVLink interface failed");
@@ -145,6 +184,11 @@ void setup() {
 
     if (!relayController.begin()) {
         Debug::printlnFeature(DebugFeature::RELAY, "ERROR: Relay controller failed");
+    }
+
+    // Initialize the driveline speed sensor (loads calibration from NVS, starts PCNT)
+    if (!speedSensor.begin()) {
+        Debug::println("[INIT] ERROR: Speed sensor PCNT init failed — speed stays invalid");
     }
 
     // Initialize CAN controller
@@ -165,6 +209,14 @@ void setup() {
 // ============================================================================
 
 void loop() {
+    // Poll the opto-input expander (rate-limited internally) before any consumer
+    // reads the snapshot this iteration.
+    boardInputs.update();
+
+    // Sample the hall speed counter (rate-limited internally) before the control
+    // logic and telemetry read the speed this iteration.
+    speedSensor.update();
+
     // Update MAVLink interface (parse inbound, request command stream)
     mavlinkInterface.update();
 
@@ -200,6 +252,8 @@ void loop() {
     report.failsafe     = (vehicleController.getInputSource() == InputSource::FAILSAFE);
     report.digitalFlags = (vehicleController.getWheelLock()  ? EFI_DIGITAL_FLAG_WHEEL_LOCK  : 0)
                         | (vehicleController.getFrontLight() ? EFI_DIGITAL_FLAG_FRONT_LIGHT : 0);
+    report.speedValid   = vehicleController.isVehicleSpeedValid();
+    report.speedKmh     = vehicleController.getVehicleSpeedKmh();
     mavlinkInterface.report(report);
 
     // Broadcast telemetry to web clients

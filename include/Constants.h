@@ -4,72 +4,155 @@
 #include <Arduino.h>
 
 // ============================================================================
-// GPIO PIN ASSIGNMENTS
+// GPIO PIN ASSIGNMENTS — custom control board "Control_v0" (ESP32-S3-WROOM-1U)
 // ============================================================================
+//
+// WIRING AUTHORITY: GPIO_PINOUT_CUSTOM_BOARD_S3.md (§2 full pin table, §9 the
+// migration summary this header was written from). If this header and that
+// document disagree about a pin, the document describes what the copper does —
+// resolve the divergence before running the firmware on the vehicle.
+//
+// This is a HARD SWITCH: the ESP32-S3-DevKitC-1 hand-wired map (GPIO_PINOUT_S3.md)
+// is no longer supported and there is no board-selection build flag.
+//
+// Pins that deliberately have NO firmware function:
+//   GPIO19/20 — native USB D-/D+ (USB-CDC console, flashing). Never assign.
+//   GPIO43/44 — UART0, shared copper between the Prog header and the future
+//               CH9121T wired-LAN chip. RESERVED: no console, no UART is opened
+//               on them (the console is USB-CDC, ARDUINO_USB_CDC_ON_BOOT=1).
+//   GPIO45    — CFG_CH9121T (LAN config strap), untouched until LAN is enabled.
+//   GPIO0/21, GPIO10-13 — spare (system LED, Hall_1 B, Hall_2/3).
 
-// MAVLink telemetry link (UART to Pixhawk TELEM2)
-#define PIN_MAVLINK_RX      GPIO_NUM_8   // UART1 RX (non-inverted)
-#define PIN_MAVLINK_TX      GPIO_NUM_15  // UART1 TX (non-inverted) — confirmed free; do NOT use GPIO 9 (PIN_TRANS_SERVO)
+// MAVLink telemetry link (UART1 to Pixhawk TELEM, connector X9 via BSS138 shifters)
+// ⚠ Verified at 115200 only — do NOT raise the baud rate (pinout §8.3).
+#define PIN_MAVLINK_RX      GPIO_NUM_18  // UART1 RX <- Pixhawk TX (X9 pin 3)
+#define PIN_MAVLINK_TX      GPIO_NUM_17  // UART1 TX -> Pixhawk RX (X9 pin 2)
 #define MAVLINK_UART_NUM    UART_NUM_1   // UART1 for MAVLink
-#define MAVLINK_BAUD_RATE   115200       // Pixhawk TELEM2 baud
+#define MAVLINK_BAUD_RATE   115200       // Pixhawk TELEM baud
 
-// Transmission Servo (HappyModel Super400 Plus)
-#define PIN_TRANS_SERVO     GPIO_NUM_9   // LEDC Channel 2
+// Transmission Servo (HappyModel Super400 Plus) — X8 pin 3
+#define PIN_TRANS_SERVO     GPIO_NUM_16  // LEDC Channel 2
 
 // Steering Actuator — driven by a Flipsky 75200 VESC over UART2 (brushed-DC mode).
-// See "VESC STEERING DRIVER CONFIGURATION" below.
-//
-// RESERVED / FREED: the former BTS7960 steering PWM pins (GPIO17/18) and their
-// LEDC channels (6/7) are freed by this change and left reserved — NOT reused —
-// so the wiring change stays localized and the freed channels remain available.
-#define PIN_STEER_RPWM      GPIO_NUM_17   // RESERVED/FREED (was steering RPWM, LEDC ch6)
-#define PIN_STEER_LPWM      GPIO_NUM_18   // RESERVED/FREED (was steering LPWM, LEDC ch7)
-#define LEDC_CH_STEER_RPWM  6             // RESERVED/FREED
-#define LEDC_CH_STEER_LPWM  7             // RESERVED/FREED
+// See "VESC STEERING DRIVER CONFIGURATION" below. The former BTS7960 steering PWM
+// pins (GPIO17/18) and their LEDC channels (6/7) are fully released: GPIO17/18 are
+// now the MAVLink UART and LEDC 6/7 are free for future use.
 
-// VESC steering driver UART (UART_NUM_2; UART0 = debug console, UART1 = MAVLink)
-#define PIN_VESC_TX         GPIO_NUM_4    // ESP TX -> VESC RX (3.3V logic, direct wiring)
-#define PIN_VESC_RX         GPIO_NUM_5    // ESP RX <- VESC TX
+// VESC steering driver UART (UART_NUM_2; UART0 reserved for LAN, UART1 = MAVLink)
+// Connector X6 via BSS138 shifters — 115200 only (pinout §8.3).
+#define PIN_VESC_TX         GPIO_NUM_4    // ESP TX -> VESC RX (X6 pin 2)
+#define PIN_VESC_RX         GPIO_NUM_5    // ESP RX <- VESC TX (X6 pin 3)
 #define VESC_UART_NUM       2             // UART_NUM_2
 #define VESC_UART_BAUD      115200        // VESC app default baud
 
-// Steering Position Sensor (AS5600 absolute magnetic angle sensor, I2C addr 0x36)
-#define PIN_STEER_SDA       GPIO_NUM_41   // I2C SDA
-#define PIN_STEER_SCL       GPIO_NUM_42   // I2C SCL
+// I2C1 ("Wire") — AS5600 steering angle sensor @ 0x36 (X14) AND the on-board
+// opto-input PCA9557 U10 @ 0x1A. The bus is opened once in main.cpp; no driver
+// on this bus may re-open it with different parameters.
+#define PIN_STEER_SDA       GPIO_NUM_1    // I2C1 SDA
+#define PIN_STEER_SCL       GPIO_NUM_2    // I2C1 SCL
 
-// Throttle Servo (PWM via LEDC)
-#define PIN_THROTTLE_PWM    GPIO_NUM_3   // LEDC Channel 1
+// Throttle Servo (PWM via LEDC) — X8 pin 2
+#define PIN_THROTTLE_PWM    GPIO_NUM_15  // LEDC Channel 1
 #define LEDC_CH_THROTTLE    1
 
-// Brake Linear Actuator (BTS7960)
+// Brake Linear Actuator (BTS7960) — X7
 // Note: R_EN and L_EN hardwired to 5V (always enabled)
-#define PIN_BRAKE_RPWM      GPIO_NUM_7   // LEDC Channel 4
-#define PIN_BRAKE_LPWM      GPIO_NUM_6   // LEDC Channel 5
+#define PIN_BRAKE_RPWM      GPIO_NUM_7   // LEDC Channel 4 (X7 pin 3)
+#define PIN_BRAKE_LPWM      GPIO_NUM_6   // LEDC Channel 5 (X7 pin 2)
 #define LEDC_CH_BRAKE_RPWM  4
 #define LEDC_CH_BRAKE_LPWM  5
 
+// SPI CAN Controller (MCP2515 + TJA1051T/3, 8 MHz crystal → MCP_8MHZ)
+#define PIN_CAN_MOSI        GPIO_NUM_42  // SPI MOSI
+#define PIN_CAN_MISO        GPIO_NUM_41  // SPI MISO
+#define PIN_CAN_SCK         GPIO_NUM_40  // SPI SCK
+#define PIN_CAN_CS          GPIO_NUM_39  // SPI Chip Select
+#define PIN_CAN_INT         GPIO_NUM_38  // MCP2515 INT — DEFINED ONLY, the driver polls
+
+// 24V boost rail (Buck Boost board via X10)
+#define PIN_BOOST_EN        GPIO_NUM_46  // Boost enable (X10 pin 1). 100K pulldown R7 keeps it off through reset
+#define PIN_ADC_24V         GPIO_NUM_9   // Rail measurement (X10 pin 3) through a 200K/24K divider, ADC1
+
+// Driveline speed sensor (12V hall) pulse input — connector X2, PCNT counted.
+// Signal path: X2.1/X2.2 -> 470R R22 -> 6N137 LED -> open-collector + pull-up -> GPIO8.
+// ⚠ The optocoupler INVERTS the signal (LED conducting = GPIO8 LOW), so the firmware
+// counts the FALLING edge and does not "fix" the polarity — pulse rate is identical on
+// either edge. S-BUS, which once had this pin earmarked, is dropped for good (pinout §3/§8.9).
+// ⚠ HARDWARE: a 12V sensor needs 560R-1k extra in series in the cable (or R22 reworked to
+// 1k); the stock 470R alone passes ≈22 mA, over the 6N137's 20 mA absolute maximum.
+#define PIN_SPEED_SENSOR    GPIO_NUM_8
+
+// CD4051 8:1 current-sense mux common output (BTS7960 IS channels), ADC1.
+// DEFINED ONLY — the mux-control PCA9557 U2 @ 0x1C is not driven by this firmware,
+// so this pin is not sampled. GPIO3 is also the JTAG-source strap; input-only use is safe.
+#define PIN_ADC_IS_MUX      GPIO_NUM_3
+
 // ============================================================================
-// FUTURE EXPANSION - RESERVED GPIO PINS
+// I2C BUSES AND PORT EXPANDERS
+// ============================================================================
+//
+// Functions that used to be direct GPIO (gear switches, brake limit sensor,
+// four relays) now live behind PCA9557 port expanders, so reads and writes are
+// fallible. Every expander driver instance is bound to exactly one bus and one
+// address at construction — there is no bus scanning.
+//
+//   I2C1 "Wire"  (GPIO1/2)   : AS5600 0x36, opto-input PCA9557 U10 0x1A
+//   I2C2 "Wire1" (GPIO48/47) : relay-board PCA9557 0x18, mux PCA9557 U2 0x1C
+//
+// ⚠ The I2C2 level shifter low side is jumper-selected: R16 populated (3V3),
+//   R18 not (pinout §8.6). ⚠ The relay board must be strapped A2A1A0 = 000 → 0x18
+//   so it can never collide with the on-board mux expander at 0x1C (§8.8).
+
+#define PIN_RELAY_SDA       GPIO_NUM_48  // I2C2 SDA (X15, BSS138 level shifted)
+#define PIN_RELAY_SCL       GPIO_NUM_47  // I2C2 SCL (X15, BSS138 level shifted)
+// Both buses run at 100 kHz. The AS5600 (X14) sits at the end of a long cable run to the
+// steering column, so signal integrity wins over speed — user decision. 400 kHz was tried and
+// rejected: not enough margin on that cable. Raising it again would need a stronger pull-up.
+#define I2C_BUS_FREQ_HZ     100000       // Both buses run at 100 kHz (see note above)
+
+#define PCA9557_ADDR_INPUTS        0x1A  // On-board opto-input expander U10 (I2C1)
+#define PCA9557_ADDR_RELAYS        0x18  // External relay board (I2C2)
+#define PCA9557_ADDR_MUX_RESERVED  0x1C  // On-board CD4051 mux control U2 (I2C2) — NEVER addressed
+
+// Opto-isolated input bit indices on PCA9557 U10 (In1..In8 = bits 0..7).
+// In6-In8 are wired to X17 but have no firmware function.
+#define BOARD_IN_BIT_GEAR_REVERSE  0     // In1 (X16)
+#define BOARD_IN_BIT_GEAR_NEUTRAL  1     // In2 (X16)
+#define BOARD_IN_BIT_GEAR_LOW      2     // In3 (X16)
+#define BOARD_IN_BIT_GEAR_HIGH     3     // In4 (X16)
+#define BOARD_IN_BIT_BRAKE_LIMIT   4     // In5 (X17) — brake "released" endstop
+
+// Opto input bit polarity. A PC817 that is conducting pulls its PCA9557 input
+// LOW, so an asserted input reads 0 — hence active-low by default. This is the
+// ONE place to flip if the bench check (task 11.4) shows the opposite sense.
+#define BOARD_INPUT_ACTIVE_LOW     1     // 1 = asserted input reads 0, 0 = asserted reads 1
+
+// Relay bit indices on the relay board's PCA9557 (Relay_1..Relay_8 = bits 0..7).
+// Relay_5-8 are wired to the board but always driven off.
+#define RELAY_BIT_IGNITION         0     // Relay_1 — ignition / ECU line
+#define RELAY_BIT_STARTER          1     // Relay_2 — starter
+#define RELAY_BIT_FRONT_LIGHT      2     // Relay_3 — front light
+#define RELAY_BIT_WHEEL_LOCK       3     // Relay_4 — front-wheel lock
+
+// Expander timing / fault policy
+#define BOARD_INPUT_POLL_MS        25    // ms between opto-input polls
+#define BOARD_INPUT_STALE_MS       250   // ms without a good read before the snapshot is invalid
+#define BOARD_INPUT_RECOVER_MS     1000  // ms between re-init attempts while faulted
+#define RELAY_WRITE_RETRIES        3     // read-back verification retries per port write
+
+// ============================================================================
+// 24V BOOST RAIL
 // ============================================================================
 
-// SPI CAN Controller (for vehicle CAN bus communication)
-#define PIN_CAN_MOSI        GPIO_NUM_11   // SPI MOSI
-#define PIN_CAN_MISO        GPIO_NUM_13   // SPI MISO
-#define PIN_CAN_SCK         GPIO_NUM_12  // SPI SCK
-#define PIN_CAN_CS          GPIO_NUM_10  // SPI Chip Select
-
-#define PIN_RELAY1      GPIO_NUM_36
-#define PIN_RELAY2      GPIO_NUM_37
-#define PIN_RELAY3      GPIO_NUM_38
-#define PIN_WHEEL_LOCK  GPIO_NUM_39   // Relay 4 — front-wheel lock (also JTAG MTCK; JTAG unused here)
-
-#define PIN_GEAR_REVERSE  GPIO_NUM_19
-#define PIN_GEAR_NEUTRAL  GPIO_NUM_20
-#define PIN_GEAR_LOW      GPIO_NUM_21
-#define PIN_GEAR_HIGH     GPIO_NUM_47
-#define PIN_BRAKE_SENSOR  GPIO_NUM_14
-
-///////
+#define RAIL_SAMPLE_INTERVAL_MS    500    // ms between rail voltage samples
+#define RAIL_ADC_SAMPLE_COUNT      8      // readings averaged per sample (ADC1 is noisy)
+#define RAIL_24V_DIVIDER_RATIO     9.33f  // 200K/24K divider: V24 = Vadc × 224/24
+// Low-rail warning threshold. ⚠ PROVISIONAL — must be tuned on the bench against
+// the measured loaded minimum of the TL494 boost under Jetson + Starlink + camera
+// load before it is trusted (task 11.1). Warning only: the rail is never dropped
+// automatically because that would remove steering authority.
+#define RAIL_24V_LOW_THRESHOLD     21.0f  // V
+#define BOOST_STARTUP_GRACE_MS     1000   // ms after enable during which low-rail warnings are suppressed
 
 // Cranking Parameters
 #define CRANKING_TIMEOUT           2000  // ms - maximum cranking duration
@@ -253,10 +336,61 @@ struct ServoChannelConfig {
 #define BRAKE_HOLD_SPEED          30    // PWM (0-255) applied against spring return when at target position
 
 // ============================================================================
+// VEHICLE SPEED SENSOR (3-pin 12V hall, PCNT on PIN_SPEED_SENSOR)
+// ============================================================================
+
+// Sampling / signal conditioning
+#define SPEED_SAMPLE_INTERVAL_MS      200    // ms between PCNT samples (5 Hz, matches telemetry)
+// No edges for this long => the reported speed decays to 0 km/h. Sized from the
+// lowest measurable speed: one pulse at ~1 km/h with the default calibration takes
+// ~1.6 s (450 mm/pulse ÷ 278 mm/s), so a shorter timeout would zero a crawling vehicle.
+#define SPEED_STALE_TIMEOUT_MS        2000   // ms
+// PCNT hardware glitch filter. The highest expected pulse rate is well under 1 kHz
+// (≈62 Hz at 100 km/h with the default calibration), so 1 µs rejects harness noise
+// with orders of magnitude of margin. Hardware ceiling is ~12.7 µs (1023 APB cycles).
+#define SPEED_GLITCH_FILTER_NS        1000   // ns
+// PCNT counter limits. The hardware zeroes the counter at these watch points and the
+// unit accumulates the overflow itself (accum_count), so update() polls a running total.
+#define SPEED_PCNT_HIGH_LIMIT         10000
+#define SPEED_PCNT_LOW_LIMIT          (-1)
+
+// Calibration defaults (NVS namespace "speed", keys "ppr" / "circ_mm").
+// ⚠ PLACEHOLDERS — pulses/rev and the fitted tyre circumference are unknown until
+// bench calibration; both are set at runtime from the web UI, no reflash needed.
+#define SPEED_DEFAULT_PULSES_PER_REV       4       // pulses per wheel/driveline revolution
+#define SPEED_DEFAULT_WHEEL_CIRCUMFERENCE_MM 1800.0f  // mm (≈ 25x8-12 ATV tyre)
+
+// Accepted calibration ranges (web command validation)
+#define SPEED_PPR_MIN                 1
+#define SPEED_PPR_MAX                 1000
+#define SPEED_CIRC_MIN_MM             100.0f
+#define SPEED_CIRC_MAX_MM             10000.0f
+
+// Health heuristic: the fingerprint of a mid-motion wire fault is pulses ceasing
+// faster than the vehicle could physically have stopped. If the last observed speed
+// would need more than the stale timeout to bleed off at this deceleration, the
+// silence is implausible and the reading is latched suspicious (isValid() false)
+// until pulses resume. A normal stop decelerates through the samples instead.
+#define SPEED_MAX_PLAUSIBLE_DECEL_KMH_S  8.0f   // km/h per second
+
+// Maximum-speed throttle limiter (NVS "speed", keys "lim_on" / "lim_kmh").
+// Ships DISABLED: default drive behavior is unchanged until an operator enables it.
+#define SPEED_LIMIT_ENABLE_DEFAULT    false
+#define SPEED_LIMIT_MAX_KMH_DEFAULT   60.0f  // km/h - safe/high default ceiling
+#define SPEED_LIMIT_THROTTLE_CAP_PCT  20.0f  // % - reduced throttle ceiling above the limit (not a hard cut)
+#define SPEED_LIMIT_MIN_KMH           1.0f   // accepted range for speed_limit_set
+#define SPEED_LIMIT_MAX_KMH           200.0f
+#define SPEED_LIMIT_WARN_MS           5000   // ms between "limiter armed but speed invalid" warnings
+
+// ============================================================================
 // SERIAL DEBUG
 // ============================================================================
 
-#define SERIAL_BAUD_RATE      115200 // Serial monitor baud rate
+// The console is the ESP32-S3 native USB CDC device on the board's USB-C connector
+// (build flag ARDUINO_USB_CDC_ON_BOOT=1). UART0 (GPIO43/44) is RESERVED for the
+// future CH9121T wired LAN and must not be reclaimed for a console.
+// Baud is irrelevant for CDC but harmless; the firmware never waits for a host.
+#define SERIAL_BAUD_RATE      115200 // Serial monitor baud rate (ignored by USB-CDC)
 #define DEBUG_ENABLED         true   // Default debug output state (runtime-toggleable via Debug utility or web portal)
 
 // Feature-specific debug flags (code-only control, persisted to NVS)

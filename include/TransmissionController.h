@@ -3,15 +3,18 @@
 
 #include "ServoController.h"
 #include "Constants.h"
+#include "BoardInputs.h"
 #include <Preferences.h>
 
 /**
  * @brief Vehicle data structure for transmission safety checks
  */
 struct TransmissionVehicleData {
-    uint8_t vehicleSpeed;       // km/h (0-255)
+    uint8_t vehicleSpeed;       // km/h (0-255) — CAN-sourced; dead (OBD-II PID 0x0D is disabled)
     uint32_t lastUpdateTime;    // millis() timestamp
     bool dataValid;             // true if CAN communication is healthy
+    float sensorSpeedKmh;       // hall speed sensor reading (km/h) — the live speed source
+    bool sensorSpeedValid;      // hall sensor health; false means "speed unknown", NOT "stopped"
 };
 
 /**
@@ -82,12 +85,23 @@ public:
     bool isGearChangeActive() const { return gearChangePhase_ != GearChangePhase::NONE; }
 
     /**
-     * @brief Configure gear selector switch GPIO pins
+     * @brief Attach the opto-input reader that supplies the gear switches.
+     *
+     * The four gear switches are no longer on ESP32 GPIO: they are In1-In4 of the
+     * board's PCA9557 input expander, so there is nothing to configure here beyond
+     * binding the snapshot source. Without it `getPhysicalGear()` reports UNKNOWN.
+     *
+     * @param inputs Board input reader (must outlive this controller)
      */
-    void initGearSensors();
+    void initGearSensors(BoardInputs& inputs);
 
     /**
-     * @brief Read physical gear from hall-effect switches
+     * @brief Read the physical gear from the opto-input snapshot.
+     *
+     * Cached for `TRANS_GEAR_READ_INTERVAL_MS`. An ambiguous reading (none or more
+     * than one switch asserted) while the servo is idle defers to the next expander
+     * poll instead of issuing back-to-back reads; an invalid (stale) snapshot
+     * reports `GEAR_UNKNOWN`, which is the intended degraded mode.
      */
     Gear getPhysicalGear() const;
 
@@ -186,8 +200,12 @@ private:
     Gear queuedGear_;               // GEAR_UNKNOWN = no sequence pending, else = final destination
     uint32_t sequenceStepDwellStart_;  // millis() when step-dwell armed, 0 = not armed
 
+    BoardInputs*     boardInputs_;         // gear switches In1-In4 (not owned)
+
     mutable Gear     cachedPhysicalGear_;
     mutable uint32_t lastGearReadTime_;
+    mutable uint32_t lastGearRetryTime_;   // last time an ambiguous read deferred to a newer snapshot
+    mutable uint8_t  gearReadRetries_;     // deferrals used in the current read window
 
     float gearPositions_[4];
     float overshootPcts_[4];

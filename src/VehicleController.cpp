@@ -7,13 +7,23 @@ VehicleController::VehicleController(SteeringController& steering,
                                      TransmissionController& transmission,
                                      BTS7960Controller& brake,
                                      MavlinkInterface& mavlink,
-                                     RelayController& relayController)
+                                     RelayController& relayController,
+                                     BoardInputs& boardInputs,
+                                     SpeedSensor& speedSensor)
     : steering_(steering),
       throttle_(throttle),
       transmission_(transmission),
       brake_(brake),
       mavlink_(mavlink),
       relayController_(relayController),
+      boardInputs_(boardInputs),
+      speedSensor_(speedSensor),
+      boostEnabled_(true),
+      boostEnabledAtMs_(0),
+      rail24V_(0.0f),
+      railLow_(false),
+      lastRailSampleMs_(0),
+      lastRailWarnMs_(0),
       currentInputSource_(InputSource::FAILSAFE),
       failsafeApplied_(false),
       webControl_(false),
@@ -34,7 +44,58 @@ VehicleController::VehicleController(SteeringController& steering,
       lastPIDThrottleUs_(THROTTLE_DEFAULT_IDLE_US),
       previousIgnitionState_(MavlinkInterface::IgnitionState::OFF),
       lastCommandedGear_(TransmissionController::Gear::GEAR_UNKNOWN),
-      transmissionInitialized_(false) {
+      transmissionInitialized_(false),
+      lastSpeedLimitWarnMs_(0) {
+}
+
+void VehicleController::initBoostRail() {
+    // main.cpp already drove PIN_BOOST_EN HIGH as the first hardware action; this
+    // records the enable so the low-rail warning is suppressed while the TL494 ramps.
+    pinMode(PIN_BOOST_EN, OUTPUT);
+    digitalWrite(PIN_BOOST_EN, HIGH);
+    boostEnabled_ = true;
+    boostEnabledAtMs_ = millis();
+    railLow_ = false;
+    lastRailSampleMs_ = 0;
+
+    // GPIO9 is ADC1 (unaffected by WiFi). 24V through the 200K/24K divider is
+    // ~2.57V, so the widest attenuation is required.
+    analogSetPinAttenuation(PIN_ADC_24V, ADC_11db);
+
+    Debug::printfFeature(DebugFeature::VEHICLE,
+        "[RAIL] 24V boost enabled (GPIO%d), monitoring GPIO%d every %d ms\n",
+        (int)PIN_BOOST_EN, (int)PIN_ADC_24V, RAIL_SAMPLE_INTERVAL_MS);
+}
+
+void VehicleController::updateRailMonitor() {
+    uint32_t now = millis();
+    if (lastRailSampleMs_ != 0 && (now - lastRailSampleMs_) < RAIL_SAMPLE_INTERVAL_MS) {
+        return;
+    }
+    lastRailSampleMs_ = now;
+
+    // ADC1 on the S3 is noisy and the divider is high-impedance, so average a few
+    // calibrated readings. Eight conversions are a few hundred microseconds — short
+    // enough for the cooperative loop.
+    uint32_t sumMv = 0;
+    for (uint8_t i = 0; i < RAIL_ADC_SAMPLE_COUNT; i++) {
+        sumMv += analogReadMilliVolts(PIN_ADC_24V);
+    }
+    float vAdc = (sumMv / (float)RAIL_ADC_SAMPLE_COUNT) / 1000.0f;
+    rail24V_ = vAdc * RAIL_24V_DIVIDER_RATIO;
+
+    bool inGrace = (now - boostEnabledAtMs_) < BOOST_STARTUP_GRACE_MS;
+    bool low = boostEnabled_ && !inGrace && (rail24V_ < RAIL_24V_LOW_THRESHOLD);
+
+    railLow_ = low;
+    if (low && (lastRailWarnMs_ == 0 || (now - lastRailWarnMs_) >= 5000)) {
+        lastRailWarnMs_ = now;
+        Debug::printfFeature(DebugFeature::VEHICLE,
+            "[RAIL] WARNING: 24V rail low (%.1f V < %.1f V) — steering VESC, Jetson and cameras are on this rail\n",
+            rail24V_, RAIL_24V_LOW_THRESHOLD);
+    } else if (!low) {
+        lastRailWarnMs_ = 0;
+    }
 }
 
 bool VehicleController::initCAN() {
@@ -52,6 +113,9 @@ void VehicleController::update() {
     // Update CAN controller (read vehicle data from ECU)
     canController_.update();
 
+    // Sample the 24V boost rail (rate-limited internally)
+    updateRailMonitor();
+
     // Restore transmission state once, on first engine-running detection
     if (!transmissionInitialized_ && isEngineRunning()) {
         transmissionInitialized_ = true;
@@ -61,12 +125,16 @@ void VehicleController::update() {
         Debug::printlnFeature(DebugFeature::VEHICLE, "[VEHICLE] Transmission initialized on engine start");
     }
 
-    // Pass vehicle data to transmission for safety checks
+    // Pass vehicle data to transmission for safety checks. Speed comes from the hall
+    // sensor (the CAN speed field is dead); the CAN fields still drive the timeout
+    // fallback used when the sensor reading is unavailable.
     CANController::VehicleData canData = canController_.getVehicleData();
     TransmissionVehicleData transData;
     transData.vehicleSpeed = canData.vehicleSpeed;
     transData.lastUpdateTime = canData.lastUpdateTime;
     transData.dataValid = canData.dataValid;
+    transData.sensorSpeedKmh = speedSensor_.getSpeedKmh();
+    transData.sensorSpeedValid = speedSensor_.isValid();
     transmission_.setVehicleData(transData);
 
     // Update relay controller with engine RPM (for automatic cranking stop)
@@ -145,6 +213,10 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
         // Front-wheel lock always available (not restricted by input source)
         processWheelLockCommand(cmd.boolValue, webPortal);
         return;
+    } else if (cmd.cmd == "set_boost") {
+        // 24V boost rail always available (guarded: disable needs ignition OFF)
+        processBoostCommand(cmd.boolValue, webPortal);
+        return;
     } else if (cmd.cmd == "steer_cal_center" || cmd.cmd == "steer_cal_left" || cmd.cmd == "steer_cal_right") {
         processSteerCalCommand(cmd.cmd, webPortal);
         return;
@@ -178,6 +250,18 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
     } else if (cmd.cmd == "throttle_cal_cancel") {
         processThrottleCalCancel(webPortal);
         return;
+    } else if (cmd.cmd == "speed_cal_ppr") {
+        processSpeedCalPprCommand(cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "speed_cal_circ") {
+        processSpeedCalCircCommand(cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "speed_limit_enable") {
+        processSpeedLimitEnableCommand(cmd.boolValue, webPortal);
+        return;
+    } else if (cmd.cmd == "speed_limit_set") {
+        processSpeedLimitSetCommand(cmd.floatValue, webPortal);
+        return;
     } else if (cmd.cmd == "can_probe") {
         // ECU capability probe — available regardless of input source (diagnostic)
         processCanProbeCommand(webPortal);
@@ -204,7 +288,9 @@ String VehicleController::getCurrentGearString() const {
         case TransmissionController::Gear::GEAR_NEUTRAL: return "N";
         case TransmissionController::Gear::GEAR_LOW: return "L";
         case TransmissionController::Gear::GEAR_HIGH: return "H";
-        default: return "N";
+        // Physical gear unknown (ambiguous switches or a faulted input expander):
+        // report it as unknown rather than presenting a plausible gear as current.
+        default: return "?";
     }
 }
 
@@ -265,7 +351,7 @@ void VehicleController::processMavlinkCommands() {
         if (shouldClipThrottle()) {
             throttlePct = min(TRANS_UNKNOWN_GEAR_THROTTLE_MAX, throttlePct);
         }
-        throttle_.setThrottlePercent(throttlePct);
+        throttle_.setThrottlePercent(applySpeedLimit(throttlePct));
     }
 
     // Apply gear selection — retry until setGear() accepts the command
@@ -360,6 +446,11 @@ bool VehicleController::shouldClipThrottle() const {
         return true;
     if (transmission_.getTargetGear() == TransmissionController::Gear::GEAR_NEUTRAL)
         return true;
+    // Physical gear unknown (ambiguous switches, or the opto-input expander is
+    // faulted and the snapshot is stale) — the drivetrain state is not known, so
+    // throttle authority is capped. This is the degraded mode for a board I/O fault.
+    if (transmission_.getPhysicalGear() == TransmissionController::Gear::GEAR_UNKNOWN)
+        return true;
     return false;
 }
 
@@ -371,8 +462,70 @@ void VehicleController::processThrottleCommand(float value, WebPortal& webPortal
     if (shouldClipThrottle()) {
         value = min(TRANS_UNKNOWN_GEAR_THROTTLE_MAX, value);
     }
-    throttle_.setThrottlePercent(value);
+    throttle_.setThrottlePercent(applySpeedLimit(value));
     webPortal.sendResponse(true, "Throttle set");
+}
+
+float VehicleController::applySpeedLimit(float throttlePct) {
+    if (!speedSensor_.isLimiterEnabled()) {
+        return throttlePct;
+    }
+
+    // Fail OPEN on sensor loss. The limiter only ever acts ABOVE the maximum speed, and a
+    // lost sensor reads 0 km/h — clamping throttle on a reading we do not trust, mid-manoeuvre,
+    // is the more dangerous failure. Over-speed protection assumes a working sensor.
+    if (!speedSensor_.isValid()) {
+        uint32_t now = millis();
+        if (lastSpeedLimitWarnMs_ == 0 || (now - lastSpeedLimitWarnMs_) >= SPEED_LIMIT_WARN_MS) {
+            lastSpeedLimitWarnMs_ = now;
+            Debug::printlnFeature(DebugFeature::VEHICLE,
+                "[SPEED] WARNING: limiter enabled but speed reading is invalid — not clamping (fail open)");
+        }
+        return throttlePct;
+    }
+    lastSpeedLimitWarnMs_ = 0;
+
+    if (speedSensor_.getSpeedKmh() <= speedSensor_.getLimitMaxKmh()) {
+        return throttlePct;
+    }
+    // A reduced ceiling, not a hard cut: killing throttle outright mid-turn is unsafe.
+    return min(throttlePct, (float)SPEED_LIMIT_THROTTLE_CAP_PCT);
+}
+
+void VehicleController::processSpeedCalPprCommand(float value, WebPortal& webPortal) {
+    int32_t ppr = (int32_t)lroundf(value);
+    if (!speedSensor_.setPulsesPerRev(ppr)) {
+        webPortal.sendResponse(false, "Pulses/rev out of range (" + String(SPEED_PPR_MIN) + "-" +
+                                      String(SPEED_PPR_MAX) + ")");
+        return;
+    }
+    webPortal.sendResponse(true, "Pulses/rev set to " + String(ppr));
+}
+
+void VehicleController::processSpeedCalCircCommand(float value, WebPortal& webPortal) {
+    if (!speedSensor_.setWheelCircumferenceMm(value)) {
+        webPortal.sendResponse(false, "Wheel circumference out of range (" +
+                                      String((int)SPEED_CIRC_MIN_MM) + "-" +
+                                      String((int)SPEED_CIRC_MAX_MM) + " mm)");
+        return;
+    }
+    webPortal.sendResponse(true, "Wheel circumference set to " + String(value, 0) + " mm");
+}
+
+void VehicleController::processSpeedLimitEnableCommand(bool enable, WebPortal& webPortal) {
+    speedSensor_.setLimiterEnabled(enable);
+    lastSpeedLimitWarnMs_ = 0;
+    webPortal.sendResponse(true, String("Speed limiter ") + (enable ? "enabled" : "disabled"));
+}
+
+void VehicleController::processSpeedLimitSetCommand(float kmh, WebPortal& webPortal) {
+    if (!speedSensor_.setLimitMaxKmh(kmh)) {
+        webPortal.sendResponse(false, "Speed limit out of range (" +
+                                      String((int)SPEED_LIMIT_MIN_KMH) + "-" +
+                                      String((int)SPEED_LIMIT_MAX_KMH) + " km/h)");
+        return;
+    }
+    webPortal.sendResponse(true, "Speed limit set to " + String(kmh, 0) + " km/h");
 }
 
 void VehicleController::processThrottleCalBegin(WebPortal& webPortal) {
@@ -551,6 +704,35 @@ void VehicleController::setWheelLock(bool locked) {
 void VehicleController::processWheelLockCommand(bool locked, WebPortal& webPortal) {
     setWheelLock(locked);
     webPortal.sendResponse(true, String("Front wheels ") + (locked ? "LOCKED" : "UNLOCKED"));
+}
+
+void VehicleController::processBoostCommand(bool on, WebPortal& webPortal) {
+    if (!on) {
+        // The rail feeds the steering VESC — dropping it on a live vehicle would
+        // remove steering authority, so a disable is only allowed with ignition OFF.
+        if (getIgnitionState() != RelayController::IgnitionState::OFF) {
+            Debug::printlnFeature(DebugFeature::VEHICLE,
+                "[RAIL] 24V disable refused — ignition is not OFF");
+            webPortal.sendResponse(false,
+                "24V rail powers the steering driver - turn ignition OFF first");
+            return;
+        }
+        digitalWrite(PIN_BOOST_EN, LOW);
+        boostEnabled_ = false;
+        railLow_ = false;   // a deliberately disabled rail is not a fault
+        lastRailWarnMs_ = 0;
+        Debug::printlnFeature(DebugFeature::VEHICLE, "[RAIL] 24V boost DISABLED");
+        webPortal.sendResponse(true, "24V rail OFF");
+        return;
+    }
+
+    digitalWrite(PIN_BOOST_EN, HIGH);
+    boostEnabled_ = true;
+    boostEnabledAtMs_ = millis();   // restart the startup grace window
+    railLow_ = false;
+    lastRailWarnMs_ = 0;
+    Debug::printlnFeature(DebugFeature::VEHICLE, "[RAIL] 24V boost ENABLED");
+    webPortal.sendResponse(true, "24V rail ON");
 }
 
 void VehicleController::processSteerCalCommand(const String& which, WebPortal& webPortal) {

@@ -2,13 +2,28 @@
 #define RELAY_CONTROLLER_H
 
 #include <Arduino.h>
+#include <Wire.h>
 #include "Constants.h"
+#include "PCA9557Expander.h"
 
 /**
- * @brief Relay controller for ignition and lighting systems
+ * @brief Relay controller for ignition, starter, lighting and wheel lock.
  *
- * Manages relay outputs for vehicle ignition states (OFF/ACC/IGNITION)
- * and front light control. Provides fail-safe methods for safety.
+ * Manages relay outputs for vehicle ignition states (OFF/ACC/IGNITION/CRANKING),
+ * front light and front-wheel lock. The relays live on the external relay board's
+ * PCA9557 @ `PCA9557_ADDR_RELAYS` (0x18) on I2C2 (`Wire1`), not on ESP32 GPIO:
+ * Relay_1 = ignition/ECU line, Relay_2 = starter, Relay_3 = front light,
+ * Relay_4 = front-wheel lock, Relay_5-8 spare (always written off).
+ *
+ * The whole 8-bit port is written from a single shadow byte and verified by
+ * reading the output register back, because over I2C a write can fail silently
+ * (a GPIO write cannot). The starter is escalated separately: a latched starter
+ * destroys the starter motor and can move the vehicle, so an unverified starter
+ * engagement aborts the crank and a verification failure while the starter bit
+ * is set forces repeated all-off writes and latches ignition OFF.
+ *
+ * Note: a physically welded relay contact is invisible to the read-back, which
+ * reflects the expander pin and not the contact. That risk stays with hardware.
  */
 class RelayController {
 public:
@@ -16,17 +31,28 @@ public:
      * @brief Ignition state enum
      */
     enum class IgnitionState {
-        OFF,        // All power off (RELAY1 LOW, RELAY2 LOW)
-        ACC,        // Ignition/ECU line powered (RELAY1 HIGH, RELAY2 LOW)
-        IGNITION,   // Ignition/ECU line powered, starter off (RELAY1 HIGH, RELAY2 LOW)
-        CRANKING    // Starter engaged (RELAY1 HIGH, RELAY2 HIGH); auto-stops on RPM or CRANKING_TIMEOUT
+        OFF,        // All power off (Relay_1 LOW, Relay_2 LOW)
+        ACC,        // Ignition/ECU line powered (Relay_1 HIGH, Relay_2 LOW)
+        IGNITION,   // Ignition/ECU line powered, starter off (Relay_1 HIGH, Relay_2 LOW)
+        CRANKING    // Starter engaged (Relay_1 HIGH, Relay_2 HIGH); auto-stops on RPM or CRANKING_TIMEOUT
     };
 
-    RelayController();
+    /**
+     * @param bus I2C bus carrying the relay board (bound at construction; the bus
+     *            itself is opened by `main.cpp` before `begin()` is called)
+     */
+    explicit RelayController(TwoWire& bus = Wire1);
 
     /**
-     * @brief Initialize relay controller (direct GPIO outputs)
-     * @return true if initialization successful
+     * @brief Initialize the relay expander and drive every relay OFF.
+     *
+     * Probes 0x18, configures all eight pins as outputs and writes 0x00 with
+     * read-back verification before returning. If nothing answers at 0x18 the
+     * reserved mux address 0x1C is probed as well so the most likely assembly
+     * mistake (relay board strapped to the mux address) is reported distinctly.
+     *
+     * @return true if initialization succeeded; false leaves the driver in a
+     *         degraded state where every setter is a logging no-op
      */
     bool begin();
 
@@ -47,6 +73,7 @@ public:
      * starter only once R1 has been powered for ACC_PRECRANK_DWELL_MS (immediately if
      * it already has), and suppresses the crank if the engine is already running.
      * While waiting, the reported state is ACC. Does not re-crank while held.
+     * Refused while the expander is unavailable or a starter fault is latched.
      */
     void requestCrank();
 
@@ -71,7 +98,10 @@ public:
      * Call this method periodically (every loop iteration) to monitor cranking.
      * Automatically stops cranking if:
      * - Engine RPM exceeds threshold (engine started)
-     * - 5 seconds elapsed without engine start
+     * - CRANKING_TIMEOUT elapsed without engine start
+     *
+     * While the driver is faulted this instead re-attempts the safe-state port
+     * write on every call until it verifies.
      *
      * @param engineRpm Current engine RPM from CAN bus
      */
@@ -79,9 +109,11 @@ public:
 
     /**
      * @brief Get current ignition state
-     * @return Current ignition state
+     * @return Current ignition state; OFF whenever the expander is unavailable
      */
-    IgnitionState getIgnitionState() const { return currentIgnitionState_; }
+    IgnitionState getIgnitionState() const {
+        return isAvailable() ? currentIgnitionState_ : IgnitionState::OFF;
+    }
 
     /**
      * @brief Get current front light state
@@ -96,12 +128,28 @@ public:
     bool getWheelLock() const { return wheelLockOn_; }
 
     /**
+     * @brief True when the relay expander failed to initialize or a port write
+     * could not be verified. Published in telemetry as `io_relay_fault`.
+     */
+    bool isFaulted() const { return !initialized_ || faulted_; }
+
+    /** @brief True when relay commands are actually reaching the hardware */
+    bool isAvailable() const { return initialized_ && !faulted_; }
+
+    /**
      * @brief Fail-safe: turn ignition and front light OFF.
      * The front-wheel lock is intentionally left untouched (holds last state).
      */
     void allOff();
 
 private:
+    PCA9557Expander expander_;
+    uint8_t outputShadow_;   // whole-port shadow; bits per RELAY_BIT_* in Constants.h
+
+    bool initialized_;       // begin() succeeded
+    bool faulted_;           // a port write could not be verified
+    bool starterInhibit_;    // crank requests refused until a write verifies clean again
+    bool allOffEscalation_;  // repeat the all-off write on every update() while faulted
 
     // State tracking
     IgnitionState currentIgnitionState_;
@@ -116,8 +164,29 @@ private:
     uint32_t r1HighSince_;         // millis() when R1 (ignition/ECU) went LOW->HIGH; 0 while OFF
     bool crankArmed_;              // True if a dwell-gated crank is pending
 
-    // Helper methods
+    /** @brief Recompute the shadow byte from the tracked state and write the port */
     void updateRelays();
+
+    /**
+     * @brief Write the whole port and verify it by reading the output register back.
+     * Retries up to `attempts` times. On persistent failure raises the fault and,
+     * if the starter bit was set, runs the starter escalation (all-off, ignition OFF,
+     * crank inhibit).
+     * @param value    port byte to write
+     * @param attempts verification attempts (the faulted-path retry in update() uses
+     *                 1, so a wedged bus cannot cost the control loop several I2C
+     *                 timeouts per iteration)
+     * @return true if the write verified
+     */
+    bool writePort(uint8_t value, uint8_t attempts = RELAY_WRITE_RETRIES);
+
+    /** @brief Immediate best-effort all-relays-off write (no retry loop) */
+    void forceAllOffWrite();
+
+    /** @brief Set/clear one bit of the shadow byte */
+    static uint8_t withBit(uint8_t value, uint8_t bit, bool on) {
+        return on ? (uint8_t)(value | (1u << bit)) : (uint8_t)(value & ~(1u << bit));
+    }
 };
 
 /**

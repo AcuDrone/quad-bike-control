@@ -13,7 +13,8 @@
  * the same typed command API the vehicle layer consumes
  * (steering/throttle/gear/brake/ignition/light). Also reports vehicle state back
  * to the MAVLink network: HEARTBEAT plus a single EFI_STATUS (RPM / coolant /
- * gear) from this component, plus STATUSTEXT for state transitions.
+ * gear) from this component, a VFR_HUD carrying hall-sensor ground speed, plus
+ * STATUSTEXT for state transitions.
  *
  * The MAVLink C library headers are included only in the .cpp to keep this
  * header lightweight.
@@ -52,8 +53,11 @@ public:
         const char* ignition;       // "OFF"/"ACC"/"IGNITION"/"CRANKING"
         bool        failsafe;       // true when in fail-safe
         uint8_t     digitalFlags;   // digital output bitmask (EFI_DIGITAL_FLAG_* in Constants.h)
-        // Note: vehicle speed and oil temperature are not available from the ECU
-        // and are therefore not reported over MAVLink.
+        bool        speedValid;     // hall speed sensor health (independent of canValid)
+        float       speedKmh;       // hall-sensor ground speed, km/h (reported as VFR_HUD groundspeed)
+        // Note: oil temperature is not available from the ECU and is not reported.
+        // Ground speed is NOT carried in EFI_STATUS — it comes from the hall speed
+        // sensor and is reported separately via VFR_HUD.
     };
 
     MavlinkInterface();

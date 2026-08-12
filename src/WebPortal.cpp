@@ -571,11 +571,11 @@ bool WebPortal::validateCommand(const WebCommand& cmd, InputSource inputSource) 
 // ============================================================================
 
 String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
-    // Capacity headroom: ~38 top-level fields (incl. 4 steering-VESC fields) + a
-    // 16-element array + a 4-member object, plus copied String values. Sized to
-    // 3584 to leave room for the transient `probe` object (only present while
-    // probe results are fresh; steady-state wire size is unchanged).
-    StaticJsonDocument<3584> doc;
+    // Capacity headroom: ~48 top-level fields (incl. 4 steering-VESC fields, the
+    // 5 rail / board-I/O fields and the 6 hall-speed fields) + a 16-element array +
+    // a 4-member object, plus copied String values. Sized to 4096 to leave room for
+    // the transient `probe` object (only present while probe results are fresh).
+    StaticJsonDocument<4096> doc;
 
     doc["timestamp"] = telemetry.timestamp;
     doc["gear"] = telemetry.gear;
@@ -600,10 +600,19 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["mav_active"] = telemetry.mav_active;
     doc["web_control"] = telemetry.web_control;
 
+    // Hall speed sensor — deliberately OUTSIDE the CAN-connected block: speed is a
+    // separate physical source with its own health, so it must display whenever the
+    // sensor is live regardless of `can_status`.
+    doc["vehicle_speed"] = serialized(String(telemetry.vehicle_speed, 1));
+    doc["speed_valid"] = telemetry.speed_valid;
+    doc["speed_ppr"] = telemetry.speed_ppr;
+    doc["speed_circ_mm"] = serialized(String(telemetry.speed_circ_mm, 0));
+    doc["speed_limit_on"] = telemetry.speed_limit_on;
+    doc["speed_limit_max"] = serialized(String(telemetry.speed_limit_max, 0));
+
     // CAN bus vehicle data
     if (telemetry.can_status == "connected") {
         doc["engine_rpm"] = telemetry.engine_rpm;
-        doc["vehicle_speed"] = telemetry.vehicle_speed;
         doc["coolant_temp"] = telemetry.coolant_temp;
         doc["oil_temp"] = telemetry.oil_temp;
         doc["throttle_position"] = telemetry.throttle_position;
@@ -629,6 +638,14 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["is_cranking"] = telemetry.is_cranking;
     doc["front_light_on"] = telemetry.front_light_on;
     doc["wheel_lock_on"] = telemetry.wheel_lock_on;
+
+    // 24V boost rail + board I/O health — emitted unconditionally (independent of
+    // CAN / MAVLink status) so a failing expander is always visible.
+    doc["rail_24v"] = serialized(String(telemetry.rail_24v, 1));
+    doc["boost_on"] = telemetry.boost_on;
+    doc["rail_low"] = telemetry.rail_low;
+    doc["io_input_fault"] = telemetry.io_input_fault;
+    doc["io_relay_fault"] = telemetry.io_relay_fault;
 
     // Firmware version
     doc["firmware_version"] = telemetry.firmware_version;

@@ -393,6 +393,10 @@
                         <div class="telemetry-value" id="telemetry-steering">0%</div>
                     </div>
                     <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_speed">Speed</div>
+                        <div class="telemetry-value" id="telemetry-speed">-- km/h</div>
+                    </div>
+                    <div class="telemetry-item">
                         <div class="telemetry-label" data-i18n="lbl_mav_link">MAVLink Link</div>
                         <div class="telemetry-value" id="telemetry-mav">Inactive</div>
                     </div>
@@ -605,6 +609,16 @@
                     </button>
                 </div>
 
+                <h3 data-i18n="h_boost_rail" style="margin-bottom: 10px;">24V Boost Rail</h3>
+                <div style="margin-bottom: 20px;">
+                    <button class="upload-btn" id="boost-rail-btn" onclick="toggleBoostRail()" style="background: var(--secondary);">
+                        ⚡ <span data-i18n="lbl_boost_rail">24V Rail:</span> <span id="boost-rail-status">--</span>
+                    </button>
+                    <div id="boost-rail-hint" data-i18n="boost_rail_hint" style="margin-top: 6px; font-size: 0.8em; color: var(--muted-foreground);">
+                        Powers the steering driver - can only be switched off with ignition OFF.
+                    </div>
+                </div>
+
                 <h3 data-i18n="h_telemetry" style="margin-bottom: 10px;">Telemetry</h3>
                 <div class="telemetry-grid" style="grid-template-columns: repeat(2, 1fr);">
                     <div class="telemetry-item">
@@ -614,6 +628,14 @@
                     <div class="telemetry-item">
                         <div class="telemetry-label" data-i18n="lbl_cranking">Cranking</div>
                         <div class="telemetry-value" id="telemetry-cranking" style="font-size: 1.3em;">No</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_rail_24v">24V Rail</div>
+                        <div class="telemetry-value" id="telemetry-rail-24v" style="font-size: 1.3em;">--</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_io_health">Board I/O</div>
+                        <div class="telemetry-value" id="telemetry-io-health" style="font-size: 1.3em;">--</div>
                     </div>
                 </div>
             </div>
@@ -674,10 +696,6 @@
                         <div class="telemetry-value" id="can-rpm">0</div>
                     </div>
                     <div class="telemetry-item">
-                        <div class="telemetry-label" data-i18n="lbl_speed">Speed</div>
-                        <div class="telemetry-value" id="can-speed">0 km/h</div>
-                    </div>
-                    <div class="telemetry-item">
                         <div class="telemetry-label" data-i18n="lbl_coolant_temp">Coolant Temp</div>
                         <div class="telemetry-value" id="can-coolant">--°C</div>
                     </div>
@@ -711,6 +729,58 @@
                 </div>
                 <div id="probe-status" style="margin-top: 8px; font-size: 0.8em; color: var(--muted-foreground); min-height: 1.2em;"></div>
                 <div id="probe-results" style="display: none; margin-top: 10px; font-size: 0.82em;"></div>
+            </div>
+
+            <!-- Speed Sensor (hall pulse input, independent of CAN) -->
+            <div class="card">
+                <h2 data-i18n="card_speed_sensor">🛞 Speed Sensor</h2>
+                <p data-i18n="speed_sensor_help" style="font-size: 0.8em; color: var(--muted-foreground); margin-bottom: 12px;">
+                    Speed is measured by the driveline hall sensor, not the CAN bus. Set pulses per
+                    revolution and the fitted tyre circumference to calibrate it.
+                </p>
+                <div class="telemetry-grid">
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_speed">Speed</div>
+                        <div class="telemetry-value" id="speed-value">-- km/h</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_speed_status">Sensor</div>
+                        <div class="telemetry-value" id="speed-status" data-i18n="speed_no_signal">No signal</div>
+                    </div>
+                </div>
+
+                <div style="margin-top: 14px;">
+                    <label data-i18n="lbl_speed_ppr" style="font-size: 0.8em; color: var(--muted-foreground);">Pulses per revolution</label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px;">
+                        <input type="number" id="speed-ppr-input" min="1" max="1000" step="1" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button onclick="saveSpeedPpr()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                    </div>
+                </div>
+                <div style="margin-top: 10px;">
+                    <label data-i18n="lbl_speed_circ" style="font-size: 0.8em; color: var(--muted-foreground);">Wheel circumference (mm)</label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px;">
+                        <input type="number" id="speed-circ-input" min="100" max="10000" step="1" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button onclick="saveSpeedCirc()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                    </div>
+                </div>
+
+                <div style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px;">
+                    <label data-i18n="lbl_speed_limit_max" style="font-size: 0.8em; color: var(--muted-foreground);">Maximum speed (km/h)</label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px;">
+                        <input type="number" id="speed-limit-input" min="1" max="200" step="1" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button onclick="saveSpeedLimit()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                    </div>
+                    <div class="slider-container" style="margin-top: 10px;">
+                        <button class="upload-btn" id="speed-limiter-btn" onclick="toggleSpeedLimiter()" style="background: var(--secondary);">
+                            🛑 <span data-i18n="lbl_speed_limiter">Speed limiter:</span> <span id="speed-limiter-status">OFF</span>
+                        </button>
+                    </div>
+                    <div data-i18n="speed_limiter_hint" style="font-size: 0.75em; color: var(--muted-foreground); margin-top: 6px;">
+                        Above the maximum speed the throttle is capped to a reduced ceiling. With no valid
+                        sensor reading the limiter does not act.
+                    </div>
+                </div>
+                <div id="speed-status-msg" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
             </div>
 
             <!-- System Maintenance -->
@@ -860,6 +930,16 @@
                 lbl_wheel_lock: 'Wheel Lock:',
                 lock_locked: 'LOCKED',
                 lock_unlocked: 'UNLOCKED',
+                h_boost_rail: '24V Boost Rail',
+                lbl_boost_rail: '24V Rail:',
+                boost_rail_hint: 'Powers the steering driver - can only be switched off with ignition OFF.',
+                lbl_rail_24v: '24V Rail',
+                unit_volt: 'V',
+                lbl_io_health: 'Board I/O',
+                io_ok: 'OK',
+                io_fault_inputs: 'INPUT FAULT',
+                io_fault_relays: 'RELAY FAULT',
+                gear_unknown: 'unknown gear',
                 h_telemetry: 'Telemetry',
                 lbl_ignition_state: 'Ignition State',
                 lbl_cranking: 'Cranking',
@@ -885,7 +965,6 @@
                 // Vehicle data (CAN) card
                 card_can: '🚗 Vehicle Data (CAN)',
                 lbl_engine_rpm: 'Engine RPM',
-                lbl_speed: 'Speed',
                 lbl_coolant_temp: 'Coolant Temp',
                 lbl_oil_temp: 'Oil Temp',
                 lbl_throttle_pos: 'Throttle Pos',
@@ -895,6 +974,23 @@
                 can_connected: 'connected',
                 can_disconnected: 'disconnected',
                 unit_kmh: 'km/h',
+
+                // Speed sensor card (hall pulse input — independent of CAN)
+                card_speed_sensor: '🛞 Speed Sensor',
+                speed_sensor_help: 'Speed is measured by the driveline hall sensor, not the CAN bus. Set pulses per revolution and the fitted tyre circumference to calibrate it.',
+                lbl_speed: 'Speed',
+                lbl_speed_status: 'Sensor',
+                speed_ok: 'OK',
+                speed_no_signal: 'No signal',
+                lbl_speed_ppr: 'Pulses per revolution',
+                lbl_speed_circ: 'Wheel circumference (mm)',
+                lbl_speed_limit_max: 'Maximum speed (km/h)',
+                lbl_speed_limiter: 'Speed limiter:',
+                speed_limiter_hint: 'Above the maximum speed the throttle is capped to a reduced ceiling. With no valid sensor reading the limiter does not act.',
+                speed_saving: 'Saving speed settings...',
+                invalid_speed_ppr: 'Pulses/rev must be 1-1000',
+                invalid_speed_circ: 'Circumference must be 100-10000 mm',
+                invalid_speed_limit: 'Speed limit must be 1-200 km/h',
 
                 // ECU probe
                 btn_probe_ecu: '🔍 Probe ECU',
@@ -1059,6 +1155,16 @@
                 lbl_wheel_lock: 'Блок. колеса:',
                 lock_locked: 'ЗАБЛОКОВАНО',
                 lock_unlocked: 'РОЗБЛОКОВАНО',
+                h_boost_rail: 'Шина 24В',
+                lbl_boost_rail: 'Шина 24В:',
+                boost_rail_hint: 'Живить драйвер керма - вимикається лише коли запалювання ВИМК.',
+                lbl_rail_24v: 'Напруга 24В',
+                unit_volt: 'В',
+                lbl_io_health: 'Ввід-вивід плати',
+                io_ok: 'Норма',
+                io_fault_inputs: 'ЗБІЙ ВХОДІВ',
+                io_fault_relays: 'ЗБІЙ РЕЛЕ',
+                gear_unknown: 'невідома передача',
                 h_telemetry: 'Телеметрія',
                 lbl_ignition_state: 'Стан запалювання',
                 lbl_cranking: 'Прокрутка',
@@ -1084,7 +1190,6 @@
                 // Vehicle data (CAN) card
                 card_can: '🚗 Дані авто (CAN)',
                 lbl_engine_rpm: 'Оберти двигуна',
-                lbl_speed: 'Швидкість',
                 lbl_coolant_temp: 'Темп. охол. рідини',
                 lbl_oil_temp: 'Темп. оливи',
                 lbl_throttle_pos: 'Полож. дроселя',
@@ -1094,6 +1199,23 @@
                 can_connected: 'підключено',
                 can_disconnected: 'відключено',
                 unit_kmh: 'км/год',
+
+                // Speed sensor card (hall pulse input — independent of CAN)
+                card_speed_sensor: '🛞 Датчик швидкості',
+                speed_sensor_help: 'Швидкість вимірює датчик Холла на трансмісії, а не шина CAN. Задайте кількість імпульсів на оберт та довжину кола встановленої шини для калібрування.',
+                lbl_speed: 'Швидкість',
+                lbl_speed_status: 'Датчик',
+                speed_ok: 'Справний',
+                speed_no_signal: 'Немає сигналу',
+                lbl_speed_ppr: 'Імпульсів на оберт',
+                lbl_speed_circ: 'Довжина кола колеса (мм)',
+                lbl_speed_limit_max: 'Максимальна швидкість (км/год)',
+                lbl_speed_limiter: 'Обмежувач швидкості:',
+                speed_limiter_hint: 'Вище максимальної швидкості дросель обмежується зниженою стелею. Без достовірних показань датчика обмежувач не діє.',
+                speed_saving: 'Збереження налаштувань швидкості...',
+                invalid_speed_ppr: 'Імпульсів на оберт має бути 1-1000',
+                invalid_speed_circ: 'Довжина кола має бути 100-10000 мм',
+                invalid_speed_limit: 'Обмеження швидкості має бути 1-200 км/год',
 
                 // ECU probe
                 btn_probe_ecu: '🔍 Опитати ЕБК',
@@ -1190,6 +1312,7 @@
             updateWebControlButton(webControlState);
             updateLightButton(lightState);
             updateWheelLockButton(wheelLockState);
+            updateBoostRailButton(boostRailState);
             const boostStatus = document.getElementById('boost-test-status');
             if (boostStatus) boostStatus.textContent = boostTestActive ? t('on') : t('off');
             const dbgBtn = document.getElementById('debug-toggle-btn');
@@ -1328,6 +1451,13 @@
                     steerCenterStatus(data.success ? data.message : t('error_prefix') + data.message,
                                       data.success ? 'var(--success)' : 'var(--danger)');
                 }
+                // Speed sensor calibration / limiter status
+                if (data.message && (data.message.includes('Pulses/rev') ||
+                    data.message.includes('Wheel circumference') || data.message.includes('Speed limit') ||
+                    data.message.includes('Speed limiter'))) {
+                    speedStatusMsg(data.success ? data.message : t('error_prefix') + data.message,
+                                   data.success ? 'var(--success)' : 'var(--danger)');
+                }
             }
         }
 
@@ -1371,6 +1501,10 @@
             // Update steering
             document.getElementById('telemetry-steering').textContent = (data.steering_pct || 0) + '%';
 
+            // Update hall-sensor speed — deliberately independent of can_status. An
+            // invalid reading shows "--" rather than a misleading 0.
+            updateSpeedDisplay(data);
+
             // Update MAVLink link status
             document.getElementById('telemetry-mav').textContent = data.mav_active ? t('mav_active') : t('mav_inactive');
 
@@ -1392,7 +1526,6 @@
             // Update CAN data
             if (data.can_status === 'connected') {
                 document.getElementById('can-rpm').textContent = data.engine_rpm || 0;
-                document.getElementById('can-speed').textContent = (data.vehicle_speed || 0) + ' ' + t('unit_kmh');
                 document.getElementById('can-throttle-pos').textContent = (data.throttle_position || 0) + '%';
 
                 // Coolant temperature with color coding
@@ -1426,7 +1559,6 @@
                 document.getElementById('can-status-text').style.color = 'var(--success)';
             } else {
                 document.getElementById('can-rpm').textContent = '--';
-                document.getElementById('can-speed').textContent = '-- ' + t('unit_kmh');
                 document.getElementById('can-coolant').textContent = '--°C';
                 document.getElementById('can-oil').textContent = '--°C';
                 document.getElementById('can-throttle-pos').textContent = '--%';
@@ -1445,7 +1577,8 @@
             const switchingIndicator = document.getElementById('gear-switching-indicator');
             if (data.gear_switching) {
                 switchingIndicator.style.display = 'block';
-                switchingIndicator.textContent = t('switching_to', data.gear || 'N');
+                switchingIndicator.textContent = t('switching_to',
+                    (!data.gear || data.gear === '?') ? t('gear_unknown') : data.gear);
             } else {
                 switchingIndicator.style.display = 'none';
             }
@@ -1509,6 +1642,38 @@
             if (data.wheel_lock_on !== undefined) {
                 wheelLockState = data.wheel_lock_on;
                 updateWheelLockButton(data.wheel_lock_on);
+            }
+
+            // 24V boost rail — the button reflects the commanded state from telemetry,
+            // not the last click (a disable can be refused by the interlock).
+            if (data.boost_on !== undefined) {
+                boostRailState = data.boost_on;
+                updateBoostRailButton(data.boost_on);
+            }
+            if (data.rail_24v !== undefined) {
+                const railEl = document.getElementById('telemetry-rail-24v');
+                if (railEl) {
+                    railEl.textContent = Number(data.rail_24v).toFixed(1) + ' ' + t('unit_volt');
+                    if (data.boost_on === false) {
+                        railEl.style.color = 'var(--muted-foreground)';   // deliberately disabled
+                    } else if (data.rail_low) {
+                        railEl.style.color = 'var(--warning)';
+                    } else {
+                        railEl.style.color = 'var(--success)';
+                    }
+                }
+            }
+
+            // Board I/O expander health (gear inputs + relays now depend on I2C)
+            if (data.io_input_fault !== undefined || data.io_relay_fault !== undefined) {
+                const ioEl = document.getElementById('telemetry-io-health');
+                if (ioEl) {
+                    const faults = [];
+                    if (data.io_input_fault) faults.push(t('io_fault_inputs'));
+                    if (data.io_relay_fault) faults.push(t('io_fault_relays'));
+                    ioEl.textContent = faults.length ? faults.join(' + ') : t('io_ok');
+                    ioEl.style.color = faults.length ? 'var(--danger)' : 'var(--success)';
+                }
             }
             if (data.steer_position !== undefined) {
                 document.getElementById('steer-pos').textContent = data.steer_position;
@@ -1880,6 +2045,93 @@
             }
         }
 
+        // ── Speed sensor (hall pulse input, independent of CAN) ─────────────
+        let speedLimiterState = false;
+
+        function speedStatusMsg(text, color) {
+            const el = document.getElementById('speed-status-msg');
+            if (!el) return;
+            el.textContent = text;
+            el.style.color = color;
+        }
+
+        function syncSpeedInput(id, value) {
+            if (value === undefined || value === null) return;
+            const el = document.getElementById(id);
+            if (el && document.activeElement !== el) {
+                el.value = value;
+            }
+        }
+
+        function updateSpeedDisplay(data) {
+            const valid = data.speed_valid === true;
+            const kmh = (typeof data.vehicle_speed === 'number') ? data.vehicle_speed : 0;
+            // speed_valid = false means the reading is UNKNOWN (sensor never pulsed or a
+            // suspicious dropout), not "stopped" — show "--" instead of a misleading 0.
+            const text = valid ? kmh.toFixed(1) + ' ' + t('unit_kmh') : '-- ' + t('unit_kmh');
+            ['telemetry-speed', 'speed-value'].forEach(function (id) {
+                const el = document.getElementById(id);
+                if (el) el.textContent = text;
+            });
+
+            const statusEl = document.getElementById('speed-status');
+            if (statusEl) {
+                statusEl.textContent = valid ? t('speed_ok') : t('speed_no_signal');
+                statusEl.style.color = valid ? 'var(--success)' : 'var(--danger)';
+            }
+
+            syncSpeedInput('speed-ppr-input', data.speed_ppr);
+            syncSpeedInput('speed-circ-input', data.speed_circ_mm);
+            syncSpeedInput('speed-limit-input', data.speed_limit_max);
+
+            if (data.speed_limit_on !== undefined) {
+                speedLimiterState = data.speed_limit_on;
+                const st = document.getElementById('speed-limiter-status');
+                if (st) st.textContent = speedLimiterState ? t('on') : t('off');
+                const btn = document.getElementById('speed-limiter-btn');
+                if (btn) {
+                    btn.style.background = speedLimiterState
+                        ? 'color-mix(in srgb, var(--warning) 60%, black)'
+                        : 'var(--secondary)';
+                }
+            }
+        }
+
+        function saveSpeedPpr() {
+            const val = parseInt(document.getElementById('speed-ppr-input').value, 10);
+            if (isNaN(val) || val < 1 || val > 1000) {
+                speedStatusMsg(t('invalid_speed_ppr'), 'var(--danger)');
+                return;
+            }
+            sendCommand('speed_cal_ppr', val);
+            speedStatusMsg(t('speed_saving'), 'var(--muted-foreground)');
+        }
+
+        function saveSpeedCirc() {
+            const val = parseFloat(document.getElementById('speed-circ-input').value);
+            if (isNaN(val) || val < 100 || val > 10000) {
+                speedStatusMsg(t('invalid_speed_circ'), 'var(--danger)');
+                return;
+            }
+            sendCommand('speed_cal_circ', val);
+            speedStatusMsg(t('speed_saving'), 'var(--muted-foreground)');
+        }
+
+        function saveSpeedLimit() {
+            const val = parseFloat(document.getElementById('speed-limit-input').value);
+            if (isNaN(val) || val < 1 || val > 200) {
+                speedStatusMsg(t('invalid_speed_limit'), 'var(--danger)');
+                return;
+            }
+            sendCommand('speed_limit_set', val);
+            speedStatusMsg(t('speed_saving'), 'var(--muted-foreground)');
+        }
+
+        function toggleSpeedLimiter() {
+            speedLimiterState = !speedLimiterState;
+            sendCommand('speed_limit_enable', speedLimiterState);
+        }
+
         function setIgnition(state) {
             sendCommand('set_ignition', state);
         }
@@ -1894,6 +2146,21 @@
         function toggleWheelLock() {
             wheelLockState = !wheelLockState;
             sendCommand('set_wheel_lock', wheelLockState);
+        }
+
+        // ---- 24V boost rail (guarded: disable refused unless ignition is OFF) ----
+        let boostRailState = true;
+        function toggleBoostRail() {
+            // No optimistic update: the firmware may refuse a disable, and telemetry
+            // (`boost_on`) is the source of truth for the button state.
+            sendCommand('set_boost', !boostRailState);
+        }
+        function updateBoostRailButton(on) {
+            const btn = document.getElementById('boost-rail-btn');
+            const status = document.getElementById('boost-rail-status');
+            if (!btn || !status) return;
+            status.textContent = on ? t('on') : t('off');
+            btn.style.background = on ? 'color-mix(in srgb, var(--success) 65%, black)' : 'var(--secondary)';
         }
 
         // ---- Web-control latched takeover ----

@@ -31,13 +31,13 @@ MavlinkInterface::MavlinkInterface()
 }
 
 bool MavlinkInterface::begin(uint8_t rxPin, uint8_t txPin, uint8_t uartNum, uint32_t baud) {
+    // UART0 (GPIO43/44) is RESERVED for the future CH9121T wired LAN and is never
+    // opened by the firmware; the console is USB-CDC. MAVLink lives on UART1 (X9).
     if (uartNum == UART_NUM_1) {
         serial_ = &Serial1;
-    } else if (uartNum == UART_NUM_0) {
-        serial_ = &Serial;
     } else {
         Debug::printlnFeature(DebugFeature::MAVLINK,
-            "[MAV] ERROR: Invalid UART number");
+            "[MAV] ERROR: Invalid UART number (only UART1 is available for MAVLink)");
         return false;
     }
 
@@ -273,6 +273,24 @@ void MavlinkInterface::report(const StateReport& state) {
             flagsVal,   // pt_compensation  <- DIGITAL FLAGS bitmask
             0.0f, 0.0f); // ignition_voltage, fuel_pressure
         uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+        serial_->write(buf, len);
+
+        // Ground speed from the hall speed sensor, in the standard VFR_HUD field the GCS
+        // already graphs for a MAV_TYPE_GROUND_ROVER (no custom NAMED_VALUE_FLOAT needed).
+        // Its validity is the SENSOR's, independent of CAN health; a stale/invalid reading
+        // is reported as 0 rather than presented as genuine motion. The remaining VFR_HUD
+        // fields are zero: this component has no airspeed, heading or altitude source.
+        float groundSpeedMs = (state.speedValid && state.speedKmh > 0.0f)
+            ? (state.speedKmh / 3.6f)
+            : 0.0f;
+        mavlink_msg_vfr_hud_pack(
+            MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &msg,
+            0.0f,           // airspeed
+            groundSpeedMs,  // groundspeed (m/s)  <- HALL SPEED SENSOR
+            0,              // heading
+            0,              // throttle
+            0.0f, 0.0f);    // alt, climb
+        len = mavlink_msg_to_send_buffer(buf, &msg);
         serial_->write(buf, len);
     }
 

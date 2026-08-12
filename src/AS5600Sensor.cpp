@@ -1,11 +1,11 @@
 #include "AS5600Sensor.h"
+#include "Constants.h"
 #include "Debug.h"
 #include <Wire.h>
 
 static constexpr uint8_t  AS5600_I2C_ADDR    = 0x36;
 static constexpr uint8_t  AS5600_REG_STATUS  = 0x0B;   // MD bit 5 = magnet detected
 static constexpr uint8_t  AS5600_REG_RAW_ANGLE = 0x0C; // 0x0C hi / 0x0D lo, 12-bit
-static constexpr uint32_t AS5600_I2C_FREQ    = 100000;  // 100 kHz for EMI margin near the BTS7960 wiring
 static constexpr uint8_t  AS5600_RECOVER_AFTER_FAILS = 5;  // consecutive failures before Wire re-init
 
 AS5600Sensor::AS5600Sensor()
@@ -18,10 +18,10 @@ AS5600Sensor::AS5600Sensor()
 bool AS5600Sensor::begin(gpio_num_t sdaPin, gpio_num_t sclPin) {
     sdaPin_ = sdaPin;
     sclPin_ = sclPin;
-    if (!Wire.begin(sdaPin, sclPin, AS5600_I2C_FREQ)) {
-        Debug::printlnFeature(DebugFeature::SERVO, "[AS5600] Wire.begin failed");
-        return false;
-    }
+    // The bus is owned by main.cpp (I2C1 is shared with the opto-input expander at
+    // 0x1A), so this driver must NOT open or re-configure it. Wire.begin() is
+    // idempotent enough to be harmless, but calling it here would let a steering
+    // init failure take the input expander down with it.
 
     // Probe the sensor
     Wire.beginTransmission(AS5600_I2C_ADDR);
@@ -57,9 +57,12 @@ bool AS5600Sensor::read(uint16_t& rawAngle, bool& magnetOk) {
 }
 
 void AS5600Sensor::recoverBus() {
-    Debug::printlnFeature(DebugFeature::SERVO, "[AS5600] I2C wedged — re-initializing bus");
+    // Shared bus: the re-init must restore the exact parameters main.cpp used, or
+    // the opto-input expander on the same bus would be left running at a different
+    // speed. BoardInputs recovers on its own once the bus is back.
+    Debug::printlnFeature(DebugFeature::SERVO, "[AS5600] I2C wedged — re-initializing shared bus I2C1");
     Wire.end();
-    Wire.begin(sdaPin_, sclPin_, AS5600_I2C_FREQ);
+    Wire.begin(sdaPin_, sclPin_, I2C_BUS_FREQ_HZ);
 }
 
 bool AS5600Sensor::readRegisters(uint8_t reg, uint8_t* buf, uint8_t len) {

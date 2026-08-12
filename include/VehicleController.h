@@ -11,7 +11,9 @@
 #include "WebPortal.h"
 #include "MavlinkInterface.h"
 #include "RelayController.h"
+#include "BoardInputs.h"
 #include "CANController.h"
+#include "SpeedSensor.h"
 
 /**
  * @brief Vehicle control coordination layer
@@ -26,7 +28,16 @@ public:
                       TransmissionController& transmission,
                       BTS7960Controller& brake,
                       MavlinkInterface& mavlink,
-                      RelayController& relayController);
+                      RelayController& relayController,
+                      BoardInputs& boardInputs,
+                      SpeedSensor& speedSensor);
+
+    /**
+     * @brief Record that the 24V boost rail was enabled in setup() and prepare the
+     * rail ADC. `main.cpp` drives `PIN_BOOST_EN` HIGH as its first hardware action;
+     * this starts the startup grace window and the sampling schedule.
+     */
+    void initBoostRail();
 
     /**
      * @brief Initialize CAN controller
@@ -126,10 +137,34 @@ public:
     const TransmissionController& getTransmission() const { return transmission_; }
 
     /**
-     * @brief Check brake sensor state
-     * @return true if brake is released (HIGH signal, no pressure)
+     * @brief Check the brake "fully released" endstop (opto input In5).
+     *
+     * Read from the `BoardInputs` snapshot — never a `digitalRead()` and never an
+     * I2C transaction of its own. A stale snapshot returns false ("not confirmed
+     * released"), so retraction stays bounded by BRAKE_SENSOR_OVERRUN_TIME /
+     * BRAKE_FULL_TRAVEL_TIME instead of stopping early on a failed read.
+     *
+     * @return true only if the endstop is confirmed reached
      */
-    bool isBrakeReleased() const { return digitalRead(PIN_BRAKE_SENSOR); }
+    bool isBrakeReleased() const {
+        BoardInputs::Snapshot snap = boardInputs_.getSnapshot();
+        return snap.valid && snap.brakeReleased;
+    }
+
+    /** @brief Latest averaged 24V rail voltage (V) */
+    float getRail24V() const { return rail24V_; }
+
+    /** @brief Commanded state of the 24V boost enable line */
+    bool isBoostOn() const { return boostEnabled_; }
+
+    /** @brief True when the rail is below RAIL_24V_LOW_THRESHOLD (warning only) */
+    bool isRailLow() const { return railLow_; }
+
+    /** @brief Opto-input expander fault state (telemetry `io_input_fault`) */
+    bool isInputFault() const { return boardInputs_.isFaulted(); }
+
+    /** @brief Relay expander fault state (telemetry `io_relay_fault`) */
+    bool isRelayFault() const { return relayController_.isFaulted(); }
 
     /**
      * @brief Get vehicle data from CAN bus
@@ -141,6 +176,19 @@ public:
      * @brief Get the latest ECU capability probe snapshot (for telemetry)
      */
     CANController::ProbeResults getProbeResults() const { return canController_.getProbeResults(); }
+
+    /**
+     * @brief Hall-sensor vehicle speed (km/h) and its health flag.
+     * Independent of CAN status — a CAN outage does not blank these.
+     */
+    float getVehicleSpeedKmh() const { return speedSensor_.getSpeedKmh(); }
+    bool isVehicleSpeedValid() const { return speedSensor_.isValid(); }
+
+    /** @brief Speed-sensor calibration and limiter settings (telemetry / web UI) */
+    uint16_t getSpeedPulsesPerRev() const { return speedSensor_.getPulsesPerRev(); }
+    float getSpeedWheelCircumferenceMm() const { return speedSensor_.getWheelCircumferenceMm(); }
+    bool isSpeedLimiterEnabled() const { return speedSensor_.isLimiterEnabled(); }
+    float getSpeedLimitMaxKmh() const { return speedSensor_.getLimitMaxKmh(); }
 
     /**
      * @brief Set ignition state with safety interlocks
@@ -204,7 +252,17 @@ private:
     // Input and output references
     MavlinkInterface& mavlink_;
     RelayController& relayController_;
+    BoardInputs& boardInputs_;     // opto inputs (gear switches + brake endstop)
+    SpeedSensor& speedSensor_;     // hall speed sensor (updated from main.cpp)
     CANController canController_;  // CAN bus controller (owned, not reference)
+
+    // 24V boost rail state
+    bool     boostEnabled_;        // commanded state of PIN_BOOST_EN
+    uint32_t boostEnabledAtMs_;    // millis() of the last enable (startup grace)
+    float    rail24V_;             // last averaged rail voltage (V)
+    bool     railLow_;             // rail below threshold outside the grace window
+    uint32_t lastRailSampleMs_;
+    uint32_t lastRailWarnMs_;      // rate limit for the low-rail log
 
     // State tracking
     InputSource currentInputSource_;
@@ -237,6 +295,8 @@ private:
     TransmissionController::Gear lastCommandedGear_;         // Last gear requested via MAVLink (dedup guard)
 
     bool transmissionInitialized_;  // True after first engine-running restore
+
+    uint32_t lastSpeedLimitWarnMs_; // rate limit for the "limiter armed, speed invalid" log
 
     /**
      * @brief Apply fail-safe commands (center steering, idle throttle, stop actuators)
@@ -324,6 +384,18 @@ private:
     void processWheelLockCommand(bool locked, WebPortal& webPortal);
 
     /**
+     * @brief Process the 24V boost rail command (`set_boost`).
+     * Enabling is always allowed and restarts the startup grace window; disabling
+     * is refused unless ignition is OFF, because the rail powers the steering VESC.
+     */
+    void processBoostCommand(bool on, WebPortal& webPortal);
+
+    /**
+     * @brief Sample and average the 24V rail (non-blocking, every RAIL_SAMPLE_INTERVAL_MS)
+     */
+    void updateRailMonitor();
+
+    /**
      * @brief Steering calibration commands (web-only).
      * Capture commands persist the current AS5600 angle as center/left/right;
      * jog drives the actuator open-loop (momentary, sign = direction, |value| = duty);
@@ -355,6 +427,24 @@ private:
      * CAN data is invalid.
      */
     void processCanProbeCommand(WebPortal& webPortal);
+
+    /**
+     * @brief Speed-sensor calibration and max-speed limiter commands
+     * (`speed_cal_ppr`, `speed_cal_circ`, `speed_limit_enable`, `speed_limit_set`).
+     * Accepted regardless of the active input source, like the other calibration commands.
+     */
+    void processSpeedCalPprCommand(float value, WebPortal& webPortal);
+    void processSpeedCalCircCommand(float value, WebPortal& webPortal);
+    void processSpeedLimitEnableCommand(bool enable, WebPortal& webPortal);
+    void processSpeedLimitSetCommand(float kmh, WebPortal& webPortal);
+
+    /**
+     * @brief Max-speed throttle limiter, applied to the arbitrated driver/MAVLink/web
+     * throttle command only (the gear-boost PID owns throttle during a shift and is
+     * never touched here). Fails OPEN: an invalid/stale speed reading does not clamp.
+     * @return the throttle percentage to command
+     */
+    float applySpeedLimit(float throttlePct);
 
     // Returns true when throttle should be clamped to TRANS_UNKNOWN_GEAR_THROTTLE_MAX.
     // Clips when gear position is invalid and physical gear is not neutral

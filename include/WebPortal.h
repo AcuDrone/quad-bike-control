@@ -71,9 +71,17 @@ public:
         bool mav_active;          // True if MAVLink command stream is valid
         bool web_control;         // True if latched web-control override is engaged
 
+        // Hall speed sensor — emitted independently of CAN health (not part of the
+        // CAN-gated block below), because it is a wholly separate physical source.
+        float vehicle_speed;      // Vehicle speed km/h from the hall sensor
+        bool speed_valid;         // Sensor health: false = reading unknown, NOT "stopped"
+        uint16_t speed_ppr;       // Calibration: pulses per revolution
+        float speed_circ_mm;      // Calibration: wheel circumference (mm)
+        bool speed_limit_on;      // Max-speed throttle limiter enabled
+        float speed_limit_max;    // Max-speed throttle limiter ceiling (km/h)
+
         // CAN bus vehicle data
         uint16_t engine_rpm;      // Engine RPM (0-16383)
-        uint8_t vehicle_speed;    // Vehicle speed km/h (0-255)
         int8_t coolant_temp;      // Coolant temperature °C (-40 to +215)
         int8_t oil_temp;          // Oil temperature °C (-40 to +215)
         uint8_t throttle_position; // Throttle position % (0-100)
@@ -95,6 +103,15 @@ public:
         bool is_cranking;         // True if starter motor is cranking
         bool front_light_on;      // True if front light is on
         bool wheel_lock_on;       // True if front-wheel lock is engaged
+
+        // 24V boost rail (Control_v0)
+        float rail_24v;           // Measured rail voltage (V, 200K/24K divider)
+        bool boost_on;            // Commanded state of the boost enable line
+        bool rail_low;            // Rail below RAIL_24V_LOW_THRESHOLD (warning only)
+
+        // Board I/O expander health
+        bool io_input_fault;      // Opto-input expander (0x1A, I2C1) unreachable/stale
+        bool io_relay_fault;      // Relay expander (0x18, I2C2) unreachable/unverified
 
         // Firmware information
         String firmware_version;  // Firmware version string (e.g., "1.0.0")

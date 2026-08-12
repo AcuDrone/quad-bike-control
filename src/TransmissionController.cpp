@@ -11,8 +11,11 @@ TransmissionController::TransmissionController()
     , settleMs_(TRANS_SERVO_SETTLE_MIN_MS)
     , queuedGear_(Gear::GEAR_UNKNOWN)
     , sequenceStepDwellStart_(0)
+    , boardInputs_(nullptr)
     , cachedPhysicalGear_(Gear::GEAR_UNKNOWN)
     , lastGearReadTime_(0)
+    , lastGearRetryTime_(0)
+    , gearReadRetries_(0)
     , lastGearCheckTime_(0)
     , lastStatusLogTime_(0)
     , lastGearMismatch_(false)
@@ -22,6 +25,8 @@ TransmissionController::TransmissionController()
     vehicleData_.vehicleSpeed = 0;
     vehicleData_.lastUpdateTime = 0;
     vehicleData_.dataValid = false;
+    vehicleData_.sensorSpeedKmh = 0.0f;
+    vehicleData_.sensorSpeedValid = false;
 
     gearPositions_[(int)Gear::GEAR_HIGH]    = TRANS_GEAR_DEFAULT_HIGH_PCT;
     gearPositions_[(int)Gear::GEAR_LOW]     = TRANS_GEAR_DEFAULT_LOW_PCT;
@@ -180,6 +185,24 @@ bool TransmissionController::needsThrottleBoost() const {
 bool TransmissionController::canChangeGear(Gear targetGear) const {
     if (targetGear == Gear::GEAR_NEUTRAL) return true;
 
+    // The hall speed sensor is the live speed source and is authoritative while healthy
+    // (CAN speed is dead — PID 0x0D is disabled).
+    if (vehicleData_.sensorSpeedValid) {
+        if (vehicleData_.sensorSpeedKmh > (float)TRANS_SPEED_INTERLOCK_THRESHOLD) {
+            Debug::printfFeature(DebugFeature::TRANSMISSION,
+                "[TRANS] Gear change blocked: vehicle moving at %.1f km/h\n",
+                vehicleData_.sensorSpeedKmh);
+            return false;
+        }
+        return true;
+    }
+
+    // Sensor uninitialized or flagged suspicious: fall back to the reviewed CAN-timeout
+    // policy below rather than inventing a new one. A stuck-blocked gearbox is itself a
+    // hazard, and no firmware can prove motion when a passive pulse sensor is silent.
+    Debug::printlnFeature(DebugFeature::TRANSMISSION,
+        "[TRANS] WARNING: speed sensor reading unavailable — falling back to CAN policy");
+
     if (vehicleData_.dataValid) {
         if (vehicleData_.vehicleSpeed > TRANS_SPEED_INTERLOCK_THRESHOLD) {
             Debug::printfFeature(DebugFeature::TRANSMISSION,
@@ -203,17 +226,11 @@ bool TransmissionController::canChangeGear(Gear targetGear) const {
 
 // ── gear sensors ─────────────────────────────────────────────────────────────
 
-void TransmissionController::initGearSensors() {
-    gpio_set_direction(PIN_GEAR_REVERSE, GPIO_MODE_INPUT);
-    gpio_set_pull_mode(PIN_GEAR_REVERSE, GPIO_FLOATING);
-    gpio_set_direction(PIN_GEAR_NEUTRAL, GPIO_MODE_INPUT);
-    gpio_set_pull_mode(PIN_GEAR_NEUTRAL, GPIO_FLOATING);
-    gpio_set_direction(PIN_GEAR_LOW, GPIO_MODE_INPUT);
-    gpio_set_pull_mode(PIN_GEAR_LOW, GPIO_FLOATING);
-    gpio_set_direction(PIN_GEAR_HIGH, GPIO_MODE_INPUT);
-    gpio_set_pull_mode(PIN_GEAR_HIGH, GPIO_FLOATING);
-    Debug::printlnFeature(DebugFeature::TRANSMISSION,
-        "[TRANS] Gear sensors initialized (active-low, external pull-ups)");
+void TransmissionController::initGearSensors(BoardInputs& inputs) {
+    boardInputs_ = &inputs;
+    Debug::printfFeature(DebugFeature::TRANSMISSION,
+        "[TRANS] Gear sensors bound to opto inputs In1-In4 @0x%02X (asserted = %s)\n",
+        PCA9557_ADDR_INPUTS, BOARD_INPUT_ACTIVE_LOW ? "LOW" : "HIGH");
 }
 
 TransmissionController::Gear TransmissionController::getPhysicalGear() const {
@@ -221,25 +238,44 @@ TransmissionController::Gear TransmissionController::getPhysicalGear() const {
     if (now - lastGearReadTime_ < TRANS_GEAR_READ_INTERVAL_MS) {
         return cachedPhysicalGear_;
     }
-    lastGearReadTime_ = now;
 
-    bool reverseActive = !digitalRead(PIN_GEAR_REVERSE);
-    bool neutralActive = !digitalRead(PIN_GEAR_NEUTRAL);
-    bool lowActive     = !digitalRead(PIN_GEAR_LOW);
-    bool highActive    = !digitalRead(PIN_GEAR_HIGH);
+    // No input source, or the expander snapshot is stale: UNKNOWN is the intended
+    // degraded mode (throttle capped at TRANS_UNKNOWN_GEAR_THROTTLE_MAX, gear-change
+    // confirmation blocked) — no extra interlock is needed.
+    if (boardInputs_ == nullptr) {
+        lastGearReadTime_ = now;
+        cachedPhysicalGear_ = Gear::GEAR_UNKNOWN;
+        return cachedPhysicalGear_;
+    }
+
+    BoardInputs::Snapshot snap = boardInputs_->getSnapshot();
+    if (!snap.valid) {
+        lastGearReadTime_ = now;
+        gearReadRetries_ = 0;
+        cachedPhysicalGear_ = Gear::GEAR_UNKNOWN;
+        return cachedPhysicalGear_;
+    }
+
+    bool reverseActive = snap.gearReverse;
+    bool neutralActive = snap.gearNeutral;
+    bool lowActive     = snap.gearLow;
+    bool highActive    = snap.gearHigh;
     uint8_t activeCount = reverseActive + neutralActive + lowActive + highActive;
 
-    // Retry when result is not clean and servo is idle (filter transient bounces)
-    uint8_t retries = 0;
-    while (activeCount != 1 && gearChangePhase_ == GearChangePhase::NONE
-           && retries < TRANS_GEAR_READ_RETRY_COUNT) {
-        reverseActive = !digitalRead(PIN_GEAR_REVERSE);
-        neutralActive = !digitalRead(PIN_GEAR_NEUTRAL);
-        lowActive     = !digitalRead(PIN_GEAR_LOW);
-        highActive    = !digitalRead(PIN_GEAR_HIGH);
-        activeCount   = reverseActive + neutralActive + lowActive + highActive;
-        retries++;
+    // Ambiguous result while the servo is idle: consume the NEXT expander poll
+    // instead of issuing back-to-back I2C reads (filters transient bounces without
+    // blocking the control loop). At most TRANS_GEAR_READ_RETRY_COUNT deferrals.
+    if (activeCount != 1 && gearChangePhase_ == GearChangePhase::NONE
+        && gearReadRetries_ < TRANS_GEAR_READ_RETRY_COUNT) {
+        if ((now - lastGearRetryTime_) >= BOARD_INPUT_POLL_MS) {
+            lastGearRetryTime_ = now;
+            gearReadRetries_++;
+        }
+        return cachedPhysicalGear_;
     }
+
+    lastGearReadTime_ = now;
+    gearReadRetries_ = 0;
 
     if (activeCount == 0) {
         cachedPhysicalGear_ = Gear::GEAR_UNKNOWN;

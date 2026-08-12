@@ -69,10 +69,17 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.mav_active = mavlink_.isSignalValid();
     telemetry.web_control = vehicleController_.isWebControl();
 
+    // Hall speed sensor — populated independently of CAN validity
+    telemetry.vehicle_speed = vehicleController_.getVehicleSpeedKmh();
+    telemetry.speed_valid = vehicleController_.isVehicleSpeedValid();
+    telemetry.speed_ppr = vehicleController_.getSpeedPulsesPerRev();
+    telemetry.speed_circ_mm = vehicleController_.getSpeedWheelCircumferenceMm();
+    telemetry.speed_limit_on = vehicleController_.isSpeedLimiterEnabled();
+    telemetry.speed_limit_max = vehicleController_.getSpeedLimitMaxKmh();
+
     CANController::VehicleData vehicleData = vehicleController_.getVehicleData();
     if (vehicleData.dataValid) {
         telemetry.engine_rpm = vehicleData.engineRPM;
-        telemetry.vehicle_speed = vehicleData.vehicleSpeed;
         telemetry.coolant_temp = vehicleData.coolantTemp;
         telemetry.oil_temp = vehicleData.oilTemp;
         telemetry.throttle_position = vehicleData.throttlePosition;
@@ -81,7 +88,6 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
         telemetry.can_status = "connected";
     } else {
         telemetry.engine_rpm = 0;
-        telemetry.vehicle_speed = 0;
         telemetry.coolant_temp = 0;
         telemetry.oil_temp = 0;
         telemetry.throttle_position = 0;
@@ -109,6 +115,13 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.is_cranking = (ignitionState == RelayController::IgnitionState::CRANKING);
     telemetry.front_light_on = vehicleController_.getFrontLight();
     telemetry.wheel_lock_on = vehicleController_.getWheelLock();
+
+    // 24V boost rail and board I/O expander health
+    telemetry.rail_24v = vehicleController_.getRail24V();
+    telemetry.boost_on = vehicleController_.isBoostOn();
+    telemetry.rail_low = vehicleController_.isRailLow();
+    telemetry.io_input_fault = vehicleController_.isInputFault();
+    telemetry.io_relay_fault = vehicleController_.isRelayFault();
 
     telemetry.firmware_version = FIRMWARE_VERSION;
 
