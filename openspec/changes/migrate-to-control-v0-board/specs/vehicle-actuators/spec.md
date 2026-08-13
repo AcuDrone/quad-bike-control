@@ -24,8 +24,9 @@ supported; there SHALL be exactly one pin map and no board-selection build flag.
   - `PIN_VESC_TX` = GPIO4, `PIN_VESC_RX` = GPIO5 (UART2, X6) — unchanged
   - `PIN_BRAKE_LPWM` = GPIO6, `PIN_BRAKE_RPWM` = GPIO7 (LEDC channels 5/4, X7) — unchanged
   - `PIN_CAN_CS` = GPIO39, `PIN_CAN_SCK` = GPIO40, `PIN_CAN_MISO` = GPIO41, `PIN_CAN_MOSI` = GPIO42
-  - `PIN_STEER_SDA` = GPIO1, `PIN_STEER_SCL` = GPIO2 (I2C1, X14 + input expander)
-  - `PIN_RELAY_SDA` = GPIO48, `PIN_RELAY_SCL` = GPIO47 (I2C2, X15)
+  - `PIN_STEER_SDA` = GPIO1, `PIN_STEER_SCL` = GPIO2 (I2C1 — external header X14, AS5600 only)
+  - `PIN_RELAY_SDA` = GPIO48, `PIN_RELAY_SCL` = GPIO47 (I2C2 — on-board expanders U10/U2 + the relay
+    board `0x1F` on header X15)
   - `PIN_BOOST_EN` = GPIO46, `PIN_ADC_24V` = GPIO9 (X10)
   - `PIN_CAN_INT` = GPIO38 and `PIN_ADC_IS_MUX` = GPIO3 SHALL be defined but unused
 

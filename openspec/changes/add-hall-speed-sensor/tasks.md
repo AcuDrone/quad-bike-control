@@ -66,8 +66,10 @@
 - [x] 6.3 In `data/index.html`, display speed from `vehicle_speed`/`speed_valid` regardless of
   `can_status`; add the speed calibration inputs (pulses/rev, circumference) and limiter controls
   (enable + max km/h) with i18n keys present in both `en` and `uk` dictionaries.
-- [ ] 6.4 Redeploy the UI with `pio run -t uploadfs` (LittleFS) — a firmware flash alone does not
-  update `data/index.html`.
+- [x] 6.4 Redeploy the UI with `pio run -t uploadfs` (LittleFS) — a firmware flash alone does not
+  update `data/index.html`. DONE in the same LittleFS upload as the board-migration change (the
+  speed calibration/limiter controls are on the flashed page); they are not exercised yet — that is
+  §9.
 
 ## 7. MAVLink speed reporting
 - [x] 7.1 In `src/MavlinkInterface.cpp` / `include/MavlinkInterface.h`, send a `VFR_HUD` message on

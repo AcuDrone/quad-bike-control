@@ -25,20 +25,23 @@ bool RelayController::begin() {
     outputShadow_ = 0x00;
 
     if (!expander_.isPresent()) {
-        // The single most likely assembly mistake is the relay board strapped to
-        // the on-board mux expander's address, so report that case distinctly.
-        PCA9557Expander muxProbe(expander_.bus(), PCA9557_ADDR_MUX_RESERVED);
-        if (muxProbe.isPresent()) {
-            Debug::printfFeature(DebugFeature::RELAY,
-                "[RELAY] ERROR: nothing at 0x%02X but a PCA9557 answers at 0x%02X — "
-                "the relay board is strapped to the reserved mux address; "
-                "strap A2A1A0 = 000 (0x%02X)\n",
-                PCA9557_ADDR_RELAYS, PCA9557_ADDR_MUX_RESERVED, PCA9557_ADDR_RELAYS);
-        } else {
-            Debug::printfFeature(DebugFeature::RELAY,
-                "[RELAY] ERROR: relay expander not responding at 0x%02X on I2C2\n",
-                PCA9557_ADDR_RELAYS);
+        // Report what the whole PCA9557 address block (0x18-0x1F) looks like on
+        // THIS bus, so a mis-strapped board or a board on the wrong connector is
+        // obvious from one line. Naming a single "expected" address would
+        // misattribute: on I2C2 the on-board mux U2 @0x1C always answers.
+        // Bounded (8 zero-length probes) and non-blocking.
+        char found[8 * 6 + 1];
+        size_t used = 0;
+        for (uint8_t addr = 0x18; addr <= 0x1F; addr++) {
+            PCA9557Expander probe(expander_.bus(), addr);
+            if (probe.isPresent()) {
+                used += snprintf(found + used, sizeof(found) - used, " 0x%02X", addr);
+            }
         }
+        Debug::printfFeature(DebugFeature::RELAY,
+            "[RELAY] ERROR: no expander at 0x%02X on this bus; "
+            "PCA9557-range devices found:%s\n",
+            PCA9557_ADDR_RELAYS, used ? found : " none");
         return false;
     }
 
@@ -68,7 +71,7 @@ bool RelayController::begin() {
     isCranking_ = false;
 
     Debug::printfFeature(DebugFeature::RELAY,
-        "[RELAY] Initialized on PCA9557 @0x%02X (I2C2): all 8 relays OFF\n",
+        "[RELAY] Initialized on PCA9557 @0x%02X: all 8 relays OFF\n",
         PCA9557_ADDR_RELAYS);
 
     return true;

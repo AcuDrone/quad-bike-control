@@ -36,7 +36,7 @@ bool BoardInputs::begin() {
 
     if (!configureDevice()) {
         Debug::printfFeature(DebugFeature::VEHICLE,
-            "[IO] ERROR: opto-input expander not responding at 0x%02X on I2C1\n",
+            "[IO] ERROR: opto-input expander not responding at 0x%02X on I2C2\n",
             PCA9557_ADDR_INPUTS);
         initialized_ = false;
         faulted_ = true;

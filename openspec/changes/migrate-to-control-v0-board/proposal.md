@@ -27,13 +27,16 @@ USB data lines, so they cannot coexist.
   superseded.
 - **BREAKING — gear switches and brake limit sensor move off GPIO.** `PIN_GEAR_REVERSE/NEUTRAL/LOW/HIGH`
   and `PIN_BRAKE_SENSOR` are deleted. A new PCA9557 input driver reads them from the on-board opto
-  expander **U10 @ 0x1A on I2C1 (`Wire`, SDA GPIO1 / SCL GPIO2 — shared with the AS5600 @ 0x36)**:
+  expander **U10 @ 0x1A on I2C2 (`Wire1`, SDA GPIO48 / SCL GPIO47 — scan-verified; the schematic's
+  port names suggested I2C1, the copper says I2C2)**:
   In1=REVERSE, In2=NEUTRAL, In3=LOW, In4=HIGH, In5=brake limit ("released" endstop), In6-8 spare.
   Inputs are polled non-blocking from `loop()`; consumers (`TransmissionController::getPhysicalGear()`,
   `VehicleController::isBrakeReleased()`) read the cached snapshot instead of `digitalRead()`.
 - **BREAKING — `RelayController` moves off GPIO.** `PIN_RELAY1-3` and `PIN_WHEEL_LOCK` are deleted;
-  the relays are driven over a **second I2C bus (`Wire1`, SDA GPIO48 / SCL GPIO47)** on the external
-  relay board's PCA9557 @ 0x18. The board's IO routing is **not** 1:1 (`Relay_1=IO4 … Relay_8=IO1`),
+  the relays are driven over I2C on the external relay board's PCA9557 **@ 0x1F** (as-shipped
+  A2A1A0 = 111 strap, kept) on header X15, driven on **`Wire1` (I2C2)** — its intended home, reached
+  after rework of the X15 signal path in the `FB3`/`FB4` ferrite area.
+  The board's IO routing is **not** 1:1 (`Relay_1=IO4 … Relay_8=IO1`),
   and two functions drive a paralleled pair, so firmware uses port masks: ignition/ECU line =
   Relay_1 + Relay_2 (IO4+IO5), starter = Relay_3 (IO6), front light = Relay_4 (IO7), front-wheel
   lock = Relay_5 + Relay_6 (IO3+IO2), Relay_7/Relay_8 (IO0/IO1) spare. The public

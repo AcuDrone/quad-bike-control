@@ -11,7 +11,10 @@
  *
  * Manages relay outputs for vehicle ignition states (OFF/ACC/IGNITION/CRANKING),
  * front light and front-wheel lock. The relays live on the external relay board's
- * PCA9557 @ `PCA9557_ADDR_RELAYS` (0x18) on I2C2 (`Wire1`), not on ESP32 GPIO.
+ * PCA9557 @ `PCA9557_ADDR_RELAYS` (0x1F, as-shipped strap A2A1A0=111), not on
+ * ESP32 GPIO. The bus is chosen by the owner at construction: the board sits on
+ * its intended home X15 → I2C2 (`Wire1`), bench-verified. X14 → I2C1 (`Wire`)
+ * works too and is the contingency if that header is ever damaged.
  *
  * The board's IO routing is NOT 1:1 (Relay_1=IO4 … Relay_8=IO1), and two functions
  * drive a paralleled PAIR of relays, so each function is a whole-port MASK from
@@ -53,10 +56,11 @@ public:
     /**
      * @brief Initialize the relay expander and drive every relay OFF.
      *
-     * Probes 0x18, configures all eight pins as outputs and writes 0x00 with
-     * read-back verification before returning. If nothing answers at 0x18 the
-     * reserved mux address 0x1C is probed as well so the most likely assembly
-     * mistake (relay board strapped to the mux address) is reported distinctly.
+     * Probes `PCA9557_ADDR_RELAYS`, configures all eight pins as outputs and
+     * writes 0x00 with read-back verification before returning. If nothing
+     * answers, the whole PCA9557 address block (0x18-0x1F) is probed on the same
+     * bus and the ACKing addresses are logged, so a mis-strapped board or a board
+     * plugged into the wrong connector is visible from one line.
      *
      * @return true if initialization succeeded; false leaves the driver in a
      *         degraded state where every setter is a logging no-op

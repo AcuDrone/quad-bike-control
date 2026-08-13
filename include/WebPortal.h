@@ -110,8 +110,8 @@ public:
         bool rail_low;            // Rail below RAIL_24V_LOW_THRESHOLD (warning only)
 
         // Board I/O expander health
-        bool io_input_fault;      // Opto-input expander (0x1A, I2C1) unreachable/stale
-        bool io_relay_fault;      // Relay expander (0x18, I2C2) unreachable/unverified
+        bool io_input_fault;      // Opto-input expander U10 (0x1A, I2C2) unreachable/stale
+        bool io_relay_fault;      // Relay expander (0x1F, I2C2 via X15) unreachable/unverified
 
         // Firmware information
         String firmware_version;  // Firmware version string (e.g., "1.0.0")

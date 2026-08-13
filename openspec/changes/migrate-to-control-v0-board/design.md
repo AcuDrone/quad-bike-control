@@ -2,7 +2,8 @@
 
 `Control_v0` (ESP32-S3-WROOM-1U, Altium project `Control_v0.PrjPcb`, 7 sheets) replaces the
 DevKitC-1 + hand wiring. Two companion boards hang off it: `Relay.PrjPcb` (8× SRD-12VDC relays +
-PCA9557, via X15) and `Buck Boost.PrjPcb` (TL494 12V→24V, via X10). The full wiring reference —
+PCA9557, via X15 / I2C2) and `Buck Boost.PrjPcb` (TL494 12V→24V, via X10). The full wiring
+reference —
 including the connector table, the opto/relay assignment and the bring-up warnings — is
 `GPIO_PINOUT_CUSTOM_BOARD_S3.md`; this document only covers the firmware architecture decisions the
 migration forces.
@@ -43,15 +44,26 @@ subsystem must follow the existing `begin()` + non-blocking `update()` pattern.
 
 ### Decision 1 — Two `TwoWire` instances, hard-assigned by role
 
-`Wire` = I2C1 (SDA GPIO1, SCL GPIO2, 100 kHz): AS5600 steering sensor @ **0x36** and the on-board
-opto-input PCA9557 U10 @ **0x1A**.
-`Wire1` = I2C2 (SDA GPIO48, SCL GPIO47, 100 kHz, BSS138 level-shifted): the relay board's PCA9557
-@ **0x18** and the on-board CD4051 mux-control PCA9557 U2 @ **0x1C**.
+**The assignment below is empirical** — it comes from live I2C scans on the assembled board and
+overrides the schematic's port names, which suggested the opto-input expander U10 was on I2C1.
+
+`Wire` = I2C1 (SDA GPIO1, SCL GPIO2, 100 kHz): the **external-header** bus — header X14, reserved
+for the AS5600 steering sensor @ **0x36** alone.
+`Wire1` = I2C2 (SDA GPIO48, SCL GPIO47, 100 kHz, BSS138 level-shifted): **both on-board PCA9557s** —
+opto-input U10 @ **0x1A** and CD4051 mux-control U2 @ **0x1C** — plus the relay board @ **0x1F** on
+header X15.
 
 | Bus | Instance | SDA | SCL | Speed | Devices |
 |-----|----------|-----|-----|-------|---------|
-| I2C1 | `Wire` | 1 | 2 | 100 kHz | AS5600 `0x36`, opto-input PCA9557 U10 `0x1A` |
-| I2C2 | `Wire1` | 48 | 47 | 100 kHz | relay-board PCA9557 `0x18`, mux PCA9557 U2 `0x1C` (**do not touch**) |
+| I2C1 | `Wire` | 1 | 2 | 100 kHz | AS5600 `0x36` (X14) |
+| I2C2 | `Wire1` | 48 | 47 | 100 kHz | opto-input PCA9557 U10 `0x1A`; mux PCA9557 U2 `0x1C` (**do not touch**); relay-board PCA9557 `0x1F` (X15) |
+
+The relay board's as-shipped strap `A2A1A0 = 111` → **0x1F** is kept: it collides with neither
+`0x1A` nor `0x1C`, so it is valid on either bus. On the first assembled board header X15 passed no
+signals at all — a device there never answered while the same device answered immediately on X14 —
+until rework in the `FB3`/`FB4` ferrite area; that is the first place to look if another board copy
+shows a silent X15. Because the strap is bus-agnostic, running the relay board on X14 / `Wire`
+instead is a one-argument change, kept as a contingency only.
 
 **Both buses run at 100 kHz, not 400 kHz.** The AS5600 is not on the board — it hangs off X14 on a
 long cable run to the steering column, and that cable plus the connector is the weakest link on
@@ -64,20 +76,25 @@ I2C2 could run faster (short traces, BSS138-shifted), but one constant is simple
 measured need. If faster steering reads are ever wanted, the change is a hardware one first — a
 stronger pull-up on the X14 run — verified on the bench before the constant moves.
 
-**U2 @ 0x1C is on the same bus as the relay expander and must never be addressed by the relay
-driver.** A PCA9557 driver instance is bound to one address at construction and the relay driver is
-constructed with `0x18` only; there is no "scan and take the first expander" path. Writing 0x1C
-would toggle the CD4051 channel-select/enable lines — harmless today (the ADC mux is unused) but it
-would become a real fault once IS monitoring lands, and a mis-strapped relay board that also answers
-at 0x1C is a real risk, which is why §8.8 of the pinout doc requires A2A1A0 = 000.
+**U2 @ 0x1C must never be written by any driver.** A PCA9557 driver instance is bound to one
+address at construction and the relay driver is constructed with `PCA9557_ADDR_RELAYS` only; there
+is no "scan and take the first expander" path. Writing 0x1C would toggle the CD4051
+channel-select/enable lines — harmless today (the ADC mux is unused) but it would become a real
+fault once IS monitoring lands. The relay strap only has to avoid `0x1A` and `0x1C`; `0x1F` does, so
+no strap rework is needed (§8.8 of the pinout doc was updated accordingly).
 
-*Alternatives considered.* Putting the relay board on `Wire` next to the AS5600 was rejected: the
-steering position loop is the most latency-sensitive I2C consumer in the system and relay writes are
-bursty. The board also physically routes X15 to GPIO47/48, so this is not a free choice.
+*Alternatives considered.* Putting the relay board on `Wire` next to the AS5600 is rejected: the
+steering loop is the most latency-sensitive I2C consumer and relay writes are bursty, and the board
+physically routes X15 to GPIO47/48 anyway. It was proven to work during bring-up (while X15 was
+still dead) and the cost turned out to be acceptable — relay writes are a few bytes at 100 kHz and
+only happen on state changes — so it stays available as a contingency, not as the design.
 
-*Address collision check at `begin()`.* The relay driver probes 0x18 and, if it does not answer,
-additionally probes 0x1C and logs a distinct "relay board strapped to the mux address" error rather
-than a generic not-found — this is the single most likely assembly mistake.
+*Diagnostic sweep at `begin()`.* If nothing answers at `PCA9557_ADDR_RELAYS`, the relay driver
+probes the whole PCA9557 block `0x18`-`0x1F` on **its own bus** and logs which addresses ACKed. The
+earlier "probe 0x1C and blame a mis-strapped relay board" heuristic was removed: 0x1C is the
+on-board mux U2, which always answers whenever the driver runs on I2C2, so that message would
+misattribute a plain wiring fault. The sweep is eight zero-length writes — bounded and
+non-blocking.
 
 ### Decision 2 — Opto inputs: polled snapshot with staleness, not per-call I2C
 
@@ -173,9 +190,9 @@ setup()
  3. nvs_flash_init(), Debug::begin()
  4. Wire.begin(PIN_STEER_SDA, PIN_STEER_SCL, I2C_BUS_FREQ_HZ)   // 100 kHz
     Wire1.begin(PIN_RELAY_SDA, PIN_RELAY_SCL, I2C_BUS_FREQ_HZ)  // 100 kHz
- 5. boardInputs.begin(Wire)           // 0x1A
+ 5. boardInputs.begin(Wire1)          // 0x1A (U10, I2C2)
  6. throttle / VESC / steering (AS5600 on Wire, already initialized) / transmission / brake
- 7. relayController.begin(Wire1)      // 0x18, all outputs LOW before anything else is commanded
+ 7. relayController.begin(Wire1)      // 0x1F on X15/I2C2; all outputs LOW before anything else is commanded
  8. CAN, web portal
 ```
 
@@ -242,7 +259,7 @@ the rail from the bench is worth having, and re-enable is always allowed.
   - §8.5 Hall inputs are divided for 5V sensors (×0.65); a 12V push-pull sensor would exceed the GPIO
     absolute maximum.
   - §8.6 I2C2 level-shifter low-side rail is jumper-selected: verify **R16 populated (3V3), R18 not**.
-  - §8.8 The relay board's PCA9557 straps must be A2A1A0 = 000 → 0x18, never 0x1C.
+  - §8.8 The relay board's PCA9557 straps must avoid 0x1A (U10) and 0x1C (U2); the as-shipped A2A1A0 = 111 → 0x1F is kept, and the board runs on X15/I2C2 (that header needed FB3/FB4-area rework on the first board).
 - **GPIO1/2 are the AS5600 bus now.** Anything (including the pending speed-sensor change) that
   assumed those pins were free is invalidated — handled as an explicit doc-update task.
 - **ADC1 and WiFi.** GPIO3 and GPIO9 are ADC1, which is unaffected by WiFi (unlike ADC2), so the AP

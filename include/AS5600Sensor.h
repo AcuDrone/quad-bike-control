@@ -18,9 +18,10 @@ public:
     /**
      * @brief Verify the sensor responds on the (already opened) I2C1 bus.
      *
-     * The bus is opened once by `main.cpp` — I2C1 is shared with the board's
-     * opto-input expander at 0x1A — so this driver never calls `Wire.begin()`
-     * itself. The pins are remembered only for the wedged-bus recovery path.
+     * The bus is opened once by `main.cpp` — I2C1 is the external-header bus
+     * (X14), reserved for this sensor alone — so this driver never calls
+     * `Wire.begin()` itself. The pins are remembered only for the wedged-bus
+     * recovery path.
      *
      * @param sdaPin GPIO pin for SDA (must match the bus main.cpp opened)
      * @param sclPin GPIO pin for SCL

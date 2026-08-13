@@ -2,7 +2,7 @@
 
 **Hardware:** custom control PCB `Control_v0` — ESP32-S3-WROOM-1U (external antenna), `qio_qspi` mode
 **Schematic:** `Control_v0.PrjPcb` (7 sheets, Altium) — Alexandr Tulusha, 14.06.2026
-**Companion boards:** `Buck Boost.PrjPcb` (→ X10), `Relay.PrjPcb` (→ X15)
+**Companion boards:** `Buck Boost.PrjPcb` (→ X10), `Relay.PrjPcb` (→ **X15 / I2C2**, bench-verified)
 **Pin Definitions:** `include/Constants.h`
 **Supersedes:** [`GPIO_PINOUT_S3.md`](GPIO_PINOUT_S3.md) (ESP32-S3-DevKitC-1 + hand wiring)
 
@@ -31,8 +31,8 @@
 | Module | ESP32-S3-WROOM-1U (u.FL / external antenna) |
 | Programming & console | USB-C, native USB (GPIO19/20), USB-CDC console |
 | Analog current sense | 8× BTS7960 IS channels → CD4051 8:1 mux → GPIO3 (ADC1) |
-| Digital inputs | 8× 5V opto-isolated (PC817) → PCA9557 U10 on I2C1 |
-| Relays | off-board `Relay` PCB — 8× SRD-12VDC + PCA9557, over I2C2 (X15) |
+| Digital inputs | 8× 5V opto-isolated (PC817) → PCA9557 U10 on **I2C2** (scan-verified, §4) |
+| Relays | off-board `Relay` PCB — 8× SRD-12VDC + PCA9557 @ 0x1F on **X15 / I2C2** (scan-verified, all relay functions bench-tested) |
 | 24V rail | off-board `Buck Boost` PCB — TL494 two-phase 12V→24V, 0-26V / 0-15A, INA180 current sense (X10) |
 | CAN | MCP2515 + TJA1051T/3, **8 MHz** crystal |
 | Wired LAN (future) | CH9121T + RJ45 (X18) on UART0 |
@@ -48,7 +48,7 @@ document is the wiring / pin reference only.
 | GPIO | Board net / connector | New firmware function | Old (DevKit) function | Status |
 |------|-----------------------|-----------------------|-----------------------|--------|
 | **0** | BOOT button, Prog X1 pin 6; LED3 via BSS138 VT3 (active high) | Boot strap + system LED (optional) | FREE | NEW ⚠ strapping |
-| **1** | I2C1 SDA — X14 (AS5600) + on-board PCA9557 U10 (0x1A) | `PIN_STEER_SDA` | FREE | MOVED (was 41) |
+| **1** | I2C1 SDA — X14 header (AS5600 0x36 only) | `PIN_STEER_SDA` | FREE | MOVED (was 41) |
 | **2** | I2C1 SCL — same bus | `PIN_STEER_SCL` | FREE | MOVED (was 42) |
 | **3** | CD4051 8:1 mux common out (Analog_1..8 = BTS7960 IS) | `PIN_ADC_IS_MUX` — ADC1 | `PIN_THROTTLE_PWM` | NEW (input only) |
 | **4** | PWM_1 → X6 pin 2 (L_PWM) | `PIN_VESC_TX` — UART2 TX | same | UNCHANGED |
@@ -81,8 +81,8 @@ document is the wiring / pin reference only.
 | **44** | UART0 RX ← Prog X1 (510Ω R14) **and** CH9121T TXD1 (100Ω R64) | RESERVED — future wired LAN | console RX | RESERVED ⚠ shared |
 | **45** | `CFG_CH9121T` via BSS138 | LAN config-mode toggle — unused until LAN enabled | FREE | RESERVED ⚠ strapping |
 | **46** | `Bust_On/OFF` → X10 pin 1 | `PIN_BOOST_EN` — boost enable output | FREE | NEW ⚠ strapping |
-| **47** | I2C2 SCL (BSS138 level shift) | Relay/mux bus SCL | `PIN_GEAR_HIGH` | NEW |
-| **48** | I2C2 SDA (BSS138 level shift) | Relay/mux bus SDA | FREE | NEW |
+| **47** | I2C2 SCL (BSS138 level shift) | On-board U10/U2 + X15 bus SCL | `PIN_GEAR_HIGH` | NEW |
+| **48** | I2C2 SDA (BSS138 level shift) | On-board U10/U2 + X15 bus SDA | FREE | NEW |
 
 > GPIO2 was the pin proposed by the pending `add-hall-speed-sensor` change. On this board GPIO2 is
 > I2C1 SCL, and Hall_1 (GPIO14) is scaled for **5V** sensors — the fitted driveline sensor outputs
@@ -109,8 +109,8 @@ document is the wiring / pin reference only.
 | **X11** | Power in | 3× +12V, 3× GND (main 12V input) |
 | **X12** | LAN UART2 | CH9121T's second UART — LAN-side, **not** an ESP UART |
 | **X13** | CAN | CANL, GND, CANH — TJA1051T/3, split termination 2×60Ω + 47n, common-mode choke |
-| **X14** | AS5600 steering angle sensor | VCC 3V3, SDA (GPIO1), SCL (GPIO2), GND |
-| **X15** | Relay board I2C | VCC, SDA (GPIO48), SCL (GPIO47), GND |
+| **X14** | I2C1 header — **AS5600 steering angle sensor only** (reserved for it; the sensor is not yet connected) | VCC 3V3, SDA (GPIO1), SCL (GPIO2), GND |
+| **X15** | I2C2 header — relay board @ 0x1F, **working / bench-verified** | VCC, SDA (GPIO48), SCL (GPIO47), GND. ⚠ *History:* on the first assembled board this connector passed no signals until rework in the `FB3`/`FB4` ferrite area — **check that area first on any board copy that shows a silent X15** |
 | **X16** | Opto inputs | In1..In4 (In_Plus / In_Minus pairs) + GND |
 | **X17** | Opto inputs | In5..In8 (In_Plus / In_Minus pairs) + GND |
 | **X18** | Ethernet | RJ45 (CH9121T) |
@@ -156,8 +156,24 @@ BAV199 clamp + 100n, into the CD4051 mux.
 
 | Bus | SDA | SCL | Speed | Devices |
 |-----|-----|-----|-------|---------|
-| I2C1 (`Wire`) | 1 | 2 | 100 kHz | AS5600 @ 0x36 (X14); input PCA9557 **U10 @ 0x1A** (A2A1A0 = 010 per board straps) |
-| I2C2 | 48 | 47 | 100 kHz | Mux-control PCA9557 **U2 @ 0x1C** (A2A1A0 = 100); relay-board PCA9557 @ strap-selectable — **must be ≠ 0x1C**, recommend **0x18** (all straps GND) |
+| I2C1 (`Wire`) | 1 | 2 | 100 kHz | **X14 header only**, reserved for the AS5600 @ 0x36 (not yet connected). No other device belongs here |
+| I2C2 (`Wire1`) | 48 | 47 | 100 kHz | **Both on-board PCA9557s plus the relay board.** Opto-input **U10 @ 0x1A** (A2A1A0 = 010); mux-control **U2 @ 0x1C** (A2A1A0 = 100); external relay board **@ 0x1F** on header X15 |
+
+> ⚠ **EMPIRICAL — established by live `i2cdetect`-style scans on the assembled board, and it
+> overrides the schematic reading.** The schematic's port names suggested the opto-input expander
+> **U10 was on I2C1**; the scans show **both** on-board expanders (U10 @ 0x1A *and* U2 @ 0x1C)
+> answering on **I2C2 (GPIO47/48)**, and nothing on-board answering on I2C1. Trust the copper.
+>
+> The final, bench-verified I2C2 scan is **0x1A, 0x1C, 0x1F** — the two on-board expanders plus the
+> relay board on X15. `RelayController` is constructed with `Wire1` in `src/main.cpp`, and the relay
+> board keeps its as-shipped **0x1F** strap (it collides with neither 0x1A nor 0x1C).
+>
+> ⚠ *History (relevant to any board copy):* on the first assembled board X15 passed no signals at
+> all — a device on X15 never answered while the same device answered immediately on X14, twice.
+> It was fixed by rework in the **`FB3`/`FB4` ferrite area**; check there first if X15 is silent on
+> another board. If the connector is ever unusable, the relay board also runs on X14 → I2C1 (change
+> the `RelayController` bus argument to `Wire` and borrow X14 from the AS5600) — a contingency, not
+> the current wiring.
 
 > Both buses run at **100 kHz** (`I2C_BUS_FREQ_HZ` in `include/Constants.h`, shared by `Wire` and
 > `Wire1`). The AS5600 is at the far end of a long cable run to the steering column via X14, so
@@ -208,7 +224,8 @@ Channel numbers are unchanged; only the throttle/transmission pins move to 15/16
 ## 5. Opto-Isolated Input Assignment
 
 All inputs are 5V, PC817-isolated, each an `In_Plus` / `In_Minus` pair. They are read through
-**PCA9557 U10 @ 0x1A on I2C1** — not directly by GPIO.
+**PCA9557 U10 @ 0x1A on I2C2 (`Wire1`, GPIO47/48)** — not directly by GPIO. (Scan-verified: the
+schematic port names implied I2C1, the copper says I2C2 — see §4.)
 
 | Input | Connector | Function |
 |-------|-----------|----------|
@@ -224,8 +241,10 @@ All inputs are 5V, PC817-isolated, each an `In_Plus` / `In_Minus` pair. They are
 ## 6. Relay Board Assignment
 
 `Relay.PrjPcb` — 8× SRD-12VDC relays (NO / COM / NC per relay), board powered from 12V, driven by its
-own PCA9557 over X15 / I2C2. **X4..X11 below are the RELAY BOARD's own connectors** — not the main
-board's X4/X5 Hall headers in §3.
+own PCA9557 **@ 0x1F** (as-shipped straps A2A1A0 = 111 — kept, see warning 8). It sits on its
+intended home **X15 / I2C2** and answers at 0x1F; every relay function below has been exercised on
+the bench. **X4..X11 below are the RELAY BOARD's own connectors** — not the main board's X4/X5 Hall
+headers in §3.
 
 | Relay | PCA9557 IO | Port bit | Connector | Function |
 |-------|-----------|----------|-----------|----------|
@@ -302,8 +321,18 @@ A separate 7s LiFePO4 battery also exists in the vehicle power system.
    WROOM-1 in `qio_qspi` mode GPIO47/48 are 3.3V IOs — verify **R16 populated, R18 not**.
 7. **Debug console is USB-CDC.** Add the `ARDUINO_USB_CDC_ON_BOOT=1` build flag (`platformio.ini`
    currently has no `build_flags` for it); use the serial monitor over USB-C.
-8. **Relay-board PCA9557 address straps must differ from on-board U2 (0x1C)** — populate
-   A2A1A0 = 000 → **0x18**.
+8. **Relay-board PCA9557 address straps: as-shipped A2A1A0 = 111 → 0x1F, KEPT.** Any strap **except
+   0x1A (U10) and 0x1C (U2)** is acceptable — those two are the on-board expanders on I2C2. The
+   board ships at **0x1F**, which collides with neither, so there is **no rework to do**; the earlier
+   "must be strapped 0x18" instruction is withdrawn. `PCA9557_ADDR_RELAYS` is 0x1F.
+   - The board lives on **X15 (I2C2)** and the firmware constructs `RelayController` with `Wire1`.
+     A boot scan of I2C2 shows **0x1A, 0x1C, 0x1F**.
+   - ⚠ **X15 needed rework on the first assembled board.** As delivered it passed no I2C signals at
+     all (a device on X15 never answered, while the same device answered immediately on X14). The
+     fix was in the **`FB3`/`FB4` ferrite area** of the X15 SDA/SCL run — **check there first** on
+     any board copy whose X15 is silent (continuity check, bridge/populate). If a connector is ever
+     beyond repair, the relay board also works on X14 (I2C1) with `RelayController` constructed on
+     `Wire` — contingency only.
    - ⚠ **The relay board's IO routing is NOT 1:1** (§6): `Relay_1=IO4, Relay_2=IO5, Relay_3=IO6,
      Relay_4=IO7, Relay_5=IO3, Relay_6=IO2, Relay_7=IO0, Relay_8=IO1`, verified from the
      `Relay.PrjPcb` netlist. Never "simplify" the firmware back to `Relay_N = bit N` — that would
@@ -362,7 +391,7 @@ A separate 7s LiFePO4 battery also exists in the vehicle power system.
 
 | Constant | Old GPIO | New location |
 |----------|----------|--------------|
-| `PIN_BRAKE_SENSOR` | 14 | Opto input **In5** (PCA9557 U10, I2C1) |
+| `PIN_BRAKE_SENSOR` | 14 | Opto input **In5** (PCA9557 U10, I2C2) |
 | `PIN_GEAR_REVERSE` | 19 | Opto input **In1** |
 | `PIN_GEAR_NEUTRAL` | 20 | Opto input **In2** |
 | `PIN_GEAR_LOW` | 21 | Opto input **In3** |
@@ -377,8 +406,8 @@ A separate 7s LiFePO4 battery also exists in the vehicle power system.
 
 | Item | Work |
 |------|------|
-| PCA9557 input reader | New driver on I2C1 @ 0x1A — supplies gear switches and the brake limit sensor to `TransmissionController` / brake logic (replaces `digitalRead`) |
-| `RelayController` | Rewrite from direct GPIO to the relay-board PCA9557 over I2C2 |
+| PCA9557 input reader | New driver on **I2C2** @ 0x1A (U10) — supplies gear switches and the brake limit sensor to `TransmissionController` / brake logic (replaces `digitalRead`) |
+| `RelayController` | Rewrite from direct GPIO to the relay-board PCA9557 @ 0x1F — bus passed in by `main.cpp` (**`Wire1`/I2C2** via X15) |
 | Boost control / telemetry | `PIN_BOOST_EN` on at boot; `PIN_ADC_24V` rail voltage into telemetry |
 | Console | Add `ARDUINO_USB_CDC_ON_BOOT=1` build flag (USB-CDC over USB-C) |
 | CD4051 IS mux (future) | PCA9557 U2 @ 0x1C drives A/B/C + enable; read on `PIN_ADC_IS_MUX` — brake-motor current monitoring |

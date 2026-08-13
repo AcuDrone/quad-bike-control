@@ -8,8 +8,17 @@ Bus assignment:
 
 | Bus | Arduino instance | SDA | SCL | Speed | Devices |
 |-----|------------------|-----|-----|-------|---------|
-| I2C1 | `Wire` | GPIO1 | GPIO2 | 100 kHz | AS5600 steering sensor `0x36`, opto-input PCA9557 U10 `0x1A` |
-| I2C2 | `Wire1` | GPIO48 | GPIO47 | 100 kHz | Relay-board PCA9557 `0x18`, on-board mux PCA9557 U2 `0x1C` |
+| I2C1 | `Wire` | GPIO1 | GPIO2 | 100 kHz | External header X14 only: AS5600 steering sensor `0x36` |
+| I2C2 | `Wire1` | GPIO48 | GPIO47 | 100 kHz | Both on-board expanders — opto-input PCA9557 U10 `0x1A`, mux PCA9557 U2 `0x1C` — plus the relay-board PCA9557 `0x1F` on header X15 |
+
+This assignment is **empirical** — established by live bus scans on the assembled board, which
+override the schematic's port names: both on-board PCA9557s (U10 and U2) answer on I2C2, and nothing
+on-board answers on I2C1.
+
+The relay board keeps its as-shipped `A2A1A0 = 111` → `0x1F` strap, which collides with neither
+`0x1A` nor `0x1C`, and runs on header X15 / `Wire1`. (On the first assembled board X15 passed no
+signals until rework in the `FB3`/`FB4` ferrite area; because the strap is bus-agnostic, moving the
+board to X14 / `Wire` is a change of the bus passed to `RelayController` only — a contingency.)
 
 Both buses SHALL run at 100 kHz (`I2C_BUS_FREQ_HZ`): the AS5600 is reached over a long cable run to
 the steering column (X14), where signal-integrity margin is worth more than bus speed.
@@ -24,10 +33,12 @@ the steering column (X14), where signal-integrity margin is worth more than bus 
   controller are initialized
 - **AND** initialization of one bus SHALL NOT depend on a device on the other bus responding
 
-#### Scenario: AS5600 and the input expander share I2C1
-- **WHEN** the steering position sensor and the opto-input expander are both in use
-- **THEN** both SHALL be addressed on `Wire` without re-initializing the bus
-- **AND** a failure of one device SHALL NOT prevent the other from being read
+#### Scenario: Drivers never re-open a bus they do not own
+- **WHEN** the AS5600 on `Wire` or an expander driver on `Wire1` initializes
+- **THEN** it SHALL use the bus `main.cpp` already opened without calling `begin()` itself
+- **AND** a failure of one device SHALL NOT prevent any other device from being read
+- **AND** an AS5600 wedged-bus recovery SHALL restore the exact bus parameters `main.cpp` opened, so
+  any other device on that bus is not left at different parameters
 
 #### Scenario: Driver bound to a single address
 - **WHEN** a PCA9557 driver instance is constructed
@@ -70,8 +81,8 @@ Registers: `0x00` input port, `0x01` output port, `0x02` polarity inversion, `0x
 
 ### Requirement: Opto-Isolated Input Expander
 The system SHALL read the eight 5V opto-isolated (PC817) digital inputs through the on-board PCA9557
-U10 at address `0x1A` on `Wire`, replacing direct GPIO reads for the gear selector and the brake
-limit sensor.
+U10 at address `0x1A` on `Wire1` (I2C2 — scan-verified; the schematic's port names implied I2C1),
+replacing direct GPIO reads for the gear selector and the brake limit sensor.
 
 Input assignment:
 
@@ -85,7 +96,7 @@ Input assignment:
 | In6-In8 | X17 | Spare — no firmware function |
 
 #### Scenario: Initialize the input expander
-- **WHEN** `BoardInputs::begin()` is called with the `Wire` bus
+- **WHEN** `BoardInputs::begin()` is called with the `Wire1` bus
 - **THEN** all eight PCA9557 pins SHALL be configured as inputs
 - **AND** a first input-port read SHALL be performed to seed the snapshot
 - **AND** `true` SHALL be returned only if the device answers at `0x1A`
@@ -145,9 +156,10 @@ indistinguishable from real input states.
   successive snapshots rather than issuing back-to-back I2C reads
 
 ### Requirement: Relay Output Expander
-The system SHALL drive the external relay board's eight relays through its PCA9557 at address `0x18`
-on `Wire1`, replacing direct GPIO relay outputs, while preserving the existing `RelayController`
-public API and ignition semantics.
+The system SHALL drive the external relay board's eight relays through its PCA9557 at address `0x1F`
+(`PCA9557_ADDR_RELAYS`, the board's as-shipped `A2A1A0 = 111` strap), replacing direct GPIO relay
+outputs, while preserving the existing `RelayController` public API and ignition semantics. The bus
+is supplied by the owner at construction: `Wire1` (I2C2), the board's home on header X15.
 
 Relay assignment. The board's IO routing is **not** 1:1 with the relay numbers (verified from the
 `Relay.PrjPcb` netlist), and two functions drive a paralleled PAIR of relays that always energize
@@ -165,18 +177,20 @@ together, so the firmware SHALL address each function by a whole-port mask:
 | Relay_8 | IO1 | X11 | Spare — always driven off | — |
 
 #### Scenario: Initialize relays to the safe state
-- **WHEN** `RelayController::begin()` is called with the `Wire1` bus
+- **WHEN** `RelayController::begin()` is called with the bus the relay board is wired to
 - **THEN** all eight PCA9557 pins SHALL be configured as outputs
 - **AND** the output port SHALL be driven to `0x00` (all relays off) before `begin()` returns
-- **AND** `true` SHALL be returned only if the device answers at `0x18` and the all-off write
+- **AND** `true` SHALL be returned only if the device answers at `0x1F` and the all-off write
   verifies
 
-#### Scenario: Detect a relay board strapped to the reserved mux address
-- **WHEN** `begin()` finds no device at `0x18`
-- **THEN** it SHALL additionally probe `0x1C`
-- **AND** if `0x1C` is the only expander answering on `Wire1`, a distinct error SHALL be logged
-  identifying the relay board as mis-strapped to the on-board mux address
-- **AND** `begin()` SHALL return `false` and the driver SHALL NOT command that device
+#### Scenario: Report the PCA9557 address block when the relay board is missing
+- **WHEN** `begin()` finds no device at `PCA9557_ADDR_RELAYS`
+- **THEN** it SHALL probe the whole PCA9557 address range `0x18`-`0x1F` on its own bus
+- **AND** it SHALL log the addresses that ACKed, or "none" if the bus is silent
+- **AND** the log SHALL NOT attribute an answering address to a mis-strapped relay board, because
+  the on-board mux U2 always answers at `0x1C` when the driver runs on I2C2
+- **AND** the probe SHALL be bounded (eight zero-length writes) and SHALL NOT block the control loop
+- **AND** `begin()` SHALL return `false` and the driver SHALL NOT command any other device
 
 #### Scenario: Whole-port writes from a shadow byte
 - **WHEN** any relay state changes
@@ -245,24 +259,27 @@ latched starter is destructive.
 
 ### Requirement: Reserved On-Board Mux Expander
 The system SHALL treat the on-board CD4051 mux-control PCA9557 U2 at address `0x1C` on `Wire1` as
-reserved and SHALL NOT address it in this change.
+reserved and SHALL NOT address it in this change, other than as part of the read-only diagnostic
+address sweep in `RelayController::begin()`.
 
 #### Scenario: Mux expander is never written
-- **WHEN** the firmware operates the relay board on `Wire1`
-- **THEN** no transaction SHALL be addressed to `0x1C`
+- **WHEN** the firmware operates the relay board
+- **THEN** no write transaction SHALL be addressed to `0x1C`
 - **AND** the CD4051 channel-select and enable lines SHALL remain in their power-on state
 - **AND** `PIN_ADC_IS_MUX` (GPIO3) SHALL be defined in `Constants.h` but not sampled
 
 #### Scenario: Address is documented as taken
 - **WHEN** a future device is added to `Wire1`
 - **THEN** `0x1C` SHALL already be recorded in `Constants.h` as `PCA9557_ADDR_MUX_RESERVED`
-- **AND** the relay board SHALL be strapped `A2A1A0 = 000` so it never collides with it
+- **AND** `0x1A` (U10) SHALL likewise be recorded as `PCA9557_ADDR_INPUTS`
+- **AND** the relay board SHALL be strapped to any PCA9557 address other than `0x1A` or `0x1C` — the
+  as-shipped `A2A1A0 = 111` → `0x1F` satisfies this and SHALL be kept
 
 ## REMOVED Requirements
 
 ### Requirement: MCP23017 I2C GPIO Expander
-**Reason**: The `Control_v0` board uses two PCA9557 expanders (opto inputs at `0x1A` on I2C1, relay
-outputs at `0x18` on I2C2), not an MCP23017. The MCP23017 was specified by an earlier archived
+**Reason**: The `Control_v0` board uses PCA9557 expanders (on-board opto inputs at `0x1A` and mux
+control at `0x1C`, both on I2C2; relay-board outputs at `0x1F`), not an MCP23017. The MCP23017 was specified by an earlier archived
 change but was never fitted or implemented — no `MCP23017` symbol exists anywhere in `src/` or
 `include/`; the gear switches, brake sensor and relays were on direct ESP32 GPIO until this change.
 

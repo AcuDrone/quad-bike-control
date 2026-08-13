@@ -4,8 +4,9 @@
 The system SHALL provide a `RelayController` class to manage relay outputs for ignition
 states, front light and front-wheel lock control, driven by commands decoded from the MAVLink
 interface or the web portal. The relays SHALL be driven through the external relay board's PCA9557
-expander on `Wire1` at address `0x18` rather than through direct ESP32 GPIO, with the public API
-unchanged for callers.
+expander at address `0x1F` rather than through direct ESP32 GPIO, with the public API unchanged for
+callers. The bus is supplied by the owner at construction: `Wire1` (I2C2), the relay board's home on
+header X15.
 
 The relay board's PCA9557 IO routing is NOT 1:1 with the relay numbers (`Relay_1=IO4,
 Relay_2=IO5, Relay_3=IO6, Relay_4=IO7, Relay_5=IO3, Relay_6=IO2, Relay_7=IO0, Relay_8=IO1`,
@@ -24,8 +25,8 @@ The duplicated relays are intentional: both relays of a pair are set and cleared
 pair can never be left half-energized by firmware.
 
 #### Scenario: Initialize relay controller
-- **WHEN** `RelayController.begin()` is called with the `Wire1` I2C bus
-- **THEN** the PCA9557 at `0x18` SHALL be detected and all eight pins configured as outputs
+- **WHEN** `RelayController.begin()` is called with the I2C bus the relay board is wired to
+- **THEN** the PCA9557 at `0x1F` SHALL be detected and all eight pins configured as outputs
 - **AND** the output port SHALL be written to `0x00` (all relays OFF) and verified by read-back
 - **AND** internal state tracking is initialized to OFF / light off / lock off
 - **AND** true is returned if initialization succeeds, false if the expander does not answer or the

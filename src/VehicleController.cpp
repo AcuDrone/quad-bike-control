@@ -60,6 +60,14 @@ void VehicleController::initBoostRail() {
 
     // GPIO9 is ADC1 (unaffected by WiFi). 24V through the 200K/24K divider is
     // ~2.57V, so the widest attenuation is required.
+    //
+    // Order matters: analogSetPinAttenuation() only RE-configures a channel that
+    // is already attached to the ADC oneshot unit. Called on a fresh pin the core
+    // logs "[E] __analogChannelConfig(): Pin is not configured as analog channel"
+    // and the attenuation is silently not applied. One throwaway analogRead()
+    // attaches the pin (via __analogInit) first; the per-pin attenuation then
+    // takes effect, and the discarded first sample is never used for telemetry.
+    (void)analogRead(PIN_ADC_24V);
     analogSetPinAttenuation(PIN_ADC_24V, ADC_11db);
 
     Debug::printfFeature(DebugFeature::VEHICLE,

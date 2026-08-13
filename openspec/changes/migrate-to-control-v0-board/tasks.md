@@ -2,9 +2,12 @@
 
 - [ ] 1.1 Tag the last DevKit-compatible commit (e.g. `git tag hw-devkitc1-last`) as the rollback
   point, and note the tag in the PR description.
-- [ ] 1.2 **[USER/MANUAL]** Confirm board straps before first power-up: I2C2 level-shifter low side
-  = 3V3 (`R16` populated, `R18` not — pinout §8.6), and the relay board's PCA9557 strapped
-  A2A1A0 = 000 → **0x18**, never 0x1C (§8.8).
+- [x] 1.2 **[USER/MANUAL]** Confirm board straps before first power-up: I2C2 level-shifter low side
+  = 3V3 (`R16` populated, `R18` not — pinout §8.6), and the relay board's PCA9557 strapped to any
+  address other than 0x1A (U10) or 0x1C (U2) — the as-shipped A2A1A0 = 111 → **0x1F** is kept, no
+  rework (§8.8). DONE: strap kept at 0x1F and the relay board answers on **X15 / I2C2**. Header X15
+  initially passed no signals (two failed scans) and was fixed by rework in the `FB3`/`FB4` ferrite
+  area — check there first on any board copy with a silent X15.
 - [ ] 1.3 **[USER/MANUAL]** Confirm the CH9121T / LAN section is unpopulated or held silent so the
   Prog header on GPIO43/44 remains usable (§8.1), and that X9 pin 1 (5V) is **not** wired to the
   Pixhawk TELEM 5V pin (§8.4).
@@ -22,7 +25,7 @@
 - [x] 2.4 **Delete** `PIN_BRAKE_SENSOR`, `PIN_GEAR_REVERSE`, `PIN_GEAR_NEUTRAL`, `PIN_GEAR_LOW`,
   `PIN_GEAR_HIGH`, `PIN_RELAY1`, `PIN_RELAY2`, `PIN_RELAY3`, `PIN_WHEEL_LOCK`.
 - [x] 2.5 Add the I2C/expander block: `PIN_RELAY_SDA` (48), `PIN_RELAY_SCL` (47), `I2C_BUS_FREQ_HZ`
-  (100000 — 100 kHz, long AS5600 cable run to X14), `PCA9557_ADDR_INPUTS` (0x1A), `PCA9557_ADDR_RELAYS` (0x18), `PCA9557_ADDR_MUX_RESERVED`
+  (100000 — 100 kHz, long AS5600 cable run to X14), `PCA9557_ADDR_INPUTS` (0x1A), `PCA9557_ADDR_RELAYS` (0x1F), `PCA9557_ADDR_MUX_RESERVED`
   (0x1C, documented as never-addressed), and the opto-input bit indices In1-In5 →
   REVERSE/NEUTRAL/LOW/HIGH/BRAKE plus the relay port masks `RELAY_MASK_IGNITION` (`0b00110000`,
   Relay_1 IO4 + Relay_2 IO5), `RELAY_MASK_STARTER` (`0b01000000`, Relay_3 IO6),
@@ -74,8 +77,10 @@
   ignition mask HIGH / starter mask LOW; CRANKING: both HIGH) and the `ACC_PRECRANK_DWELL_MS` /
   `CRANKING_TIMEOUT` / RPM-exit crank logic untouched.
 - [x] 5.3 In `begin()`, configure all eight pins as outputs and drive the port to 0x00 (all relays
-  off) **before** returning; probe 0x18 and, if absent, additionally probe 0x1C and log the distinct
-  "relay board strapped to the mux address (0x1C)" error. Return `false` on failure.
+  off) **before** returning; probe `PCA9557_ADDR_RELAYS` and, if absent, sweep the whole PCA9557
+  block 0x18-0x1F on the driver's own bus and log which addresses ACKed ("none" if silent). Do NOT
+  blame a mis-strapped relay board for an answer at 0x1C — that is the on-board mux U2. Return
+  `false` on failure.
 - [x] 5.4 Implement write verification: after every port write, read the output register back and
   compare; retry up to `RELAY_WRITE_RETRIES`; on persistent mismatch set `isFaulted()` and log.
 - [x] 5.5 Implement the starter escalation from `design.md` Decision 3: `RELAY_MASK_STARTER` is only
@@ -127,8 +132,9 @@
   `OFF`** and replies `{"ok":false,"error":...}` on refusal; enabling is always allowed.
 - [x] 7.6 `data/index.html`: add a 24V rail readout (value + low-rail colour state), a boost toggle
   wired to `set_boost`, and an I/O fault indicator; add matching `en` **and** `uk` i18n keys.
-- [ ] 7.7 Deploy the UI with `~/.platformio/penv/bin/pio run -t uploadfs` — a firmware flash alone
-  does not update `data/index.html`.
+- [x] 7.7 Deploy the UI with `~/.platformio/penv/bin/pio run -t uploadfs` — a firmware flash alone
+  does not update `data/index.html`. DONE over native USB; it only succeeds since the LittleFS
+  partition was shrunk to 1.5 MB (`partitions_16mb.csv`).
 
 ## 8. Build system and console
 
@@ -183,8 +189,11 @@
   no enable glitch through reset (pinout §8.2).
 - [ ] 11.2 **[USER/MANUAL]** Console: confirm boot log and runtime output appear on the USB-C serial
   monitor, and that the board boots normally with USB unplugged.
-- [ ] 11.3 **[USER/MANUAL]** I2C scan on both buses: `Wire` must show exactly 0x36 and 0x1A; `Wire1`
-  must show exactly 0x18 and 0x1C. Any other result stops bring-up. Both buses run at **100 kHz**
+- [x] 11.3 **[USER/MANUAL]** I2C scan on both buses. Bench-verified result: `Wire1` (I2C2) answers
+  **0x1A (U10), 0x1C (U2) and 0x1F (relay board on X15)**; `Wire` (I2C1) is empty until the AS5600
+  is plugged into X14, where it must then show 0x36 alone. Any other result stops bring-up. The
+  debug-gated boot scan in `src/main.cpp` prints both buses on every boot. Both buses run at
+  **100 kHz**
   (`I2C_BUS_FREQ_HZ`) by decision — the AS5600 is at the far end of a long cable run to the steering
   column (X14) and signal-integrity margin beats bus speed there; 400 kHz was tried and rejected.
 - [ ] 11.3a **[USER/MANUAL] [OPTIONAL — only if faster steering reads are ever wanted]** Bench
@@ -196,18 +205,19 @@
   the reported physical gear follows each position with exactly one input asserted; confirm the
   brake limit sensor state flips at the retracted endstop. Confirm the input bit polarity matches the
   firmware's "asserted" sense (`design.md` Open Questions).
-- [ ] 11.5 **[USER/MANUAL]** Input fault behavior: unplug X14/X16 (or hold SCL low) and confirm the
+- [ ] 11.5 **[USER/MANUAL]** Input fault behavior: unplug X16 (or hold SCL low) and confirm the
   gear goes `UNKNOWN` within `BOARD_INPUT_STALE_MS`, throttle is capped at 5%, `io_input_fault`
   appears in telemetry, and everything recovers automatically on reconnect.
-- [ ] 11.6 **[USER/MANUAL]** Relays, engine disabled (starter lead disconnected or fuel/ignition
+- [x] 11.6 **[USER/MANUAL]** Relays, engine disabled (starter lead disconnected or fuel/ignition
   isolated): exercise each function from the web UI / MAVLink and confirm the correct relays click —
   ignition clicks **both** Relay_1 (X4) and Relay_2 (X5), the wheel lock clicks **both** Relay_5 (X8)
   and Relay_6 (X9), starter is Relay_3 (X6) alone, front light is Relay_4 (X7) alone — the read-back
   verifies, and Relay_7 (X10) / Relay_8 (X11) never move.
-- [ ] 11.7 **[USER/MANUAL]** Crank sequence with the starter lead still disconnected: confirm the
+- [x] 11.7 **[USER/MANUAL]** Crank sequence with the starter lead still disconnected: confirm the
   `ACC_PRECRANK_DWELL_MS` dwell before Relay_3 (starter) engages, and that Relay_3 releases on
   `CRANKING_TIMEOUT`.
-  Then unplug X15 mid-crank and confirm the all-off escalation, ignition latching to `OFF`, and
+- [ ] 11.7a **[USER/MANUAL]** Relay-bus fault escalation: unplug the relay board's I2C connector
+  (X15) mid-crank and confirm the all-off escalation, ignition latching to `OFF`, and
   `io_relay_fault` in telemetry.
 - [ ] 11.8 **[USER/MANUAL]** Servos: confirm throttle (GPIO15) and transmission (GPIO16) move on the
   correct X8 pins with the correct LEDC channels and 50 Hz; confirm the brake BTS7960 (GPIO6/7 → X7)

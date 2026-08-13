@@ -18,10 +18,11 @@ AS5600Sensor::AS5600Sensor()
 bool AS5600Sensor::begin(gpio_num_t sdaPin, gpio_num_t sclPin) {
     sdaPin_ = sdaPin;
     sclPin_ = sclPin;
-    // The bus is owned by main.cpp (I2C1 is shared with the opto-input expander at
-    // 0x1A), so this driver must NOT open or re-configure it. Wire.begin() is
-    // idempotent enough to be harmless, but calling it here would let a steering
-    // init failure take the input expander down with it.
+    // The bus is owned by main.cpp, so this driver must NOT open or re-configure
+    // it. I2C1 is the external-header bus (X14) and the AS5600 has it to itself —
+    // the on-board expanders U10/U2 and the relay board are all on I2C2.
+    // Wire.begin() is idempotent enough to be harmless, but calling it here would
+    // let a steering init failure disturb a bus main.cpp already owns.
 
     // Probe the sensor
     Wire.beginTransmission(AS5600_I2C_ADDR);
@@ -57,9 +58,9 @@ bool AS5600Sensor::read(uint16_t& rawAngle, bool& magnetOk) {
 }
 
 void AS5600Sensor::recoverBus() {
-    // Shared bus: the re-init must restore the exact parameters main.cpp used, or
-    // the opto-input expander on the same bus would be left running at a different
-    // speed. BoardInputs recovers on its own once the bus is back.
+    // The re-init must restore the exact parameters main.cpp opened the bus with:
+    // main.cpp owns both buses, and a device added to X14 later (the contingency
+    // relay-board home) must not find I2C1 running at different parameters.
     Debug::printlnFeature(DebugFeature::SERVO, "[AS5600] I2C wedged — re-initializing shared bus I2C1");
     Wire.end();
     Wire.begin(sdaPin_, sclPin_, I2C_BUS_FREQ_HZ);

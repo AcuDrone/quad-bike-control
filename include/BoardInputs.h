@@ -10,7 +10,9 @@
  * @brief Polled reader for the eight 5V opto-isolated (PC817) board inputs.
  *
  * The inputs live on the on-board PCA9557 U10 @ `PCA9557_ADDR_INPUTS` (0x1A) on
- * I2C1 (`Wire`), shared with the AS5600 steering sensor. Consumers
+ * I2C2 (`Wire1`), shared with the on-board CD4051 mux expander U2 @0x1C. (Live
+ * bus scans put U10 on I2C2; the schematic's port names suggested I2C1 — the
+ * copper wins.) Consumers
  * (`TransmissionController::getPhysicalGear()`, `VehicleController::isBrakeReleased()`)
  * read the published snapshot and never issue I2C themselves, so a control-loop
  * read can never turn into a burst of blocking transactions.
@@ -42,7 +44,7 @@ public:
      * @brief Bind to the expander on the given bus (bound at construction; the
      * bus itself is opened by `main.cpp` before `begin()` is called).
      */
-    explicit BoardInputs(TwoWire& bus = Wire);
+    explicit BoardInputs(TwoWire& bus = Wire1);
 
     /**
      * @brief Configure all eight pins as inputs and take a first read.

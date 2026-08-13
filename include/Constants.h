@@ -45,9 +45,12 @@
 #define VESC_UART_NUM       2             // UART_NUM_2
 #define VESC_UART_BAUD      115200        // VESC app default baud
 
-// I2C1 ("Wire") — AS5600 steering angle sensor @ 0x36 (X14) AND the on-board
-// opto-input PCA9557 U10 @ 0x1A. The bus is opened once in main.cpp; no driver
-// on this bus may re-open it with different parameters.
+// I2C1 ("Wire") — the EXTERNAL header bus: AS5600 steering angle sensor @ 0x36
+// on X14, which is reserved for it and is the only device on this bus. The
+// on-board expanders and the external relay board @ 0x1F (X15) are on I2C2 —
+// see the bus map below for the full picture.
+// The bus is opened once in main.cpp; no driver on this bus may re-open it with
+// different parameters.
 #define PIN_STEER_SDA       GPIO_NUM_1    // I2C1 SDA
 #define PIN_STEER_SCL       GPIO_NUM_2    // I2C1 SCL
 
@@ -96,22 +99,37 @@
 // fallible. Every expander driver instance is bound to exactly one bus and one
 // address at construction — there is no bus scanning.
 //
-//   I2C1 "Wire"  (GPIO1/2)   : AS5600 0x36, opto-input PCA9557 U10 0x1A
-//   I2C2 "Wire1" (GPIO48/47) : relay-board PCA9557 0x18, mux PCA9557 U2 0x1C
+// EMPIRICAL BUS MAP — established by live I2C scans on the assembled board and
+// confirmed by bench-testing every device. It overrides the schematic port
+// names, which suggested U10 was on I2C1:
 //
+//   I2C1 "Wire"  (GPIO1/2)   : external headers only —
+//                              AS5600 0x36 (X14, reserved for it)
+//   I2C2 "Wire1" (GPIO48/47) : BOTH on-board PCA9557s —
+//                              opto-input U10 0x1A, CD4051 mux U2 0x1C
+//                              + external relay board 0x1F on header X15
+//
+// Historical note for a future board copy: X15's signal path was dead on the
+//   first assembled board (0x1F never answered in an I2C2 scan, two attempts),
+//   traced to the FB3/FB4 ferrite area and fixed by rework — check there first
+//   if X15 is silent. Contingency only: the relay board also works on X14/I2C1
+//   (one-line change in main.cpp, Wire1 → Wire, borrowing X14 from the AS5600).
 // ⚠ The I2C2 level shifter low side is jumper-selected: R16 populated (3V3),
-//   R18 not (pinout §8.6). ⚠ The relay board must be strapped A2A1A0 = 000 → 0x18
-//   so it can never collide with the on-board mux expander at 0x1C (§8.8).
+//   R18 not (pinout §8.6).
 
-#define PIN_RELAY_SDA       GPIO_NUM_48  // I2C2 SDA (X15, BSS138 level shifted)
-#define PIN_RELAY_SCL       GPIO_NUM_47  // I2C2 SCL (X15, BSS138 level shifted)
+#define PIN_RELAY_SDA       GPIO_NUM_48  // I2C2 SDA (on-board U10/U2 + X15, BSS138 level shifted)
+#define PIN_RELAY_SCL       GPIO_NUM_47  // I2C2 SCL (on-board U10/U2 + X15, BSS138 level shifted)
 // Both buses run at 100 kHz. The AS5600 (X14) sits at the end of a long cable run to the
 // steering column, so signal integrity wins over speed — user decision. 400 kHz was tried and
 // rejected: not enough margin on that cable. Raising it again would need a stronger pull-up.
 #define I2C_BUS_FREQ_HZ     100000       // Both buses run at 100 kHz (see note above)
 
-#define PCA9557_ADDR_INPUTS        0x1A  // On-board opto-input expander U10 (I2C1)
-#define PCA9557_ADDR_RELAYS        0x18  // External relay board (I2C2)
+#define PCA9557_ADDR_INPUTS        0x1A  // On-board opto-input expander U10 (I2C2 — scan-verified)
+// External relay board, as shipped strapped A2A1A0 = 111 → 0x1F. Deliberately KEPT:
+// it collides with nothing on either bus (0x1A / 0x1C are the on-board expanders),
+// so there is no reason to rework the straps. It runs on its intended home
+// X15 → I2C2, bench-verified with all relay functions exercised.
+#define PCA9557_ADDR_RELAYS        0x1F  // External relay board
 #define PCA9557_ADDR_MUX_RESERVED  0x1C  // On-board CD4051 mux control U2 (I2C2) — NEVER addressed
 
 // Opto-isolated input bit indices on PCA9557 U10 (In1..In8 = bits 0..7).
