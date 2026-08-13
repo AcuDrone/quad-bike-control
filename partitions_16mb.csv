@@ -1,9 +1,12 @@
 # Name,   Type, SubType, Offset,  Size, Flags
 # 16MB partition table for ESP32-S3-DevKitC-1 N16R8
-# app0/app1: 4MB each | spiffs: ~7.9MB | coredump: 64KB
+# app0/app1: 4MB each | spiffs (LittleFS): 1.5MB | coredump: 64KB
+# Remaining flash after 0x9A0000 is intentionally unallocated: a large FS
+# partition makes `uploadfs` erase megabytes in one stretch, which starves the
+# native USB-Serial/JTAG peripheral and drops the connection.
 nvs,      data, nvs,     0x9000,  0x5000,
 otadata,  data, ota,     0xe000,  0x2000,
 app0,     app,  ota_0,   0x10000, 0x400000,
 app1,     app,  ota_1,   0x410000,0x400000,
-spiffs,   data, spiffs,  0x810000,0x7E0000,
-coredump, data, coredump,0xFF0000,0x10000,
+spiffs,   data, spiffs,  0x810000,0x180000,
+coredump, data, coredump,0x990000,0x10000,
