@@ -21,6 +21,12 @@ static const uint8_t kBitmapGroups[4] = {0x00, 0x20, 0x40, 0x60};
 CANController::CANController()
     : mcp_can_(nullptr),
       initialized_(false),
+      csPin_(PIN_CAN_CS),
+      consecutiveSendFailures_(0),
+      lastRxLogTime_(0),
+      lastHealthLogTime_(0),
+      lastOverflowLogTime_(0),
+      rxOverflowSuppressed_(0),
       state_(OBDState::IDLE),
       activePIDIndex_(0),
       requestSentTime_(0),
@@ -80,22 +86,70 @@ bool CANController::begin(gpio_num_t csPin, gpio_num_t sckPin, gpio_num_t mosiPi
     SPI.begin(sckPin, misoPin, mosiPin, csPin);
     Debug::printfFeature(DebugFeature::CAN,"[CAN] SPI initialized: SCK=%d, MISO=%d, MOSI=%d, CS=%d\n", sckPin, misoPin, mosiPin, csPin);
 
+    // Remember CS for the raw register reads used by the diagnostics helpers
+    csPin_ = csPin;
+
     // Create MCP_CAN object with CS pin
     mcp_can_ = new MCP_CAN(csPin);
 
-    // Initialize MCP2515 at 500 kbps
-    if (mcp_can_->begin(MCP_ANY, CAN_500KBPS, MCP_8MHZ) != CAN_OK) {
+    // Initialize MCP2515 at 500 kbps.
+    // MCP_STDEXT (not MCP_ANY) leaves RXB0CTRL/RXB1CTRL RXM = 00 so the acceptance
+    // masks/filters are actually applied; MCP_ANY sets RXM = 11 and disables them.
+    if (mcp_can_->begin(MCP_STDEXT, CAN_500KBPS, MCP_8MHZ) != CAN_OK) {
         Debug::printlnFeature(DebugFeature::CAN,"[CAN] ERROR: MCP2515 initialization failed");
         delete mcp_can_;
         mcp_can_ = nullptr;
         return false;
     }
 
-    // Set to normal mode (not loopback)
-    mcp_can_->setMode(MCP_NORMAL);
+    // Program the acceptance window BEFORE going NORMAL (library convention: init_Mask()/
+    // init_Filt() switch to CONFIG mode internally and restore the previously cached mode).
+    if (!applyRxFilters()) {
+        Debug::printlnFeature(DebugFeature::CAN,
+            "[CAN] ERROR: failed to program RX acceptance masks/filters");
+        delete mcp_can_;
+        mcp_can_ = nullptr;
+        return false;
+    }
+
+    // Set to normal mode (not loopback). setMode() returns MCP2515_FAIL if CANSTAT
+    // never reflects the requested mode — silently ignoring it leaves the chip in
+    // config/loopback mode, which looks like a healthy init but never touches the bus.
+    byte modeResult = mcp_can_->setMode(MCP_NORMAL);
+    if (modeResult != MCP2515_OK) {
+        Debug::printlnFeature(DebugFeature::CAN, "[CAN] WARNING: setMode(NORMAL) failed, retrying once...");
+        modeResult = mcp_can_->setMode(MCP_NORMAL);
+    }
+
+    // Read CANSTAT back directly (the library exposes no getMode()) so the actual
+    // operating mode is visible on the monitor regardless of what setMode() claimed.
+    uint8_t canstat = readRegister(MCP_CANSTAT);
+    uint8_t opmode = canstat & MODE_MASK;
+    const char* modeName = "UNKNOWN";
+    switch (opmode) {
+        case MCP_NORMAL:     modeName = "NORMAL";     break;
+        case MCP_SLEEP:      modeName = "SLEEP";      break;
+        case MCP_LOOPBACK:   modeName = "LOOPBACK";   break;
+        case MCP_LISTENONLY: modeName = "LISTENONLY"; break;
+        case MODE_CONFIG:    modeName = "CONFIG";     break;
+        default: break;
+    }
+    Debug::printfFeature(DebugFeature::CAN,
+        "[CAN] CANSTAT=0x%02X -> mode %s (0x%02X)\n", canstat, modeName, opmode);
+
+    if (modeResult != MCP2515_OK || opmode != MCP_NORMAL) {
+        Debug::printlnFeature(DebugFeature::CAN, "[CAN] ERROR: failed to enter NORMAL mode (stuck in loopback?)");
+        initialized_ = false;
+        delete mcp_can_;
+        mcp_can_ = nullptr;
+        return false;
+    }
 
     initialized_ = true;
     Debug::printlnFeature(DebugFeature::CAN,"[CAN] MCP2515 initialized at 500 kbps");
+    Debug::printfFeature(DebugFeature::CAN,
+        "[CAN] health: TEC=%u REC=%u EFLG=0x%02X\n",
+        mcp_can_->errorCountTX(), mcp_can_->errorCountRX(), mcp_can_->getError());
     Debug::printlnFeature(DebugFeature::CAN,"[CAN] Ready to read vehicle data");
 
     return true;
@@ -118,6 +172,12 @@ void CANController::update() {
 
     switch (state_) {
         case OBDState::IDLE: {
+            // Keep the MCP2515 RX buffers empty between polls: a frame left sitting in
+            // RXB0/RXB1 blocks the next reception and eventually raises RXnOVR.
+            drainRxBuffers();
+            checkRxOverflow();
+            logHealth();
+
             int8_t index = selectNextPID();
             if (index < 0) {
                 break;  // Nothing due yet
@@ -128,7 +188,27 @@ void CANController::update() {
                 requestSentTime_ = millis();
                 state_ = OBDState::WAITING_RESPONSE;
             } else {
-                // Send failed, skip and reschedule
+                // Send failed (logged by sendOBDRequest) — surface why and try to recover
+                uint8_t eflg = mcp_can_->getError();
+                Debug::printfFeature(DebugFeature::CAN,
+                    "[CAN] Send failure: TEC=%u REC=%u EFLG=0x%02X\n",
+                    mcp_can_->errorCountTX(), mcp_can_->errorCountRX(), eflg);
+
+                if (eflg & MCP_EFLG_TXBO) {
+                    recoverFromBusOff();
+                }
+
+                // A wedged TX buffer never clears itself: abort queued transmissions
+                // once the failures stack up, so the next poll starts from a clean slate.
+                if (++consecutiveSendFailures_ >= CAN_MAX_CONSEC_SEND_FAILURES) {
+                    mcp_can_->abortTX();
+                    Debug::printfFeature(DebugFeature::CAN,
+                        "[CAN] Aborted stuck TX buffers after %d consecutive send failures\n",
+                        consecutiveSendFailures_);
+                    consecutiveSendFailures_ = 0;
+                }
+
+                // Skip and reschedule
                 pidTable_[index].nextPollTime = millis() + pidTable_[index].interval;
                 pidTable_[index].retryCount++;
             }
@@ -157,9 +237,7 @@ void CANController::update() {
                 // Abort pending TX and wait for bus-off recovery before next send
                 // mcp_can_->abortTX();
                 if (mcp_can_->getError() & MCP_EFLG_TXBO) {
-                    Debug::printlnFeature(DebugFeature::CAN, "[CAN] Bus-off detected, recovering...");
-                    mcp_can_->begin(MCP_ANY, CAN_500KBPS, MCP_8MHZ);
-                    mcp_can_->setMode(MCP_NORMAL);
+                    recoverFromBusOff();
                 }
                 pidTable_[activePIDIndex_].retryCount++;
                 // Add a short delay before the next send to let abortTX settle
@@ -217,6 +295,7 @@ bool CANController::sendOBDRequest(uint8_t pid) {
         return false;
     }
 
+    consecutiveSendFailures_ = 0;
     return true;
 }
 
@@ -250,7 +329,9 @@ bool CANController::tryReceiveResponse() {
                 return true;
             }
         }
-        // Non-matching message — discard and continue draining
+        // Non-matching message — report it (rate-limited) so a wrong response ID or a
+        // negative response (0x7F) is visible instead of being silently dropped
+        logUnmatchedFrame(canId, len, rxBuf);
     }
 
     return false;
@@ -323,6 +404,179 @@ bool CANController::isDataStale() const {
 }
 
 // ============================================================================
+// DIAGNOSTICS / RECOVERY
+// ============================================================================
+
+// The vendored coryjfowler MCP_CAN library keeps mcp2515_readRegister() and
+// mcp2515_modifyRegister() private and exposes no getMode()/clearRXnOVR(), so the
+// two registers the diagnostics need (CANSTAT for mode readback, EFLG for clearing
+// the RX overflow flags) are accessed here over the same SPI bus the library uses.
+// Same SPISettings as the library (10 MHz, MSBFIRST, SPI_MODE0) and the same CS pin,
+// so the transfers interleave safely with the library's own transactions.
+uint8_t CANController::readRegister(uint8_t address) const {
+    SPI.beginTransaction(SPISettings(10000000, MSBFIRST, SPI_MODE0));
+    digitalWrite(csPin_, LOW);
+    SPI.transfer(MCP_READ);
+    SPI.transfer(address);
+    uint8_t value = SPI.transfer(0x00);
+    digitalWrite(csPin_, HIGH);
+    SPI.endTransaction();
+    return value;
+}
+
+void CANController::modifyRegister(uint8_t address, uint8_t mask, uint8_t data) const {
+    SPI.beginTransaction(SPISettings(10000000, MSBFIRST, SPI_MODE0));
+    digitalWrite(csPin_, LOW);
+    SPI.transfer(MCP_BITMOD);
+    SPI.transfer(address);
+    SPI.transfer(mask);
+    SPI.transfer(data);
+    digitalWrite(csPin_, HIGH);
+    SPI.endTransaction();
+}
+
+// Restrict the MCP2515 RX buffers to the OBD-II response window 0x7E8-0x7EF.
+//
+// Encoding (mcp_can.cpp, mcp2515_write_mf(), lines 722-748): for ext == 0 the library
+// does `canid = (uint16_t)(id >> 16)` and then writes
+//     SIDL = (canid & 0x07) << 5;  SIDH = canid >> 3;
+// i.e. the 11-bit standard ID must sit in bits 26:16 of the argument -> id << 16.
+// The low 16 bits land in EIDn (extended-ID / first-two-data-bytes filtering) and are
+// left at 0 = don't care. This matches the library's own OBD2_PID_Request example,
+// which passes init_Mask(0, 0x7F00000) / init_Filt(0, 0x7DF0000).
+//
+// mask 0x7F8 << 16 keeps ID bits 10:3 as "care" and bits 2:0 as "don't care";
+// filter 0x7E8 << 16 therefore accepts exactly 0x7E8..0x7EF.
+// Mask 0 gates RXB0 (filters 0-1), mask 1 gates RXB1 (filters 2-5), so both masks and
+// all six filters must be set or an unfiltered buffer keeps letting broadcasts through.
+// ext = 0 on every filter also clears EXIDE, so extended frames match nothing and are
+// rejected outright.
+bool CANController::applyRxFilters() {
+    if (mcp_can_ == nullptr) {
+        return false;
+    }
+
+    bool ok = true;
+    ok &= (mcp_can_->init_Mask(0, 0, CAN_RX_ID_MASK_REG) == MCP2515_OK);
+    ok &= (mcp_can_->init_Mask(1, 0, CAN_RX_ID_MASK_REG) == MCP2515_OK);
+    for (uint8_t n = 0; n < 6; n++) {
+        ok &= (mcp_can_->init_Filt(n, 0, CAN_RX_ID_FILTER_REG) == MCP2515_OK);
+    }
+
+    Debug::printfFeature(DebugFeature::CAN,
+        "[CAN] RX acceptance filter: standard IDs 0x%03X-0x%03X only "
+        "(mask=0x%03X filter=0x%03X, regs 0x%08lX/0x%08lX)%s\n",
+        (unsigned)CAN_RX_ID_FILTER,
+        (unsigned)(CAN_RX_ID_FILTER | (~CAN_RX_ID_MASK & 0x7FF)),
+        (unsigned)CAN_RX_ID_MASK, (unsigned)CAN_RX_ID_FILTER,
+        (unsigned long)CAN_RX_ID_MASK_REG, (unsigned long)CAN_RX_ID_FILTER_REG,
+        ok ? "" : " [FAILED]");
+
+    return ok;
+}
+
+void CANController::recoverFromBusOff() {
+    if (mcp_can_ == nullptr) {
+        return;
+    }
+
+    Debug::printlnFeature(DebugFeature::CAN, "[CAN] Bus-off detected, recovering...");
+    // begin() resets the chip, which wipes the masks/filters — reprogram them before
+    // returning to NORMAL or the broadcast flood comes straight back.
+    mcp_can_->begin(MCP_STDEXT, CAN_500KBPS, MCP_8MHZ);
+    applyRxFilters();
+    if (mcp_can_->setMode(MCP_NORMAL) != MCP2515_OK) {
+        Debug::printlnFeature(DebugFeature::CAN, "[CAN] ERROR: failed to enter NORMAL mode (stuck in loopback?)");
+    }
+    Debug::printfFeature(DebugFeature::CAN,
+        "[CAN] Recovery: CANSTAT=0x%02X EFLG=0x%02X\n",
+        readRegister(MCP_CANSTAT), mcp_can_->getError());
+    consecutiveSendFailures_ = 0;
+}
+
+void CANController::logUnmatchedFrame(unsigned long canId, uint8_t len, const uint8_t* buf) {
+    uint32_t now = millis();
+    if (now - lastRxLogTime_ < CAN_RX_LOG_INTERVAL) {
+        return;  // rate-limited to ~1 line per second
+    }
+    lastRxLogTime_ = now;
+
+    uint8_t d[4] = {0, 0, 0, 0};
+    for (uint8_t i = 0; i < 4 && i < len; i++) {
+        d[i] = buf[i];
+    }
+    Debug::printfFeature(DebugFeature::CAN,
+        "[CAN] RX unmatched: id=0x%03lX len=%d data=%02X %02X %02X %02X\n",
+        canId, len, d[0], d[1], d[2], d[3]);
+}
+
+void CANController::logHealth() {
+    if (mcp_can_ == nullptr || vehicleData_.dataValid) {
+        return;  // only interesting while no data is coming back
+    }
+
+    uint32_t now = millis();
+    if (now - lastHealthLogTime_ < CAN_HEALTH_LOG_INTERVAL) {
+        return;
+    }
+    lastHealthLogTime_ = now;
+
+    Debug::printfFeature(DebugFeature::CAN,
+        "[CAN] health: TEC=%u REC=%u EFLG=0x%02X\n",
+        mcp_can_->errorCountTX(), mcp_can_->errorCountRX(), mcp_can_->getError());
+}
+
+void CANController::checkRxOverflow() {
+    if (mcp_can_ == nullptr) {
+        return;
+    }
+
+    uint8_t eflg = mcp_can_->getError();
+    if ((eflg & (MCP_EFLG_RX0OVR | MCP_EFLG_RX1OVR)) == 0) {
+        return;
+    }
+
+    // RXnOVR is sticky and must be cleared by software, otherwise the flags stay
+    // latched forever and mask any later overflow.
+    modifyRegister(MCP_EFLG, MCP_EFLG_RX0OVR | MCP_EFLG_RX1OVR, 0x00);
+
+    // Hardware filtering should make overflows rare, but a burst still floods the log
+    // one line per loop iteration — report at most once per CAN_OVERFLOW_LOG_INTERVAL
+    // and carry the suppressed count so the real rate stays visible.
+    uint32_t now = millis();
+    if (lastOverflowLogTime_ != 0 && (now - lastOverflowLogTime_) < CAN_OVERFLOW_LOG_INTERVAL) {
+        rxOverflowSuppressed_++;
+        return;
+    }
+    lastOverflowLogTime_ = now;
+
+    Debug::printfFeature(DebugFeature::CAN,
+        "[CAN] RX overflow (EFLG=0x%02X), cleared (x%lu since last report)\n",
+        eflg, (unsigned long)rxOverflowSuppressed_);
+    rxOverflowSuppressed_ = 0;
+}
+
+void CANController::drainRxBuffers() {
+    if (mcp_can_ == nullptr) {
+        return;
+    }
+
+    unsigned long canId;
+    uint8_t len = 0;
+    uint8_t rxBuf[8];
+
+    // Bounded drain (same cap as the receive paths) — keeps the loop non-blocking
+    for (uint8_t i = 0; i < 5; i++) {
+        if (mcp_can_->checkReceive() != CAN_MSGAVAIL) {
+            break;
+        }
+        mcp_can_->readMsgBuf(&canId, &len, rxBuf);
+        // Nothing is expected while IDLE, so every frame here is "unmatched"
+        logUnmatchedFrame(canId, len, rxBuf);
+    }
+}
+
+// ============================================================================
 // ECU CAPABILITY PROBE
 // ============================================================================
 
@@ -352,6 +606,8 @@ bool CANController::sendMode03Request() {
         Debug::printlnFeature(DebugFeature::CAN, "[CAN] ERROR: Failed to send Mode 03 request");
         return false;
     }
+
+    consecutiveSendFailures_ = 0;
     return true;
 }
 
@@ -391,7 +647,8 @@ bool CANController::tryReceiveProbeResponse(uint8_t expectedMode, uint8_t expect
                 return true;
             }
         }
-        // Non-matching message — discard and continue draining
+        // Non-matching message — report it (rate-limited) and continue draining
+        logUnmatchedFrame(canId, len, rxBuf);
     }
 
     return false;

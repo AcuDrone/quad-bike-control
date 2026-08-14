@@ -38,28 +38,17 @@ BTS7960Controller brakeActuator;
 // MAVLink interface to Pixhawk (TELEM2)
 MavlinkInterface mavlinkInterface;
 
-// ── I2C TOPOLOGY: BENCH REALITY (established by live bus scans) ──────────────
-// The schematic's port names suggested the opto-input expander U10 sat on I2C1;
-// live scans prove otherwise. Verified map (all three devices bench-tested):
-//   I2C2 (Wire1, GPIO47/48) : BOTH on-board PCA9557s — input U10 @0x1A and
-//                             CD4051 mux U2 @0x1C — plus the external relay
-//                             board @0x1F on header X15.
-//   I2C1 (Wire,  GPIO1/2)   : external headers only — X14, reserved for the
-//                             AS5600 @0x36 as designed.
-// The external relay board ships strapped A2A1A0=111 → 0x1F; 0x1F collides with
-// neither 0x1A nor 0x1C, so the as-shipped strap is kept.
-//
-// Historical note for a future board copy: X15's signal path was dead on the
-// first assembled board (0x1F never appeared in an I2C2 scan, two attempts),
-// traced to the FB3/FB4 ferrite area and fixed by rework. Check that area first
-// if X15 is silent. Contingency if it ever is: the relay board also works on
-// X14 → I2C1 (change the RelayController argument below from Wire1 to Wire,
-// borrowing X14 from the AS5600).
+// ── I2C TOPOLOGY (scan-verified; overrides the schematic's port names) ───────
+//   I2C2 (Wire1, GPIO48/47) : on-board PCA9557s — opto inputs U10 @0x1A,
+//                             CD4051 mux U2 @0x1C — + relay board @0x1F on X15
+//   I2C1 (Wire,  GPIO1/2)   : external headers only — AS5600 @0x36 on X14
+// Fallback if X15 ever goes silent: the relay board also works on X14 → I2C1
+// (change the RelayController argument below from Wire1 to Wire).
+
 // Opto-isolated board inputs (gear switches In1-In4, brake endstop In5) on I2C2
 BoardInputs boardInputs(Wire1);
 
-// Relay Controller for ignition, starter, lights and wheel lock.
-// On I2C2 (Wire1) @0x1F via X15 — its intended home; see the note above.
+// Relay Controller for ignition, starter, lights and wheel lock — I2C2 @0x1F via X15
 RelayController relayController(Wire1);
 
 // Driveline speed sensor (12V hall via the X2 opto input, PCNT on GPIO8)
@@ -132,37 +121,28 @@ void setup() {
     Serial.println("[INIT] Debug utility initialized");
 
     // Feature debug flags — MUST be set after Debug::begin(), which overwrites
-    // the in-memory flags with the NVS-stored state
-    // Debug::setFeatureEnabled(DebugFeature::CAN, true);
+    // the in-memory flags with the NVS-stored state. Uncomment one to trace it.
+    // Debug::setFeatureEnabled(DebugFeature::CAN, true);           // MCP2515 health, unmatched RX, overflow
+    // Debug::setFeatureEnabled(DebugFeature::RELAY, true);         // relay/ignition switching
+    // Debug::setFeatureEnabled(DebugFeature::BRAKE, true);         // brake moves + endstop
+    // Debug::setFeatureEnabled(DebugFeature::VEHICLE, true);       // speed sensor + vehicle state
     // Debug::setFeatureEnabled(DebugFeature::TRANSMISSION, true);
-    // Debug::setFeatureEnabled(DebugFeature::VEHICLE, true);
-    // Debug::setFeatureEnabled(DebugFeature::MAVLINK, true);  // diagnose command-stream / fail-safe flapping
+    // Debug::setFeatureEnabled(DebugFeature::MAVLINK, true);       // diagnose command-stream / fail-safe flapping
     Debug::setFeatureEnabled(DebugFeature::SERVO, false);
-    // On for board bring-up: relay/ignition switching and brake endstop tracing.
-    // TURN BOTH OFF BEFORE VEHICLE DEPLOYMENT — they are bring-up aids only and
-    // chatter on every relay write and brake move.
-    Debug::setFeatureEnabled(DebugFeature::RELAY, true);
-    Debug::setFeatureEnabled(DebugFeature::BRAKE, true);
 
     // Ungated state dump so a disabled master switch is visible on the monitor
-    Serial.printf("[INIT] Debug: master=%s SERVO=%s RELAY=%s BRAKE=%s\n",
+    Serial.printf("[INIT] Debug: master=%s SERVO=%s\n",
                   Debug::isEnabled() ? "ON" : "OFF",
-                  Debug::isFeatureEnabled(DebugFeature::SERVO) ? "ON" : "OFF",
-                  Debug::isFeatureEnabled(DebugFeature::RELAY) ? "ON" : "OFF",
-                  Debug::isFeatureEnabled(DebugFeature::BRAKE) ? "ON" : "OFF");
+                  Debug::isFeatureEnabled(DebugFeature::SERVO) ? "ON" : "OFF");
 
     Debug::println("\n=== ESP32-S3 Quad Bike Control (Control_v0) ===");
 
     // Record the boost enable and start rail monitoring (grace window + ADC setup)
     vehicleController.initBoostRail();
 
-    // ── I2C buses ────────────────────────────────────────────────────────────
+    // ── I2C buses (map at the top of this file) ──────────────────────────────
     // main.cpp is the single owner of both buses: they are opened here, before any
     // consumer, so no driver depends on another driver's initialization succeeding.
-    //   I2C1 (Wire)  GPIO1/2   : external headers — AS5600 0x36 (X14)
-    //   I2C2 (Wire1) GPIO48/47 : on-board expanders — opto inputs U10 0x1A
-    //                            and CD4051 mux U2 0x1C (never addressed)
-    //                            + relay-board PCA9557 0x1F on X15
     if (!Wire.begin(PIN_STEER_SDA, PIN_STEER_SCL, I2C_BUS_FREQ_HZ)) {
         Debug::println("[INIT] ERROR: I2C1 (Wire) init failed");
     }
@@ -170,8 +150,8 @@ void setup() {
         Debug::println("[INIT] ERROR: I2C2 (Wire1) init failed");
     }
 
-    // Bring-up aid: enumerate both buses before any driver claims them, so a
-    // missing/mis-strapped expander is obvious from the boot log alone.
+    // Enumerate both buses before any driver claims them, so a missing or
+    // mis-strapped expander is obvious from the boot log alone.
     if (Debug::isEnabled()) {
         scanI2CBus(Wire,  "I2C1 (Wire)");
         scanI2CBus(Wire1, "I2C2 (Wire1)");

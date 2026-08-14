@@ -31,9 +31,9 @@
 - [x] 7.1 Clean firmware build: `~/.platformio/penv/bin/pio run` passes with no errors.
 
 ## 8. Bench verification
-- [ ] 8.1 Run the probe on the real Bashan 330 via the web UI; confirm supported-PID bitmaps, per-PID answers, and DTC summary appear in the UI and serial log. (User-side: requires the physical bike/board.)
-- [ ] 8.2 Record the actual probe results (which candidate PIDs answered, raw/decoded values, DTCs) into this change's design.md/proposal.md so a future change can enable the confirmed PIDs. (User-side: depends on 8.1.)
-- [ ] 8.3 Confirm MAP (`map_kpa`) shows a plausible live value in the CAN card while the engine runs. (User-side: requires the physical bike/board.)
+- [x] 8.1 Run the probe on the real Bashan 330 via the web UI; confirm supported-PID bitmaps, per-PID answers, and DTC summary appear in the UI and serial log. (Done 2026-08-14 on the real Delphi MT05, bench, key on/engine off; ran twice with identical output. Bitmaps, per-PID answers and the DTC summary were confirmed **in the serial log**; the web-UI panel rendering is still unconfirmed pending the LittleFS upload in 5.4.)
+- [x] 8.2 Record the actual probe results (which candidate PIDs answered, raw/decoded values, DTCs) into this change's design.md/proposal.md so a future change can enable the confirmed PIDs. (Done: see "Probe results (recorded 2026-08-14, bench, key on/engine off)" in design.md. Enabling the confirmed PIDs remains future work and is explicitly NOT part of this change.)
+- [ ] 8.3 Confirm MAP (`map_kpa`) shows a plausible live value in the CAN card while the engine runs. (Not done: the 2026-08-14 run was engine-off. 0x0B answered 101 kPa = atmospheric, which is plausible but does not prove the value tracks manifold vacuum. Still requires a running-engine check.)
 
 ## 9. Validate
 - [x] 9.1 `openspec validate add-can-pid-probe --strict` passes with no errors.

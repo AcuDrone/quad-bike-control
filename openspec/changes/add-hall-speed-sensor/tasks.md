@@ -1,5 +1,5 @@
 ## 1. Hardware (manual / user task)
-- [ ] 1.1 **[USER/MANUAL]** Wire the 12V hall sensor to the **X2** opto-isolated input on
+- [x] 1.1 **[USER/MANUAL]** Wire the 12V hall sensor to the **X2** opto-isolated input on
   `Control_v0` (6N137 → GPIO8), **not** to a Hall connector. Signal path:
   `X2.1 / X2.2 → 470Ω R22 → 6N137 LED → open-collector output + pull-up → GPIO8`
   (`GPIO_PINOUT_CUSTOM_BOARD_S3.md` §3/§8.9). Wiring depends on the sensor type:
@@ -7,11 +7,15 @@
     line with the signal);
   - **open-collector NPN:** +12V through the series resistor → `X2.1`, sensor output → `X2.2` (the
     sensor sinks the LED current).
-- [ ] 1.2 **[USER/MANUAL] ⚠ REQUIRED — limit the 6N137 LED current before first power-up.** At 12V
+  DONE 2026-08-14 — wired as **open-collector NPN**; the fitted sensor is a toothed-ring pickup.
+- [x] 1.2 **[USER/MANUAL] ⚠ REQUIRED — limit the 6N137 LED current before first power-up.** At 12V
   the stock 470Ω `R22` alone gives ≈22 mA, slightly **over the 6N137's 20 mA absolute maximum**. Fit
   **560Ω–1kΩ in series in the sensor cable** (preferred; ≈7–10 mA, in the 6–15 mA sweet spot) **or**
   rework `R22` to 1kΩ on the board. Measure the LED current (or the drop across the series resistor)
   and confirm it is inside 6–15 mA, and scope/meter GPIO8 to confirm it toggles with the sensor.
+  DONE 2026-08-14 — series resistor value bench-tuned; GPIO8 confirmed toggling (clean pulse counts).
+  ⚠ Failure mode seen along the way: too little LED current leaves the 6N137 output stuck at an
+  invalid ~1.7 V logic level, so GPIO8 never sees a valid edge and PCNT counts nothing.
 
 ## 2. Constants
 - [x] 2.1 Add to `include/Constants.h`: `PIN_SPEED_SENSOR` (**GPIO 8**, 6N137 opto input on X2 —
@@ -80,11 +84,16 @@
 - [x] 8.1 Clean firmware build passes with no errors: `~/.platformio/penv/bin/pio run`.
 
 ## 9. Bench verification
-- [ ] 9.1 **[USER/MANUAL]** Spin the sensor target with a drill or hand-spin a lifted wheel a known
+- [x] 9.1 **[USER/MANUAL]** Spin the sensor target with a drill or hand-spin a lifted wheel a known
   number of revolutions; confirm the pulse count and that `vehicle_speed` tracks the input.
+  DONE 2026-08-14 — 5 full wheel revolutions on the vehicle produced **347 pulses** (≈69.4/rev),
+  confirming the pulse path end-to-end (sensor → X2 opto → GPIO8 → PCNT).
 - [ ] 9.2 **[USER/MANUAL]** Calibrate: measure the tyre circumference and determine pulses/rev, set
   both via the web UI (`speed_cal_*`), and confirm the displayed km/h is plausible against a known
   reference (e.g. GPS speed at a steady pace).
+  PARTIAL 2026-08-14 — both values **measured** (69 pulses/rev; roll-out 1990 mm on the 25" tyre) and
+  shipped as the `Constants.h` defaults. Still open: setting/overriding them from the web UI and the
+  moving GPS cross-check.
 - [ ] 9.3 **[USER/MANUAL]** Verify the live interlock: above ~5 km/h a non-NEUTRAL gear change is
   blocked and logged; at rest it is allowed.
 - [ ] 9.4 **[USER/MANUAL]** Enable the limiter with a low test max speed and confirm throttle

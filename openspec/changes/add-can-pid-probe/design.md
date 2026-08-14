@@ -152,6 +152,95 @@ readable transcript (per-PID answered/raw/decoded and the DTC summary) even with
 Additive only. No stored data or API removed. Enabling the remaining candidate PIDs is a separate
 future change gated on the captured bench results.
 
+## Probe results (recorded 2026-08-14, bench, key on/engine off)
+
+Ground truth captured from the real vehicle: Bashan 330 4x4, Delphi MT05-family ECU, bench, key
+on / engine off, 500 kbps. The probe was run **twice with identical output**; the transcript below
+is from the serial log (`Debug::printfFeature(DebugFeature::CAN, ...)`).
+
+### Mode 01 supported-PID bitmaps
+
+| Group | Raw bytes | Continuation bit (D bit0) |
+|-------|-----------|---------------------------|
+| 0x00  | `BE 3E B0 13` | set → query 0x20 |
+| 0x20  | `80 00 00 01` | set → query 0x40 |
+| 0x40  | `C8 08 00 00` | clear → stop (0x60 never queried) |
+
+Decoded supported PIDs (23 total, MSB-first per byte, byte A bit7 = first PID of the group):
+
+- from `0x00 = BE 3E B0 13`: **01, 03, 04, 05, 06, 07, 0B, 0C, 0D, 0E, 0F, 11, 13, 14, 1C, 1F, 20**
+- from `0x20 = 80 00 00 01`: **21, 40**
+- from `0x40 = C8 08 00 00`: **41, 42, 45, 4D**
+
+Full list: `01 03 04 05 06 07 0B 0C 0D 0E 0F 11 13 14 1C 1F 20 21 40 41 42 45 4D`.
+
+The three PIDs already polled in normal operation (0x0C RPM, 0x05 coolant, 0x11 TPS) are all
+present, as is 0x0B MAP — this change's addition is confirmed by the bitmap as well as by a live
+answer. Notable PIDs the bitmap reveals that we do not yet read: 0x03 fuel-system status,
+0x06/0x07 short/long-term fuel trim B1, 0x13 O2 sensors present, 0x1C OBD standard, 0x1F run time
+since engine start, 0x21 distance with MIL on, 0x41 monitor status this drive cycle, 0x45 relative
+throttle position, 0x4D time run with MIL on.
+
+### Candidate PID test results
+
+| PID | Meaning | In bitmap | Answered | Decoded value | Notes |
+|-----|---------|-----------|----------|---------------|-------|
+| 0x04 | Calculated engine load | yes | yes | 0.00 % | expected with engine off |
+| 0x0B | MAP (absolute) | yes | yes | 101 kPa | atmospheric — plausible, engine off |
+| 0x0D | Vehicle speed | yes | yes | 0 km/h | **SUPPORTED** — see below |
+| 0x0E | Timing advance | yes | yes | 0.0° | expected with engine off |
+| 0x0F | Intake air temp | yes | yes | 29 °C | plausible ambient |
+| 0x14 | O2 sensor B1S1 | yes | yes | 0.41 V | plausible unheated/cold |
+| 0x42 | Control module voltage | yes | yes | 12.86 V | matches battery, key on |
+| 0x2F | Fuel tank level | no | **no response** | — | confirmed absent (as predicted) |
+| 0x5C | Engine oil temp | no | **no response** | — | confirmed absent |
+
+Bitmap and live answers agree on every candidate: everything the bitmap claims answered, and the
+two PIDs the bitmap omits (0x2F, 0x5C) produced no response. This ECU's bitmap is therefore
+trustworthy for this ECU, contrary to the conservative assumption in "Decisions → step 2" (the
+probe still sends all candidates regardless of bitmap, which is what let us prove this).
+
+### Mode 03 (stored DTCs)
+
+DTC count = 0, no stored codes. `multiFrameTruncated` not exercised (a count of 0 fits in the
+single classic frame), so the documented multi-frame limitation remains untested on real hardware.
+
+### Correction to an earlier assumption: 0x0D vehicle speed
+
+This change assumed 0x0D was dash-wired only and absent from the ECU. **That assumption is wrong**
+— 0x0D is both in the bitmap and answered (0 km/h, correct for a stationary bench). Caveat: a
+stationary vehicle cannot distinguish "supported and reading zero" from "supported but always
+returns zero because no speed source is wired to the ECU". **0x0D MUST be re-verified while the
+vehicle is actually moving before any consumer trusts it** — this is a prerequisite for the future
+change described below, and for the `add-hall-speed-sensor` change, which should not be assumed
+redundant on the strength of this bench result.
+
+### Environment notes (operational, not part of the probe result set)
+
+- The MT05 continuously broadcasts periodic non-OBD frames (e.g. standard ID `0x301`) on the same
+  bus. These flooded the MCP2515 RX buffers and forced hardware acceptance filtering to the OBD-II
+  response window `0x7E8-0x7EF` (masks 0/1 plus all six filters — see `applyRxFilters()` in
+  `src/CANController.cpp`, already implemented). Any future work that needs those broadcast frames
+  will have to widen or reprogram those filters.
+- Under heavy polling the MCP2515 library occasionally reports a TX-timeout "send failure" for a
+  frame that in fact transmits; the ECU's reply then arrives as an unmatched response. Cosmetic
+  logging artefact only — no lost data — recorded here so it is not re-diagnosed later.
+
+### Implications for a future change (NOT enabled here)
+
+Per this change's Non-Goals, no additional PIDs are enabled by this change. The evidence above
+makes these safe candidates for a follow-up change: 0x42 module voltage, 0x0F IAT, 0x04 load,
+0x0E timing advance, and 0x14 O2 B1S1 (all answered with plausible values). 0x0D vehicle speed is
+a candidate **only after** a moving-vehicle verification. 0x2F fuel level and 0x5C oil temp are
+confirmed unavailable and must stay disabled — 0x2F is already commented out in
+`include/CANController.h` / `src/CANController.cpp`, and this result retroactively justifies that.
+
 ## Open Questions
-- Exact decoded formulas for any non-standard PIDs this ECU exposes will be confirmed from the
-  bench probe transcript before a future change enables them.
+- ~~Exact decoded formulas for any non-standard PIDs this ECU exposes will be confirmed from the
+  bench probe transcript before a future change enables them.~~ **Resolved 2026-08-14**: the ECU
+  exposed no non-standard PIDs — every PID it reported is a standard SAE J1979 PID decoding with
+  the standard formula (see "Probe results" above).
+- Does 0x0D vehicle speed return a real value while the vehicle is moving, or is it always 0
+  because no speed source reaches the ECU? Requires a road/rolling test; blocks enabling 0x0D.
+- Does 0x0B MAP track manifold vacuum with the engine actually running? The engine-off reading
+  (101 kPa atmospheric) is plausible but does not prove the ECU updates it dynamically (task 8.3).

@@ -46,9 +46,7 @@
 #define VESC_UART_BAUD      115200        // VESC app default baud
 
 // I2C1 ("Wire") — the EXTERNAL header bus: AS5600 steering angle sensor @ 0x36
-// on X14, which is reserved for it and is the only device on this bus. The
-// on-board expanders and the external relay board @ 0x1F (X15) are on I2C2 —
-// see the bus map below for the full picture.
+// on X14 is the only device on it (see the bus map below).
 // The bus is opened once in main.cpp; no driver on this bus may re-open it with
 // different parameters.
 #define PIN_STEER_SDA       GPIO_NUM_1    // I2C1 SDA
@@ -80,7 +78,7 @@
 // Signal path: X2.1/X2.2 -> 470R R22 -> 6N137 LED -> open-collector + pull-up -> GPIO8.
 // ⚠ The optocoupler INVERTS the signal (LED conducting = GPIO8 LOW), so the firmware
 // counts the FALLING edge and does not "fix" the polarity — pulse rate is identical on
-// either edge. S-BUS, which once had this pin earmarked, is dropped for good (pinout §3/§8.9).
+// either edge.
 // ⚠ HARDWARE: a 12V sensor needs 560R-1k extra in series in the cable (or R22 reworked to
 // 1k); the stock 470R alone passes ≈22 mA, over the 6N137's 20 mA absolute maximum.
 #define PIN_SPEED_SENSOR    GPIO_NUM_8
@@ -99,9 +97,8 @@
 // fallible. Every expander driver instance is bound to exactly one bus and one
 // address at construction — there is no bus scanning.
 //
-// EMPIRICAL BUS MAP — established by live I2C scans on the assembled board and
-// confirmed by bench-testing every device. It overrides the schematic port
-// names, which suggested U10 was on I2C1:
+// BUS MAP — scan-verified on the assembled board. It overrides the schematic
+// port names, which suggested U10 was on I2C1:
 //
 //   I2C1 "Wire"  (GPIO1/2)   : external headers only —
 //                              AS5600 0x36 (X14, reserved for it)
@@ -109,11 +106,6 @@
 //                              opto-input U10 0x1A, CD4051 mux U2 0x1C
 //                              + external relay board 0x1F on header X15
 //
-// Historical note for a future board copy: X15's signal path was dead on the
-//   first assembled board (0x1F never answered in an I2C2 scan, two attempts),
-//   traced to the FB3/FB4 ferrite area and fixed by rework — check there first
-//   if X15 is silent. Contingency only: the relay board also works on X14/I2C1
-//   (one-line change in main.cpp, Wire1 → Wire, borrowing X14 from the AS5600).
 // ⚠ The I2C2 level shifter low side is jumper-selected: R16 populated (3V3),
 //   R18 not (pinout §8.6).
 
@@ -124,11 +116,9 @@
 // rejected: not enough margin on that cable. Raising it again would need a stronger pull-up.
 #define I2C_BUS_FREQ_HZ     100000       // Both buses run at 100 kHz (see note above)
 
-#define PCA9557_ADDR_INPUTS        0x1A  // On-board opto-input expander U10 (I2C2 — scan-verified)
-// External relay board, as shipped strapped A2A1A0 = 111 → 0x1F. Deliberately KEPT:
-// it collides with nothing on either bus (0x1A / 0x1C are the on-board expanders),
-// so there is no reason to rework the straps. It runs on its intended home
-// X15 → I2C2, bench-verified with all relay functions exercised.
+#define PCA9557_ADDR_INPUTS        0x1A  // On-board opto-input expander U10 (I2C2)
+// External relay board on X15 → I2C2, as shipped strapped A2A1A0 = 111 → 0x1F.
+// The strap is kept: 0x1F collides with neither on-board expander (0x1A / 0x1C).
 #define PCA9557_ADDR_RELAYS        0x1F  // External relay board
 #define PCA9557_ADDR_MUX_RESERVED  0x1C  // On-board CD4051 mux control U2 (I2C2) — NEVER addressed
 
@@ -365,29 +355,31 @@ struct ServoChannelConfig {
 #define BRAKE_HOLD_SPEED          30    // PWM (0-255) applied against spring return when at target position
 
 // ============================================================================
-// VEHICLE SPEED SENSOR (3-pin 12V hall, PCNT on PIN_SPEED_SENSOR)
+// VEHICLE SPEED SENSOR (12V toothed-ring pickup, PCNT on PIN_SPEED_SENSOR)
 // ============================================================================
 
 // Sampling / signal conditioning
 #define SPEED_SAMPLE_INTERVAL_MS      200    // ms between PCNT samples (5 Hz, matches telemetry)
-// No edges for this long => the reported speed decays to 0 km/h. Sized from the
-// lowest measurable speed: one pulse at ~1 km/h with the default calibration takes
-// ~1.6 s (450 mm/pulse ÷ 278 mm/s), so a shorter timeout would zero a crawling vehicle.
+// No edges for this long => the reported speed decays to 0 km/h. With the measured
+// calibration one pulse at ~1 km/h takes only ~0.10 s (28.8 mm/pulse ÷ 278 mm/s), so
+// 2 s keeps a wide margin: it only trips on a genuinely stopped or disconnected sensor,
+// never on a crawling vehicle.
 #define SPEED_STALE_TIMEOUT_MS        2000   // ms
-// PCNT hardware glitch filter. The highest expected pulse rate is well under 1 kHz
-// (≈62 Hz at 100 km/h with the default calibration), so 1 µs rejects harness noise
-// with orders of magnitude of margin. Hardware ceiling is ~12.7 µs (1023 APB cycles).
+// PCNT hardware glitch filter. Highest expected pulse rate with the measured calibration
+// is ≈960 Hz at 100 km/h (period ~1.04 ms), so a 1 µs filter rejects harness noise while
+// consuming <0.2% of the shortest half-period. Hardware ceiling is ~12.7 µs (1023 APB cycles).
 #define SPEED_GLITCH_FILTER_NS        1000   // ns
 // PCNT counter limits. The hardware zeroes the counter at these watch points and the
 // unit accumulates the overflow itself (accum_count), so update() polls a running total.
 #define SPEED_PCNT_HIGH_LIMIT         10000
 #define SPEED_PCNT_LOW_LIMIT          (-1)
 
-// Calibration defaults (NVS namespace "speed", keys "ppr" / "circ_mm").
-// ⚠ PLACEHOLDERS — pulses/rev and the fitted tyre circumference are unknown until
-// bench calibration; both are set at runtime from the web UI, no reflash needed.
-#define SPEED_DEFAULT_PULSES_PER_REV       4       // pulses per wheel/driveline revolution
-#define SPEED_DEFAULT_WHEEL_CIRCUMFERENCE_MM 1800.0f  // mm (≈ 25x8-12 ATV tyre)
+// Calibration defaults (NVS namespace "speed", keys "ppr" / "circ_mm"), both
+// bench-measured on the vehicle and both settable at runtime from the web UI
+// (speed_cal_ppr / speed_cal_circ) — no reflash needed to change them.
+// The fitted pickup reads a 70-tooth ring, NOT discrete magnets.
+#define SPEED_DEFAULT_PULSES_PER_REV       70      // pulses per wheel revolution (toothed ring)
+#define SPEED_DEFAULT_WHEEL_CIRCUMFERENCE_MM 1990.0f  // mm (25" ATV tyre, measured roll-out)
 
 // Accepted calibration ranges (web command validation)
 #define SPEED_PPR_MIN                 1
@@ -486,6 +478,23 @@ enum class InputSource {
 #define CAN_RESPONSE_TIMEOUT      200   // ms - OBD-II response timeout (non-blocking, healthy ECU responds in ~50ms)
 #define CAN_DATA_STALE_TIMEOUT    5000  // ms - Mark data invalid if not updated
 #define CAN_RETRY_ATTEMPTS        3     // Number of retry attempts on error
+
+// CAN Diagnostics / Recovery (bring-up aids, all non-blocking)
+#define CAN_MAX_CONSEC_SEND_FAILURES 3     // Consecutive sendMsgBuf() failures before abortTX()
+#define CAN_RX_LOG_INTERVAL          1000  // ms - rate limit for unmatched-RX-frame logging
+#define CAN_HEALTH_LOG_INTERVAL      5000  // ms - rate limit for TEC/REC/EFLG health logging
+#define CAN_OVERFLOW_LOG_INTERVAL    5000  // ms - rate limit for RXnOVR overflow logging
+
+// MCP2515 hardware acceptance filtering (standard 11-bit IDs only).
+// The ECU floods the bus with broadcast frames (Delphi MT05 sends 0x301 etc.) which
+// overrun the two RX buffers faster than the loop can drain them. Accept only the
+// OBD-II response window 0x7E8-0x7EF: (id & 0x7F8) == 0x7E8.
+// The coryjfowler MCP_CAN library expects standard mask/filter IDs shifted left by 16
+// (mcp2515_write_mf() takes bits 26:16 as the 11-bit ID when ext == 0).
+#define CAN_RX_ID_MASK            0x7F8   // 11-bit acceptance mask (care bits 10:3)
+#define CAN_RX_ID_FILTER          0x7E8   // 11-bit acceptance filter (OBD-II ECU responses)
+#define CAN_RX_ID_MASK_REG   (((uint32_t)CAN_RX_ID_MASK) << 16)    // 0x07F80000
+#define CAN_RX_ID_FILTER_REG (((uint32_t)CAN_RX_ID_FILTER) << 16)  // 0x07E80000
 
 // ECU Capability Probe (on-demand diagnostic sweep)
 #define CAN_PROBE_RETRY_ATTEMPTS  1     // Retries per probe request (keeps worst-case sweep duration bounded)

@@ -35,6 +35,12 @@ on the bike.
 - Other candidate PIDs (0x04 load, 0x0E timing, 0x0F IAT, 0x42 module voltage, 0x0D speed,
   0x2F fuel, 0x5C oil temp, 0x14 O2) are **not** enabled by this change; they will be enabled in
   a future change once the bench probe confirms the ECU answers them.
+- **Bench probe run 2026-08-14** (real Delphi MT05, key on/engine off): results are recorded in
+  design.md → "Probe results (recorded 2026-08-14, bench, key on/engine off)". Summary: 23
+  supported PIDs; 0x04/0x0B/0x0D/0x0E/0x0F/0x14/0x42 all answered with plausible values; 0x2F and
+  0x5C confirmed absent; 0 stored DTCs. Note 0x0D vehicle speed is supported, contradicting this
+  change's earlier assumption — it still needs a moving-vehicle check before it can be trusted.
+  Enabling any of these PIDs remains future work and is out of scope here.
 
 ## Impact
 - Affected specs: `can-controller` (ADDED: ECU Capability Probe; MODIFIED: CAN Controller OBD-II

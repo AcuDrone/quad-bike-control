@@ -136,6 +136,14 @@ inversion noted.
 > - **Open-collector (NPN) sensor:** +12V through the series R → `X2.1`, sensor output → `X2.2`
 >   (the sensor sinks the LED current).
 
+> ✅ **Bench-verified 2026-08-14.** The fitted sensor is a **toothed-ring** type (not discrete
+> magnets), configured as **70 pulses per wheel revolution** (measured 69.4 = 347 pulses over 5
+> revs; the ring is a round 70 teeth), wired per the **open-collector NPN** diagram above. The series resistor is **required** and its value was tuned on
+> the bench. **Failure signature:** with too little LED current the 6N137 output does not swing fully
+> and sits at an invalid logic level around **~1.7 V** — GPIO8 never registers a clean edge and PCNT
+> counts nothing. Drop the series resistance until the output is a solid rail-to-rail swing (staying
+> inside the 6–15 mA LED window).
+
 **BTS7960 IS conditioning (X7/X8 pins 4/5 and all Analog_1..8):** 4.7K series + 10K to GND +
 BAV199 clamp + 100n, into the CD4051 mux.
 
