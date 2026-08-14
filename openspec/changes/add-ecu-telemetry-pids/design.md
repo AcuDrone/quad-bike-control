@@ -24,8 +24,11 @@ and cheap, and nothing else.
 ## Goals / Non-Goals
 - **Goals**: read `0x42` module voltage, `0x0F` intake air temp and `0x04` engine load at the
   existing 2000 ms interval class; surface them in web telemetry and the CAN card (en + uk);
-  map the two that have a natural, currently-unused `EFI_STATUS` field; keep RPM at 500 ms;
-  prove `0x0D` vehicle speed against the hall sensor in motion (report only).
+  map the two that have a natural, currently-unused `EFI_STATUS` field; fill the two hardcoded-zero
+  MAVLink throttle fields (`EFI_STATUS.throttle_out`, `VFR_HUD.throttle`) from the already-polled
+  TPS (`0x11`), with a commanded-throttle fallback for the HUD; keep RPM at 500 ms.
+  (The `0x0D` vehicle-speed question is closed — verified always 0 in motion on 2026-08-14, see
+  below — so no in-motion comparison run remains.)
 - **Non-Goals**: no new poll-rate classes or scheduler redesign; no enabling of `0x0E`, `0x14`,
   fuel trims or the other bitmap-reported PIDs; **no** `0x0D` in telemetry or control; no change
   to the probe machine; no Mission Planner plugin work (out of repo).
@@ -119,7 +122,9 @@ occupancy of the 19 fields (`.pio/libdeps/.../mavlink_msg_efi_status.h`):
 | `intake_manifold_temperature` | 0.0 (unused) | **← intake air temp `0x0F` (°C)** |
 | `ignition_voltage` | 0.0 (unused) | **← control module voltage `0x42` (V)** |
 | `intake_manifold_pressure` | 0.0 (unused) | free — natural home for MAP `0x0B`, deferred (see Open Questions) |
-| `ecu_index`, `fuel_consumed`, `fuel_flow`, `throttle_position`, `spark_dwell_time`, `barometric_pressure`, `ignition_timing`, `injection_time`, `exhaust_gas_temperature`, `throttle_out`, `fuel_pressure` | 0.0 (unused) | unchanged |
+| `throttle_out` | 0.0 (unused) | **← measured ECU TPS `0x11` (%), NaN when CAN invalid** |
+| `throttle_position` | 0.0 (unused) | free — deliberately left unused (see "Throttle reporting") |
+| `ecu_index`, `fuel_consumed`, `fuel_flow`, `spark_dwell_time`, `barometric_pressure`, `ignition_timing`, `injection_time`, `exhaust_gas_temperature`, `fuel_pressure` | 0.0 (unused) | unchanged |
 
 - `intake_manifold_temperature` is documented `[degC]` and `ignition_voltage` is documented `[V]`
   ("supply voltage to EFI sparking system") — both are semantically honest homes for our values,
@@ -128,7 +133,7 @@ occupancy of the 19 fields (`.pio/libdeps/.../mavlink_msg_efi_status.h`):
   documented contract with the Mission Planner plugin (`src/MavlinkInterface.cpp:243-247`,
   `include/Constants.h:252-256`). Overwriting it would break gear display. Mapping load onto
   `throttle_position` or `throttle_out` instead was rejected: those fields mean throttle, we
-  already have a real TPS value (`0x11`) that could legitimately claim `throttle_position` later,
+  already have a real TPS value (`0x11`) that claims `throttle_out` in this change (see below),
   and a mis-signposted field is worse than an absent one. Engine load stays web-only.
 - **Invalid-data convention**: both new fields are sent as `NaN` while `state.canValid` is false,
   matching `rpmVal` / `chtVal` so the plugin renders "--". (MAVLink also documents `0` as
@@ -138,6 +143,56 @@ occupancy of the 19 fields (`.pio/libdeps/.../mavlink_msg_efi_status.h`):
   (`uint16_t`), keeping the struct dependency-free of CAN headers as its comment requires.
 - The GCS will not show these until the Mission Planner plugin's packet subscription is extended.
   That is additive, out-of-repo work; firmware behaviour is unaffected either way.
+
+### Throttle reporting: measured vs commanded, per message
+Both throttle fields we fill are currently hardcoded zeros (`src/MavlinkInterface.cpp:272`
+`throttle_out = 0.0f`, `:291` `VFR_HUD.throttle = 0`), and the data to fill them is already on
+hand: TPS (`0x11`) has been in the poll table since before this change and lands in
+`VehicleData.throttlePosition`, so there is **no extra request-slot cost** — only the two zeros are
+new. It also closes a standing spec/code gap: the `mavlink-interface` requirement already states
+`EFI_STATUS` carries "throttle position", which the zeroed field did not honour.
+
+Two values exist and they are not the same thing:
+
+- **Measured** — the ECU's own TPS reading. Ground truth about the engine, but only available while
+  the CAN link is healthy.
+- **Commanded (arbitrated)** — the percent the throttle servo is actually being driven with. Always
+  known locally, and it is what the *vehicle* was told to do, not necessarily what the engine did.
+
+The policy differs per message because the two messages promise different things:
+
+- **`EFI_STATUS` = ECU truth, measured only.** It is the engine-data message and every other field
+  in it is a measurement, with `NaN` as the established "no data" marker (`rpm`,
+  `cylinder_head_temperature`, and the two fields added above). Putting a commanded value into it
+  would silently change the meaning of an ECU field. So `throttle_out` carries measured TPS when
+  `state.canValid`, and `NaN` otherwise — a plugin renders "--".
+- **`VFR_HUD` = pilot-facing HUD, must always say something useful.** `throttle` is a `uint16_t`
+  percent: **there is no NaN and no "unknown" encoding**, so the only alternatives to a fallback are
+  a frozen 0 or suppressing the whole message (which would also take ground speed down with it —
+  ground speed is governed by the hall sensor's validity, deliberately independent of CAN). A HUD
+  throttle bar reading 0 % while the operator is holding throttle is misleading in the more
+  dangerous direction than a bar showing intent. So: measured TPS when CAN is valid, commanded
+  percent when it is not.
+
+The substitution is not ambiguous to a consumer, because the two messages are sent in the same tick:
+`EFI_STATUS.throttle_out` reads `NaN` **exactly when** `VFR_HUD.throttle` has fallen back to the
+commanded value. When CAN is valid both carry the same measured number, so agreement is the normal
+state and a sustained divergence is not possible by construction (we do not attempt stuck-linkage
+detection here — that would need both values reported side by side, which is a follow-up).
+
+**Sourcing the commanded value.** `MavlinkInterface::StateReport` (`include/MavlinkInterface.h:46`)
+carries neither throttle value today, so it gains `throttlePosition` (`uint8_t`, %, straight from
+`VehicleData`) and `throttleCmdPct` (`uint8_t`, 0-100), keeping the struct's no-CAN-headers rule.
+The commanded field must **not** be taken from `MavlinkInterface::getThrottle()` (the autopilot's
+raw demand): `VehicleController::update()` (`src/VehicleController.cpp:356-362`) applies a
+speed-limit cap, the gear-boost PID overrides throttle entirely during a shift
+(`:159`, `:990`), the web `set_throttle` path is a separate source, and fail-safe forces idle. The
+one place all of that has already been arbitrated is the servo's live pulse width, so the value is
+derived from `ThrottleController::getCurrentUs()` mapped back through the active calibration
+window — i.e. a new `usToPercent()` inverse of `percentToUs()` (`src/ThrottleController.cpp:31-35`;
+clamp to 0-100, guard `fullUs_ == idleUs_`), exposed as `VehicleController::getThrottlePercent()`
+and copied into the snapshot in `main.cpp` next to the other `report.*` assignments. Rounding to an
+integer percent at the edge is fine — the field is a percent bar, not a control signal.
 
 ### Web telemetry and JSON budget
 The three fields are emitted inside the existing `if (telemetry.can_status == "connected")` block
@@ -159,14 +214,52 @@ wholesale when CAN is down — the same contract the CAN card already relies on.
   Task 5.1 measures it. If it is already over, that is pre-existing drift and MUST be reported
   as a finding — this change adds ~54 B and does not amend that requirement.
 
-### `0x0D` vehicle speed: verification only
-The bench probe answered `0x0D` = 0 km/h stationary, which proves the PID exists but not that a
-speed source reaches the ECU. This change therefore **does not** add `0x0D` anywhere. Task 6.4
-drives the vehicle with the hall sensor live and logs both values for comparison, recording the
-outcome in this file. Even a perfect match would not make the hall sensor redundant: the hall
-sensor is a directly-owned, independently-validated signal feeding the gear-change interlock and
-`VFR_HUD` (`add-hall-speed-sensor`), whereas `0x0D` would be a second-hand value at a 2000 ms
-class cadence with unknown provenance. Any future adoption of `0x0D` is a separate change.
+#### Measured budget (static, 2026-08-14 — runtime confirmation still pending)
+
+Measured by rebuilding the exact document shape against the **same ArduinoJson 6.21.6 headers the
+firmware links**, replicating which values are copied into the string pool (`String`,
+`serialized(String)` and `char*` buffers) versus stored by pointer (string literals). The host has
+64-bit pointers (32 B `VariantSlot`), so the ESP32 figure is derived as `slots × 16 + stringPool`;
+the slot count is architecture-independent and cross-checks exactly against a hand count (159).
+
+| Case | Slots | Doc bytes (ESP32) | % of 4096 | Serialized |
+|------|-------|-------------------|-----------|------------|
+| Steady state, before | 72 | 1203 | 29.4 % | ~1058 B |
+| Steady state, after | 75 | 1257 | 30.7 % | ~1111 B |
+| Probe present, before | 156 | 2580 | 63.0 % | ~1971 B |
+| **Probe present, after (peak)** | **159** | **2634** | **64.3 %** | ~2024 B |
+
+`StaticJsonDocument<4096>` is **sufficient — capacity NOT bumped.** The peak (transient `probe`
+object present, all 4 bitmap groups answered, all 9 candidate PIDs decoded, 2 DTCs) leaves ~1462
+bytes / 36 % headroom. Document growth from this change is +54 B, wire growth +53 B, both matching
+the ~54 B estimate above.
+
+**Pre-existing finding (task 5.2): the steady-state payload was already over the "under 1KB"
+figure before this change** — ~1058 B, i.e. the requirement had already drifted through the
+Control_v0 rail, hall-speed and steering-VESC additions. This change takes it to ~1111 B. Per
+task 5.2 this is reported, **not** silently amended; the *Telemetry Performance* requirement is
+left untouched and needs its own change. (Serialized lengths are modelled with representative
+string values — `firmware_version`, `input_source` etc. — so they carry ±tens of bytes of
+uncertainty; the >1 KB conclusion is robust because the model uses short placeholders and so
+under-states the real payload.)
+
+A high-water-mark log in `createTelemetryJSON()` reports `memoryUsage()` / `capacity()` /
+`json.length()` on each new peak (not every 5 Hz broadcast), so the bench run confirms these
+numbers on real hardware for free. Tasks 5.1/5.2 stay open until that runtime observation exists.
+
+### `0x0D` vehicle speed: verified dead, nothing to do
+The bench probe answered `0x0D` = 0 km/h stationary, which proved the PID exists but not that a
+speed source reaches the ECU. **Resolved on the bench 2026-08-14 (user-verified): `0x0D` reports
+0 at all times, including with the wheel in motion.** The ECU answers the request but has no
+vehicle-speed sensor input on this vehicle — the speedo is dash-wired — so the value is
+permanently 0 and useless.
+
+Task 8.4 is therefore **already satisfied**: the outcome is "always 0", no side-by-side
+comparison against the hall sensor is needed, and there is nothing to wire. This change **does
+not** add `0x0D` to `pidTable_`, telemetry, MAVLink or any control path, and no future change
+should either. `add-hall-speed-sensor` (GPIO8/X2) is the only speed source on this vehicle — a
+directly-owned, independently-validated signal feeding the gear-change interlock and `VFR_HUD`
+— and is in no sense redundant.
 
 ## Risks / Trade-offs
 - **RPM jitter from a busier scheduler** → quantified above (~75 ms expected, one 200 ms
@@ -184,13 +277,19 @@ class cadence with unknown provenance. Any future adoption of `0x0D` is a separa
 
 ## Migration Plan
 Purely additive: three new poll-table entries, three new `VehicleData` fields, three new JSON
-fields, two previously-zero MAVLink fields, three new UI readouts. No NVS keys, no removed API,
-no wire-format break — an older web client simply ignores the new JSON keys. Rollback is reverting
-`PID_COUNT` to 4 and dropping the three table entries; nothing else depends on the new fields.
+fields, four previously-zero MAVLink fields (intake temp, module voltage, `EFI_STATUS.throttle_out`,
+`VFR_HUD.throttle`), one new read-only accessor pair for commanded throttle, three new UI readouts.
+No NVS keys, no removed API, no wire-format break — an older web client simply ignores the new JSON
+keys, and a GCS that ignored the four zeroed MAVLink fields keeps working. Rollback is reverting
+`PID_COUNT` to 4, dropping the three table entries and restoring the four zero literals; nothing
+else depends on the new fields, and the new throttle accessor is read-only (no control path
+touches it).
 
 ## Open Questions
-- Does `0x0D` report real speed while moving, or always 0? (Task 6.4, report-only. Blocks any
-  future adoption; does not block this change.)
+- ~~Does `0x0D` report real speed while moving, or always 0? (Task 8.4, report-only. Blocks any
+  future adoption; does not block this change.)~~ **Resolved 2026-08-14** (bench, user-verified):
+  **always 0** in motion — the ECU answers the PID but has no speed input on this vehicle. `0x0D`
+  is dead; no future adoption is possible and task 8.4 needs no bench run.
 - Should MAP (`0x0B`) also be mapped to the free `EFI_STATUS.intake_manifold_pressure`? Natural
   and nearly free, but MAP belongs to `add-can-pid-probe`'s scope, which states no `EFI_STATUS`
   consumer change is required. Deferred to a follow-up so this change's MAVLink delta stays

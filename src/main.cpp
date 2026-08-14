@@ -287,6 +287,10 @@ void loop() {
                         | (vehicleController.getFrontLight() ? EFI_DIGITAL_FLAG_FRONT_LIGHT : 0);
     report.speedValid   = vehicleController.isVehicleSpeedValid();
     report.speedKmh     = vehicleController.getVehicleSpeedKmh();
+    report.intakeTemp   = vd.intakeTemp;
+    report.moduleVoltageMv = vd.moduleVoltageMv;
+    report.throttlePosition = vd.throttlePosition;              // measured (ECU)
+    report.throttleCmdPct   = vehicleController.getThrottlePercent();  // commanded (arbitrated)
     mavlinkInterface.report(report);
 
     // Broadcast telemetry to web clients

@@ -618,6 +618,9 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
         doc["throttle_position"] = telemetry.throttle_position;
         doc["fuel_level"] = telemetry.fuel_level;
         doc["map_kpa"] = telemetry.map_kpa;
+        doc["ecu_voltage"] = serialized(String(telemetry.module_voltage_mv / 1000.0f, 2));
+        doc["intake_temp"] = telemetry.intake_temp;
+        doc["engine_load"] = telemetry.engine_load;
     }
     doc["can_status"] = telemetry.can_status;
 
@@ -731,6 +734,19 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
 
     String json;
     serializeJson(doc, json);
+
+    // Capacity/size high-water mark. Logged only when a new peak is reached (not on
+    // every 5 Hz broadcast), so both the steady state and the larger probe-present
+    // peak are reported exactly once each.
+    static size_t peakUsage = 0;
+    if (doc.memoryUsage() > peakUsage) {
+        peakUsage = doc.memoryUsage();
+        Debug::printfFeature(DebugFeature::WEB,
+            "[WEB] telemetry JSON peak: mem=%u/%u bytes, serialized=%u bytes%s\n",
+            (unsigned)peakUsage, (unsigned)doc.capacity(), (unsigned)json.length(),
+            telemetry.probe_present ? " (probe present)" : "");
+    }
+
     return json;
 }
 

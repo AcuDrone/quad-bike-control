@@ -47,6 +47,7 @@ public:
     uint16_t getCurrentUs() const { return servo_.getMicroseconds(); }
     bool isCalibrating() const { return calibrating_; }
     uint16_t percentToUs(float pct) const;
+    uint8_t usToPercent(uint16_t us) const;   // inverse of percentToUs(), clamped 0..100
 
 private:
     ServoController servo_;

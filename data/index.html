@@ -712,6 +712,18 @@
                         <div class="telemetry-value" id="can-map">-- kPa</div>
                     </div>
                     <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_ecu_voltage">ECU Voltage</div>
+                        <div class="telemetry-value" id="can-ecu-voltage">-- V</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_intake_temp">Intake Air Temp</div>
+                        <div class="telemetry-value" id="can-intake-temp">--°C</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_engine_load">Engine Load</div>
+                        <div class="telemetry-value" id="can-engine-load">--%</div>
+                    </div>
+                    <div class="telemetry-item">
                         <div class="telemetry-label" data-i18n="lbl_fuel_level">Fuel Level</div>
                         <div class="telemetry-value" id="can-fuel">--%</div>
                     </div>
@@ -969,6 +981,9 @@
                 lbl_oil_temp: 'Oil Temp',
                 lbl_throttle_pos: 'Throttle Pos',
                 lbl_map: 'MAP',
+                lbl_ecu_voltage: 'ECU Voltage',
+                lbl_intake_temp: 'Intake Air Temp',
+                lbl_engine_load: 'Engine Load',
                 lbl_fuel_level: 'Fuel Level',
                 lbl_can_status: 'CAN Status',
                 can_connected: 'connected',
@@ -1194,6 +1209,9 @@
                 lbl_oil_temp: 'Темп. оливи',
                 lbl_throttle_pos: 'Полож. дроселя',
                 lbl_map: 'MAP',
+                lbl_ecu_voltage: 'Напруга ЕБК',
+                lbl_intake_temp: 'Темп. впуск. повітря',
+                lbl_engine_load: 'Навантаження двигуна',
                 lbl_fuel_level: 'Рівень пального',
                 lbl_can_status: 'Стан CAN',
                 can_connected: 'підключено',
@@ -1554,6 +1572,9 @@
 
                 document.getElementById('can-fuel').textContent = (data.fuel_level || 0) + '%';
                 document.getElementById('can-map').textContent = (data.map_kpa != null ? data.map_kpa : '--') + ' kPa';
+                document.getElementById('can-ecu-voltage').textContent = (data.ecu_voltage != null ? data.ecu_voltage.toFixed(2) : '--') + ' V';
+                document.getElementById('can-intake-temp').textContent = (data.intake_temp != null ? data.intake_temp : '--') + '°C';
+                document.getElementById('can-engine-load').textContent = (data.engine_load != null ? data.engine_load : '--') + '%';
 
                 document.getElementById('can-status-text').textContent = t('can_connected');
                 document.getElementById('can-status-text').style.color = 'var(--success)';
@@ -1563,6 +1584,9 @@
                 document.getElementById('can-oil').textContent = '--°C';
                 document.getElementById('can-throttle-pos').textContent = '--%';
                 document.getElementById('can-map').textContent = '-- kPa';
+                document.getElementById('can-ecu-voltage').textContent = '-- V';
+                document.getElementById('can-intake-temp').textContent = '--°C';
+                document.getElementById('can-engine-load').textContent = '--%';
                 document.getElementById('can-fuel').textContent = '--%';
                 document.getElementById('can-status-text').textContent = t('can_disconnected');
                 document.getElementById('can-status-text').style.color = 'var(--danger)';

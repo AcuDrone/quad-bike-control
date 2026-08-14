@@ -123,6 +123,14 @@ public:
     uint16_t getThrottleUs() const { return throttle_.getCurrentUs(); }
 
     /**
+     * @brief Get the commanded throttle as a percent of the calibrated window (0-100).
+     * Derived from the servo's live pulse width, so this is the ARBITRATED output —
+     * whatever actually won among autopilot command, web command, gear-change boost
+     * override, speed-limit cap and fail-safe idle — not any single input's demand.
+     */
+    uint8_t getThrottlePercent() const { return throttle_.usToPercent(throttle_.getCurrentUs()); }
+
+    /**
      * @brief Get calibrated throttle idle/full endpoints (µs) and calibration state
      */
     uint16_t getThrottleIdleUs() const { return throttle_.getIdleUs(); }

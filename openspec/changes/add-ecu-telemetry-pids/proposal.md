@@ -43,17 +43,36 @@ we pull what we can read; whether every consumer uses it today is secondary.
   Both new fields are reported as `NaN` while CAN data is invalid, matching the existing
   `rpm` / `cylinder_head_temperature` convention so the Mission Planner plugin shows "--" instead
   of a misleading 0.
+- **Populate the two hardcoded-zero MAVLink throttle fields** (`src/MavlinkInterface.cpp:272` and
+  `:291`), using the ECU TPS (`0x11`) that is **already polled** and already stored in
+  `VehicleData.throttlePosition` — no new request-slot cost:
+  - `EFI_STATUS.throttle_out` (today `0.0f`) ← **measured** ECU TPS in %, and `NaN` while CAN data
+    is invalid, matching this message's existing NaN-when-invalid convention.
+  - `VFR_HUD.throttle` (today `0`; `uint16_t` percent) ← the same measured TPS when CAN is valid,
+    **falling back to the commanded/arbitrated throttle percent** when it is not. `VFR_HUD` has no
+    NaN encoding, so a HUD throttle bar pinned at 0 while the operator is holding throttle would be
+    actively misleading; the locally-known commanded value keeps it honest. See design.md for the
+    measured-vs-commanded policy.
+  - `EFI_STATUS.throttle_position` stays an unused zero — the same value is not duplicated into two
+    fields of one message.
+  - **`MavlinkInterface::StateReport` carries neither value today** and gains both:
+    `throttlePosition` (`uint8_t`, %, copied from `VehicleData`) and `throttleCmdPct` (`uint8_t`,
+    0-100). The commanded value must come from the throttle servo's live pulse width — the
+    *arbitrated* output of autopilot / web / gear-boost PID / speed-limit cap / fail-safe idle —
+    so a percent accessor is added to `ThrottleController` (`percentToUs()` currently has no
+    inverse) and surfaced via `VehicleController`, then copied into the snapshot in `main.cpp`.
 - **Explicitly NOT polled** (available per the probe, deliberately deferred to keep the request
   budget small): `0x0E` timing advance, `0x14` O2 sensor B1S1, `0x06`/`0x07` fuel trims,
   `0x03` fuel-system status, `0x13` O2 sensors present, `0x1C` OBD standard, `0x1F` run time,
   `0x21` distance with MIL on, `0x41` monitor status, `0x45` relative throttle, `0x4D` time run
   with MIL on. `0x2F` and `0x5C` remain confirmed-absent and stay disabled.
-- **One verification task, report-only**: log `0x0D` vehicle speed against the hall speed sensor
-  while the vehicle is actually moving, and record the result in this change's design.md.
-  `0x0D` is **NOT** added to the poll table, telemetry, or any control path here — it answers
-  0 km/h on a stationary bench, which cannot distinguish "supported and reading zero" from
-  "supported but never fed a speed source". Cross-reference: `add-hall-speed-sensor` remains the
-  authoritative speed source and must not be treated as redundant on the strength of this result.
+- **`0x0D` vehicle speed — verified dead, no verification run outstanding**: resolved on the bench
+  2026-08-14 (user-verified) — `0x0D` reports **0 at all times, including in motion**. The ECU
+  answers the PID but has no vehicle-speed sensor input on this vehicle (dash-wired speedo), so the
+  value is permanently 0 and useless. `0x0D` is **NOT** added to the poll table, telemetry, or any
+  control path here, and cannot be adopted later. Task 8.4 records this outcome; no comparison
+  against the hall sensor is needed. Cross-reference: `add-hall-speed-sensor` (GPIO8/X2) is the
+  only speed source on this vehicle and is in no sense redundant.
 
 ## Impact
 - Affected specs:
@@ -62,18 +81,24 @@ we pull what we can read; whether every consumer uses it today is secondary.
   - `web-telemetry` — **ADDED** `ECU Electrical and Air Telemetry` (new JSON fields + CAN-card
     display + i18n parity).
   - `mavlink-interface` — **MODIFIED** `Vehicle State Reporting via Standard MAVLink Messages`
-    (`EFI_STATUS` field mapping for intake temp and module voltage).
+    (`EFI_STATUS` field mapping for intake temp and module voltage; `EFI_STATUS.throttle_out` and
+    `VFR_HUD.throttle` populated with measured TPS, with a commanded-throttle fallback for
+    `VFR_HUD`).
 - Affected code: `include/CANController.h`, `src/CANController.cpp` (PID constants, poll table,
   `VehicleData` fields, `parseAndStore`), `include/WebPortal.h`, `src/WebPortal.cpp`
   (`Telemetry` struct + `createTelemetryJSON`), `src/TelemetryManager.cpp` (field copy),
   `include/MavlinkInterface.h` + `src/MavlinkInterface.cpp` (`StateReport` fields + `EFI_STATUS`
-  pack call), `data/index.html` (CAN card readouts + en/uk i18n keys).
+  and `VFR_HUD` pack calls), `include/ThrottleController.h` + `src/ThrottleController.cpp`
+  (µs → percent accessor), `include/VehicleController.h` (commanded-throttle percent getter),
+  `src/main.cpp` (`StateReport` population), `data/index.html` (CAN card readouts + en/uk i18n
+  keys).
 - Deployment note: updating `data/index.html` requires `pio run -t uploadfs` (LittleFS upload);
   a firmware flash alone does not update the web UI.
 - **Ground-station note**: the Mission Planner plugin decodes `EFI_STATUS` by packet
   subscription (see `include/Constants.h:252-256`). The two new fields are additive — existing
   decodes are untouched — but the plugin must be extended before the values are visible in the
-  GCS. That plugin work is outside this repository and outside this change.
+  GCS. That plugin work is outside this repository and outside this change. `VFR_HUD.throttle` is
+  the exception: it is a standard HUD field the GCS already renders, so it needs no plugin work.
 
 ## Sequencing with active changes
 Spec deltas apply to `openspec/specs/` **as they exist today**, so ordering matters where two

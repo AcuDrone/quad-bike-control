@@ -87,6 +87,9 @@ public:
         uint8_t throttle_position; // Throttle position % (0-100)
         uint8_t fuel_level;       // Fuel tank level % (0-100)
         uint8_t map_kpa;          // Manifold absolute pressure, kPa (0-255)
+        uint16_t module_voltage_mv; // Control module supply voltage, mV
+        int8_t intake_temp;       // Intake air temperature °C (-40 to +215)
+        uint8_t engine_load;      // Calculated engine load % (0-100)
         String can_status;        // CAN status: "connected", "disconnected"
 
         // MAVLink command channel + link data

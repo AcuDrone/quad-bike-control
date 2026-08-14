@@ -244,6 +244,12 @@ void MavlinkInterface::report(const StateReport& state) {
     //                                 [R, N, H, L] = [-1, 0, 1, 2]; while the servo moves between
     //                                 two gears the value is their MIDPOINT (0.5 staircase),
     //                                 settling on the integer. (Sensorless, time-based ASSUMED gear.)
+    //   intake_manifold_temperature -> intake air temperature (°C, PID 0x0F)
+    //   ignition_voltage           -> control module supply voltage (V, PID 0x42)
+    //   throttle_out               -> MEASURED throttle position (%, PID 0x11). throttle_position
+    //                                 is left unused: one value is not duplicated into two fields.
+    // The ECU's own calculated engine load (PID 0x04) is deliberately NOT carried here — engine_load
+    // is taken by GEAR, and a mis-signposted field is worse than an absent one. It stays web-only.
     // ArduPilot won't surface a peripheral's EFI in MP's native efi_* fields, but the raw packet
     // IS delivered, so the plugin's subscription receives it cleanly. RPM/coolant are NaN while
     // CAN data is invalid (so the plugin shows "--" instead of misleading zeros).
@@ -255,6 +261,11 @@ void MavlinkInterface::report(const StateReport& state) {
             : encodeGear(state.gearTo);
         float rpmVal = state.canValid ? (float)state.engineRpm  : NAN;
         float chtVal = state.canValid ? (float)state.coolantTemp : NAN;
+        float iatVal = state.canValid ? (float)state.intakeTemp : NAN;
+        float voltVal = state.canValid ? (state.moduleVoltageMv / 1000.0f) : NAN;
+        // MEASURED throttle only: EFI_STATUS reports ECU truth, so a commanded value is
+        // never substituted here (VFR_HUD.throttle carries that fallback instead).
+        float thrVal = state.canValid ? (float)state.throttlePosition : NAN;
         // Digital output states packed as a bitmask (see EFI_DIGITAL_FLAG_* in Constants.h):
         // bit0 = wheel lock, bit1 = front light. Always valid (relay ground-truth), never NaN.
         float flagsVal = (float)state.digitalFlags;
@@ -266,29 +277,40 @@ void MavlinkInterface::report(const StateReport& state) {
             rpmVal,     // rpm
             0.0f, 0.0f, // fuel_consumed, fuel_flow
             gearVal,    // engine_load  <- GEAR
-            0.0f, 0.0f, 0.0f, 0.0f, 0.0f, // throttle_position, spark_dwell, baro, intake_press, intake_temp
+            0.0f, 0.0f, 0.0f, 0.0f, // throttle_position, spark_dwell, baro, intake_press
+            iatVal,     // intake_manifold_temperature  <- INTAKE AIR TEMP
             chtVal,     // cylinder_head_temperature  <- coolant
             0.0f, 0.0f, // ignition_timing, injection_time
-            0.0f, 0.0f, // exhaust_gas_temperature, throttle_out
+            0.0f,       // exhaust_gas_temperature
+            thrVal,     // throttle_out  <- MEASURED TPS
             flagsVal,   // pt_compensation  <- DIGITAL FLAGS bitmask
-            0.0f, 0.0f); // ignition_voltage, fuel_pressure
+            voltVal,    // ignition_voltage  <- MODULE VOLTAGE
+            0.0f);      // fuel_pressure
         uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
         serial_->write(buf, len);
 
         // Ground speed from the hall speed sensor, in the standard VFR_HUD field the GCS
         // already graphs for a MAV_TYPE_GROUND_ROVER (no custom NAMED_VALUE_FLOAT needed).
         // Its validity is the SENSOR's, independent of CAN health; a stale/invalid reading
-        // is reported as 0 rather than presented as genuine motion. The remaining VFR_HUD
-        // fields are zero: this component has no airspeed, heading or altitude source.
+        // is reported as 0 rather than presented as genuine motion.
+        //
+        // throttle is MEASURED TPS while CAN is valid, falling back to the COMMANDED
+        // (arbitrated servo) percent when it is not: the field is a uint16_t percent with no
+        // NaN or "unknown" encoding, and a HUD bar frozen at 0 while the operator is holding
+        // throttle misleads in the more dangerous direction. The substitution is never
+        // ambiguous — EFI_STATUS.throttle_out reads NaN in this same tick exactly when the
+        // fallback is in use, so a consumer can always tell measured from commanded.
+        // airspeed, heading, alt and climb remain zero: no source on this component.
         float groundSpeedMs = (state.speedValid && state.speedKmh > 0.0f)
             ? (state.speedKmh / 3.6f)
             : 0.0f;
+        uint16_t throttlePct = state.canValid ? state.throttlePosition : state.throttleCmdPct;
         mavlink_msg_vfr_hud_pack(
             MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &msg,
             0.0f,           // airspeed
             groundSpeedMs,  // groundspeed (m/s)  <- HALL SPEED SENSOR
             0,              // heading
-            0,              // throttle
+            throttlePct,    // throttle (%)  <- MEASURED TPS, else COMMANDED
             0.0f, 0.0f);    // alt, climb
         len = mavlink_msg_to_send_buffer(buf, &msg);
         serial_->write(buf, len);

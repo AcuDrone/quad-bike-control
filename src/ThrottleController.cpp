@@ -34,6 +34,17 @@ uint16_t ThrottleController::percentToUs(float pct) const {
     return (uint16_t)((int32_t)idleUs_ + (int32_t)(((int32_t)fullUs_ - (int32_t)idleUs_) * (pct / 100.0f)));
 }
 
+uint8_t ThrottleController::usToPercent(uint16_t us) const {
+    // Degenerate window (never produced by saveCalibration()/loadCalibration(), both of
+    // which enforce THROTTLE_MIN_SPAN_US) — report 0 rather than divide by zero.
+    if (fullUs_ == idleUs_) return 0;
+    int32_t pct = ((int32_t)us - (int32_t)idleUs_) * 100 /
+                  ((int32_t)fullUs_ - (int32_t)idleUs_);
+    if (pct < 0) pct = 0;       // servo below the calibrated idle endpoint
+    if (pct > 100) pct = 100;
+    return (uint8_t)pct;
+}
+
 void ThrottleController::setThrottlePercent(float pct) {
     if (calibrating_) return;
     servo_.setMicroseconds(percentToUs(pct));

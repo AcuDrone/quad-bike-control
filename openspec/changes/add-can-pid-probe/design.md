@@ -187,7 +187,7 @@ throttle position, 0x4D time run with MIL on.
 |-----|---------|-----------|----------|---------------|-------|
 | 0x04 | Calculated engine load | yes | yes | 0.00 % | expected with engine off |
 | 0x0B | MAP (absolute) | yes | yes | 101 kPa | atmospheric — plausible, engine off |
-| 0x0D | Vehicle speed | yes | yes | 0 km/h | **SUPPORTED** — see below |
+| 0x0D | Vehicle speed | yes | yes | 0 km/h | answered but **always 0, even in motion** — see below |
 | 0x0E | Timing advance | yes | yes | 0.0° | expected with engine off |
 | 0x0F | Intake air temp | yes | yes | 29 °C | plausible ambient |
 | 0x14 | O2 sensor B1S1 | yes | yes | 0.41 V | plausible unheated/cold |
@@ -207,13 +207,17 @@ single classic frame), so the documented multi-frame limitation remains untested
 
 ### Correction to an earlier assumption: 0x0D vehicle speed
 
-This change assumed 0x0D was dash-wired only and absent from the ECU. **That assumption is wrong**
-— 0x0D is both in the bitmap and answered (0 km/h, correct for a stationary bench). Caveat: a
-stationary vehicle cannot distinguish "supported and reading zero" from "supported but always
-returns zero because no speed source is wired to the ECU". **0x0D MUST be re-verified while the
-vehicle is actually moving before any consumer trusts it** — this is a prerequisite for the future
-change described below, and for the `add-hall-speed-sensor` change, which should not be assumed
-redundant on the strength of this bench result.
+This change assumed 0x0D was dash-wired only and absent from the ECU. That was only half wrong:
+0x0D *is* in the bitmap and *does* answer (0 km/h on the stationary bench), so the PID is not
+absent — but the original dash-wired reasoning was functionally correct about the data.
+
+**Follow-up verified 2026-08-14 (bench, user-verified, wheel in motion): 0x0D reports 0 at all
+times, including while the wheel is turning.** The ECU answers the request but has no
+vehicle-speed sensor input on this vehicle — the speedometer is dash-wired and never reaches the
+ECU — so the value is permanently 0 and carries no data. 0x0D is therefore **dead** and MUST NOT
+be adopted by any consumer. The hall speed sensor (GPIO8 / X2, `add-hall-speed-sensor`) remains
+the only speed source on this vehicle; it is not redundant and there is nothing further to wire
+or verify for 0x0D.
 
 ### Environment notes (operational, not part of the probe result set)
 
@@ -231,7 +235,8 @@ redundant on the strength of this bench result.
 Per this change's Non-Goals, no additional PIDs are enabled by this change. The evidence above
 makes these safe candidates for a follow-up change: 0x42 module voltage, 0x0F IAT, 0x04 load,
 0x0E timing advance, and 0x14 O2 B1S1 (all answered with plausible values). 0x0D vehicle speed is
-a candidate **only after** a moving-vehicle verification. 0x2F fuel level and 0x5C oil temp are
+**not** a candidate — the moving-vehicle verification came back always-0 (see above), so it must
+stay disabled alongside the confirmed-absent PIDs. 0x2F fuel level and 0x5C oil temp are
 confirmed unavailable and must stay disabled — 0x2F is already commented out in
 `include/CANController.h` / `src/CANController.cpp`, and this result retroactively justifies that.
 
@@ -240,7 +245,10 @@ confirmed unavailable and must stay disabled — 0x2F is already commented out i
   bench probe transcript before a future change enables them.~~ **Resolved 2026-08-14**: the ECU
   exposed no non-standard PIDs — every PID it reported is a standard SAE J1979 PID decoding with
   the standard formula (see "Probe results" above).
-- Does 0x0D vehicle speed return a real value while the vehicle is moving, or is it always 0
-  because no speed source reaches the ECU? Requires a road/rolling test; blocks enabling 0x0D.
+- ~~Does 0x0D vehicle speed return a real value while the vehicle is moving, or is it always 0
+  because no speed source reaches the ECU? Requires a road/rolling test; blocks enabling 0x0D.~~
+  **Resolved 2026-08-14** (bench, user-verified, wheel in motion): always 0 — the ECU answers the
+  PID but has no vehicle-speed input on this vehicle, so it carries no data. 0x0D stays disabled
+  permanently; the hall speed sensor (GPIO8/X2) is the only speed source.
 - Does 0x0B MAP track manifold vacuum with the engine actually running? The engine-off reading
   (101 kPa atmospheric) is plausible but does not prove the ECU updates it dynamically (task 8.3).

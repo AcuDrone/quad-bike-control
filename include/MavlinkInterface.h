@@ -55,6 +55,10 @@ public:
         uint8_t     digitalFlags;   // digital output bitmask (EFI_DIGITAL_FLAG_* in Constants.h)
         bool        speedValid;     // hall speed sensor health (independent of canValid)
         float       speedKmh;       // hall-sensor ground speed, km/h (reported as VFR_HUD groundspeed)
+        int8_t      intakeTemp;     // intake air temperature °C (ECU PID 0x0F)
+        uint16_t    moduleVoltageMv; // control module supply voltage, mV (ECU PID 0x42)
+        uint8_t     throttlePosition; // MEASURED throttle position, % (ECU PID 0x11)
+        uint8_t     throttleCmdPct;   // COMMANDED (arbitrated) throttle, % 0-100 — servo output
         // Note: oil temperature is not available from the ECU and is not reported.
         // Ground speed is NOT carried in EFI_STATUS — it comes from the hall speed
         // sensor and is reported separately via VFR_HUD.

@@ -85,6 +85,9 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
         telemetry.throttle_position = vehicleData.throttlePosition;
         telemetry.fuel_level = vehicleData.fuelLevel;
         telemetry.map_kpa = vehicleData.mapKpa;
+        telemetry.module_voltage_mv = vehicleData.moduleVoltageMv;
+        telemetry.intake_temp = vehicleData.intakeTemp;
+        telemetry.engine_load = vehicleData.engineLoad;
         telemetry.can_status = "connected";
     } else {
         telemetry.engine_rpm = 0;
@@ -93,6 +96,9 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
         telemetry.throttle_position = 0;
         telemetry.fuel_level = 0;
         telemetry.map_kpa = 0;
+        telemetry.module_voltage_mv = 0;
+        telemetry.intake_temp = 0;
+        telemetry.engine_load = 0;
         telemetry.can_status = "disconnected";
     }
 

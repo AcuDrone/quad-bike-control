@@ -5,7 +5,8 @@ The system SHALL report vehicle state back to the MAVLink network using standard
 a fixed schedule. Engine data is sourced from the CAN `VehicleData`; vehicle ground speed is sourced
 from the hall-effect speed sensor and reported via `VFR_HUD`. Additional ECU sensor values SHALL be
 carried only in `EFI_STATUS` fields that are semantically appropriate and not already assigned to
-another value.
+another value. Where a value can be either measured by the ECU or commanded by the controller, the
+reported value SHALL be unambiguous as to which of the two it is.
 
 #### Scenario: Emit heartbeat
 - **WHEN** the heartbeat interval elapses (1 Hz)
@@ -31,6 +32,38 @@ another value.
   `ignition_voltage` field, in volts
 - **AND** both fields were previously transmitted as unused zeros, so no existing value is displaced
 
+#### Scenario: Report measured throttle position in EFI_STATUS
+- **WHEN** the engine-telemetry interval elapses
+- **AND** CAN `VehicleData` is valid
+- **THEN** the `EFI_STATUS` message SHALL carry the ECU-measured throttle position (OBD-II PID
+  `0x11`) in the `throttle_out` field, as a percentage
+- **AND** the field was previously transmitted as an unused zero, so no existing value is displaced
+- **AND** the value SHALL be the measured position only — a commanded throttle value SHALL NOT be
+  substituted into `EFI_STATUS`, which reports ECU measurements
+
+#### Scenario: Report throttle percent in VFR_HUD
+- **WHEN** the engine-telemetry interval elapses
+- **AND** CAN `VehicleData` is valid
+- **THEN** the `VFR_HUD` message SHALL carry the ECU-measured throttle position in its `throttle`
+  field, as an integer percentage in the range 0-100
+- **AND** the GCS SHALL be able to display it on the standard HUD throttle indicator without any
+  ground-station plugin change
+
+#### Scenario: Fall back to commanded throttle in VFR_HUD when CAN data is invalid
+- **WHEN** the engine-telemetry interval elapses
+- **AND** CAN `VehicleData` is invalid or stale, so no measured throttle position is available
+- **THEN** `VFR_HUD.throttle` SHALL carry the commanded throttle percentage — the value the throttle
+  servo is actually being driven with — rather than 0, because the field is an unsigned integer
+  percentage with no `NaN` or "unknown" encoding and a HUD reading 0 % while throttle is applied is
+  misleading
+- **AND** the commanded value SHALL be the arbitrated output actually applied to the servo
+  (autopilot command, web command, gear-change boost override, speed-limit cap, or fail-safe idle),
+  not the raw command of any single input source
+- **AND** `EFI_STATUS.throttle_out` SHALL read `NaN` in the same reporting tick, so a consumer can
+  tell unambiguously that the `VFR_HUD` value is commanded rather than measured
+- **AND** `VFR_HUD` SHALL NOT be suppressed for that tick, since its ground-speed field is governed
+  by the hall sensor's own validity, independent of CAN validity
+
 #### Scenario: Preserve existing EFI_STATUS field assignments
 - **WHEN** additional ECU values are mapped into `EFI_STATUS`
 - **THEN** the `engine_load` field SHALL continue to carry the encoded GEAR value and SHALL NOT be
@@ -38,6 +71,9 @@ another value.
 - **AND** the `pt_compensation` field SHALL continue to carry the digital-output bitmask
 - **AND** any ECU value without a free, semantically appropriate field SHALL be omitted from MAVLink
   rather than mapped onto a mismatched field
+- **AND** a value already carried in one `EFI_STATUS` field SHALL NOT be duplicated into a second
+  field of the same message (the measured throttle position is carried by `throttle_out` only;
+  `throttle_position` remains unused)
 
 #### Scenario: Report vehicle speed via VFR_HUD
 - **WHEN** the engine-telemetry interval elapses
@@ -77,5 +113,7 @@ another value.
 - **AND** the `intake_manifold_temperature` and `ignition_voltage` fields SHALL be reported as `NaN`
   (matching the existing `rpm` / `cylinder_head_temperature` convention) so a ground station shows
   "no data" rather than a misleading 0 °C / 0 V
+- **AND** the `throttle_out` field SHALL likewise be reported as `NaN`, while `VFR_HUD.throttle`
+  falls back to the commanded throttle percentage
 - **AND** `VFR_HUD` ground-speed reporting is governed by the hall sensor's own validity, independent
   of CAN validity

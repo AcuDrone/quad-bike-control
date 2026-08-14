@@ -25,6 +25,9 @@ public:
         uint8_t throttlePosition;   // % (0-100)
         uint8_t fuelLevel;          // % (0-100)
         uint8_t mapKpa;             // Manifold absolute pressure, kPa absolute (0-255)
+        uint16_t moduleVoltageMv;   // Control module supply voltage, mV (raw (A*256)+B is already mV)
+        int8_t intakeTemp;          // Intake air temperature °C (-40 to +215)
+        uint8_t engineLoad;         // Calculated engine load % (0-100)
         uint32_t lastUpdateTime;    // millis() timestamp of last successful update
         bool dataValid;             // true if CAN communication is healthy
     };
@@ -154,7 +157,7 @@ private:
         uint8_t retryCount;
     };
 
-    static constexpr uint8_t PID_COUNT = 4;
+    static constexpr uint8_t PID_COUNT = 7;
 
     // OBD-II PIDs (Mode 01 - Current Data)
     static constexpr uint8_t PID_ENGINE_RPM = 0x0C;
@@ -163,6 +166,9 @@ private:
     // static constexpr uint8_t PID_OIL_TEMP = 0x5C;
     static constexpr uint8_t PID_THROTTLE_POS = 0x11;
     static constexpr uint8_t PID_MAP = 0x0B;
+    static constexpr uint8_t PID_MODULE_VOLTAGE = 0x42;
+    static constexpr uint8_t PID_INTAKE_TEMP = 0x0F;
+    static constexpr uint8_t PID_ENGINE_LOAD = 0x04;
     // static constexpr uint8_t PID_FUEL_LEVEL = 0x2F;
 
     MCP_CAN* mcp_can_;              // MCP2515 CAN controller object

@@ -88,12 +88,12 @@
   number of revolutions; confirm the pulse count and that `vehicle_speed` tracks the input.
   DONE 2026-08-14 — 5 full wheel revolutions on the vehicle produced **347 pulses** (≈69.4/rev),
   confirming the pulse path end-to-end (sensor → X2 opto → GPIO8 → PCNT).
-- [ ] 9.2 **[USER/MANUAL]** Calibrate: measure the tyre circumference and determine pulses/rev, set
+- [x] 9.2 **[USER/MANUAL]** Calibrate: measure the tyre circumference and determine pulses/rev, set
   both via the web UI (`speed_cal_*`), and confirm the displayed km/h is plausible against a known
   reference (e.g. GPS speed at a steady pace).
-  PARTIAL 2026-08-14 — both values **measured** (69 pulses/rev; roll-out 1990 mm on the 25" tyre) and
-  shipped as the `Constants.h` defaults. Still open: setting/overriding them from the web UI and the
-  moving GPS cross-check.
+  DONE 2026-08-14 — values measured (69.4 pulses/rev over 5 revs, roll-out 1990 mm) and shipped as
+  Constants.h defaults (70 ppr per user decision — round tooth count); web-UI set/override tested OK
+  by the user.
 - [ ] 9.3 **[USER/MANUAL]** Verify the live interlock: above ~5 km/h a non-NEUTRAL gear change is
   blocked and logged; at rest it is allowed.
 - [ ] 9.4 **[USER/MANUAL]** Enable the limiter with a low test max speed and confirm throttle
