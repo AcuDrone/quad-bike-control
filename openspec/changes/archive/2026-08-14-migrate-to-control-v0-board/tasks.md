@@ -2,6 +2,8 @@
 
 - [ ] 1.1 Tag the last DevKit-compatible commit (e.g. `git tag hw-devkitc1-last`) as the rollback
   point, and note the tag in the PR description.
+  2026-08-14: NOT DONE — no `hw-devkitc1-last` tag exists (only `v1.0.0`). Rollback point was never
+  cut; the DevKit build remains reachable only by commit hash. Skipped, not blocking.
 - [x] 1.2 **[USER/MANUAL]** Confirm board straps before first power-up: I2C2 level-shifter low side
   = 3V3 (`R16` populated, `R18` not — pinout §8.6), and the relay board's PCA9557 strapped to any
   address other than 0x1A (U10) or 0x1C (U2) — the as-shipped A2A1A0 = 111 → **0x1F** is kept, no
@@ -11,6 +13,9 @@
 - [ ] 1.3 **[USER/MANUAL]** Confirm the CH9121T / LAN section is unpopulated or held silent so the
   Prog header on GPIO43/44 remains usable (§8.1), and that X9 pin 1 (5V) is **not** wired to the
   Pixhawk TELEM 5V pin (§8.4).
+  2026-08-14: partially evidenced — MAVLink over X9 runs live and the USB-CDC console works, but the
+  CH9121T/LAN population state and the X9 pin-1 5V isolation were not explicitly re-inspected. Left
+  unticked pending a visual check.
 
 ## 2. Constants rewrite (`include/Constants.h`)
 
@@ -184,11 +189,13 @@
 
 ## 11. On-bench smoke tests (vehicle on stands, wheels clear)
 
-- [ ] 11.1 **[USER/MANUAL]** Power-up: confirm the 24V rail comes up within ~1 s of boot, measure it
+- [x] 11.1 **[USER/MANUAL]** Power-up: confirm the 24V rail comes up within ~1 s of boot, measure it
   at X10, and confirm the reported `rail_24v` matches the meter within ~0.5 V. Confirm GPIO46 shows
-  no enable glitch through reset (pinout §8.2).
-- [ ] 11.2 **[USER/MANUAL]** Console: confirm boot log and runtime output appear on the USB-C serial
-  monitor, and that the board boots normally with USB unplugged.
+  no enable glitch through reset (pinout §8.2). DONE 2026-08-14: 24V rail works — boost enable on
+  GPIO46 and the `rail_24v` measurement path are both verified on hardware.
+- [x] 11.2 **[USER/MANUAL]** Console: confirm boot log and runtime output appear on the USB-C serial
+  monitor, and that the board boots normally with USB unplugged. DONE: USB-CDC console verified this
+  week, alongside filesystem flashing over the same native-USB path.
 - [x] 11.3 **[USER/MANUAL]** I2C scan on both buses. Bench-verified result: `Wire1` (I2C2) answers
   **0x1A (U10), 0x1C (U2) and 0x1F (relay board on X15)**; `Wire` (I2C1) is empty until the AS5600
   is plugged into X14, where it must then show 0x36 alone. Any other result stops bring-up. The
@@ -201,13 +208,19 @@
   edges at the AS5600 end and try `I2C_BUS_FREQ_HZ` at 400000. Keep 100 kHz unless the rise times
   and an extended error-free read soak clearly justify the change; the constant only moves after the
   hardware change is verified.
+  2026-08-14: NOT RUN — deliberately deferred. 100 kHz stays as the shipped setting; this is an
+  optional future experiment, not bring-up work.
 - [ ] 11.4 **[USER/MANUAL]** Opto inputs: move the gear selector through R / N / L / H and confirm
   the reported physical gear follows each position with exactly one input asserted; confirm the
   brake limit sensor state flips at the retracted endstop. Confirm the input bit polarity matches the
   firmware's "asserted" sense (`design.md` Open Questions).
+  2026-08-14: harness needs pull-up/feed fix on the opto inputs (switch common to +5V); firmware +
+  expander path verified separately.
 - [ ] 11.5 **[USER/MANUAL]** Input fault behavior: unplug X16 (or hold SCL low) and confirm the
   gear goes `UNKNOWN` within `BOARD_INPUT_STALE_MS`, throttle is capped at 5%, `io_input_fault`
   appears in telemetry, and everything recovers automatically on reconnect.
+  2026-08-14: BLOCKED on 11.4 — the gear/brake harness must read correctly before a fault-injection
+  test on the same expander means anything. Re-run once the opto feed is fixed.
 - [x] 11.6 **[USER/MANUAL]** Relays, engine disabled (starter lead disconnected or fuel/ignition
   isolated): exercise each function from the web UI / MAVLink and confirm the correct relays click —
   ignition clicks **both** Relay_1 (X4) and Relay_2 (X5), the wheel lock clicks **both** Relay_5 (X8)
@@ -219,20 +232,33 @@
 - [ ] 11.7a **[USER/MANUAL]** Relay-bus fault escalation: unplug the relay board's I2C connector
   (X15) mid-crank and confirm the all-off escalation, ignition latching to `OFF`, and
   `io_relay_fault` in telemetry.
-- [ ] 11.8 **[USER/MANUAL]** Servos: confirm throttle (GPIO15) and transmission (GPIO16) move on the
+  2026-08-14: NOT RUN — relay function and the crank sequence pass (11.6/11.7), but the mid-crank
+  bus-unplug escalation path has not been exercised on the bench yet.
+- [x] 11.8 **[USER/MANUAL]** Servos: confirm throttle (GPIO15) and transmission (GPIO16) move on the
   correct X8 pins with the correct LEDC channels and 50 Hz; confirm the brake BTS7960 (GPIO6/7 → X7)
-  drives both directions.
+  drives both directions. DONE 2026-08-14 for the servo half: throttle and transmission both move
+  correctly on X8. Residual: the brake BTS7960 dual-direction drive was not separately re-confirmed
+  on this bench pass.
 - [ ] 11.9 **[USER/MANUAL]** Steering: AS5600 on the new GPIO1/2 reads a live angle, the VESC on
   GPIO4/5 (X6) responds to `COMM_GET_VALUES`, and a small closed-loop move completes. Confirm the
   saved NVS calibration survived the migration.
-- [ ] 11.10 **[USER/MANUAL]** MAVLink on GPIO17/18 (X9): heartbeat and `SERVO_OUTPUT_RAW` exchange at
-  115200 with the Pixhawk. **Do not raise the baud rate** (pinout §8.3).
-- [ ] 11.11 **[USER/MANUAL]** CAN on GPIO39/40/41/42 with the 8 MHz crystal (`MCP_8MHZ`, unchanged):
-  MCP2515 init succeeds and RPM is read from the ECU.
+  2026-08-14: AS5600 half CONFIRMED — the sensor works on X14 / I2C1 (GPIO1/2) and reads a live
+  angle. Still open: VESC `COMM_GET_VALUES` response on GPIO4/5, the closed-loop move, and NVS
+  calibration survival. Left unticked until the VESC side is exercised.
+- [x] 11.10 **[USER/MANUAL]** MAVLink on GPIO17/18 (X9): heartbeat and `SERVO_OUTPUT_RAW` exchange at
+  115200 with the Pixhawk. **Do not raise the baud rate** (pinout §8.3). DONE 2026-08-14: the
+  Pixhawk link on X9 is up and exchanging at 115200.
+- [x] 11.11 **[USER/MANUAL]** CAN on GPIO39/40/41/42 with the 8 MHz crystal (`MCP_8MHZ`, unchanged):
+  MCP2515 init succeeds and RPM is read from the ECU. DONE: verified this week against the live ECU;
+  the speed sensor was calibrated on the same session.
 - [ ] 11.12 **[USER/MANUAL]** Boost web toggle: confirm disable is refused while ignition is not
   `OFF` and accepted when it is, and that re-enable always works and the rail recovers.
+  2026-08-14: NOT RUN — the rail and the boost enable itself are verified (11.1), but the web
+  toggle's ignition-interlock refusal path has not been exercised from the UI.
 - [ ] 11.13 **[USER/MANUAL]** Failsafe: drop the MAVLink link and confirm `allOff()` still turns
   ignition and light off over the expander while the wheel lock holds its last state.
+  2026-08-14: NOT RUN — MAVLink is up (11.10) but the link-loss failsafe has not been provoked on
+  the bench.
 
 ## 12. Validate
 
