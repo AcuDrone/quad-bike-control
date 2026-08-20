@@ -18,6 +18,10 @@ static const uint8_t kProbeCandidates[CANController::PROBE_CANDIDATE_COUNT] = {
 // Supported-PID bitmap group request PIDs (Mode 01)
 static const uint8_t kBitmapGroups[4] = {0x00, 0x20, 0x40, 0x60};
 
+// CANCTRL.ABAT (bit 4). mcp_can_dfs.h names the register (MCP_CANCTRL) but none of its
+// bits, so the abort-request bit is spelled out here.
+static constexpr uint8_t MCP_CANCTRL_ABAT = 0x10;
+
 CANController::CANController()
     : mcp_can_(nullptr),
       initialized_(false),
@@ -27,6 +31,7 @@ CANController::CANController()
       lastHealthLogTime_(0),
       lastOverflowLogTime_(0),
       rxOverflowSuppressed_(0),
+      lastReinitTime_(0),
       state_(OBDState::IDLE),
       activePIDIndex_(0),
       requestSentTime_(0),
@@ -160,6 +165,8 @@ bool CANController::begin(gpio_num_t csPin, gpio_num_t sckPin, gpio_num_t mosiPi
     // time is meaningful, so any offset baked in there is already in the past by the
     // time begin() completes.
     uint32_t staggerBase = millis();
+    // No response has arrived yet, so the no-data watchdog measures from here.
+    lastReinitTime_ = staggerBase;
     pidTable_[4].nextPollTime = staggerBase + 150;
     pidTable_[5].nextPollTime = staggerBase + 300;
     pidTable_[6].nextPollTime = staggerBase + 450;
@@ -201,6 +208,26 @@ void CANController::update() {
                 break;  // Nothing due yet
             }
 
+            // Requests are going out but nothing is coming back: re-initialize the chip.
+            // Covers a wedged TX (latched ABAT, stuck TXB) that reports success on every
+            // send, and the boot case where the ECU was off and no response ever arrived —
+            // measured from begin()/the last re-init until the first response lands.
+            // Rate-limited so a genuinely absent ECU costs one re-init per interval.
+            uint32_t now = millis();
+            uint32_t noDataFor = (vehicleData_.lastUpdateTime != 0)
+                                     ? (now - vehicleData_.lastUpdateTime)
+                                     : (now - lastReinitTime_);
+            if (noDataFor >= CAN_REINIT_NO_DATA_MS &&
+                (now - lastReinitTime_) >= CAN_REINIT_MIN_INTERVAL_MS) {
+                Debug::printfFeature(DebugFeature::CAN,
+                    "[CAN] No data for %lus, re-initializing controller\n",
+                    (unsigned long)(noDataFor / 1000));
+                recoverFromBusOff();
+                lastReinitTime_ = millis();
+                state_ = OBDState::IDLE;
+                break;  // resume polling on the next iteration, from a freshly configured chip
+            }
+
             if (sendOBDRequest(pidTable_[index].pid)) {
                 activePIDIndex_ = index;
                 requestSentTime_ = millis();
@@ -220,8 +247,12 @@ void CANController::update() {
                 // once the failures stack up, so the next poll starts from a clean slate.
                 if (++consecutiveSendFailures_ >= CAN_MAX_CONSEC_SEND_FAILURES) {
                     mcp_can_->abortTX();
+                    // abortTX() only sets CANCTRL.ABAT and never clears it; left latched the
+                    // chip silently aborts every later transmission while sendMsgBuf() still
+                    // reports CAN_OK, so the latch must be released here.
+                    modifyRegister(MCP_CANCTRL, MCP_CANCTRL_ABAT, 0x00);
                     Debug::printfFeature(DebugFeature::CAN,
-                        "[CAN] Aborted stuck TX buffers after %d consecutive send failures\n",
+                        "[CAN] Aborted stuck TX buffers after %d consecutive send failures (ABAT cleared)\n",
                         consecutiveSendFailures_);
                     consecutiveSendFailures_ = 0;
                 }

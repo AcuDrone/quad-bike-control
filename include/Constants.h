@@ -484,6 +484,8 @@ enum class InputSource {
 #define CAN_RX_LOG_INTERVAL          1000  // ms - rate limit for unmatched-RX-frame logging
 #define CAN_HEALTH_LOG_INTERVAL      5000  // ms - rate limit for TEC/REC/EFLG health logging
 #define CAN_OVERFLOW_LOG_INTERVAL    5000  // ms - rate limit for RXnOVR overflow logging
+#define CAN_REINIT_NO_DATA_MS        15000 // ms - full chip re-init when polling but no valid OBD response for this long (heals a wedged TX / latched ABAT once the ECU powers up)
+#define CAN_REINIT_MIN_INTERVAL_MS   15000 // ms - minimum spacing between forced re-inits
 
 // MCP2515 hardware acceptance filtering (standard 11-bit IDs only).
 // The ECU floods the bus with broadcast frames (Delphi MT05 sends 0x301 etc.) which

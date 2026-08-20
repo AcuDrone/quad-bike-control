@@ -182,6 +182,7 @@ private:
     uint32_t lastHealthLogTime_;      // millis() of the last TEC/REC/EFLG health log (rate limit)
     uint32_t lastOverflowLogTime_;    // millis() of the last RXnOVR log (rate limit)
     uint32_t rxOverflowSuppressed_;   // RXnOVR clears since the last overflow log line
+    uint32_t lastReinitTime_;         // millis() of the last forced re-init (also the boot reference before any response)
 
     // State machine
     OBDState state_;
