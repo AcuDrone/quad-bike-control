@@ -122,17 +122,28 @@
 #define PCA9557_ADDR_RELAYS        0x1F  // External relay board
 #define PCA9557_ADDR_MUX_RESERVED  0x1C  // On-board CD4051 mux control U2 (I2C2) — NEVER addressed
 
-// Opto-isolated input bit indices on PCA9557 U10 (In1..In8 = bits 0..7).
-// In6-In8 are wired to X17 but have no firmware function.
-#define BOARD_IN_BIT_GEAR_REVERSE  0     // In1 (X16)
-#define BOARD_IN_BIT_GEAR_NEUTRAL  1     // In2 (X16)
-#define BOARD_IN_BIT_GEAR_LOW      2     // In3 (X16)
-#define BOARD_IN_BIT_GEAR_HIGH     3     // In4 (X16)
+// Opto-isolated input bit indices on PCA9557 U10.
+//
+// ⚠ The In1..In8 = bits 0..7 assumption taken from the schematic is WRONG for the
+//   gear channels — the routing is not 1:1, same story as the relay board above.
+//   Bench-verified 2026-08-21 by sweeping the gear lever with a live raw dump:
+//     NEUTRAL = bit 0   REVERSE = bit 1   LOW = bit 6   HIGH = bit 7
+//   Observed port bytes: between positions 0x1C, R 0x1E, N 0x1D, L 0x5C, H 0x9C.
+//   Bits 2, 3 and 4 sat HIGH and bit 5 LOW throughout — none of them ever moved.
+//
+// ⚠ The gear channels are engaged-HIGH: every wired gear opto CONDUCTS at rest
+//   (pin LOW) and selecting a position OPENS exactly that one channel, so its pin
+//   goes HIGH. BOARD_INPUT_ACTIVE_LOW below therefore describes the brake input
+//   only — do NOT apply it to the four gear bits.
+#define BOARD_IN_BIT_GEAR_NEUTRAL  0     // X16 — engaged = HIGH
+#define BOARD_IN_BIT_GEAR_REVERSE  1     // X16 — engaged = HIGH
+#define BOARD_IN_BIT_GEAR_LOW      6     // X16 — engaged = HIGH
+#define BOARD_IN_BIT_GEAR_HIGH     7     // X16 — engaged = HIGH
 #define BOARD_IN_BIT_BRAKE_LIMIT   4     // In5 (X17) — brake "released" endstop
 
-// Opto input bit polarity. A PC817 that is conducting pulls its PCA9557 input
-// LOW, so an asserted input reads 0 — hence active-low by default. This is the
-// ONE place to flip if the bench check (task 11.4) shows the opposite sense.
+// Brake input bit polarity. A PC817 that is conducting pulls its PCA9557 input
+// LOW, so an asserted input reads 0 — hence active-low. NOT bench-verified: bit 4
+// never moved during the 2026-08-21 sweep, so this is still the schematic's sense.
 #define BOARD_INPUT_ACTIVE_LOW     1     // 1 = asserted input reads 0, 0 = asserted reads 1
 
 // Relay port masks on the relay board's PCA9557.

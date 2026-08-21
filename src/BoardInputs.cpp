@@ -8,6 +8,7 @@ BoardInputs::BoardInputs(TwoWire& bus)
     : expander_(bus, PCA9557_ADDR_INPUTS),
       snapshot_{false, false, false, false, false, false, 0},
       rawInputs_(0),
+      lastLoggedRaw_(0xFFFF),
       initialized_(false),
       faulted_(true),          // faulted until the first good read proves otherwise
       failureCount_(0),
@@ -22,8 +23,8 @@ bool BoardInputs::configureDevice() {
     if (!expander_.isPresent()) {
         return false;
     }
-    // All eight pins are inputs; no polarity inversion (the sense is applied in
-    // firmware via BOARD_INPUT_ACTIVE_LOW so there is exactly one place to flip).
+    // All eight pins are inputs; no polarity inversion in the device — the sense is
+    // applied in firmware by applyRaw() so there is exactly one place to flip.
     if (!expander_.setPolarityInversion(0x00)) {
         return false;
     }
@@ -96,6 +97,13 @@ void BoardInputs::update() {
             Debug::printfFeature(DebugFeature::VEHICLE,
                 "[IO] Opto inputs recovered (raw=0x%02X)\n", raw);
         }
+        if (lastLoggedRaw_ != (uint16_t)raw) {
+            lastLoggedRaw_ = raw;
+            Debug::printfFeature(DebugFeature::VEHICLE,
+                "[IO] raw=0x%02X (R:%d N:%d L:%d H:%d brake:%d)\n", raw,
+                snapshot_.gearReverse, snapshot_.gearNeutral, snapshot_.gearLow,
+                snapshot_.gearHigh, snapshot_.brakeReleased);
+        }
         return;
     }
 
@@ -143,12 +151,21 @@ bool BoardInputs::bitAsserted(uint8_t raw, uint8_t bit) {
 #endif
 }
 
+bool BoardInputs::bitHigh(uint8_t raw, uint8_t bit) {
+    return (raw >> bit) & 0x01;
+}
+
 void BoardInputs::applyRaw(uint8_t raw) {
     rawInputs_ = raw;
-    snapshot_.gearReverse   = bitAsserted(raw, BOARD_IN_BIT_GEAR_REVERSE);
-    snapshot_.gearNeutral   = bitAsserted(raw, BOARD_IN_BIT_GEAR_NEUTRAL);
-    snapshot_.gearLow       = bitAsserted(raw, BOARD_IN_BIT_GEAR_LOW);
-    snapshot_.gearHigh      = bitAsserted(raw, BOARD_IN_BIT_GEAR_HIGH);
+    // Gear channels are engaged-HIGH (each position OPENS its normally-conducting
+    // opto), so they are read as raw levels — BOARD_INPUT_ACTIVE_LOW is the brake's.
+    // This fails safe both ways: a lost opto feed floats every gear bit HIGH →
+    // multiple active → GEAR_UNKNOWN, and mid-shift all four read LOW → none
+    // active → GEAR_UNKNOWN.
+    snapshot_.gearReverse   = bitHigh(raw, BOARD_IN_BIT_GEAR_REVERSE);
+    snapshot_.gearNeutral   = bitHigh(raw, BOARD_IN_BIT_GEAR_NEUTRAL);
+    snapshot_.gearLow       = bitHigh(raw, BOARD_IN_BIT_GEAR_LOW);
+    snapshot_.gearHigh      = bitHigh(raw, BOARD_IN_BIT_GEAR_HIGH);
     snapshot_.brakeReleased = bitAsserted(raw, BOARD_IN_BIT_BRAKE_LIMIT);
     snapshot_.valid = true;
 }

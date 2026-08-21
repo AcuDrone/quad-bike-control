@@ -17,8 +17,9 @@
  * read the published snapshot and never issue I2C themselves, so a control-loop
  * read can never turn into a burst of blocking transactions.
  *
- * Input map: In1..In4 = gear REVERSE/NEUTRAL/LOW/HIGH, In5 = brake "released"
- * endstop, In6-In8 spare. Bit polarity is controlled by `BOARD_INPUT_ACTIVE_LOW`.
+ * Input map (bench-verified 2026-08-21, see Constants.h): port bits 0/1/6/7 =
+ * gear NEUTRAL/REVERSE/LOW/HIGH, engaged-HIGH; bit 4 = brake "released" endstop,
+ * polarity from `BOARD_INPUT_ACTIVE_LOW`. The remaining bits are spare.
  *
  * Fault policy (see the change's design.md, Decision 2):
  *  - a single failed read keeps the last-known snapshot and retries next poll;
@@ -31,11 +32,11 @@ class BoardInputs {
 public:
     /** @brief Immutable view of the input state published to consumers */
     struct Snapshot {
-        bool gearReverse;    // In1 asserted
-        bool gearNeutral;    // In2 asserted
-        bool gearLow;        // In3 asserted
-        bool gearHigh;       // In4 asserted
-        bool brakeReleased;  // In5 asserted — brake at its retracted endstop
+        bool gearReverse;    // bit 1 HIGH
+        bool gearNeutral;    // bit 0 HIGH
+        bool gearLow;        // bit 6 HIGH
+        bool gearHigh;       // bit 7 HIGH
+        bool brakeReleased;  // bit 4 asserted — brake at its retracted endstop
         bool valid;          // false once the data is stale (do not trust the bools)
         uint32_t ageMs;      // ms since the last successful read
     };
@@ -77,8 +78,11 @@ private:
     /** @brief Decode the raw port byte into the snapshot bools */
     void applyRaw(uint8_t raw);
 
-    /** @brief True when the given bit index is asserted in `raw` */
+    /** @brief True when the given bit index is asserted in `raw` (active-low inputs) */
     static bool bitAsserted(uint8_t raw, uint8_t bit);
+
+    /** @brief Raw level of the given bit index in `raw` (engaged-HIGH gear inputs) */
+    static bool bitHigh(uint8_t raw, uint8_t bit);
 
     /** @brief (Re)configure the device as all-inputs; used by begin() and recovery */
     bool configureDevice();
@@ -87,6 +91,7 @@ private:
 
     Snapshot snapshot_;
     uint8_t  rawInputs_;
+    uint16_t lastLoggedRaw_;       // 0xFFFF until the first read is logged (never a valid byte)
 
     bool     initialized_;
     bool     faulted_;

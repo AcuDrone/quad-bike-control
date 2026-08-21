@@ -114,6 +114,7 @@ public:
 
         // Board I/O expander health
         bool io_input_fault;      // Opto-input expander U10 (0x1A, I2C2) unreachable/stale
+        uint8_t io_raw;           // Raw U10 input port byte of the last good read
         bool io_relay_fault;      // Relay expander (0x1F, I2C2 via X15) unreachable/unverified
 
         // Firmware information

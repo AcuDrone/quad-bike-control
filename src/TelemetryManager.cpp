@@ -127,6 +127,7 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.boost_on = vehicleController_.isBoostOn();
     telemetry.rail_low = vehicleController_.isRailLow();
     telemetry.io_input_fault = vehicleController_.isInputFault();
+    telemetry.io_raw = vehicleController_.getInputRaw();
     telemetry.io_relay_fault = vehicleController_.isRelayFault();
 
     telemetry.firmware_version = FIRMWARE_VERSION;

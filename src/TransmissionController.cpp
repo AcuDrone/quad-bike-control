@@ -229,8 +229,9 @@ bool TransmissionController::canChangeGear(Gear targetGear) const {
 void TransmissionController::initGearSensors(BoardInputs& inputs) {
     boardInputs_ = &inputs;
     Debug::printfFeature(DebugFeature::TRANSMISSION,
-        "[TRANS] Gear sensors bound to opto inputs In1-In4 @0x%02X (asserted = %s)\n",
-        PCA9557_ADDR_INPUTS, BOARD_INPUT_ACTIVE_LOW ? "LOW" : "HIGH");
+        "[TRANS] Gear sensors bound to opto input bits N:%d R:%d L:%d H:%d @0x%02X (engaged = HIGH)\n",
+        BOARD_IN_BIT_GEAR_NEUTRAL, BOARD_IN_BIT_GEAR_REVERSE, BOARD_IN_BIT_GEAR_LOW,
+        BOARD_IN_BIT_GEAR_HIGH, PCA9557_ADDR_INPUTS);
 }
 
 TransmissionController::Gear TransmissionController::getPhysicalGear() const {

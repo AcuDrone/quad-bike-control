@@ -171,6 +171,9 @@ public:
     /** @brief Opto-input expander fault state (telemetry `io_input_fault`) */
     bool isInputFault() const { return boardInputs_.isFaulted(); }
 
+    /** @brief Raw opto-input port byte of the last good read (telemetry `io_raw`) */
+    uint8_t getInputRaw() const { return boardInputs_.getRawInputs(); }
+
     /** @brief Relay expander fault state (telemetry `io_relay_fault`) */
     bool isRelayFault() const { return relayController_.isFaulted(); }
 

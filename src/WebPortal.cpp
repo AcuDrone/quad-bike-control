@@ -648,6 +648,7 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["boost_on"] = telemetry.boost_on;
     doc["rail_low"] = telemetry.rail_low;
     doc["io_input_fault"] = telemetry.io_input_fault;
+    doc["io_raw"] = telemetry.io_raw;
     doc["io_relay_fault"] = telemetry.io_relay_fault;
 
     // Firmware version

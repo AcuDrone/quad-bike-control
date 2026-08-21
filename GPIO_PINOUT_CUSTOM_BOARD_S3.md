@@ -235,14 +235,25 @@ All inputs are 5V, PC817-isolated, each an `In_Plus` / `In_Minus` pair. They are
 **PCA9557 U10 @ 0x1A on I2C2 (`Wire1`, GPIO47/48)** — not directly by GPIO. (Scan-verified: the
 schematic port names implied I2C1, the copper says I2C2 — see §4.)
 
-| Input | Connector | Function |
-|-------|-----------|----------|
-| In1 | X16 | Gear REVERSE |
-| In2 | X16 | Gear NEUTRAL |
-| In3 | X16 | Gear LOW |
-| In4 | X16 | Gear HIGH |
-| In5 | X17 | Brake limit sensor ("released" endstop — 1000 ms overrun logic, I2C latency acceptable) |
-| In6-In8 | X17 | Spare |
+⚠ The schematic's `In1..In8 = bits 0..7` numbering does **not** hold for the gear channels — the
+routing is not 1:1, exactly like the relay board in §6. The table below is **bench-verified
+2026-08-21** by sweeping the gear lever against a live raw port dump.
+
+| Port bit | Connector | Function | Asserted level |
+|----------|-----------|----------|----------------|
+| 0 | X16 | Gear NEUTRAL | **HIGH** |
+| 1 | X16 | Gear REVERSE | **HIGH** |
+| 6 | X16 | Gear LOW | **HIGH** |
+| 7 | X16 | Gear HIGH | **HIGH** |
+| 4 | X17 | Brake limit sensor ("released" endstop — 1000 ms overrun logic, I2C latency acceptable) | LOW (`BOARD_INPUT_ACTIVE_LOW`, **not** bench-verified) |
+| 2, 3, 5 | X17 | Spare — never moved during the sweep | — |
+
+The gear channels are **engaged-HIGH**: every wired gear opto conducts at rest (pin LOW) and
+selecting a position *opens* exactly that one channel, driving its pin HIGH. Observed port bytes:
+between positions `0x1C`, R `0x1E`, N `0x1D`, L `0x5C`, H `0x9C`.
+
+This fails safe in both directions: losing the opto feed floats all four gear bits HIGH →
+multiple-active → `GEAR_UNKNOWN`; mid-shift all four read LOW → none-active → `GEAR_UNKNOWN`.
 
 ---
 
@@ -399,11 +410,11 @@ A separate 7s LiFePO4 battery also exists in the vehicle power system.
 
 | Constant | Old GPIO | New location |
 |----------|----------|--------------|
-| `PIN_BRAKE_SENSOR` | 14 | Opto input **In5** (PCA9557 U10, I2C2) |
-| `PIN_GEAR_REVERSE` | 19 | Opto input **In1** |
-| `PIN_GEAR_NEUTRAL` | 20 | Opto input **In2** |
-| `PIN_GEAR_LOW` | 21 | Opto input **In3** |
-| `PIN_GEAR_HIGH` | 47 | Opto input **In4** |
+| `PIN_BRAKE_SENSOR` | 14 | Opto input **bit 4** (PCA9557 U10, I2C2) |
+| `PIN_GEAR_REVERSE` | 19 | Opto input **bit 1** (see §5) |
+| `PIN_GEAR_NEUTRAL` | 20 | Opto input **bit 0** (see §5) |
+| `PIN_GEAR_LOW` | 21 | Opto input **bit 6** (see §5) |
+| `PIN_GEAR_HIGH` | 47 | Opto input **bit 7** (see §5) |
 | `PIN_RELAY1` | 36 | Relay board ignition/ECU line — **Relay_1 + Relay_2** (IO4+IO5, `RELAY_MASK_IGNITION`) |
 | `PIN_RELAY2` | 37 | Relay board starter — **Relay_3** (IO6, `RELAY_MASK_STARTER`) |
 | `PIN_RELAY3` | 38 | Relay board front light — **Relay_4** (IO7, `RELAY_MASK_FRONT_LIGHT`) |
