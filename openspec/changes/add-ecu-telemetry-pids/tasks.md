@@ -22,8 +22,8 @@
 - [x] 4.4 i18n parity check: confirm the `en` and `uk` dictionaries have identical key sets (no key added to one only).
 
 ## 5. Budget checks
-- [ ] 5.1 `StaticJsonDocument` headroom check: log `doc.memoryUsage()` from `createTelemetryJSON()` both in steady state and with the transient `probe` object present; confirm it stays under the 4096-byte capacity (bump the capacity if not) and record both numbers in design.md.
-- [ ] 5.2 Measure the serialized steady-state payload length (`json.length()`) and compare against the `web-telemetry` → *Telemetry Performance* "under 1KB" figure. If it is already over budget before this change's ~54 bytes, report it as a pre-existing finding — do not silently amend that requirement here.
+- [x] 5.1 `StaticJsonDocument` headroom check: log `doc.memoryUsage()` from `createTelemetryJSON()` both in steady state and with the transient `probe` object present; confirm it stays under the 4096-byte capacity (bump the capacity if not) and record both numbers in design.md. (Done 2026-08-21 bench: steady `mem=1264/4096`, probe-present peak `mem=2558/4096` — under capacity, see design.md runtime confirmation.)
+- [x] 5.2 Measure the serialized steady-state payload length (`json.length()`) and compare against the `web-telemetry` → *Telemetry Performance* "under 1KB" figure. If it is already over budget before this change's ~54 bytes, report it as a pre-existing finding — do not silently amend that requirement here. (Done 2026-08-21 bench: 1092–1229 B steady state — over budget as the static model predicted; pre-existing finding stands, requirement untouched.)
 
 ## 6. MAVLink EFI_STATUS / VFR_HUD mapping
 - [x] 6.1 Add `int8_t intakeTemp;` and `uint16_t moduleVoltageMv;` to `MavlinkInterface::StateReport` (`include/MavlinkInterface.h`), keeping the struct free of CAN headers; populate them at the `report()` call site from `VehicleData`.
@@ -49,4 +49,4 @@
 
 ## 9. Validate
 - [x] 9.1 `openspec validate add-ecu-telemetry-pids --strict` passes with no errors.
-- [ ] 9.2 Confirm the archive order stated in proposal.md still holds (this change archives after `add-can-pid-probe` and `add-hall-speed-sensor`); if either has already archived, re-check the MODIFIED blocks against the updated `openspec/specs/` before archiving.
+- [x] 9.2 Confirm the archive order stated in proposal.md still holds (this change archives after `add-can-pid-probe` and `add-hall-speed-sensor`); if either has already archived, re-check the MODIFIED blocks against the updated `openspec/specs/` before archiving. (Confirmed 2026-08-21: neither predecessor archived — latest archive is 2026-08-14 board migration — so the stated order holds.)

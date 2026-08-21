@@ -247,6 +247,14 @@ A high-water-mark log in `createTelemetryJSON()` reports `memoryUsage()` / `capa
 `json.length()` on each new peak (not every 5 Hz broadcast), so the bench run confirms these
 numbers on real hardware for free. Tasks 5.1/5.2 stay open until that runtime observation exists.
 
+**Runtime confirmation (2026-08-21, bench, key on/engine off, live Delphi MT05):** high-water-mark
+log observed steady state `mem=1264/4096, serialized=1229 B` (vs model 1257 / ~1111 — doc bytes
+within 7 B, wire +118 B from real string values, direction as predicted) and probe-present peak
+`mem=2558/4096, serialized=2007 B` while the probe was still accumulating (model peak 2634 /
+~2024). Capacity confirmed sufficient at ~62 % worst observed; the >1 KB steady-state payload is
+confirmed on the wire (1092–1229 B across the session), so the task 5.2 pre-existing finding
+stands as written.
+
 ### `0x0D` vehicle speed: verified dead, nothing to do
 The bench probe answered `0x0D` = 0 km/h stationary, which proved the PID exists but not that a
 speed source reaches the ECU. **Resolved on the bench 2026-08-14 (user-verified): `0x0D` reports

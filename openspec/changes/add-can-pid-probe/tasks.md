@@ -21,7 +21,7 @@
 - [x] 5.1 Add a "Probe ECU" button that sends the `can_probe` WebSocket command and disables itself while `probe.running` is true.
 - [x] 5.2 Add a probe results panel rendering bitmaps, per-PID supported/answered/raw/decoded, and the DTC summary (with a truncation note when `multiFrameTruncated`), styled with existing Sage Garden `:root` tokens (`--info/--warning/--success/--danger`).
 - [x] 5.3 Add a MAP (`map_kpa`) readout to the CAN telemetry card.
-- [ ] 5.4 Redeploy the UI with `pio run -t uploadfs` (LittleFS) — a firmware flash alone does not update `data/index.html`. (Deferred: no board connected — no `/dev/cu.wchusbserial*` present.)
+- [x] 5.4 Redeploy the UI with `pio run -t uploadfs` (LittleFS) — a firmware flash alone does not update `data/index.html`. (Done 2026-08-21 on the bench via `/dev/cu.usbmodem2101`.)
 
 ## 6. MAP PID enable + VehicleData field
 - [x] 6.1 Add `uint8_t mapKpa;` to `CANController::VehicleData` and initialize it in the constructor.
