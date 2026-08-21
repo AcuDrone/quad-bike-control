@@ -33,7 +33,7 @@
 - [x] 6.1 `pio run` completes with no errors and no new warnings.
 
 ## 7. Bench verification
-- [ ] 7.1 ESP32 alone with `DebugFeature::MAVLINK` on and no autopilot: the 1 Hz line shows `viso:0` and a stale yaw — confirm the interface stays silent rather than emitting zero-velocity spam.
+- [x] 7.1 ESP32 alone with `DebugFeature::MAVLINK` on and no autopilot: the 1 Hz line shows `viso:0` and a stale yaw — confirm the interface stays silent rather than emitting zero-velocity spam. (Done 2026-08-21 bench: `viso:0 yaw:stale att:0.0Hz` at 1 Hz, link down, zero VISION_SPEED_ESTIMATE TX over a 2-minute window.)
 - [ ] 7.2 Bridge ArduPilot Rover SITL to UART1 through a 3.3 V USB-TTL adapter (`sim_vehicle.py -v Rover --serial1=uart:/dev/ttyUSB0:115200`) and drive the hall input with a signal generator — this exercises the real `handle_vision_speed_estimate` path and proves `VISO_TYPE` exists in the build.
 - [ ] 7.3 Mission Planner → MAVLink Inspector → sysid 1 / compid 25: confirm `VISION_SPEED_ESTIMATE` arrives at ~5 Hz with plausible `x`/`y`.
 - [ ] 7.4 Gate matrix — force each gate in turn (pull the hall signal mid-motion to trip the suspicious latch; stop the `ATTITUDE` stream; neutral with the wheel spinning; unplug the gear input expander) and confirm the TX counter **stops** in each case rather than the message continuing with zeros.
