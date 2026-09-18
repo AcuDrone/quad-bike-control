@@ -296,12 +296,13 @@ struct ServoChannelConfig {
 // Re-command guard + stall latch (MAVLink streams steering at ~25 Hz; without
 // these the stall/move timers never elapse — the fixed re-command bug).
 #define STEER_RETARGET_TOLERANCE  10    // AS5600 counts — re-command within this of the current target is a no-op (timers keep running)
-#define STEER_STALL_COOLDOWN_MS   1500  // ms — same-direction moves refused after a stall; opposite direction always allowed
+#define STEER_STALL_COOLDOWN_MS   700   // ms — same-direction moves refused after a stall; opposite direction always allowed
 
 // VESC steering driver telemetry monitor + failsafe
+// (Over-current is left to the VESC itself: Motor Current Max clamp, Absolute Max
+//  Current fault — surfaced here as a fault code — and MOSFET temperature limiting.
+//  Mechanical jams are caught by the AS5600 stall detector, STEER_STALL_TIMEOUT.)
 #define STEER_VESC_TELEM_MS         300   // ms — COMM_GET_VALUES poll period (~3 Hz)
-#define STEER_VESC_OVERCURRENT_A    18.0f // A — motor current above this (sustained) trips a stall-stop (below the VESC hardware limit)
-#define STEER_VESC_OVERCURRENT_MS   400   // ms — over-current must persist this long before tripping
 #define STEER_VESC_COMM_TIMEOUT_MS  1000  // ms — no valid GET_VALUES reply for this long -> driver fault (stop, reject moves)
 
 // Throttle Servo Parameters
