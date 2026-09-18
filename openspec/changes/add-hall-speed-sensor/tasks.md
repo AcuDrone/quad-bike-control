@@ -21,7 +21,7 @@
 - [x] 2.1 Add to `include/Constants.h`: `PIN_SPEED_SENSOR` (**GPIO 8**, 6N137 opto input on X2 —
   comment that the opto **inverts** the signal), `SPEED_SAMPLE_INTERVAL_MS`,
   `SPEED_STALE_TIMEOUT_MS`, `SPEED_GLITCH_FILTER_NS`, `SPEED_DEFAULT_PULSES_PER_REV`,
-  `SPEED_DEFAULT_WHEEL_CIRCUMFERENCE_MM`, `SPEED_LIMIT_ENABLE_DEFAULT` (false),
+  `SPEED_DEFAULT_WHEEL_CIRCUMFERENCE_MM`, `SPEED_LIMIT_ENABLE_DEFAULT` (true),
   `SPEED_LIMIT_MAX_KMH_DEFAULT`, and `SPEED_LIMIT_THROTTLE_CAP_PCT`.
 
 ## 3. SpeedSensor subsystem (PCNT pulse counting + km/h)

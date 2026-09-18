@@ -40,7 +40,7 @@ drives telemetry and control logic.
      `include/MavlinkInterface.h:55`, `src/MavlinkInterface.cpp:262`).
   3. **Control logic** — make the existing gear-change interlock **live** by sourcing its speed
      from the hall sensor instead of the dead CAN field, and add a **configurable maximum-speed
-     throttle limiter** (disabled by default) that reduces throttle authority above a settable
+     throttle limiter** (enabled by default) that reduces throttle authority above a settable
      speed, set via `speed_limit_set` / `speed_limit_enable` web commands.
 - **BREAKING (telemetry contract):** `vehicle_speed` in the WebSocket JSON is no longer gated by
   `can_status == "connected"` and is now hall-sensor-sourced, not CAN-sourced; it is removed from

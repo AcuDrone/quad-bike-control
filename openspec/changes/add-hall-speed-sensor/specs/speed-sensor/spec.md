@@ -128,14 +128,15 @@ speed is displayed whenever the sensor is live regardless of `can_status`.
 
 ### Requirement: Configurable Maximum-Speed Throttle Limiter
 The system SHALL provide a runtime-configurable maximum-speed throttle limiter that reduces throttle
-authority above a settable speed. The limiter SHALL be disabled by default and SHALL fail safe on
+authority above a settable speed. The limiter SHALL be enabled by default and SHALL fail safe on
 loss of a valid speed reading.
 
 #### Scenario: Configure the limiter at runtime
 - **WHEN** a `speed_limit_enable` command (boolean) or a `speed_limit_set` command (maximum km/h) is
   received via the web command path
 - **THEN** the setting SHALL be validated and persisted to NVS namespace `"speed"`
-- **AND** the limiter SHALL default to disabled (`SPEED_LIMIT_ENABLE_DEFAULT` = false) until enabled
+- **AND** the limiter SHALL default to enabled (`SPEED_LIMIT_ENABLE_DEFAULT` = true), and an
+  operator SHALL be able to disable it with `speed_limit_enable`
 
 #### Scenario: Reduce throttle authority above the maximum speed
 - **WHEN** the limiter is enabled and the speed reading is valid and exceeds `limit_max_kmh`

@@ -162,11 +162,11 @@ shifts above `TRANS_SPEED_INTERLOCK_THRESHOLD`. Fail-safe cases:
   moving → reads 0 → shift permitted) is documented in Risks with the decel-plausibility heuristic as
   the partial mitigation and a wired fault line as future work.
 
-### Decision: Max-speed throttle limiter — simplest safe design, disabled by default
+### Decision: Max-speed throttle limiter — simplest safe design, enabled by default
 A new control-logic limiter in `VehicleController`, applied after command arbitration, before the
 throttle command reaches the actuator:
 
-- Config in NVS `"speed"`: `limit_enable` (bool, default **false**) and `limit_max_kmh`
+- Config in NVS `"speed"`: `limit_enable` (bool, default **true**) and `limit_max_kmh`
   (default `SPEED_LIMIT_MAX_KMH_DEFAULT`, a safe/high value). Set via `speed_limit_enable` /
   `speed_limit_set` web commands.
 - Behavior when enabled and speed is **valid**: while `speed > limit_max_kmh`, throttle authority is
@@ -224,8 +224,9 @@ reported" note in `MavlinkInterface` is superseded.
 Additive at the code level (new module + new NVS namespace + new web commands), with one behavioral
 change to the telemetry contract (`vehicle_speed` decoupled from the CAN gate) and one to the
 interlock's speed source (CAN field → hall sensor). No stored data is removed; the new NVS `"speed"`
-namespace starts from `Constants.h` defaults on first boot. The speed limiter ships **disabled**, so
-default drive behavior is unchanged until an operator enables it. Rollback: leaving the sensor
+namespace starts from `Constants.h` defaults on first boot. The speed limiter ships **enabled** at
+the 60 km/h default ceiling, so drive behavior below 55 km/h (the start of the taper band) is
+unchanged; an operator can disable it from the web UI. Rollback: leaving the sensor
 unwired and uncalibrated yields `isValid() == false` and 0 km/h, restoring today's effective
 behavior (interlock never blocks, limiter never clamps).
 

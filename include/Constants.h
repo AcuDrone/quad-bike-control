@@ -433,8 +433,9 @@ struct ServoChannelConfig {
 #define SPEED_MAX_PLAUSIBLE_DECEL_KMH_S  8.0f   // km/h per second
 
 // Maximum-speed throttle limiter (NVS "speed", keys "lim_on" / "lim_kmh").
-// Ships DISABLED: default drive behavior is unchanged until an operator enables it.
-#define SPEED_LIMIT_ENABLE_DEFAULT    false
+// Ships ENABLED at the 60 km/h LOCAL ceiling below (or the autopilot's SPEED_MAX when that is
+// available). A stored NVS "lim_on" value still wins over this compile-time default.
+#define SPEED_LIMIT_ENABLE_DEFAULT    true
 #define SPEED_LIMIT_MAX_KMH_DEFAULT   60.0f  // km/h - safe/high default ceiling (the LOCAL fallback;
                                              // the autopilot's SPEED_MAX overrides the VALUE, never the toggle)
 #define SPEED_LIMIT_MIN_KMH           1.0f   // accepted range for speed_limit_set
