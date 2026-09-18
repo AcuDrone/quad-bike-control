@@ -45,7 +45,13 @@ VehicleController::VehicleController(SteeringController& steering,
       previousIgnitionState_(MavlinkInterface::IgnitionState::OFF),
       lastCommandedGear_(TransmissionController::Gear::GEAR_UNKNOWN),
       transmissionInitialized_(false),
-      lastSpeedLimitWarnMs_(0) {
+      lastSpeedLimitWarnMs_(0),
+      lastSpeedLimitSource_(SpeedLimitSource::OFF),
+      lastSpeedLimitKmh_(NAN),
+      lastSpeedLimitLogMs_(0),
+      limiterCeilingPct_(100.0f),
+      limiterLastMs_(0),
+      webThrottleDemandPct_(0.0f) {
 }
 
 void VehicleController::initBoostRail() {
@@ -156,6 +162,19 @@ void VehicleController::update() {
     // Apply fail-safe if needed
     applyFailsafe();
 
+    // Re-apply the limiter to the STANDING web throttle demand every loop. The MAVLink path
+    // already re-reads its channel every iteration, so it was always re-limited; the web path
+    // used to clamp only at command time, which meant a vehicle accelerating past the ceiling on
+    // an unchanged 80 % slider was never clamped until the operator touched the slider again.
+    // Calibration owns the servo directly, and the gear-boost PID writes µs — both stay clear.
+    if (currentInputSource_ == InputSource::WEB && !gearBoostActive_ && !throttle_.isCalibrating()) {
+        float demandPct = webThrottleDemandPct_;
+        if (shouldClipThrottle()) {
+            demandPct = min(TRANS_UNKNOWN_GEAR_THROTTLE_MAX, demandPct);
+        }
+        throttle_.setThrottlePercent(applySpeedLimit(demandPct));
+    }
+
     // PID-controlled RPM boost during gear changes or manual test (overrides MAVLink/web throttle)
     if (transmission_.needsThrottleBoost() || gearBoostActive_ || boostManualActive_) {
         updateGearBoostPID();
@@ -192,6 +211,7 @@ void VehicleController::setWebControl(bool on) {
         // Snap to a safe state on takeover so we don't inherit the autopilot's live throttle.
         // Steering / gear / brake hold their current positions (no lurch).
         throttle_.idle();
+        webThrottleDemandPct_ = 0.0f;   // never inherit a stale demand into the next loop
         gearBoostActive_ = false;
         boostManualActive_ = false;
     }
@@ -302,6 +322,19 @@ String VehicleController::getCurrentGearString() const {
     }
 }
 
+int8_t VehicleController::getTravelDirection() const {
+    // PHYSICAL gear only — see the header. Both forward ratios drive the same direction.
+    switch (transmission_.getPhysicalGear()) {
+        case TransmissionController::Gear::GEAR_REVERSE: return -1;
+        case TransmissionController::Gear::GEAR_LOW:     return  1;
+        case TransmissionController::Gear::GEAR_HIGH:    return  1;
+        // NEUTRAL, and GEAR_UNKNOWN (ambiguous switches, faulted input expander, or the
+        // brief mid-shift window): no direction to report, so the sample is suppressed
+        // rather than signed by a guess.
+        default: return 0;
+    }
+}
+
 String VehicleController::getTargetGearString() const {
     TransmissionController::Gear gear = transmission_.getTargetGear();
     switch (gear) {
@@ -329,6 +362,7 @@ void VehicleController::applyFailsafe() {
         Debug::printlnFeature(DebugFeature::VEHICLE, "[FAILSAFE] Entering safe state");
         steering_.setSteeringPercent(0.0f);
         throttle_.idle();
+        webThrottleDemandPct_ = 0.0f;  // a demand that outlives the idle would reopen the throttle
         brake_.stop();         // Stop brake actuator (hold position)
         brakeIsMoving_ = false;
         brakeSensorTriggerTime_ = 0;  // Reset sensor trigger
@@ -470,16 +504,89 @@ void VehicleController::processThrottleCommand(float value, WebPortal& webPortal
     if (shouldClipThrottle()) {
         value = min(TRANS_UNKNOWN_GEAR_THROTTLE_MAX, value);
     }
+    // Record the operator's standing demand; update() re-limits it every loop from here on.
+    webThrottleDemandPct_ = value;
     throttle_.setThrottlePercent(applySpeedLimit(value));
     webPortal.sendResponse(true, "Throttle set");
 }
 
-float VehicleController::applySpeedLimit(float throttlePct) {
+// ============================================================================
+// MAX-SPEED LIMITER — ceiling arbitration and proportional taper
+// ============================================================================
+
+float VehicleController::getEffectiveSpeedLimitKmh(SpeedLimitSource& source) const {
+    // The local toggle is the MASTER SWITCH. It is checked first and on its own: the autopilot
+    // supplies the ceiling's VALUE and must never be able to arm (or disarm) the limiter, so an
+    // operator standing at the vehicle can always disable it without a ground station.
     if (!speedSensor_.isLimiterEnabled()) {
+        source = SpeedLimitSource::OFF;
+        return 0.0f;
+    }
+
+    if (mavlink_.hasSpeedMaxParam()) {
+        source = SpeedLimitSource::MAVLINK;
+        // CLAMP an out-of-band value rather than discarding it: falling back to a stored 60 km/h
+        // because someone set a deliberate 0.5 km/h crawl is the failure direction that hurts.
+        float kmh = mavlink_.getSpeedMaxKmh();
+        return constrain(kmh, (float)SPEED_LIMIT_MIN_KMH, (float)SPEED_LIMIT_MAX_KMH);
+    }
+
+    source = SpeedLimitSource::LOCAL;
+    return speedSensor_.getLimitMaxKmh();
+}
+
+float VehicleController::getEffectiveSpeedLimitKmh() const {
+    SpeedLimitSource source;
+    return getEffectiveSpeedLimitKmh(source);
+}
+
+VehicleController::SpeedLimitSource VehicleController::getSpeedLimitSource() const {
+    SpeedLimitSource source;
+    (void)getEffectiveSpeedLimitKmh(source);
+    return source;
+}
+
+const char* VehicleController::getSpeedLimitSourceName(SpeedLimitSource source) {
+    switch (source) {
+        case SpeedLimitSource::MAVLINK: return "mavlink";
+        case SpeedLimitSource::LOCAL:   return "local";
+        default:                        return "off";
+    }
+}
+
+void VehicleController::logSpeedLimitSourceChange(SpeedLimitSource source, float limitKmh) {
+    bool changed = (source != lastSpeedLimitSource_) ||
+                   isnan(lastSpeedLimitKmh_) ||
+                   fabsf(limitKmh - lastSpeedLimitKmh_) > SPEED_LIMIT_LOG_EPSILON_KMH;
+    if (!changed) {
+        return;
+    }
+    uint32_t now = millis();
+    // Hold-off. While suppressed the remembered state is deliberately NOT updated, so whatever
+    // the value settles on is logged on the next opportunity instead of being swallowed.
+    if (lastSpeedLimitLogMs_ != 0 && (now - lastSpeedLimitLogMs_) < SPEED_LIMIT_SRC_LOG_MIN_MS) {
+        return;
+    }
+    lastSpeedLimitLogMs_ = now;
+    lastSpeedLimitSource_ = source;
+    lastSpeedLimitKmh_ = limitKmh;
+    Debug::printfFeature(DebugFeature::VEHICLE,
+        "[SPEED] Limit source: %s @ %.1f km/h\n", getSpeedLimitSourceName(source), limitKmh);
+}
+
+float VehicleController::applySpeedLimit(float throttlePct) {
+    SpeedLimitSource source;
+    float limitKmh = getEffectiveSpeedLimitKmh(source);
+    logSpeedLimitSourceChange(source, limitKmh);
+
+    if (source == SpeedLimitSource::OFF) {
+        // Reset the taper so re-enabling never resumes from a stale low ceiling.
+        limiterCeilingPct_ = 100.0f;
+        limiterLastMs_ = 0;
         return throttlePct;
     }
 
-    // Fail OPEN on sensor loss. The limiter only ever acts ABOVE the maximum speed, and a
+    // Fail OPEN on sensor loss. The limiter only ever acts NEAR AND ABOVE the maximum speed, and a
     // lost sensor reads 0 km/h — clamping throttle on a reading we do not trust, mid-manoeuvre,
     // is the more dangerous failure. Over-speed protection assumes a working sensor.
     if (!speedSensor_.isValid()) {
@@ -489,15 +596,42 @@ float VehicleController::applySpeedLimit(float throttlePct) {
             Debug::printlnFeature(DebugFeature::VEHICLE,
                 "[SPEED] WARNING: limiter enabled but speed reading is invalid — not clamping (fail open)");
         }
+        limiterCeilingPct_ = 100.0f;
+        limiterLastMs_ = 0;
         return throttlePct;
     }
     lastSpeedLimitWarnMs_ = 0;
 
-    if (speedSensor_.getSpeedKmh() <= speedSensor_.getLimitMaxKmh()) {
-        return throttlePct;
+    // Proportional taper: full authority up to `limit - band`, falling linearly to the floor at
+    // the limit, floor above it. A floor rather than zero — cutting all drive mid-corner is a
+    // stability event, not a safety feature.
+    float over = speedSensor_.getSpeedKmh() - (limitKmh - SPEED_LIMIT_TAPER_BAND_KMH);
+    float targetPct;
+    if (over <= 0.0f) {
+        targetPct = 100.0f;
+    } else if (over >= SPEED_LIMIT_TAPER_BAND_KMH) {
+        targetPct = SPEED_LIMIT_FLOOR_PCT;
+    } else {
+        targetPct = 100.0f - (100.0f - SPEED_LIMIT_FLOOR_PCT) * (over / SPEED_LIMIT_TAPER_BAND_KMH);
     }
-    // A reduced ceiling, not a hard cut: killing throttle outright mid-turn is unsafe.
-    return min(throttlePct, (float)SPEED_LIMIT_THROTTLE_CAP_PCT);
+
+    // Slew-limit the CEILING (not the demand — the driver's own stick moves must pass through at
+    // full rate). dt is capped at 1 s and the first evaluation adopts the target directly, so a
+    // stalled or just-restarted loop cannot integrate an unknown interval into a step change.
+    uint32_t now = millis();
+    if (limiterLastMs_ == 0) {
+        limiterCeilingPct_ = targetPct;
+    } else {
+        float dt = (now - limiterLastMs_) / 1000.0f;
+        if (dt > 1.0f) dt = 1.0f;
+        float maxStep = SPEED_LIMIT_CEILING_SLEW_PCT_S * dt;
+        float delta = constrain(targetPct - limiterCeilingPct_, -maxStep, maxStep);
+        limiterCeilingPct_ += delta;
+    }
+    limiterLastMs_ = now;
+    limiterCeilingPct_ = constrain(limiterCeilingPct_, SPEED_LIMIT_FLOOR_PCT, 100.0f);
+
+    return min(throttlePct, limiterCeilingPct_);
 }
 
 void VehicleController::processSpeedCalPprCommand(float value, WebPortal& webPortal) {
@@ -950,6 +1084,7 @@ void VehicleController::updateGearBoostPID() {
         Debug::printlnFeature(DebugFeature::VEHICLE, "[BOOST] Gear change complete, releasing PID");
         canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM);
         throttle_.idle();
+        webThrottleDemandPct_ = 0.0f;  // the boost released to IDLE — don't let the old web demand undo it
         gearBoostActive_ = false;
         return;
     }
@@ -976,6 +1111,7 @@ void VehicleController::updateGearBoostPID() {
         canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM);
         gearBoostActive_ = false;
         throttle_.idle();
+        webThrottleDemandPct_ = 0.0f;  // same reasoning as the normal release above
         return;
     }
 

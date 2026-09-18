@@ -787,9 +787,22 @@
                             🛑 <span data-i18n="lbl_speed_limiter">Speed limiter:</span> <span id="speed-limiter-status">OFF</span>
                         </button>
                     </div>
+                    <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 10px; font-size: 0.85em;">
+                        <span data-i18n="lbl_speed_limit_eff" style="color: var(--muted-foreground);">Active limit</span>
+                        <span>
+                            <span id="speed-limit-eff">--</span>
+                            <span id="speed-limit-src" style="color: var(--muted-foreground); font-size: 0.9em;"></span>
+                        </span>
+                    </div>
+                    <div id="speed-limit-ceil-row" style="display: none; justify-content: space-between; align-items: baseline; margin-top: 4px; font-size: 0.85em; color: var(--warning);">
+                        <span data-i18n="lbl_speed_limit_ceil">Limiting</span>
+                        <span id="speed-limit-ceil">--</span>
+                    </div>
                     <div data-i18n="speed_limiter_hint" style="font-size: 0.75em; color: var(--muted-foreground); margin-top: 6px;">
-                        Above the maximum speed the throttle is capped to a reduced ceiling. With no valid
-                        sensor reading the limiter does not act.
+                        Approaching the maximum speed the throttle ceiling is tapered down smoothly instead of
+                        being stepped. The ceiling value comes from the autopilot's SPEED_MAX when the link
+                        provides it, otherwise from the maximum above — this toggle always decides whether the
+                        limiter acts at all. With no valid sensor reading the limiter does not act.
                     </div>
                 </div>
                 <div id="speed-status-msg" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
@@ -1001,7 +1014,12 @@
                 lbl_speed_circ: 'Wheel circumference (mm)',
                 lbl_speed_limit_max: 'Maximum speed (km/h)',
                 lbl_speed_limiter: 'Speed limiter:',
-                speed_limiter_hint: 'Above the maximum speed the throttle is capped to a reduced ceiling. With no valid sensor reading the limiter does not act.',
+                lbl_speed_limit_eff: 'Active limit',
+                lbl_speed_limit_ceil: 'Limiting',
+                lim_src_mavlink: '(autopilot SPEED_MAX)',
+                lim_src_local: '(stored)',
+                lim_src_off: '(off)',
+                speed_limiter_hint: "Approaching the maximum speed the throttle ceiling is tapered down smoothly instead of being stepped. The ceiling value comes from the autopilot's SPEED_MAX when the link provides it, otherwise from the maximum above — this toggle always decides whether the limiter acts at all. With no valid sensor reading the limiter does not act.",
                 speed_saving: 'Saving speed settings...',
                 invalid_speed_ppr: 'Pulses/rev must be 1-1000',
                 invalid_speed_circ: 'Circumference must be 100-10000 mm',
@@ -1229,7 +1247,12 @@
                 lbl_speed_circ: 'Довжина кола колеса (мм)',
                 lbl_speed_limit_max: 'Максимальна швидкість (км/год)',
                 lbl_speed_limiter: 'Обмежувач швидкості:',
-                speed_limiter_hint: 'Вище максимальної швидкості дросель обмежується зниженою стелею. Без достовірних показань датчика обмежувач не діє.',
+                lbl_speed_limit_eff: 'Діюче обмеження',
+                lbl_speed_limit_ceil: 'Обмежується',
+                lim_src_mavlink: '(автопілот SPEED_MAX)',
+                lim_src_local: '(збережене)',
+                lim_src_off: '(вимкнено)',
+                speed_limiter_hint: 'При наближенні до максимальної швидкості стеля дроселя плавно знижується, а не падає стрибком. Значення стелі береться з параметра SPEED_MAX автопілота, якщо він доступний по каналу, інакше — з максимуму вище; цей перемикач завжди вирішує, чи діє обмежувач взагалі. Без достовірних показань датчика обмежувач не діє.',
                 speed_saving: 'Збереження налаштувань швидкості...',
                 invalid_speed_ppr: 'Імпульсів на оберт має бути 1-1000',
                 invalid_speed_circ: 'Довжина кола має бути 100-10000 мм',
@@ -2117,6 +2140,41 @@
                     btn.style.background = speedLimiterState
                         ? 'color-mix(in srgb, var(--warning) 60%, black)'
                         : 'var(--secondary)';
+                }
+            }
+
+            // Active limit + where its value came from. The input above stays bound to
+            // speed_limit_max (the STORED fallback), so it is dimmed — never disabled — while
+            // the autopilot supplies the value: the operator may still need to set the fallback.
+            const src = data.speed_limit_src;
+            if (src !== undefined) {
+                const effEl = document.getElementById('speed-limit-eff');
+                if (effEl) {
+                    const eff = (typeof data.speed_limit_eff === 'number') ? data.speed_limit_eff : 0;
+                    effEl.textContent = (src === 'off')
+                        ? '-- ' + t('unit_kmh')
+                        : eff.toFixed(0) + ' ' + t('unit_kmh');
+                }
+                const srcEl = document.getElementById('speed-limit-src');
+                if (srcEl) {
+                    srcEl.textContent = (src === 'mavlink') ? t('lim_src_mavlink')
+                                      : (src === 'local') ? t('lim_src_local')
+                                      : t('lim_src_off');
+                }
+                const input = document.getElementById('speed-limit-input');
+                if (input) input.style.opacity = (src === 'mavlink') ? '0.55' : '1';
+            }
+
+            // The taper ceiling is only interesting while it is actually holding throttle back.
+            const ceilRow = document.getElementById('speed-limit-ceil-row');
+            if (ceilRow) {
+                const ceil = (typeof data.speed_limit_ceil === 'number') ? data.speed_limit_ceil : 100;
+                if (ceil < 100) {
+                    ceilRow.style.display = 'flex';
+                    const ceilEl = document.getElementById('speed-limit-ceil');
+                    if (ceilEl) ceilEl.textContent = ceil.toFixed(0) + ' %';
+                } else {
+                    ceilRow.style.display = 'none';
                 }
             }
         }

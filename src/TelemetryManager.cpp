@@ -76,6 +76,13 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.speed_circ_mm = vehicleController_.getSpeedWheelCircumferenceMm();
     telemetry.speed_limit_on = vehicleController_.isSpeedLimiterEnabled();
     telemetry.speed_limit_max = vehicleController_.getSpeedLimitMaxKmh();
+    // speed_limit_max stays the STORED value so the UI input keeps editing the local fallback;
+    // the enforced ceiling and its source are reported separately.
+    VehicleController::SpeedLimitSource limitSrc;
+    telemetry.speed_limit_eff = vehicleController_.getEffectiveSpeedLimitKmh(limitSrc);
+    telemetry.speed_limit_src = VehicleController::getSpeedLimitSourceName(limitSrc);
+    telemetry.mav_speed_max = vehicleController_.getMavSpeedMaxKmh();
+    telemetry.speed_limit_ceil = vehicleController_.getSpeedLimitCeilingPct();
 
     CANController::VehicleData vehicleData = vehicleController_.getVehicleData();
     if (vehicleData.dataValid) {

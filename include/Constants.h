@@ -215,13 +215,39 @@ struct ServoChannelConfig {
 #define MAVLINK_REPORT_TX_MS          200    // ms between outbound engine/state reports (5 Hz)
 #define MAVLINK_STATUSTEXT_MIN_MS     250    // ms minimum spacing between STATUSTEXT messages
 
+// Autopilot parameter subscription (READ-ONLY — the firmware never sends PARAM_SET).
+// Exactly one parameter is subscribed: ArduPilot's SPEED_MAX, used as the km/h ceiling of the
+// firmware's own max-speed limiter. Both an unsolicited PARAM_VALUE and a periodic
+// PARAM_REQUEST_READ are honored: ArduPilot's broadcast-on-set behaviour is version- and
+// routing-dependent, so the POLL is the change detector and the broadcast only makes it sooner.
+#define MAVLINK_PARAM_SPEED_MAX_ID    "SPEED_MAX"  // ArduPilot cruise-speed ceiling (m/s); 0 = "not set"
+#define MAVLINK_PARAM_SPEED_MAX_MS    30.0f  // m/s — ArduPilot's own range bound; above this → rejected
+#define MAVLINK_PARAM_POLL_MS         5000   // ms between PARAM_REQUEST_READ polls (never stops)
+#define MAVLINK_PARAM_FIRST_DELAY_MS  1000   // ms after the autopilot is learned before the first request
+#define MAVLINK_PARAM_STALE_MS        16000  // ms without a PARAM_VALUE before the value is unusable (~3 polls)
+#define MAVLINK_PARAM_EPSILON_MS      0.005f // m/s — smaller differences are "unchanged" (never compare floats with ==)
+#define MAVLINK_MS_TO_KMH             3.6f   // m/s → km/h (parameter path only; existing /3.6f literals stay)
+
+// Body-frame wheel odometry (VISION_POSITION_DELTA — wheel speed into the autopilot's EKF3).
+// The delta is measured along the vehicle's OWN longitudinal axis, so no heading is needed and
+// nothing inbound is subscribed: EKF3 rotates it with its own attitude. VISION_SPEED_ESTIMATE
+// (earth-frame) was falsified on the 2026-08-21 bench — see
+// openspec/changes/add-extnav-velocity/design.md.
+#define MAVLINK_VISO_ENABLED           1     // compile-time switch; runtime switch is the autopilot's VISO_TYPE
+#define MAVLINK_VISO_CONFIDENCE        100.0f  // 0-100 quality → EKF3 velErr = EK3_VIS_VERR_MIN..MAX; 100 picks
+                                             // the MIN end (0.1 m/s default), well under the 1.0 aiding gate
+#define MAVLINK_VISO_MAX_DT_US         1000000 // µs: a longer gap since the last send is treated as a break —
+                                             // re-baseline (skip one interval) rather than integrate a stale dt
+#define MAVLINK_VISO_NEUTRAL_ZERO_KMH  0.5f  // in NEUTRAL only readings below this are sent (as a zero-motion
+                                             // update); above it the direction sign is unrecoverable → stay silent
+
 // ESP32 MAVLink identity (distinct component on the vehicle's system)
 #define MAVLINK_SYSTEM_ID             1      // Same system as the autopilot
 #define MAVLINK_COMPONENT_ID          25     // MAV_COMP_ID_USER1 (peripheral component)
 
 // Command channel value range (microseconds) — SERVO_OUTPUT_RAW carries µs directly
-#define RC_US_MIN     1000   // Minimum command microseconds
-#define RC_US_MAX     2000   // Maximum command microseconds
+#define RC_US_MIN     1100   // Minimum command microseconds
+#define RC_US_MAX     1900   // Maximum command microseconds
 #define RC_US_CENTER  1500   // Center point (split between throttle and brake)
 
 // Deadband Configuration
@@ -409,11 +435,22 @@ struct ServoChannelConfig {
 // Maximum-speed throttle limiter (NVS "speed", keys "lim_on" / "lim_kmh").
 // Ships DISABLED: default drive behavior is unchanged until an operator enables it.
 #define SPEED_LIMIT_ENABLE_DEFAULT    false
-#define SPEED_LIMIT_MAX_KMH_DEFAULT   60.0f  // km/h - safe/high default ceiling
-#define SPEED_LIMIT_THROTTLE_CAP_PCT  20.0f  // % - reduced throttle ceiling above the limit (not a hard cut)
+#define SPEED_LIMIT_MAX_KMH_DEFAULT   60.0f  // km/h - safe/high default ceiling (the LOCAL fallback;
+                                             // the autopilot's SPEED_MAX overrides the VALUE, never the toggle)
 #define SPEED_LIMIT_MIN_KMH           1.0f   // accepted range for speed_limit_set
 #define SPEED_LIMIT_MAX_KMH           200.0f
 #define SPEED_LIMIT_WARN_MS           5000   // ms between "limiter armed but speed invalid" warnings
+
+// Proportional taper. Authority is withdrawn GRADUALLY as the ceiling is approached rather than
+// in one step at the limit: a step lurches a heavy vehicle, invites hunting around the threshold,
+// and does both exactly where it hurts most — mid-corner.
+#define SPEED_LIMIT_TAPER_BAND_KMH     5.0f   // km/h - the ceiling starts falling this far BELOW the limit
+#define SPEED_LIMIT_FLOOR_PCT          10.0f  // % - throttle ceiling at/above the limit; never a hard cut
+#define SPEED_LIMIT_CEILING_SLEW_PCT_S 200.0f // %/s - max ceiling movement (both directions) — no servo snap.
+                                              // Applied to the CEILING, not the demand: the driver's own
+                                              // stick moves are never slowed by the limiter.
+#define SPEED_LIMIT_SRC_LOG_MIN_MS     1000   // ms hold-off between "limit source" logs
+#define SPEED_LIMIT_LOG_EPSILON_KMH    0.05f  // km/h - smaller ceiling moves are not worth a log line
 
 // ============================================================================
 // SERIAL DEBUG

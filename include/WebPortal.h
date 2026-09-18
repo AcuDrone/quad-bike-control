@@ -78,7 +78,11 @@ public:
         uint16_t speed_ppr;       // Calibration: pulses per revolution
         float speed_circ_mm;      // Calibration: wheel circumference (mm)
         bool speed_limit_on;      // Max-speed throttle limiter enabled
-        float speed_limit_max;    // Max-speed throttle limiter ceiling (km/h)
+        float speed_limit_max;    // STORED limiter ceiling (km/h) — the local fallback the UI edits
+        float speed_limit_eff;    // Ceiling actually enforced (km/h), 0 when the limiter is off
+        String speed_limit_src;   // Where that ceiling came from: "off" / "local" / "mavlink"
+        float mav_speed_max;      // Last SPEED_MAX from the autopilot (km/h), 0 = none received
+        float speed_limit_ceil;   // Throttle ceiling the taper is applying (%, 100 = inactive)
 
         // CAN bus vehicle data
         uint16_t engine_rpm;      // Engine RPM (0-16383)

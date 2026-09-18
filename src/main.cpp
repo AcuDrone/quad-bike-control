@@ -274,6 +274,9 @@ void loop() {
     CANController::VehicleData vd = vehicleController.getVehicleData();
     String gearToStr   = vehicleController.getTargetGearString();  // current step / assumed gear
     String gearFromStr = vehicleController.getFromGearString();    // gear the step is leaving
+    // Named local, NOT a temporary: StateReport stores a const char* into this String, so it
+    // must outlive the report() call below (same lifetime pattern as the two gear strings above).
+    String gearPhysStr = vehicleController.getCurrentGearString();  // physically sensed ("?" = unknown)
     MavlinkInterface::StateReport report;
     report.canValid     = vd.dataValid;
     report.engineRpm    = vd.engineRPM;
@@ -291,6 +294,10 @@ void loop() {
     report.moduleVoltageMv = vd.moduleVoltageMv;
     report.throttlePosition = vd.throttlePosition;              // measured (ECU)
     report.throttleCmdPct   = vehicleController.getThrottlePercent();  // commanded (arbitrated)
+    report.gearPhysical     = gearPhysStr.c_str();               // measured (opto switches)
+    report.mapKpa           = vd.mapKpa;
+    report.engineLoad       = vd.engineLoad;
+    report.travelDirection  = vehicleController.getTravelDirection();  // PHYSICAL gear sign
     mavlinkInterface.report(report);
 
     // Broadcast telemetry to web clients

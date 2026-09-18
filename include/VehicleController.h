@@ -23,6 +23,14 @@
  */
 class VehicleController {
 public:
+    /**
+     * @brief Where the max-speed limiter's km/h ceiling currently comes from.
+     * OFF = the local master toggle is off (nothing is limited); LOCAL = the NVS-stored
+     * value; MAVLINK = the autopilot's SPEED_MAX parameter. The autopilot supplies the
+     * VALUE only — it can never arm or disarm the limiter.
+     */
+    enum class SpeedLimitSource { OFF, LOCAL, MAVLINK };
+
     VehicleController(SteeringController& steering,
                       ThrottleController& throttle,
                       TransmissionController& transmission,
@@ -82,6 +90,18 @@ public:
      * @return Gear string
      */
     String getCurrentGearString() const;
+
+    /**
+     * @brief Direction of travel implied by the gearbox: +1 forward, -1 reverse, 0 unknown.
+     *
+     * Signs the (unsigned) wheel-speed reading for the MAVLink external-navigation
+     * velocity. Derived from the PHYSICAL gear (the opto switches), never from the
+     * assumed/commanded one: the transmission command path is sensorless and time-based,
+     * and an assumption must never sign a measurement the autopilot's EKF will fuse.
+     * An ambiguous or faulted reading yields 0, which suppresses the sample.
+     * @return +1 (LOW/HIGH), -1 (REVERSE) or 0 (NEUTRAL/UNKNOWN)
+     */
+    int8_t getTravelDirection() const;
 
     /**
      * @brief Get the current target/step gear as string (R/N/L/H).
@@ -202,6 +222,35 @@ public:
     float getSpeedLimitMaxKmh() const { return speedSensor_.getLimitMaxKmh(); }
 
     /**
+     * @brief The ceiling the limiter is actually enforcing (km/h), and where it came from.
+     *
+     * Arbitration: the local enable toggle is the MASTER SWITCH — off means OFF/0 and no
+     * autopilot value is even consulted. With it on, a usable `SPEED_MAX` wins (clamped into
+     * [SPEED_LIMIT_MIN_KMH, SPEED_LIMIT_MAX_KMH]); otherwise the NVS-stored value is used.
+     *
+     * The MAVLink value is RAM-ONLY: this path never calls SpeedSensor::setLimitMaxKmh(),
+     * which writes flash on every call — a 5 s poll would wear the NVS out.
+     * @param source Out: where the returned ceiling came from
+     * @return the ceiling in km/h (0 when the limiter is disabled)
+     */
+    float getEffectiveSpeedLimitKmh(SpeedLimitSource& source) const;
+    float getEffectiveSpeedLimitKmh() const;
+
+    /** @brief Where the limiter ceiling currently comes from */
+    SpeedLimitSource getSpeedLimitSource() const;
+
+    /** @brief Telemetry name for a limiter source ("off"/"local"/"mavlink") */
+    static const char* getSpeedLimitSourceName(SpeedLimitSource source);
+
+    /**
+     * @brief Throttle ceiling the proportional taper is currently applying (%, 100 = inactive)
+     */
+    float getSpeedLimitCeilingPct() const { return limiterCeilingPct_; }
+
+    /** @brief Last SPEED_MAX received from the autopilot, km/h (0 = none) */
+    float getMavSpeedMaxKmh() const { return mavlink_.getSpeedMaxKmh(); }
+
+    /**
      * @brief Set ignition state with safety interlocks
      * @param state Ignition state string (OFF/ACC/IGNITION/START)
      * @param errorMsg Output parameter for error message if operation fails
@@ -308,6 +357,20 @@ private:
     bool transmissionInitialized_;  // True after first engine-running restore
 
     uint32_t lastSpeedLimitWarnMs_; // rate limit for the "limiter armed, speed invalid" log
+
+    // Limiter ceiling-source tracking (log on change only)
+    SpeedLimitSource lastSpeedLimitSource_;
+    float    lastSpeedLimitKmh_;    // NAN sentinel = nothing logged yet
+    uint32_t lastSpeedLimitLogMs_;
+
+    // Proportional taper state. The ceiling is what gets rate-limited, never the demand.
+    float    limiterCeilingPct_;    // currently applied throttle ceiling (%, 100 = inactive)
+    uint32_t limiterLastMs_;        // millis() of the last taper evaluation (0 = first call)
+
+    // Standing web throttle demand (%), re-limited every loop so a vehicle accelerating past
+    // the ceiling on an unchanged web command is still clamped. Reset to 0 on every path that
+    // idles the throttle — a demand that outlives an idle command would reopen the throttle.
+    float    webThrottleDemandPct_;
 
     /**
      * @brief Apply fail-safe commands (center steering, idle throttle, stop actuators)
@@ -453,9 +516,21 @@ private:
      * @brief Max-speed throttle limiter, applied to the arbitrated driver/MAVLink/web
      * throttle command only (the gear-boost PID owns throttle during a shift and is
      * never touched here). Fails OPEN: an invalid/stale speed reading does not clamp.
+     *
+     * A PROPORTIONAL taper, not a step: the ceiling is 100 % at
+     * `limit - SPEED_LIMIT_TAPER_BAND_KMH`, falls linearly to SPEED_LIMIT_FLOOR_PCT at the
+     * limit, and holds the floor above it — never a hard cut mid-corner. The ceiling itself
+     * is slew-limited so engagement cannot snap the servo.
      * @return the throttle percentage to command
      */
     float applySpeedLimit(float throttlePct);
+
+    /**
+     * @brief Log a limiter source/ceiling change once, then hold off.
+     * Suppressed logs deliberately do NOT update the remembered state, so the settled value
+     * is logged on the next opportunity rather than being lost.
+     */
+    void logSpeedLimitSourceChange(SpeedLimitSource source, float limitKmh);
 
     // Returns true when throttle should be clamped to TRANS_UNKNOWN_GEAR_THROTTLE_MAX.
     // Clips when gear position is invalid and physical gear is not neutral

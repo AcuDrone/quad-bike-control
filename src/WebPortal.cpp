@@ -571,8 +571,8 @@ bool WebPortal::validateCommand(const WebCommand& cmd, InputSource inputSource) 
 // ============================================================================
 
 String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
-    // Capacity headroom: ~48 top-level fields (incl. 4 steering-VESC fields, the
-    // 5 rail / board-I/O fields and the 6 hall-speed fields) + a 16-element array +
+    // Capacity headroom: ~52 top-level fields (incl. 4 steering-VESC fields, the
+    // 5 rail / board-I/O fields and the 10 hall-speed / limiter fields) + a 16-element array +
     // a 4-member object, plus copied String values. Sized to 4096 to leave room for
     // the transient `probe` object (only present while probe results are fresh).
     StaticJsonDocument<4096> doc;
@@ -609,6 +609,12 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["speed_circ_mm"] = serialized(String(telemetry.speed_circ_mm, 0));
     doc["speed_limit_on"] = telemetry.speed_limit_on;
     doc["speed_limit_max"] = serialized(String(telemetry.speed_limit_max, 0));
+    // The ENFORCED ceiling and where it came from. speed_limit_max above stays the STORED value
+    // so the configuration input keeps editing the local fallback while MAVLink is in charge.
+    doc["speed_limit_eff"] = serialized(String(telemetry.speed_limit_eff, 1));
+    doc["speed_limit_src"] = telemetry.speed_limit_src;
+    doc["mav_speed_max"] = serialized(String(telemetry.mav_speed_max, 1));
+    doc["speed_limit_ceil"] = serialized(String(telemetry.speed_limit_ceil, 0));
 
     // CAN bus vehicle data
     if (telemetry.can_status == "connected") {
