@@ -30,7 +30,9 @@ The system SHALL broadcast vehicle telemetry data to connected web clients at 5 
 - **AND** gear switching state is included: `"gear_switching": true/false`
 
 ### Requirement: Telemetry Display on Web Interface
-The system SHALL display real-time telemetry on the web interface.
+The system SHALL display real-time telemetry on the web interface. Vehicle speed SHALL be displayed
+from the hall-effect speed sensor independently of CAN bus status (it is no longer part of the
+CAN-gated vehicle-data display).
 
 #### Scenario: Display decoded command values
 - **WHEN** a telemetry message with MAVLink command data is received
@@ -44,11 +46,17 @@ The system SHALL display real-time telemetry on the web interface.
 - **AND** time since last heartbeat and command signal age are displayed (human-readable)
 - **AND** link indicators use color coding (green: good, yellow: degraded, red: lost/timeout)
 
+#### Scenario: Display vehicle speed from hall sensor
+- **WHEN** a telemetry message containing `vehicle_speed` is received
+- **THEN** the vehicle speed is displayed (0-255 km/h) regardless of `can_status`
+- **AND** when the accompanying `speed_valid` flag is false the display indicates the reading is
+  unavailable/unhealthy rather than showing a misleading 0
+- **AND** the value updates in real-time as new telemetry arrives
+
 #### Scenario: Display CAN bus vehicle data
 - **WHEN** telemetry message with CAN data is received
 - **AND** CAN status is "connected"
 - **THEN** engine RPM is displayed (0-16383 rpm)
-- **AND** vehicle speed is displayed (0-255 km/h)
 - **AND** coolant temperature is displayed with color coding:
   - Green: <90°C (normal)
   - Yellow: 90-105°C (warm)
@@ -59,12 +67,15 @@ The system SHALL display real-time telemetry on the web interface.
   - Red: >130°C (hot)
 - **AND** throttle position is displayed as percentage (0-100%)
 - **AND** CAN data age is displayed (time since last update)
+- **AND** vehicle speed is NOT part of this CAN-gated block (it is displayed independently from the
+  hall sensor)
 
 #### Scenario: Display CAN disconnected state
 - **WHEN** telemetry message has `can_status` != "connected"
 - **THEN** CAN card shows "Disconnected" or "No Data" status
 - **AND** CAN data values are greyed out or hidden
 - **AND** data age shows time since last valid CAN message
+- **AND** the hall-sensor vehicle speed display remains active and unaffected
 
 #### Scenario: Display gear transition indicator
 - **WHEN** telemetry message has `gear_switching` = true
