@@ -43,7 +43,8 @@ firmware SHALL assume that opto path is present and that its output is **inverte
 ### Requirement: Hall Pulse Counting via PCNT
 The system SHALL count hall-sensor pulses using the ESP32-S3 PCNT hardware pulse counter with a
 configurable glitch filter, and SHALL derive frequency by sampling the accumulated count on a fixed
-interval from the cooperative `update()` loop without using interrupts or a FreeRTOS task.
+interval from the cooperative `update()` loop without using interrupts or a FreeRTOS task. The
+derived speed SHALL be expressed in metres per second, the firmware's internal speed unit.
 
 #### Scenario: Configure PCNT on initialization
 - **WHEN** `SpeedSensor::begin()` is called
@@ -57,7 +58,9 @@ interval from the cooperative `update()` loop without using interrupts or a Free
 - **WHEN** `SpeedSensor::update()` is called and a `SPEED_SAMPLE_INTERVAL_MS` window has elapsed
 - **THEN** the delta pulse count over the window SHALL be read from the PCNT unit
 - **AND** speed SHALL be computed using `distance_per_pulse = wheel_circumference_mm / pulses_per_rev`
-  and the elapsed time, and exposed via `getSpeedKmh()`
+  and the elapsed time, and exposed via `getSpeedMs()`
+- **AND** the result SHALL be taken directly as metres per second, because millimetres per
+  millisecond is metres per second by definition — no unit conversion SHALL be applied
 - **AND** `update()` SHALL return without blocking the main loop
 
 ### Requirement: Runtime Speed Calibration
@@ -102,12 +105,19 @@ them via web commands routed through `WebPortal::WebCommand` → `VehicleControl
 
 ### Requirement: Speed Signal Validity and Timeout
 The system SHALL distinguish "vehicle stopped" from "sensor unhealthy". A silent sensor SHALL report
-0 km/h, and a separate validity signal SHALL indicate whether the reading can be trusted, so that
+0 m/s, and a separate validity signal SHALL indicate whether the reading can be trusted, so that
 each consumer can apply its own fail-safe policy.
 
 #### Scenario: Report zero speed when no pulses arrive
 - **WHEN** no hall pulses have been counted for `SPEED_STALE_TIMEOUT_MS`
-- **THEN** the reported speed SHALL decay to 0 km/h
+- **THEN** the reported speed SHALL decay to 0 m/s
+
+#### Scenario: Decay the reading between pulses rather than holding it
+- **WHEN** a sample window sees no edges and the stale timeout has not yet elapsed
+- **THEN** the reported speed SHALL be reduced to at most the speed still reachable from the last
+  observed speed at `SPEED_MAX_PLAUSIBLE_DECEL_MS2`, rather than held at its last value
+- **AND** the plausibility check SHALL be evaluated on every such sample, not only at the stale
+  timeout, so a mid-motion wire fault is latched as soon as it is detectable
 
 #### Scenario: Validity is false until the sensor has produced pulses
 - **WHEN** the system boots and no plausible pulse has yet been counted
@@ -115,8 +125,8 @@ each consumer can apply its own fail-safe policy.
 - **AND** `isValid()` SHALL become true after at least one plausible pulse is counted
 
 #### Scenario: Flag implausible pulse loss as suspicious
-- **WHEN** the vehicle was recently moving above the interlock threshold and pulses cease faster than
-  a physically plausible deceleration
+- **WHEN** the vehicle was recently moving above `TRANS_SPEED_INTERLOCK_THRESHOLD_MS` and pulses
+  cease faster than a physically plausible deceleration
 - **THEN** the reading SHALL be flagged suspicious (`isValid()` returns false)
 - **AND** consumers SHALL treat the speed as unknown rather than as a genuine 0 m/s, except the
   transmission interlock, which MAY use the decaying reading as an upper bound
@@ -137,32 +147,4 @@ speed is displayed whenever the sensor is live regardless of `can_status`.
 - **THEN** the speed value SHALL be displayed regardless of `can_status`
 - **AND** when `speed_valid` is false the UI SHALL indicate the reading is unavailable/unhealthy
   rather than showing a misleading 0
-
-### Requirement: Configurable Maximum-Speed Throttle Limiter
-The system SHALL provide a runtime-configurable maximum-speed throttle limiter that reduces throttle
-authority above a settable speed. The limiter SHALL be enabled by default and SHALL fail safe on
-loss of a valid speed reading.
-
-#### Scenario: Configure the limiter at runtime
-- **WHEN** a `speed_limit_enable` command (boolean) or a `speed_limit_set` command (maximum km/h) is
-  received via the web command path
-- **THEN** the setting SHALL be validated and persisted to NVS namespace `"speed"`
-- **AND** the limiter SHALL default to enabled (`SPEED_LIMIT_ENABLE_DEFAULT` = true), and an
-  operator SHALL be able to disable it with `speed_limit_enable`
-
-#### Scenario: Reduce throttle authority above the maximum speed
-- **WHEN** the limiter is enabled and the speed reading is valid and exceeds `limit_max_kmh`
-- **THEN** the throttle command SHALL be clamped to `SPEED_LIMIT_THROTTLE_CAP_PCT` (a reduced ceiling,
-  not a hard cut)
-- **AND** when speed is at or below the limit the throttle command SHALL pass through unchanged
-
-#### Scenario: Limiter fails open on sensor loss
-- **WHEN** the limiter is enabled and the speed reading is invalid or stale
-- **THEN** the limiter SHALL NOT clamp the throttle (fail open)
-- **AND** a rate-limited warning SHALL be logged
-
-#### Scenario: Limiter does not fight the gear-boost throttle PID
-- **WHEN** a gear-change throttle-boost is active (the boost PID owns the throttle)
-- **THEN** the speed limiter SHALL apply only to the arbitrated driver/MAVLink/web throttle command
-- **AND** SHALL NOT override or conflict with the gear-boost PID output
 
