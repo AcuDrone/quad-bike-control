@@ -64,7 +64,7 @@ bool MavlinkInterface::begin(uint8_t rxPin, uint8_t txPin, uint8_t uartNum, uint
     rateWindowStart_ = now;
     rateWindowCount_ = 0;
     lastOdomTimeUs_ = 0;       // no odometry baseline yet → the first send re-baselines
-    speedMaxMs_ = NAN;         // no SPEED_MAX yet → the vehicle layer uses its stored ceiling
+    speedMaxMs_ = NAN;         // no SPEED_MAX yet → the vehicle layer does not limit at all
     speedMaxRxMs_ = 0;
     lastParamRequestMs_ = 0;   // first poll is scheduled off targetLearnedMs_
 
@@ -188,7 +188,7 @@ void MavlinkInterface::update() {
         // being re-established, i.e. a gate is flapping.
         // spdmax/age/valid make the SPEED_MAX subscription diagnosable on serial alone:
         // "nan" = never received, a sawtooth age 0→MAVLINK_PARAM_POLL_MS = the poll is answered,
-        // and valid:N with a real value = stale or link down (the vehicle layer has fallen back).
+        // and valid:N with a real value = stale or link down (the vehicle layer stops limiting).
         Debug::printfFeature(DebugFeature::MAVLINK,
             "[MAV] viso:%lu dt:%lums spdmax:%.2fm/s age:%lums valid:%s\n",
             (unsigned long)odomTxCount_, (unsigned long)lastOdomDtMs_,
@@ -310,14 +310,14 @@ void MavlinkInterface::handleParamValue(uint8_t sysid, uint8_t compid,
     if (changed) {
         Debug::printfFeature(DebugFeature::MAVLINK,
             "[MAV] SPEED_MAX = %.2f m/s (%.1f km/h)%s\n",
-            value, value * MAVLINK_MS_TO_KMH,
-            (value <= 0.0f) ? " — 0 means \"not set\", limiter falls back to the stored ceiling" : "");
+            value, value * MS_TO_KMH,
+            (value <= 0.0f) ? " — 0 means \"no limit\", the limiter does nothing" : "");
     }
 }
 
 bool MavlinkInterface::hasSpeedMaxParam() const {
     if (isnan(speedMaxMs_) || speedMaxMs_ <= 0.0f) {
-        return false;   // never received, or ArduPilot's "not set" zero
+        return false;   // never received, or the "no limit" zero
     }
     if (!isLinkUp()) {
         return false;   // cable out / autopilot down — fall back within the heartbeat timeout
@@ -325,14 +325,10 @@ bool MavlinkInterface::hasSpeedMaxParam() const {
     return (millis() - speedMaxRxMs_) < MAVLINK_PARAM_STALE_MS;
 }
 
-float MavlinkInterface::getSpeedMaxKmh() const {
+float MavlinkInterface::getSpeedMaxMs() const {
     if (isnan(speedMaxMs_)) {
         return 0.0f;
     }
-    return speedMaxMs_ * MAVLINK_MS_TO_KMH;
-}
-
-float MavlinkInterface::getSpeedMaxRawMs() const {
     return speedMaxMs_;
 }
 
@@ -479,8 +475,8 @@ void MavlinkInterface::report(const StateReport& state) {
         // fallback is in use, so a consumer can always tell measured from commanded (and the
         // value shown here then equals EFI_STATUS.throttle_out, which always carries commanded).
         // airspeed, heading, alt and climb remain zero: no source on this component.
-        float groundSpeedMs = (state.speedValid && state.speedKmh > 0.0f)
-            ? (state.speedKmh / 3.6f)
+        float groundSpeedMs = (state.speedValid && state.speedMs > 0.0f)
+            ? state.speedMs
             : 0.0f;
         uint16_t throttlePct = state.canValid ? state.throttlePosition : state.throttleCmdPct;
         mavlink_msg_vfr_hud_pack(
@@ -553,7 +549,7 @@ void MavlinkInterface::sendVisionPositionDelta(const StateReport& state) {
         return;
     }
     // Gate 2: sensor health. This covers the speed sensor's wire-fault (suspicious) latch —
-    // a cut signal wire decays to 0 km/h and looks exactly like "stopped" while the vehicle
+    // a cut signal wire decays to 0 m/s and looks exactly like "stopped" while the vehicle
     // is still rolling. That is the single most dangerous zero in the system.
     if (!state.speedValid) {
         lastOdomTimeUs_ = 0;
@@ -562,7 +558,7 @@ void MavlinkInterface::sendVisionPositionDelta(const StateReport& state) {
     // Gate 3: rolling with no recoverable sign (neutral, or gear unknown mid-shift). A wrong
     // sign injects an error of TWICE the speed; a skipped sample costs nothing. Note the
     // comparison lets a genuine standstill through as a zero-motion update.
-    if (state.travelDirection == 0 && state.speedKmh > MAVLINK_VISO_NEUTRAL_ZERO_KMH) {
+    if (state.travelDirection == 0 && state.speedMs > MAVLINK_VISO_NEUTRAL_ZERO_MS) {
         lastOdomTimeUs_ = 0;
         return;
     }
@@ -585,7 +581,7 @@ void MavlinkInterface::sendVisionPositionDelta(const StateReport& state) {
     // 200 ms, because the cooperative loop's tick jitters and ArduPilot divides by exactly the
     // time_delta_usec we send here to recover the velocity.
     const float dtSec = (float)dtUs * 1.0e-6f;
-    const float speedMs = (state.speedKmh / 3.6f) * (float)state.travelDirection;
+    const float speedMs = state.speedMs * (float)state.travelDirection;
 
     // Body frame, x forward. y (right) and z (down) are exactly 0: the wheel measures only the
     // longitudinal axis, and a ground rover has no body-frame lateral or vertical travel to

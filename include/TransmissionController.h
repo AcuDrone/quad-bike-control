@@ -13,8 +13,9 @@ struct TransmissionVehicleData {
     uint8_t vehicleSpeed;       // km/h (0-255) — CAN-sourced; dead (OBD-II PID 0x0D is disabled)
     uint32_t lastUpdateTime;    // millis() timestamp
     bool dataValid;             // true if CAN communication is healthy
-    float sensorSpeedKmh;       // hall speed sensor reading (km/h) — the live speed source
+    float sensorSpeedMs;        // hall speed sensor reading (m/s) — the live speed source
     bool sensorSpeedValid;      // hall sensor health; false means "speed unknown", NOT "stopped"
+    bool sensorSpeedSuspicious; // latched implausible pulse loss; reading is a decaying upper bound
 };
 
 /**

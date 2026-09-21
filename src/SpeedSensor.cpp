@@ -11,14 +11,12 @@ SpeedSensor::SpeedSensor()
       pulsesPerRev_(SPEED_DEFAULT_PULSES_PER_REV),
       wheelCircumferenceMm_(SPEED_DEFAULT_WHEEL_CIRCUMFERENCE_MM),
       distancePerPulseMm_(0.0f),
-      limiterEnabled_(SPEED_LIMIT_ENABLE_DEFAULT),
-      limitMaxKmh_(SPEED_LIMIT_MAX_KMH_DEFAULT),
       lastSampleMs_(0),
       lastPulseMs_(0),
       lastTotal_(0),
       pulseTotal_(0),
-      speedKmh_(0.0f),
-      lastMovingSpeedKmh_(0.0f),
+      speedMs_(0.0f),
+      lastMovingSpeedMs_(0.0f),
       everPulsed_(false),
       suspicious_(false),
       staleHandled_(true) {
@@ -34,10 +32,18 @@ void SpeedSensor::recomputeDistancePerPulse() {
 bool SpeedSensor::begin() {
     Preferences prefs;
     if (prefs.begin(NVS_NAMESPACE, true)) {
-        pulsesPerRev_         = (uint16_t)prefs.getInt("ppr", SPEED_DEFAULT_PULSES_PER_REV);
-        wheelCircumferenceMm_ = prefs.getFloat("circ_mm", SPEED_DEFAULT_WHEEL_CIRCUMFERENCE_MM);
-        limiterEnabled_       = prefs.getBool("lim_on", SPEED_LIMIT_ENABLE_DEFAULT);
-        limitMaxKmh_          = prefs.getFloat("lim_kmh", SPEED_LIMIT_MAX_KMH_DEFAULT);
+        int32_t ppr  = prefs.getInt("ppr", SPEED_DEFAULT_PULSES_PER_REV);
+        float   circ = prefs.getFloat("circ_mm", SPEED_DEFAULT_WHEEL_CIRCUMFERENCE_MM);
+        prefs.end();
+        if (ppr >= SPEED_PPR_MIN && ppr <= SPEED_PPR_MAX) pulsesPerRev_ = (uint16_t)ppr;
+        if (circ >= SPEED_CIRC_MIN_MM && circ <= SPEED_CIRC_MAX_MM) wheelCircumferenceMm_ = circ;
+    }
+    // One-off cleanup of the retired local-limiter keys — the ceiling now comes only from the
+    // autopilot's SPEED_MAX. remove() on an absent key is a no-op, so after the first boot on
+    // new firmware this costs nothing.
+    if (prefs.begin(NVS_NAMESPACE, false)) {
+        prefs.remove("lim_on");
+        prefs.remove("lim_kmh");
         prefs.end();
     }
     recomputeDistancePerPulse();
@@ -50,6 +56,13 @@ bool SpeedSensor::begin() {
     // train between two samples cannot lose counts and no user ISR is needed.
     unitConfig.flags.accum_count = 1;
 
+    pcnt_glitch_filter_config_t filterConfig = {};
+    filterConfig.max_glitch_ns = SPEED_GLITCH_FILTER_NS;
+
+    pcnt_chan_config_t chanConfig = {};
+    chanConfig.edge_gpio_num  = PIN_SPEED_SENSOR;
+    chanConfig.level_gpio_num = -1;   // no direction/level input: the sensor is unidirectional
+
     esp_err_t err = pcnt_new_unit(&unitConfig, &unit_);
     if (err != ESP_OK) {
         Debug::printfFeature(DebugFeature::VEHICLE, "[SPEED] PCNT unit alloc failed (%d)\n", (int)err);
@@ -58,38 +71,30 @@ bool SpeedSensor::begin() {
     }
 
     // accum_count only fires at watch points, so the limits must be watched.
-    pcnt_unit_add_watch_point(unit_, SPEED_PCNT_HIGH_LIMIT);
-    pcnt_unit_add_watch_point(unit_, SPEED_PCNT_LOW_LIMIT);
-
-    pcnt_glitch_filter_config_t filterConfig = {};
-    filterConfig.max_glitch_ns = SPEED_GLITCH_FILTER_NS;
-    pcnt_unit_set_glitch_filter(unit_, &filterConfig);
-
-    pcnt_chan_config_t chanConfig = {};
-    chanConfig.edge_gpio_num  = PIN_SPEED_SENSOR;
-    chanConfig.level_gpio_num = -1;   // no direction/level input: the sensor is unidirectional
-    err = pcnt_new_channel(unit_, &chanConfig, &channel_);
-    if (err != ESP_OK) {
-        Debug::printfFeature(DebugFeature::VEHICLE, "[SPEED] PCNT channel alloc failed (%d)\n", (int)err);
-        pcnt_del_unit(unit_);
-        unit_ = nullptr;
-        channel_ = nullptr;
-        return false;
-    }
-
+    err = pcnt_unit_add_watch_point(unit_, SPEED_PCNT_HIGH_LIMIT);
+    if (err == ESP_OK) err = pcnt_unit_add_watch_point(unit_, SPEED_PCNT_LOW_LIMIT);
+    if (err == ESP_OK) err = pcnt_unit_set_glitch_filter(unit_, &filterConfig);
+    if (err == ESP_OK) err = pcnt_new_channel(unit_, &chanConfig, &channel_);
     // ONE edge only. The 6N137 inverts the sensor signal (LED conducting -> GPIO8 LOW),
     // so an active sensor pulse arrives here as a falling edge — but the pulse RATE is
     // identical on either edge, so this is a documentation matter, not a polarity fix.
-    pcnt_channel_set_edge_action(channel_,
+    if (err == ESP_OK) err = pcnt_channel_set_edge_action(channel_,
                                  PCNT_CHANNEL_EDGE_ACTION_HOLD,      // rising  (opto releasing)
                                  PCNT_CHANNEL_EDGE_ACTION_INCREASE); // falling (opto conducting)
-    pcnt_channel_set_level_action(channel_,
+    if (err == ESP_OK) err = pcnt_channel_set_level_action(channel_,
                                   PCNT_CHANNEL_LEVEL_ACTION_KEEP,
                                   PCNT_CHANNEL_LEVEL_ACTION_KEEP);
-
-    pcnt_unit_enable(unit_);
-    pcnt_unit_clear_count(unit_);
-    pcnt_unit_start(unit_);
+    if (err == ESP_OK) err = pcnt_unit_enable(unit_);
+    if (err == ESP_OK) err = pcnt_unit_clear_count(unit_);
+    if (err == ESP_OK) err = pcnt_unit_start(unit_);
+    if (err != ESP_OK) {
+        Debug::printfFeature(DebugFeature::VEHICLE, "[SPEED] PCNT setup failed (%s)\n", esp_err_to_name(err));
+        if (channel_) { pcnt_del_channel(channel_); channel_ = nullptr; }
+        pcnt_unit_disable(unit_);
+        pcnt_del_unit(unit_);
+        unit_ = nullptr;
+        return false;
+    }
 
     initialized_  = true;
     lastSampleMs_ = millis();
@@ -127,19 +132,23 @@ void SpeedSensor::update() {
     lastTotal_  = total;
     pulseTotal_ = total;
 
+    if (delta > SPEED_MAX_PULSES_PER_SAMPLE) {
+        return;
+    }
+
     if (delta > 0) {
         // Measure over the interval since the last window that SAW edges, not since the
         // last sample: below ~5 km/h one pulse period spans several sample windows, and
         // dividing by the sample interval would multiply the reading (a 1 km/h crawl would
-        // read ~8 km/h and trip the interlock). Clamped so the first pulse after a long
-        // standstill cannot be divided by an arbitrarily large gap.
+        // read ~8 km/h and trip the interlock). After a stale zero every pulse in this delta
+        // arrived within the last sample, so the window is dtMs.
         uint32_t windowMs = now - lastPulseMs_;
-        if (windowMs > SPEED_STALE_TIMEOUT_MS) windowMs = SPEED_STALE_TIMEOUT_MS;
-        if (windowMs == 0) windowMs = dtMs;
-        // mm/ms is metres per second by definition; ×3.6 gives km/h.
-        speedKmh_ = ((delta * distancePerPulseMm_) / (float)windowMs) * 3.6f;
-        lastPulseMs_        = now;
-        lastMovingSpeedKmh_ = speedKmh_;
+        if (staleHandled_ || windowMs == 0) windowMs = dtMs;
+        // mm/ms IS metres per second by definition — no conversion, and none wanted:
+        // m/s is the firmware's internal speed unit everywhere.
+        speedMs_ = (delta * distancePerPulseMm_) / (float)windowMs;
+        lastPulseMs_       = now;
+        lastMovingSpeedMs_ = speedMs_;
         staleHandled_       = false;
         suspicious_         = false;   // a live pulse train clears a latched fault
         if (!everPulsed_) {
@@ -149,28 +158,31 @@ void SpeedSensor::update() {
         return;
     }
 
-    // No edges in this window. Hold the last reading until the stale timeout: at low
-    // speed one pulse period can span several sample windows.
-    uint32_t silenceMs = now - lastPulseMs_;
-    if (silenceMs < SPEED_STALE_TIMEOUT_MS || staleHandled_) {
+    if (staleHandled_) {
         return;
     }
-    staleHandled_ = true;
-    speedKmh_     = 0.0f;
+    uint32_t silenceMs = now - lastPulseMs_;
 
-    // Could the vehicle physically have stopped inside this silence? If bleeding off
-    // the last observed speed needs longer than the silence, the pulses vanished faster
-    // than any real deceleration — treat the 0 as unknown, not as "stopped".
-    if (lastMovingSpeedKmh_ > (float)TRANS_SPEED_INTERLOCK_THRESHOLD) {
-        uint32_t minStopMs = (uint32_t)((lastMovingSpeedKmh_ / SPEED_MAX_PLAUSIBLE_DECEL_KMH_S) * 1000.0f);
-        if (minStopMs > silenceMs) {
+    float plausibleMs = lastMovingSpeedMs_
+                      - SPEED_MAX_PLAUSIBLE_DECEL_MS2 * (silenceMs * 0.001f);
+    if (plausibleMs < 0.0f) plausibleMs = 0.0f;
+    if (speedMs_ > plausibleMs) speedMs_ = plausibleMs;
+
+    if (!suspicious_ && lastMovingSpeedMs_ > TRANS_SPEED_INTERLOCK_THRESHOLD_MS) {
+        float impliedMaxMs = distancePerPulseMm_ / (float)silenceMs;
+        if (plausibleMs > impliedMaxMs) {
             suspicious_ = true;
             Debug::printfFeature(DebugFeature::VEHICLE,
-                "[SPEED] WARNING: pulses stopped implausibly fast from %.1f km/h (%lu ms) — reading marked invalid\n",
-                lastMovingSpeedKmh_, (unsigned long)silenceMs);
+                "[SPEED] WARNING: pulses stopped implausibly fast from %.2f m/s (%.1f km/h, %lu ms) — reading marked invalid\n",
+                lastMovingSpeedMs_, lastMovingSpeedMs_ * MS_TO_KMH, (unsigned long)silenceMs);
         }
     }
-    lastMovingSpeedKmh_ = 0.0f;
+
+    if (silenceMs >= SPEED_STALE_TIMEOUT_MS) {
+        staleHandled_      = true;
+        speedMs_           = 0.0f;
+        lastMovingSpeedMs_ = 0.0f;
+    }
 }
 
 bool SpeedSensor::setPulsesPerRev(int32_t ppr) {
@@ -204,30 +216,5 @@ bool SpeedSensor::setWheelCircumferenceMm(float mm) {
     }
     Debug::printfFeature(DebugFeature::VEHICLE, "[SPEED] Wheel circumference set to %.0f mm (%.1f mm/pulse)\n",
                          wheelCircumferenceMm_, distancePerPulseMm_);
-    return true;
-}
-
-void SpeedSensor::setLimiterEnabled(bool enabled) {
-    limiterEnabled_ = enabled;
-    Preferences prefs;
-    if (prefs.begin(NVS_NAMESPACE, false)) {
-        prefs.putBool("lim_on", enabled);
-        prefs.end();
-    }
-    Debug::printfFeature(DebugFeature::VEHICLE, "[SPEED] Max-speed limiter %s (%.0f km/h)\n",
-                         enabled ? "ENABLED" : "DISABLED", limitMaxKmh_);
-}
-
-bool SpeedSensor::setLimitMaxKmh(float kmh) {
-    if (!(kmh >= SPEED_LIMIT_MIN_KMH) || kmh > SPEED_LIMIT_MAX_KMH) {
-        return false;
-    }
-    limitMaxKmh_ = kmh;
-    Preferences prefs;
-    if (prefs.begin(NVS_NAMESPACE, false)) {
-        prefs.putFloat("lim_kmh", limitMaxKmh_);
-        prefs.end();
-    }
-    Debug::printfFeature(DebugFeature::VEHICLE, "[SPEED] Limiter maximum set to %.1f km/h\n", limitMaxKmh_);
     return true;
 }

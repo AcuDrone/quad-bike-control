@@ -536,36 +536,6 @@ bool WebPortal::parseWebCommand(uint8_t* data, size_t len) {
     return true;
 }
 
-bool WebPortal::validateCommand(const WebCommand& cmd, InputSource inputSource) {
-    // Only allow web commands when input source is WEB (not MAVLINK or FAILSAFE)
-    if (inputSource != InputSource::WEB) {
-        return false;
-    }
-
-    // Validate command type
-    if (cmd.cmd != "set_gear" && cmd.cmd != "set_steering" && cmd.cmd != "set_throttle") {
-        return false;
-    }
-
-    // Validate ranges
-    if (cmd.cmd == "set_steering") {
-        if (cmd.floatValue < -100.0f || cmd.floatValue > 100.0f) {
-            return false;
-        }
-    } else if (cmd.cmd == "set_throttle") {
-        if (cmd.floatValue < 0.0f || cmd.floatValue > 100.0f) {
-            return false;
-        }
-    } else if (cmd.cmd == "set_gear") {
-        if (cmd.strValue != "R" && cmd.strValue != "N" &&
-            cmd.strValue != "L" && cmd.strValue != "H") {
-            return false;
-        }
-    }
-
-    return true;
-}
-
 // ============================================================================
 // PRIVATE METHODS - JSON FORMATTING
 // ============================================================================
@@ -603,17 +573,14 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // Hall speed sensor — deliberately OUTSIDE the CAN-connected block: speed is a
     // separate physical source with its own health, so it must display whenever the
     // sensor is live regardless of `can_status`.
-    doc["vehicle_speed"] = serialized(String(telemetry.vehicle_speed, 1));
+    // THE PRESENTATION EDGE: the firmware carries m/s, the UI speaks km/h. These two
+    // multiplications are the only place a road speed changes unit on the way out.
+    doc["vehicle_speed"] = serialized(String(telemetry.vehicle_speed_ms * MS_TO_KMH, 1));
     doc["speed_valid"] = telemetry.speed_valid;
     doc["speed_ppr"] = telemetry.speed_ppr;
     doc["speed_circ_mm"] = serialized(String(telemetry.speed_circ_mm, 0));
-    doc["speed_limit_on"] = telemetry.speed_limit_on;
-    doc["speed_limit_max"] = serialized(String(telemetry.speed_limit_max, 0));
-    // The ENFORCED ceiling and where it came from. speed_limit_max above stays the STORED value
-    // so the configuration input keeps editing the local fallback while MAVLink is in charge.
-    doc["speed_limit_eff"] = serialized(String(telemetry.speed_limit_eff, 1));
-    doc["speed_limit_src"] = telemetry.speed_limit_src;
-    doc["mav_speed_max"] = serialized(String(telemetry.mav_speed_max, 1));
+    // The enforced ceiling, from the autopilot's SPEED_MAX alone. 0 = no limit.
+    doc["speed_limit_kmh"] = serialized(String(telemetry.speed_limit_ms * MS_TO_KMH, 1));
     doc["speed_limit_ceil"] = serialized(String(telemetry.speed_limit_ceil, 0));
 
     // CAN bus vehicle data

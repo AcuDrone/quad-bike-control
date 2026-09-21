@@ -23,14 +23,6 @@
  */
 class VehicleController {
 public:
-    /**
-     * @brief Where the max-speed limiter's km/h ceiling currently comes from.
-     * OFF = the local master toggle is off (nothing is limited); LOCAL = the NVS-stored
-     * value; MAVLINK = the autopilot's SPEED_MAX parameter. The autopilot supplies the
-     * VALUE only — it can never arm or disarm the limiter.
-     */
-    enum class SpeedLimitSource { OFF, LOCAL, MAVLINK };
-
     VehicleController(SteeringController& steering,
                       ThrottleController& throttle,
                       TransmissionController& transmission,
@@ -209,46 +201,30 @@ public:
     CANController::ProbeResults getProbeResults() const { return canController_.getProbeResults(); }
 
     /**
-     * @brief Hall-sensor vehicle speed (km/h) and its health flag.
+     * @brief Hall-sensor vehicle speed (m/s) and its health flag.
      * Independent of CAN status — a CAN outage does not blank these.
      */
-    float getVehicleSpeedKmh() const { return speedSensor_.getSpeedKmh(); }
+    float getVehicleSpeedMs() const { return speedSensor_.getSpeedMs(); }
     bool isVehicleSpeedValid() const { return speedSensor_.isValid(); }
 
-    /** @brief Speed-sensor calibration and limiter settings (telemetry / web UI) */
+    /** @brief Speed-sensor calibration (telemetry / web UI) */
     uint16_t getSpeedPulsesPerRev() const { return speedSensor_.getPulsesPerRev(); }
     float getSpeedWheelCircumferenceMm() const { return speedSensor_.getWheelCircumferenceMm(); }
-    bool isSpeedLimiterEnabled() const { return speedSensor_.isLimiterEnabled(); }
-    float getSpeedLimitMaxKmh() const { return speedSensor_.getLimitMaxKmh(); }
 
     /**
-     * @brief The ceiling the limiter is actually enforcing (km/h), and where it came from.
+     * @brief The ceiling the limiter is enforcing, in m/s. 0 = NO LIMIT.
      *
-     * Arbitration: the local enable toggle is the MASTER SWITCH — off means OFF/0 and no
-     * autopilot value is even consulted. With it on, a usable `SPEED_MAX` wins (clamped into
-     * [SPEED_LIMIT_MIN_KMH, SPEED_LIMIT_MAX_KMH]); otherwise the NVS-stored value is used.
-     *
-     * The MAVLink value is RAM-ONLY: this path never calls SpeedSensor::setLimitMaxKmh(),
-     * which writes flash on every call — a 5 s poll would wear the NVS out.
-     * @param source Out: where the returned ceiling came from
-     * @return the ceiling in km/h (0 when the limiter is disabled)
+     * There is exactly one source: the autopilot's `SPEED_MAX` parameter, held in RAM only
+     * (never persisted — there is no local ceiling any more). When no usable value is
+     * available — never received, zero, out of range, stale, or the link is down — this
+     * returns 0 and the limiter does nothing, exactly as ArduPilot reads `SPEED_MAX = 0`.
      */
-    float getEffectiveSpeedLimitKmh(SpeedLimitSource& source) const;
-    float getEffectiveSpeedLimitKmh() const;
-
-    /** @brief Where the limiter ceiling currently comes from */
-    SpeedLimitSource getSpeedLimitSource() const;
-
-    /** @brief Telemetry name for a limiter source ("off"/"local"/"mavlink") */
-    static const char* getSpeedLimitSourceName(SpeedLimitSource source);
+    float getSpeedLimitMs() const;
 
     /**
      * @brief Throttle ceiling the proportional taper is currently applying (%, 100 = inactive)
      */
     float getSpeedLimitCeilingPct() const { return limiterCeilingPct_; }
-
-    /** @brief Last SPEED_MAX received from the autopilot, km/h (0 = none) */
-    float getMavSpeedMaxKmh() const { return mavlink_.getSpeedMaxKmh(); }
 
     /**
      * @brief Set ignition state with safety interlocks
@@ -358,9 +334,8 @@ private:
 
     uint32_t lastSpeedLimitWarnMs_; // rate limit for the "limiter armed, speed invalid" log
 
-    // Limiter ceiling-source tracking (log on change only)
-    SpeedLimitSource lastSpeedLimitSource_;
-    float    lastSpeedLimitKmh_;    // NAN sentinel = nothing logged yet
+    // Limiter ceiling tracking (log on change only)
+    float    lastSpeedLimitMs_;     // NAN sentinel = nothing logged yet
     uint32_t lastSpeedLimitLogMs_;
 
     // Proportional taper state. The ceiling is what gets rate-limited, never the demand.
@@ -503,14 +478,12 @@ private:
     void processCanProbeCommand(WebPortal& webPortal);
 
     /**
-     * @brief Speed-sensor calibration and max-speed limiter commands
-     * (`speed_cal_ppr`, `speed_cal_circ`, `speed_limit_enable`, `speed_limit_set`).
+     * @brief Speed-sensor calibration commands (`speed_cal_ppr`, `speed_cal_circ`).
      * Accepted regardless of the active input source, like the other calibration commands.
+     * There is deliberately no limiter command: the ceiling is the autopilot's alone.
      */
     void processSpeedCalPprCommand(float value, WebPortal& webPortal);
     void processSpeedCalCircCommand(float value, WebPortal& webPortal);
-    void processSpeedLimitEnableCommand(bool enable, WebPortal& webPortal);
-    void processSpeedLimitSetCommand(float kmh, WebPortal& webPortal);
 
     /**
      * @brief Max-speed throttle limiter, applied to the arbitrated driver/MAVLink/web
@@ -518,19 +491,20 @@ private:
      * never touched here). Fails OPEN: an invalid/stale speed reading does not clamp.
      *
      * A PROPORTIONAL taper, not a step: the ceiling is 100 % at
-     * `limit - SPEED_LIMIT_TAPER_BAND_KMH`, falls linearly to SPEED_LIMIT_FLOOR_PCT at the
+     * `limit - SPEED_LIMIT_TAPER_BAND_MS`, falls linearly to SPEED_LIMIT_FLOOR_PCT at the
      * limit, and holds the floor above it — never a hard cut mid-corner. The ceiling itself
-     * is slew-limited so engagement cannot snap the servo.
+     * is slew-limited so engagement cannot snap the servo. With no limit (0 m/s) the demand
+     * passes through untouched.
      * @return the throttle percentage to command
      */
     float applySpeedLimit(float throttlePct);
 
     /**
-     * @brief Log a limiter source/ceiling change once, then hold off.
+     * @brief Log a limit change once, then hold off.
      * Suppressed logs deliberately do NOT update the remembered state, so the settled value
      * is logged on the next opportunity rather than being lost.
      */
-    void logSpeedLimitSourceChange(SpeedLimitSource source, float limitKmh);
+    void logSpeedLimitChange(float limitMs);
 
     // Returns true when throttle should be clamped to TRANS_UNKNOWN_GEAR_THROTTLE_MAX.
     // Clips when gear position is invalid and physical gear is not neutral

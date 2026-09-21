@@ -46,8 +46,7 @@ VehicleController::VehicleController(SteeringController& steering,
       lastCommandedGear_(TransmissionController::Gear::GEAR_UNKNOWN),
       transmissionInitialized_(false),
       lastSpeedLimitWarnMs_(0),
-      lastSpeedLimitSource_(SpeedLimitSource::OFF),
-      lastSpeedLimitKmh_(NAN),
+      lastSpeedLimitMs_(NAN),
       lastSpeedLimitLogMs_(0),
       limiterCeilingPct_(100.0f),
       limiterLastMs_(0),
@@ -147,8 +146,9 @@ void VehicleController::update() {
     transData.vehicleSpeed = canData.vehicleSpeed;
     transData.lastUpdateTime = canData.lastUpdateTime;
     transData.dataValid = canData.dataValid;
-    transData.sensorSpeedKmh = speedSensor_.getSpeedKmh();
+    transData.sensorSpeedMs = speedSensor_.getSpeedMs();
     transData.sensorSpeedValid = speedSensor_.isValid();
+    transData.sensorSpeedSuspicious = speedSensor_.isSuspicious();
     transmission_.setVehicleData(transData);
 
     // Update relay controller with engine RPM (for automatic cranking stop)
@@ -199,6 +199,10 @@ void VehicleController::setInputSource(InputSource source) {
                      (source == InputSource::MAVLINK) ? INPUT_SOURCE_NAME_MAVLINK :
                      (source == InputSource::WEB) ? INPUT_SOURCE_NAME_WEB :
                      INPUT_SOURCE_NAME_FAILSAFE);
+        if (source == InputSource::WEB) {
+            webThrottleDemandPct_ = 0.0f;
+            throttle_.idle();
+        }
     }
     currentInputSource_ = source;
 }
@@ -284,12 +288,6 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
     } else if (cmd.cmd == "speed_cal_circ") {
         processSpeedCalCircCommand(cmd.floatValue, webPortal);
         return;
-    } else if (cmd.cmd == "speed_limit_enable") {
-        processSpeedLimitEnableCommand(cmd.boolValue, webPortal);
-        return;
-    } else if (cmd.cmd == "speed_limit_set") {
-        processSpeedLimitSetCommand(cmd.floatValue, webPortal);
-        return;
     } else if (cmd.cmd == "can_probe") {
         // ECU capability probe — available regardless of input source (diagnostic)
         processCanProbeCommand(webPortal);
@@ -297,6 +295,11 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
     }
 
     Debug::printfFeature(DebugFeature::VEHICLE, "[WEB] Command end %s\n", cmd.cmd);
+    if (currentInputSource_ != InputSource::WEB) {
+        webPortal.sendResponse(false, "MAVLink control active");
+        return;
+    }
+
     // Process control commands
     if (cmd.cmd == "set_gear") {
         processGearCommand(cmd.strValue, webPortal);
@@ -511,90 +514,65 @@ void VehicleController::processThrottleCommand(float value, WebPortal& webPortal
 }
 
 // ============================================================================
-// MAX-SPEED LIMITER — ceiling arbitration and proportional taper
+// MAX-SPEED LIMITER — SPEED_MAX ceiling and proportional taper
 // ============================================================================
 
-float VehicleController::getEffectiveSpeedLimitKmh(SpeedLimitSource& source) const {
-    // The local toggle is the MASTER SWITCH. It is checked first and on its own: the autopilot
-    // supplies the ceiling's VALUE and must never be able to arm (or disarm) the limiter, so an
-    // operator standing at the vehicle can always disable it without a ground station.
-    if (!speedSensor_.isLimiterEnabled()) {
-        source = SpeedLimitSource::OFF;
+float VehicleController::getSpeedLimitMs() const {
+    // ONE source, no arbitration and no master switch: the autopilot's SPEED_MAX. Anything that
+    // makes that value untrustworthy — never received, zero, out of range, stale, link down —
+    // is reported as 0, which means NO LIMITING. That matches ArduPilot's own reading of a zero
+    // SPEED_MAX and the value Mission Planner's speed-limit sign writes to clear a limit.
+    if (!mavlink_.hasSpeedMaxParam()) {
         return 0.0f;
     }
-
-    if (mavlink_.hasSpeedMaxParam()) {
-        source = SpeedLimitSource::MAVLINK;
-        // CLAMP an out-of-band value rather than discarding it: falling back to a stored 60 km/h
-        // because someone set a deliberate 0.5 km/h crawl is the failure direction that hurts.
-        float kmh = mavlink_.getSpeedMaxKmh();
-        return constrain(kmh, (float)SPEED_LIMIT_MIN_KMH, (float)SPEED_LIMIT_MAX_KMH);
-    }
-
-    source = SpeedLimitSource::LOCAL;
-    return speedSensor_.getLimitMaxKmh();
+    return mavlink_.getSpeedMaxMs();
 }
 
-float VehicleController::getEffectiveSpeedLimitKmh() const {
-    SpeedLimitSource source;
-    return getEffectiveSpeedLimitKmh(source);
-}
-
-VehicleController::SpeedLimitSource VehicleController::getSpeedLimitSource() const {
-    SpeedLimitSource source;
-    (void)getEffectiveSpeedLimitKmh(source);
-    return source;
-}
-
-const char* VehicleController::getSpeedLimitSourceName(SpeedLimitSource source) {
-    switch (source) {
-        case SpeedLimitSource::MAVLINK: return "mavlink";
-        case SpeedLimitSource::LOCAL:   return "local";
-        default:                        return "off";
-    }
-}
-
-void VehicleController::logSpeedLimitSourceChange(SpeedLimitSource source, float limitKmh) {
-    bool changed = (source != lastSpeedLimitSource_) ||
-                   isnan(lastSpeedLimitKmh_) ||
-                   fabsf(limitKmh - lastSpeedLimitKmh_) > SPEED_LIMIT_LOG_EPSILON_KMH;
+void VehicleController::logSpeedLimitChange(float limitMs) {
+    bool changed = isnan(lastSpeedLimitMs_) ||
+                   fabsf(limitMs - lastSpeedLimitMs_) > SPEED_LIMIT_LOG_EPSILON_MS;
     if (!changed) {
         return;
     }
     uint32_t now = millis();
     // Hold-off. While suppressed the remembered state is deliberately NOT updated, so whatever
     // the value settles on is logged on the next opportunity instead of being swallowed.
-    if (lastSpeedLimitLogMs_ != 0 && (now - lastSpeedLimitLogMs_) < SPEED_LIMIT_SRC_LOG_MIN_MS) {
+    if (lastSpeedLimitLogMs_ != 0 && (now - lastSpeedLimitLogMs_) < SPEED_LIMIT_LOG_MIN_MS) {
         return;
     }
     lastSpeedLimitLogMs_ = now;
-    lastSpeedLimitSource_ = source;
-    lastSpeedLimitKmh_ = limitKmh;
-    Debug::printfFeature(DebugFeature::VEHICLE,
-        "[SPEED] Limit source: %s @ %.1f km/h\n", getSpeedLimitSourceName(source), limitKmh);
+    lastSpeedLimitMs_ = limitMs;
+    if (limitMs <= 0.0f) {
+        Debug::printlnFeature(DebugFeature::VEHICLE,
+            "[SPEED] Speed limit: none (no usable SPEED_MAX) — not limiting");
+    } else {
+        Debug::printfFeature(DebugFeature::VEHICLE,
+            "[SPEED] Speed limit: %.2f m/s (%.1f km/h) from SPEED_MAX\n",
+            limitMs, limitMs * MS_TO_KMH);
+    }
 }
 
 float VehicleController::applySpeedLimit(float throttlePct) {
-    SpeedLimitSource source;
-    float limitKmh = getEffectiveSpeedLimitKmh(source);
-    logSpeedLimitSourceChange(source, limitKmh);
+    float limitMs = getSpeedLimitMs();
+    logSpeedLimitChange(limitMs);
 
-    if (source == SpeedLimitSource::OFF) {
-        // Reset the taper so re-enabling never resumes from a stale low ceiling.
+    if (limitMs <= 0.0f) {
+        // No usable SPEED_MAX => no limiting at all. Reset the taper so the next limit that
+        // arrives never resumes from a stale low ceiling.
         limiterCeilingPct_ = 100.0f;
         limiterLastMs_ = 0;
         return throttlePct;
     }
 
     // Fail OPEN on sensor loss. The limiter only ever acts NEAR AND ABOVE the maximum speed, and a
-    // lost sensor reads 0 km/h — clamping throttle on a reading we do not trust, mid-manoeuvre,
+    // lost sensor reads 0 m/s — clamping throttle on a reading we do not trust, mid-manoeuvre,
     // is the more dangerous failure. Over-speed protection assumes a working sensor.
     if (!speedSensor_.isValid()) {
         uint32_t now = millis();
         if (lastSpeedLimitWarnMs_ == 0 || (now - lastSpeedLimitWarnMs_) >= SPEED_LIMIT_WARN_MS) {
             lastSpeedLimitWarnMs_ = now;
             Debug::printlnFeature(DebugFeature::VEHICLE,
-                "[SPEED] WARNING: limiter enabled but speed reading is invalid — not clamping (fail open)");
+                "[SPEED] WARNING: speed limit active but speed reading is invalid — not clamping (fail open)");
         }
         limiterCeilingPct_ = 100.0f;
         limiterLastMs_ = 0;
@@ -605,14 +583,14 @@ float VehicleController::applySpeedLimit(float throttlePct) {
     // Proportional taper: full authority up to `limit - band`, falling linearly to the floor at
     // the limit, floor above it. A floor rather than zero — cutting all drive mid-corner is a
     // stability event, not a safety feature.
-    float over = speedSensor_.getSpeedKmh() - (limitKmh - SPEED_LIMIT_TAPER_BAND_KMH);
+    float over = speedSensor_.getSpeedMs() - (limitMs - SPEED_LIMIT_TAPER_BAND_MS);
     float targetPct;
     if (over <= 0.0f) {
         targetPct = 100.0f;
-    } else if (over >= SPEED_LIMIT_TAPER_BAND_KMH) {
+    } else if (over >= SPEED_LIMIT_TAPER_BAND_MS) {
         targetPct = SPEED_LIMIT_FLOOR_PCT;
     } else {
-        targetPct = 100.0f - (100.0f - SPEED_LIMIT_FLOOR_PCT) * (over / SPEED_LIMIT_TAPER_BAND_KMH);
+        targetPct = 100.0f - (100.0f - SPEED_LIMIT_FLOOR_PCT) * (over / SPEED_LIMIT_TAPER_BAND_MS);
     }
 
     // Slew-limit the CEILING (not the demand — the driver's own stick moves must pass through at
@@ -652,22 +630,6 @@ void VehicleController::processSpeedCalCircCommand(float value, WebPortal& webPo
         return;
     }
     webPortal.sendResponse(true, "Wheel circumference set to " + String(value, 0) + " mm");
-}
-
-void VehicleController::processSpeedLimitEnableCommand(bool enable, WebPortal& webPortal) {
-    speedSensor_.setLimiterEnabled(enable);
-    lastSpeedLimitWarnMs_ = 0;
-    webPortal.sendResponse(true, String("Speed limiter ") + (enable ? "enabled" : "disabled"));
-}
-
-void VehicleController::processSpeedLimitSetCommand(float kmh, WebPortal& webPortal) {
-    if (!speedSensor_.setLimitMaxKmh(kmh)) {
-        webPortal.sendResponse(false, "Speed limit out of range (" +
-                                      String((int)SPEED_LIMIT_MIN_KMH) + "-" +
-                                      String((int)SPEED_LIMIT_MAX_KMH) + " km/h)");
-        return;
-    }
-    webPortal.sendResponse(true, "Speed limit set to " + String(kmh, 0) + " km/h");
 }
 
 void VehicleController::processThrottleCalBegin(WebPortal& webPortal) {

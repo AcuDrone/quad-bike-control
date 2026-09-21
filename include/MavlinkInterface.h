@@ -30,8 +30,8 @@
  * validity or the direction sign is in doubt (a wrong measurement is worse than no
  * measurement).
  *
- * Subscribes READ-ONLY to a single autopilot parameter, `SPEED_MAX`, which the vehicle
- * layer uses as the ceiling of its own max-speed throttle limiter. Polled with
+ * Subscribes READ-ONLY to a single autopilot parameter, `SPEED_MAX` (m/s) — the ONLY
+ * source of the vehicle layer's max-speed throttle limiter ceiling. Polled with
  * PARAM_REQUEST_READ and also accepted unsolicited; never written back (no PARAM_SET),
  * and held in RAM only.
  *
@@ -73,7 +73,7 @@ public:
         bool        failsafe;       // true when in fail-safe
         uint8_t     digitalFlags;   // digital output bitmask (EFI_DIGITAL_FLAG_* in Constants.h)
         bool        speedValid;     // hall speed sensor health (independent of canValid)
-        float       speedKmh;       // hall-sensor ground speed, km/h (reported as VFR_HUD groundspeed)
+        float       speedMs;        // hall-sensor ground speed, m/s (reported as VFR_HUD groundspeed)
         int8_t      intakeTemp;     // intake air temperature °C (ECU PID 0x0F)
         uint16_t    moduleVoltageMv; // control module supply voltage, mV (ECU PID 0x42)
         uint8_t     throttlePosition; // MEASURED throttle position, % (ECU PID 0x11)
@@ -155,18 +155,15 @@ public:
 
     /**
      * @brief True when a SPEED_MAX value can be trusted right now.
-     * Received AND greater than zero (ArduPilot reads 0 as "not set") AND the link is up
+     * Received AND greater than zero (0 means "no limit") AND the link is up
      * AND the reading is younger than MAVLINK_PARAM_STALE_MS. The two staleness gates are
      * deliberate: an unplugged cable falls back within the heartbeat timeout, an autopilot
      * that is alive but has stopped answering falls back within the parameter timeout.
      */
     bool hasSpeedMaxParam() const;
 
-    /** @brief Last accepted SPEED_MAX in km/h (0 if never received). */
-    float getSpeedMaxKmh() const;
-
-    /** @brief Last accepted SPEED_MAX as received, in m/s (NAN if never received). */
-    float getSpeedMaxRawMs() const;
+    /** @brief Last accepted SPEED_MAX in m/s (0 if never received). */
+    float getSpeedMaxMs() const;
 
     /** @brief ms since the last accepted SPEED_MAX (MAVLINK_PARAM_STALE_MS if never received). */
     uint32_t getSpeedMaxAgeMs() const;

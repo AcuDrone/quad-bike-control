@@ -70,6 +70,14 @@ them via web commands routed through `WebPortal::WebCommand` → `VehicleControl
 - **AND** if no stored values exist, the defaults `SPEED_DEFAULT_PULSES_PER_REV` and
   `SPEED_DEFAULT_WHEEL_CIRCUMFERENCE_MM` from `Constants.h` SHALL be used
 
+#### Scenario: Ignore invalid stored calibration
+- **WHEN** `SpeedSensor::begin()` is called and the stored `ppr` is outside
+  `SPEED_PPR_MIN`-`SPEED_PPR_MAX` (1-1000), or the stored `circ_mm` is outside
+  `SPEED_CIRC_MIN_MM`-`SPEED_CIRC_MAX_MM` (100-10000 mm) or is NaN
+- **THEN** that stored value SHALL be ignored and the compile-time default from `Constants.h`
+  SHALL be used instead (70 pulses/rev, 1990 mm)
+- **AND** the other stored value SHALL still be applied if it is in range
+
 #### Scenario: Set pulses-per-revolution at runtime
 - **WHEN** a `speed_cal_ppr` web command is received with a positive integer value
 - **THEN** the value SHALL be validated and applied to the sensor
@@ -107,7 +115,8 @@ each consumer can apply its own fail-safe policy.
 - **WHEN** the vehicle was recently moving above the interlock threshold and pulses cease faster than
   a physically plausible deceleration
 - **THEN** the reading SHALL be flagged suspicious (`isValid()` returns false)
-- **AND** consumers SHALL treat the speed as unknown rather than as a genuine 0 km/h
+- **AND** consumers SHALL treat the speed as unknown rather than as a genuine 0 m/s, except the
+  transmission interlock, which MAY use the decaying reading as an upper bound
 
 ### Requirement: Sensor-Sourced Speed Telemetry
 The system SHALL publish hall-sensor speed to web clients independently of CAN bus health, so that

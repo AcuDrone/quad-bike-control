@@ -1,12 +1,11 @@
 ## ADDED Requirements
 
 ### Requirement: Autopilot Maximum-Speed Parameter Subscription
-The system SHALL subscribe to the autopilot's `SPEED_MAX` parameter over MAVLink so the vehicle's
-own maximum-speed limiter can take its ceiling from the value the operator edits in the ground
-station. The subscription SHALL be read-only: the system SHALL NOT send `PARAM_SET` or otherwise
-write any autopilot parameter. A value that cannot be trusted SHALL be rejected rather than stored,
-and an absent, zero, silent or stale value SHALL be reported as unavailable so the vehicle layer
-can fall back to its own stored setting.
+The system SHALL subscribe to the autopilot's `SPEED_MAX` parameter over MAVLink, which is the
+ONLY source of the vehicle's maximum-speed limit. The subscription SHALL be read-only: the system
+SHALL NOT send `PARAM_SET` or otherwise write any autopilot parameter. A value that cannot be
+trusted SHALL be rejected rather than stored, and an absent, zero, silent or stale value SHALL be
+reported as unavailable so the vehicle layer stops limiting altogether.
 
 #### Scenario: Poll the parameter periodically
 - **WHEN** the autopilot's system and component ids have been learned from its `HEARTBEAT`
@@ -51,22 +50,25 @@ can fall back to its own stored setting.
 
 #### Scenario: Store and expose an accepted value
 - **WHEN** a `PARAM_VALUE` for `SPEED_MAX` passes every check
-- **THEN** the raw value SHALL be stored in metres per second together with the time of receipt
-- **AND** the system SHALL expose the value converted to km/h (`× MAVLINK_MS_TO_KMH`), the raw
-  m/s value, and the age of the reading
+- **THEN** the value SHALL be stored in metres per second together with the time of receipt
+- **AND** the system SHALL expose it in metres per second — the firmware's internal speed unit —
+  together with the age of the reading, and SHALL NOT expose a km/h accessor
 - **AND** a change SHALL be logged only when the new value differs from the previous one by more
   than `MAVLINK_PARAM_EPSILON_MS`, so a 5-second poll of an unchanged parameter does not fill the
   console
+- **AND** the log line MAY show km/h in parentheses alongside the m/s value, because a log is a
+  presentation surface
 
 #### Scenario: Report the parameter as unavailable when it cannot be trusted
 - **WHEN** the vehicle layer asks whether a `SPEED_MAX` value is available
 - **THEN** the answer SHALL be true only if a value has been received, the value is greater than
   zero, the link is up, and the reading is younger than `MAVLINK_PARAM_STALE_MS`
-- **AND** a value of zero SHALL be reported as unavailable, because the autopilot itself reads
-  `SPEED_MAX = 0` as "not set"
+- **AND** a value of zero SHALL be reported as unavailable, because `SPEED_MAX = 0` means "no
+  limit" both to the autopilot and to this vehicle
 - **AND** both the link gate and the age gate SHALL apply independently, so a disconnected cable
   is reported as unavailable within the heartbeat timeout while an autopilot that is alive but has
   stopped answering this parameter is reported as unavailable within the staleness timeout
+- **AND** "unavailable" SHALL result in no limiting at all, not in a fallback ceiling
 
 #### Scenario: Reset the subscription on re-initialisation
 - **WHEN** the MAVLink interface is initialised
@@ -76,7 +78,26 @@ can fall back to its own stored setting.
 
 #### Scenario: Surface the subscription state on the diagnostic line
 - **WHEN** the periodic (1 Hz) MAVLink debug line is emitted
-- **THEN** it SHALL include the last received `SPEED_MAX`, the age of that reading, and whether the
-  value is currently considered available
+- **THEN** it SHALL include the last received `SPEED_MAX` in m/s, the age of that reading, and
+  whether the value is currently considered available
 - **AND** this SHALL be sufficient to distinguish "never received", "received and fresh" and
   "received but stale" on the serial console alone
+
+### Requirement: Outbound Speed Reporting in Metres per Second
+The interface SHALL receive the vehicle's ground speed from the vehicle layer already in metres
+per second, which is both the firmware's internal unit and the unit every MAVLink speed field
+uses. It SHALL NOT perform a km/h conversion on any outbound speed path.
+
+#### Scenario: VFR_HUD groundspeed needs no conversion
+- **WHEN** a `VFR_HUD` message is packed
+- **THEN** the `groundspeed` field SHALL carry the reported sensor speed directly
+- **AND** no division by 3.6 SHALL be applied, because the reported speed is already m/s
+- **AND** an invalid or non-positive reading SHALL still be reported as zero rather than as
+  genuine motion
+
+#### Scenario: The odometry delta needs no conversion
+- **WHEN** a `VISION_POSITION_DELTA` message is packed
+- **THEN** the signed longitudinal speed SHALL be the reported sensor speed multiplied by the
+  travel direction, with no unit conversion
+- **AND** the neutral-rolling suppression threshold SHALL be expressed in metres per second
+  (`MAVLINK_VISO_NEUTRAL_ZERO_MS`)

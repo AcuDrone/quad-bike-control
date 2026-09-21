@@ -59,6 +59,12 @@ After the ESP32 boots:
 - Steering angle
 - Input source indicator
 - S-bus status
+- Speed and speed limit
+
+**Speed limit (read-only):** the throttle limiter's ceiling comes **only** from the autopilot's
+`SPEED_MAX` parameter (`speed_limit_kmh` in telemetry; `0` / "none" means no limit). The web
+portal has no maximum-speed box and no limiter on/off button — there is nothing to set here.
+See `MAVLINK_SETUP.md` → "Autopilot speed limit (`SPEED_MAX`)".
 
 **Manual Control** (only when S-bus inactive):
 - Gear selection buttons (R/N/L/H)

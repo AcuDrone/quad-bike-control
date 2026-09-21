@@ -73,15 +73,11 @@ public:
 
         // Hall speed sensor — emitted independently of CAN health (not part of the
         // CAN-gated block below), because it is a wholly separate physical source.
-        float vehicle_speed;      // Vehicle speed km/h from the hall sensor
+        float vehicle_speed_ms;   // Vehicle speed (m/s) from the hall sensor — serialised as km/h
         bool speed_valid;         // Sensor health: false = reading unknown, NOT "stopped"
         uint16_t speed_ppr;       // Calibration: pulses per revolution
         float speed_circ_mm;      // Calibration: wheel circumference (mm)
-        bool speed_limit_on;      // Max-speed throttle limiter enabled
-        float speed_limit_max;    // STORED limiter ceiling (km/h) — the local fallback the UI edits
-        float speed_limit_eff;    // Ceiling actually enforced (km/h), 0 when the limiter is off
-        String speed_limit_src;   // Where that ceiling came from: "off" / "local" / "mavlink"
-        float mav_speed_max;      // Last SPEED_MAX from the autopilot (km/h), 0 = none received
+        float speed_limit_ms;     // Enforced ceiling (m/s) from SPEED_MAX, 0 = no limit — km/h in JSON
         float speed_limit_ceil;   // Throttle ceiling the taper is applying (%, 100 = inactive)
 
         // CAN bus vehicle data
@@ -253,14 +249,6 @@ private:
      * @return true if command parsed successfully
      */
     bool parseWebCommand(uint8_t* data, size_t len);
-
-    /**
-     * Validate command based on input source priority
-     * @param cmd Command to validate
-     * @param inputSource Current input source
-     * @return true if command is allowed
-     */
-    bool validateCommand(const WebCommand& cmd, InputSource inputSource);
 
     /**
      * Create JSON telemetry message

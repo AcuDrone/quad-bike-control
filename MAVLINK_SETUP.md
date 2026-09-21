@@ -294,34 +294,33 @@ baseline keeps being re-established by a flapping gate.
 
 ## Autopilot speed limit (`SPEED_MAX`)
 
-The ESP32 has its own max-speed throttle limiter, driven by the hall wheel sensor. Its **km/h
-ceiling** can come from the autopilot: the firmware polls ArduPilot's `SPEED_MAX` (m/s) with
-`PARAM_REQUEST_READ` every `MAVLINK_PARAM_POLL_MS` (5 s, first request 1 s after the autopilot's
-`HEARTBEAT` is seen) and also accepts an unsolicited `PARAM_VALUE`. A change made from Mission
-Planner or MAVProxy therefore lands within about 5 s, with no reboot.
+The ESP32 has its own max-speed throttle limiter, driven by the hall wheel sensor. Its ceiling
+has **exactly one source: ArduPilot's `SPEED_MAX` parameter (m/s)**. There is no local ceiling,
+no stored value and no enable toggle — the limiter is always armed and simply does nothing when
+no usable `SPEED_MAX` is available. The firmware polls `SPEED_MAX` with `PARAM_REQUEST_READ` every
+`MAVLINK_PARAM_POLL_MS` (5 s, first request 1 s after the autopilot's `HEARTBEAT` is seen) and
+also accepts an unsolicited `PARAM_VALUE`, so a change made from Mission Planner or MAVProxy lands
+within about 5 s, with no reboot.
 
 > **The parameter is never written and never persisted.** The ESP32 sends no `PARAM_SET` — it
-> only ever reads. The received value lives in RAM and dies with the link; the ESP32's own stored
-> ceiling (NVS `speed` / `lim_kmh`) is **never** overwritten by autopilot traffic, so the value in
-> the web UI's "Maximum speed" box survives every `SPEED_MAX` change and every power cycle.
+> only ever reads. The received value lives in RAM and dies with the link. Nothing about the
+> limiter is stored in NVS any more.
 
-### Precedence
+### When the limit applies
 
-| Web `speed_limiter` toggle | `SPEED_MAX` state | Ceiling used | Telemetry `speed_limit_src` |
-|---|---|---|---|
-| OFF | anything | *none — the limiter does not act* | `"off"` |
-| ON | fresh and > 0 | `SPEED_MAX × 3.6` km/h, clamped into 1–200 km/h | `"mavlink"` |
-| ON | `0` ("not set" in ArduPilot's own reading) | the stored web value | `"local"` |
-| ON | never received / rejected | the stored web value | `"local"` |
-| ON | older than `MAVLINK_PARAM_STALE_MS` (16 s ≈ 3 polls) | the stored web value | `"local"` |
-| ON | link down (no `HEARTBEAT` for 3 s) | the stored web value | `"local"` |
+| `SPEED_MAX` state | Limit enforced |
+|---|---|
+| fresh and > 0 | that value, in m/s |
+| `0` | *none* — 0 means "no limit", exactly as ArduPilot reads it, and it is what Mission Planner's speed-limit sign writes to clear a limit |
+| never received / rejected (NaN, ∞, negative, > 30 m/s) | *none* |
+| older than `MAVLINK_PARAM_STALE_MS` (16 s ≈ 3 polls) | *none* |
+| link down (no `HEARTBEAT` for 3 s) | *none* |
 
-**The web toggle is the master switch.** The autopilot supplies the ceiling's *value*, never the
-decision to limit — an operator at the vehicle can always disable the limiter without a ground
-station, and no autopilot traffic can re-arm it.
+**The fallback is no limiting.** Losing the autopilot never leaves the vehicle throttled by a
+stale ceiling nobody can see or change.
 
-A value outside 1–200 km/h is **clamped, not discarded**: silently reverting a deliberate crawl
-setting to a stored 60 km/h ceiling is the failure direction that hurts.
+All speeds inside the firmware are **m/s**; km/h appears only in the web JSON and in
+human-readable debug strings.
 
 ### Rejected values
 
@@ -333,19 +332,26 @@ station on the same wire (typically sysid 255) cannot move the vehicle's speed c
 
 ### What the limiter then does
 
-The throttle ceiling is **tapered**, not stepped: 100 % at `limit − SPEED_LIMIT_TAPER_BAND_KMH`
-(5 km/h), falling linearly to `SPEED_LIMIT_FLOOR_PCT` (10 %) at the limit, and holding that floor
+The throttle ceiling is **tapered**, not stepped: 100 % at `limit − SPEED_LIMIT_TAPER_BAND_MS`
+(1.4 m/s ≈ 5 km/h), falling linearly to `SPEED_LIMIT_FLOOR_PCT` (10 %) at the limit, and holding that floor
 above it. The ceiling itself is slew-limited to `SPEED_LIMIT_CEILING_SLEW_PCT_S` (200 %/s) so
 engagement cannot snap the servo — the rate limit applies to the *ceiling*, so the driver's own
 throttle movements are never slowed. There is no hard cut: removing all drive mid-corner is a
 stability event, not a safety measure. An invalid speed reading still **fails open** (no clamp),
 and the gear-change throttle boost is outside the limiter entirely.
 
+This is a **throttle limiter, not a speed governor**: it only ever withholds throttle, and it **never
+applies the brake**. Total reaction latency is about **0.65 s** — the 200 ms speed sample plus the
+0.45 s the slew-limited ceiling needs to fall from 100 % to the floor — which is roughly **5 m past
+the limit at 30 km/h** and **11 m at 60 km/h** before the taper is fully in. On a descent it cannot
+hold the ceiling at all: gravity, not the engine, is doing the accelerating, and withholding throttle
+is the only lever the limiter has.
+
 The 1 Hz `[MAV]` debug line (`DebugFeature::MAVLINK`) reports `spdmax:<m/s> age:<ms> valid:<Y|N>`,
 which separates "never received" (`nan`), "answered and fresh" (a 0 → 5000 ms age sawtooth) and
-"received but stale/link down" (`valid:N`). The vehicle layer logs `[SPEED] Limit source: … @ …
-km/h` on each change. `[SPEED] Limiter maximum set to …` comes only from a web save — if it ever
-appears in response to autopilot traffic, something is writing NVS that must not.
+"received but stale/link down" (`valid:N`). The vehicle layer logs `[SPEED] Speed limit: … m/s
+(… km/h) from SPEED_MAX` on each change, and `[SPEED] Speed limit: none …` when it stops
+limiting.
 
 ## Fail-safe
 

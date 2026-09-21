@@ -18,17 +18,20 @@
  *
  * "Stopped" and "disconnected" are indistinguishable at a passive pulse sensor,
  * so the two facts are reported separately:
- *  - `getSpeedKmh()` decays to 0 after `SPEED_STALE_TIMEOUT_MS` of silence —
+ *  - `getSpeedMs()` decays to 0 after `SPEED_STALE_TIMEOUT_MS` of silence —
  *    the physically correct reading for a stopped vehicle;
  *  - `isValid()` is the health signal: false until the first pulse since boot,
  *    and latched false when pulses cease faster than a plausible deceleration
  *    (the fingerprint of a mid-motion wire fault). Each consumer picks its own
  *    fail-safe direction from that.
  *
- * This class is also the single owner of the NVS namespace `"speed"`: it holds
- * the calibration (pulses/rev + wheel circumference) AND the max-speed limiter
- * configuration. The limiter is *applied* in `VehicleController`; only its
- * persisted settings live here so one class owns the namespace.
+ * This class is the single owner of the NVS namespace `"speed"`, which now holds
+ * only the calibration (pulses/rev + wheel circumference). The max-speed limiter
+ * has NO persisted configuration: its ceiling comes solely from the autopilot's
+ * SPEED_MAX parameter and is applied in `VehicleController`.
+ *
+ * All speeds here are METRES PER SECOND. km/h exists only at the presentation
+ * edge (web JSON, human-readable debug strings).
  */
 class SpeedSensor {
 public:
@@ -48,8 +51,8 @@ public:
 
     // ---- Readings ----------------------------------------------------------
 
-    /** @brief Latest speed in km/h (0 when stale — see isValid() for health) */
-    float getSpeedKmh() const { return speedKmh_; }
+    /** @brief Latest speed in m/s (0 when stale — see isValid() for health) */
+    float getSpeedMs() const { return speedMs_; }
 
     /** @brief True only when the reading can be trusted (pulsed since boot, not suspicious) */
     bool isValid() const { return initialized_ && everPulsed_ && !suspicious_; }
@@ -71,17 +74,6 @@ public:
     /** @brief Set wheel circumference in mm; persists immediately. False if out of range. */
     bool setWheelCircumferenceMm(float mm);
 
-    // ---- Max-speed limiter configuration (NVS "speed") ---------------------
-
-    bool isLimiterEnabled() const { return limiterEnabled_; }
-    float getLimitMaxKmh() const { return limitMaxKmh_; }
-
-    /** @brief Enable/disable the limiter; persists immediately. */
-    void setLimiterEnabled(bool enabled);
-
-    /** @brief Set the limiter's maximum speed (km/h); persists immediately. False if out of range. */
-    bool setLimitMaxKmh(float kmh);
-
 private:
     /** @brief distance_per_pulse = circumference / pulses_per_rev, recomputed on calibration change */
     void recomputeDistancePerPulse();
@@ -95,17 +87,13 @@ private:
     float    wheelCircumferenceMm_;
     float    distancePerPulseMm_;
 
-    // Limiter configuration (applied by VehicleController)
-    bool     limiterEnabled_;
-    float    limitMaxKmh_;
-
     // Sampling state
     uint32_t lastSampleMs_;
     uint32_t lastPulseMs_;       // millis() of the last window that saw edges
     uint32_t lastTotal_;         // pulse total at the previous sample
     uint32_t pulseTotal_;        // running total since begin()
-    float    speedKmh_;
-    float    lastMovingSpeedKmh_; // last non-zero speed, for the decel plausibility check
+    float    speedMs_;
+    float    lastMovingSpeedMs_; // last non-zero speed, for the decel plausibility check
 
     // Health
     bool     everPulsed_;

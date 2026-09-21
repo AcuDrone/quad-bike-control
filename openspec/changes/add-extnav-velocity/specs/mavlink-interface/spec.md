@@ -14,7 +14,7 @@ suppressed interval SHALL NOT be folded into a later increment.
 - **AND** a valid integration baseline exists (see the re-baseline scenario)
 - **THEN** a `VISION_POSITION_DELTA` message SHALL be sent from the ESP32's component id
 - **AND** the signed longitudinal speed SHALL be the sensor speed in metres per second multiplied
-  by the travel direction (`speedKmh / 3.6 · travelDirection`)
+  by the travel direction (`speedMs · travelDirection`)
 - **AND** `position_delta` SHALL be that signed speed multiplied by the integration interval,
   placed on the body-frame forward axis, with the lateral and vertical components exactly zero
 - **AND** the velocity SHALL NOT be rotated into the earth frame, and no heading SHALL be required
@@ -83,7 +83,7 @@ suppressed interval SHALL NOT be folded into a later increment.
 #### Scenario: Suppress the message when rolling in neutral
 - **WHEN** the report interval elapses
 - **AND** the travel direction is `0` (neutral, or gear unknown)
-- **AND** the speed reading exceeds `MAVLINK_VISO_NEUTRAL_ZERO_KMH`
+- **AND** the speed reading exceeds `MAVLINK_VISO_NEUTRAL_ZERO_MS`
 - **THEN** no `VISION_POSITION_DELTA` SHALL be sent for that tick, because the vehicle is moving
   with no recoverable direction sign and a wrong sign would inject an error of twice the speed
 - **AND** the integration baseline SHALL be invalidated
@@ -92,7 +92,7 @@ suppressed interval SHALL NOT be folded into a later increment.
 - **WHEN** the report interval elapses
 - **AND** the link is up and the speed reading is valid
 - **AND** the vehicle is stationary — including stationary in neutral, with a speed at or below
-  `MAVLINK_VISO_NEUTRAL_ZERO_KMH`
+  `MAVLINK_VISO_NEUTRAL_ZERO_MS`
 - **THEN** a `VISION_POSITION_DELTA` carrying a zero position delta SHALL be sent
 - **AND** it SHALL NOT be suppressed, because with no reliable GPS a zero-motion update is the
   strongest available constraint on estimator drift while the vehicle is parked or idling

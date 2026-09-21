@@ -2,9 +2,10 @@
 
 ### Requirement: Speed-Based Gear Change Prevention
 The transmission system SHALL use vehicle speed data from the hall-effect speed sensor (not the CAN
-bus) to prevent unsafe gear changes while the vehicle is in motion. When the sensor reading is not
-valid, the system SHALL fall back to a fail-safe policy that mirrors the previous CAN-timeout
-behavior.
+bus) to prevent unsafe gear changes while the vehicle is in motion. When the sensor has never
+produced a reading (uninitialized), the system SHALL fall back to a fail-safe policy that mirrors
+the previous CAN-timeout behavior. While the sensor is flagged suspicious, its decaying reading is
+a physical upper bound on speed and the interlock SHALL keep using it.
 
 #### Scenario: Block gear change when speed exceeds threshold
 - **WHEN** the hall sensor reports a valid speed of 10 km/h
@@ -26,10 +27,18 @@ behavior.
 - **AND** the transmission shall move to NEUTRAL
 
 #### Scenario: Fail-safe fallback when speed reading is invalid
-- **WHEN** the hall sensor reading is invalid, uninitialized, or flagged suspicious
+- **WHEN** the hall sensor reading is invalid or uninitialized
 - **AND** a gear change is requested
 - **THEN** the system SHALL fall back to the existing fail-safe policy and allow the gear change
 - **AND** a warning shall be logged indicating the speed reading was unavailable
+
+#### Scenario: Interlock holds on a suspicious reading
+- **WHEN** the hall sensor is flagged suspicious after pulses vanished mid-motion
+- **AND** a gear change is requested
+- **THEN** the interlock SHALL compare the decaying reading against the threshold as if the sensor
+  were valid
+- **AND** the change SHALL be blocked until the reading falls below the threshold, pulses resume, or
+  the stale timeout zeroes it
 
 #### Scenario: Timeout fallback when CAN data is unavailable
 **Given** CAN data was last updated 6000ms ago

@@ -777,32 +777,18 @@
                 </div>
 
                 <div style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px;">
-                    <label data-i18n="lbl_speed_limit_max" style="font-size: 0.8em; color: var(--muted-foreground);">Maximum speed (km/h)</label>
-                    <div style="display: flex; gap: 6px; margin-top: 4px;">
-                        <input type="number" id="speed-limit-input" min="1" max="200" step="1" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
-                        <button onclick="saveSpeedLimit()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
-                    </div>
-                    <div class="slider-container" style="margin-top: 10px;">
-                        <button class="upload-btn" id="speed-limiter-btn" onclick="toggleSpeedLimiter()" style="background: var(--secondary);">
-                            🛑 <span data-i18n="lbl_speed_limiter">Speed limiter:</span> <span id="speed-limiter-status">OFF</span>
-                        </button>
-                    </div>
-                    <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 10px; font-size: 0.85em;">
-                        <span data-i18n="lbl_speed_limit_eff" style="color: var(--muted-foreground);">Active limit</span>
-                        <span>
-                            <span id="speed-limit-eff">--</span>
-                            <span id="speed-limit-src" style="color: var(--muted-foreground); font-size: 0.9em;"></span>
-                        </span>
+                    <div style="display: flex; justify-content: space-between; align-items: baseline; font-size: 0.85em;">
+                        <span data-i18n="lbl_speed_limit" style="color: var(--muted-foreground);">Speed limit</span>
+                        <span id="speed-limit-value">--</span>
                     </div>
                     <div id="speed-limit-ceil-row" style="display: none; justify-content: space-between; align-items: baseline; margin-top: 4px; font-size: 0.85em; color: var(--warning);">
                         <span data-i18n="lbl_speed_limit_ceil">Limiting</span>
                         <span id="speed-limit-ceil">--</span>
                     </div>
                     <div data-i18n="speed_limiter_hint" style="font-size: 0.75em; color: var(--muted-foreground); margin-top: 6px;">
-                        Approaching the maximum speed the throttle ceiling is tapered down smoothly instead of
-                        being stepped. The ceiling value comes from the autopilot's SPEED_MAX when the link
-                        provides it, otherwise from the maximum above — this toggle always decides whether the
-                        limiter acts at all. With no valid sensor reading the limiter does not act.
+                        The limit comes only from the autopilot's SPEED_MAX parameter; 0 (or no link) means no
+                        limit. Approaching it the throttle ceiling is tapered down smoothly instead of being
+                        stepped. With no valid sensor reading the limiter does not act.
                     </div>
                 </div>
                 <div id="speed-status-msg" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
@@ -1012,18 +998,13 @@
                 speed_no_signal: 'No signal',
                 lbl_speed_ppr: 'Pulses per revolution',
                 lbl_speed_circ: 'Wheel circumference (mm)',
-                lbl_speed_limit_max: 'Maximum speed (km/h)',
-                lbl_speed_limiter: 'Speed limiter:',
-                lbl_speed_limit_eff: 'Active limit',
+                lbl_speed_limit: 'Speed limit',
                 lbl_speed_limit_ceil: 'Limiting',
-                lim_src_mavlink: '(autopilot SPEED_MAX)',
-                lim_src_local: '(stored)',
-                lim_src_off: '(off)',
-                speed_limiter_hint: "Approaching the maximum speed the throttle ceiling is tapered down smoothly instead of being stepped. The ceiling value comes from the autopilot's SPEED_MAX when the link provides it, otherwise from the maximum above — this toggle always decides whether the limiter acts at all. With no valid sensor reading the limiter does not act.",
+                lim_none: 'none',
+                speed_limiter_hint: "The limit comes only from the autopilot's SPEED_MAX parameter; 0 (or no link) means no limit. Approaching it the throttle ceiling is tapered down smoothly instead of being stepped. With no valid sensor reading the limiter does not act.",
                 speed_saving: 'Saving speed settings...',
                 invalid_speed_ppr: 'Pulses/rev must be 1-1000',
                 invalid_speed_circ: 'Circumference must be 100-10000 mm',
-                invalid_speed_limit: 'Speed limit must be 1-200 km/h',
 
                 // ECU probe
                 btn_probe_ecu: '🔍 Probe ECU',
@@ -1245,18 +1226,13 @@
                 speed_no_signal: 'Немає сигналу',
                 lbl_speed_ppr: 'Імпульсів на оберт',
                 lbl_speed_circ: 'Довжина кола колеса (мм)',
-                lbl_speed_limit_max: 'Максимальна швидкість (км/год)',
-                lbl_speed_limiter: 'Обмежувач швидкості:',
-                lbl_speed_limit_eff: 'Діюче обмеження',
+                lbl_speed_limit: 'Обмеження швидкості',
                 lbl_speed_limit_ceil: 'Обмежується',
-                lim_src_mavlink: '(автопілот SPEED_MAX)',
-                lim_src_local: '(збережене)',
-                lim_src_off: '(вимкнено)',
-                speed_limiter_hint: 'При наближенні до максимальної швидкості стеля дроселя плавно знижується, а не падає стрибком. Значення стелі береться з параметра SPEED_MAX автопілота, якщо він доступний по каналу, інакше — з максимуму вище; цей перемикач завжди вирішує, чи діє обмежувач взагалі. Без достовірних показань датчика обмежувач не діє.',
+                lim_none: 'немає',
+                speed_limiter_hint: 'Обмеження береться лише з параметра SPEED_MAX автопілота; 0 (або відсутній зв\'язок) означає, що обмеження немає. При наближенні до нього стеля дроселя плавно знижується, а не падає стрибком. Без достовірних показань датчика обмежувач не діє.',
                 speed_saving: 'Збереження налаштувань швидкості...',
                 invalid_speed_ppr: 'Імпульсів на оберт має бути 1-1000',
                 invalid_speed_circ: 'Довжина кола має бути 100-10000 мм',
-                invalid_speed_limit: 'Обмеження швидкості має бути 1-200 км/год',
 
                 // ECU probe
                 btn_probe_ecu: '🔍 Опитати ЕБК',
@@ -1400,6 +1376,7 @@
         let ws;
         let wsConnected = false;
         let currentInputSource = 'FAILSAFE';
+        let lastControlsInputSource = null;
         let controlsEnabled = false;
 
         // Track which controls are being actively used
@@ -1850,6 +1827,12 @@
             const webControlActive = currentInputSource === 'WEB' || currentInputSource === 'FAILSAFE';
             controlsEnabled = webControlActive && wsConnected;
 
+            if (currentInputSource === 'WEB' && lastControlsInputSource !== 'WEB') {
+                document.getElementById('throttle-slider').value = 0;
+                document.getElementById('throttle-value').textContent = '0%';
+            }
+            lastControlsInputSource = currentInputSource;
+
             // Update warning visibility
             const warning = document.getElementById('control-warning');
             warning.style.display = currentInputSource === 'MAVLINK' ? 'block' : 'none';
@@ -2093,8 +2076,6 @@
         }
 
         // ── Speed sensor (hall pulse input, independent of CAN) ─────────────
-        let speedLimiterState = false;
-
         function speedStatusMsg(text, color) {
             const el = document.getElementById('speed-status-msg');
             if (!el) return;
@@ -2129,40 +2110,18 @@
 
             syncSpeedInput('speed-ppr-input', data.speed_ppr);
             syncSpeedInput('speed-circ-input', data.speed_circ_mm);
-            syncSpeedInput('speed-limit-input', data.speed_limit_max);
 
-            if (data.speed_limit_on !== undefined) {
-                speedLimiterState = data.speed_limit_on;
-                const st = document.getElementById('speed-limiter-status');
-                if (st) st.textContent = speedLimiterState ? t('on') : t('off');
-                const btn = document.getElementById('speed-limiter-btn');
-                if (btn) {
-                    btn.style.background = speedLimiterState
-                        ? 'color-mix(in srgb, var(--warning) 60%, black)'
-                        : 'var(--secondary)';
-                }
-            }
-
-            // Active limit + where its value came from. The input above stays bound to
-            // speed_limit_max (the STORED fallback), so it is dimmed — never disabled — while
-            // the autopilot supplies the value: the operator may still need to set the fallback.
-            const src = data.speed_limit_src;
-            if (src !== undefined) {
-                const effEl = document.getElementById('speed-limit-eff');
-                if (effEl) {
-                    const eff = (typeof data.speed_limit_eff === 'number') ? data.speed_limit_eff : 0;
-                    effEl.textContent = (src === 'off')
-                        ? '-- ' + t('unit_kmh')
-                        : eff.toFixed(0) + ' ' + t('unit_kmh');
-                }
-                const srcEl = document.getElementById('speed-limit-src');
-                if (srcEl) {
-                    srcEl.textContent = (src === 'mavlink') ? t('lim_src_mavlink')
-                                      : (src === 'local') ? t('lim_src_local')
-                                      : t('lim_src_off');
-                }
-                const input = document.getElementById('speed-limit-input');
-                if (input) input.style.opacity = (src === 'mavlink') ? '0.55' : '1';
+            // The limit has exactly one source — the autopilot's SPEED_MAX. 0 (or no usable
+            // value at all) means no limiting, so it is shown as "none" rather than as 0 km/h,
+            // which would read like "stopped". Both units are shown: the operator sets the
+            // parameter in m/s in the ground station but reads the vehicle in km/h.
+            const limEl = document.getElementById('speed-limit-value');
+            if (limEl) {
+                const lim = (typeof data.speed_limit_kmh === 'number') ? data.speed_limit_kmh : 0;
+                limEl.textContent = (lim > 0)
+                    ? lim.toFixed(1) + ' ' + t('unit_kmh') + ' (' + (lim / 3.6).toFixed(1) + ' m/s)'
+                    : t('lim_none');
+                limEl.style.color = (lim > 0) ? 'var(--foreground)' : 'var(--muted-foreground)';
             }
 
             // The taper ceiling is only interesting while it is actually holding throttle back.
@@ -2197,21 +2156,6 @@
             }
             sendCommand('speed_cal_circ', val);
             speedStatusMsg(t('speed_saving'), 'var(--muted-foreground)');
-        }
-
-        function saveSpeedLimit() {
-            const val = parseFloat(document.getElementById('speed-limit-input').value);
-            if (isNaN(val) || val < 1 || val > 200) {
-                speedStatusMsg(t('invalid_speed_limit'), 'var(--danger)');
-                return;
-            }
-            sendCommand('speed_limit_set', val);
-            speedStatusMsg(t('speed_saving'), 'var(--muted-foreground)');
-        }
-
-        function toggleSpeedLimiter() {
-            speedLimiterState = !speedLimiterState;
-            sendCommand('speed_limit_enable', speedLimiterState);
         }
 
         function setIgnition(state) {

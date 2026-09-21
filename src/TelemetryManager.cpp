@@ -70,18 +70,13 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.web_control = vehicleController_.isWebControl();
 
     // Hall speed sensor — populated independently of CAN validity
-    telemetry.vehicle_speed = vehicleController_.getVehicleSpeedKmh();
+    // m/s here as everywhere inside the firmware; WebPortal converts to km/h for the UI.
+    telemetry.vehicle_speed_ms = vehicleController_.getVehicleSpeedMs();
     telemetry.speed_valid = vehicleController_.isVehicleSpeedValid();
     telemetry.speed_ppr = vehicleController_.getSpeedPulsesPerRev();
     telemetry.speed_circ_mm = vehicleController_.getSpeedWheelCircumferenceMm();
-    telemetry.speed_limit_on = vehicleController_.isSpeedLimiterEnabled();
-    telemetry.speed_limit_max = vehicleController_.getSpeedLimitMaxKmh();
-    // speed_limit_max stays the STORED value so the UI input keeps editing the local fallback;
-    // the enforced ceiling and its source are reported separately.
-    VehicleController::SpeedLimitSource limitSrc;
-    telemetry.speed_limit_eff = vehicleController_.getEffectiveSpeedLimitKmh(limitSrc);
-    telemetry.speed_limit_src = VehicleController::getSpeedLimitSourceName(limitSrc);
-    telemetry.mav_speed_max = vehicleController_.getMavSpeedMaxKmh();
+    // The one and only ceiling: the autopilot's SPEED_MAX. 0 means no limit.
+    telemetry.speed_limit_ms = vehicleController_.getSpeedLimitMs();
     telemetry.speed_limit_ceil = vehicleController_.getSpeedLimitCeilingPct();
 
     CANController::VehicleData vehicleData = vehicleController_.getVehicleData();
