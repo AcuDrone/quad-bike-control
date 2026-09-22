@@ -213,11 +213,10 @@ struct ServoChannelConfig {
 #define MAVLINK_HEARTBEAT_TIMEOUT_MS  3000   // ms without an autopilot heartbeat before link is "down"
 #define MAVLINK_HEARTBEAT_TX_MS       1000   // ms between outbound HEARTBEAT messages (1 Hz)
 #define MAVLINK_REPORT_TX_MS          200    // ms between outbound engine/state reports (5 Hz)
-#define MAVLINK_ESC_INFO_TX_MS        1000   // ms between outbound ESC_INFO messages (1 Hz);
-                                             // ESC_STATUS rides the MAVLINK_REPORT_TX_MS tick
-#define MAVLINK_ESC_INDEX             0      // slot 0 is the steering VESC
-#define MAVLINK_ESC_COUNT             1      // there is exactly one ESC on this vehicle, and `count`
-                                             // is what tells a consumer slots 1..3 are not data
+#define MAVLINK_STEER_SLOW_TX_MS      1000   // ms between the SLOW steering-VESC named floats
+                                             // (VESC_TEMP, VESC_OK) — 1 Hz. The other three
+                                             // (STEER_POS, STEER_A, VESC_V) ride the
+                                             // MAVLINK_REPORT_TX_MS tick at 5 Hz
 #define MAVLINK_STATUSTEXT_MIN_MS     250    // ms minimum spacing between STATUSTEXT messages
 
 // Autopilot parameter subscription (READ-ONLY — the firmware never sends PARAM_SET).

@@ -48,12 +48,6 @@ public:
 
     /** @brief Last reported driver fault code (0 = no fault) */
     virtual uint8_t faultCode() const { return 0; }
-
-    /** @brief Valid telemetry replies received since boot (wraps; only the advance is meaningful) */
-    virtual uint16_t replyCount() const { return 0; }
-
-    /** @brief 0 -> non-zero fault-code transitions since boot (fault EPISODES, not samples) */
-    virtual uint32_t faultEventCount() const { return 0; }
 };
 
 #endif // IMOTOR_DRIVER_H

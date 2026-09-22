@@ -9,8 +9,6 @@ VescMotorDriver::VescMotorDriver(uint8_t uartNum)
       lastRequestTime_(0),
       haveReply_(false),
       lastValidReplyTime_(0),
-      replyCount_(0),
-      faultEventCount_(0),
       rxState_(RX_START),
       rxLen_(0),
       rxIdx_(0),
@@ -135,19 +133,9 @@ void VescMotorDriver::pumpRx() {
 void VescMotorDriver::handlePacket(const uint8_t* payload, uint16_t len) {
     VescProtocol::Values v;
     if (VescProtocol::decodeGetValues(payload, len, v)) {
-        // Both counters are written HERE and nowhere else: this is the single point where a
-        // valid reply is accepted, so they stay boot-cumulative and a stalled replyCount_ is
-        // itself the "VESC silent" diagnostic. Counting in the reporting layer instead would
-        // sample at 5 Hz a value that changes at 3.3 Hz — missing a fault that raises and
-        // clears between two ticks, and double-counting one that straddles them.
-        const uint8_t prevFault = values_.faultCode;
         values_ = v;
         haveReply_ = true;
         lastValidReplyTime_ = millis();
-        replyCount_++;   // uint16_t, wraps (~5.5 h at 3.3 Hz) — only the ADVANCE is meaningful
-        if (v.faultCode != 0 && prevFault == 0) {
-            faultEventCount_++;   // fault EPISODES, not samples: a persistent fault counts once
-        }
     }
 }
 

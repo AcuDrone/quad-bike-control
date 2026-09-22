@@ -37,8 +37,6 @@ public:
     float fetTempC() const override { return values_.fetTempC; }
     float inputVoltageV() const override { return values_.inputVoltageV; }
     uint8_t faultCode() const override { return values_.faultCode; }
-    uint16_t replyCount() const override { return replyCount_; }
-    uint32_t faultEventCount() const override { return faultEventCount_; }
 
 private:
     void sendGetValues();
@@ -56,8 +54,6 @@ private:
     VescProtocol::Values values_;
     bool haveReply_;
     uint32_t lastValidReplyTime_;
-    uint16_t replyCount_;        // valid GET_VALUES replies since boot (wraps ~every 5.5 h at 3.3 Hz)
-    uint32_t faultEventCount_;   // 0 -> non-zero fault transitions since boot (episodes, not samples)
 
     // Non-blocking receive state machine
     enum RxState : uint8_t {

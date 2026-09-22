@@ -111,10 +111,6 @@ public:
     float getInputVoltage() const { return motor_.inputVoltageV(); }
     /** @brief VESC fault code (0 = no fault) */
     uint8_t getVescFault() const { return motor_.faultCode(); }
-    /** @brief Valid VESC telemetry replies received since boot (wraps; only the advance matters) */
-    uint16_t getVescReplyCount() const { return motor_.replyCount(); }
-    /** @brief VESC fault EPISODES since boot (0 -> non-zero fault-code transitions) */
-    uint32_t getVescFaultEvents() const { return motor_.faultEventCount(); }
 
 private:
     AS5600Sensor sensor_;

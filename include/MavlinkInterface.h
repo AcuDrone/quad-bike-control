@@ -13,18 +13,21 @@
  * the same typed command API the vehicle layer consumes
  * (steering/throttle/gear/brake/ignition/light). Also reports vehicle state back
  * to the MAVLink network: HEARTBEAT plus a single EFI_STATUS from this component,
- * a VFR_HUD carrying hall-sensor ground speed, the steering VESC's telemetry as an
- * ESC_STATUS / ESC_INFO pair (index 0 = the steering ESC, count = 1), plus
- * STATUSTEXT for state transitions.
+ * a VFR_HUD carrying hall-sensor ground speed, the steering VESC's telemetry as
+ * exactly five NAMED_VALUE_FLOAT values (STEER_POS, STEER_A, VESC_V at 5 Hz;
+ * VESC_TEMP, VESC_OK at 1 Hz), plus STATUSTEXT for state transitions.
  *
- * The ESC pair carries the VESC's input voltage (the 24 V boost rail, distinct from
- * EFI_STATUS.ignition_voltage on the 12 V side), its MOTOR current, FET temperature,
- * online state, mapped failure flags and two boot-cumulative counters — and, in the
- * one repurposed field, the MEASURED steering position in centi-percent of the
- * calibrated lock-to-lock range (INT32_MIN = unknown; the VESC's ERPM is meaningless
- * on this brushed, unsensored drive and is never decoded). Both messages keep being
- * sent while the VESC is silent, with their values at their documented sentinels, so
- * "ESC down" stays distinguishable from "peripheral down". See the .cpp.
+ * Those five names are the project's ONE scoped exception to the "everything in the
+ * field that names it, in a single EFI_STATUS" rule: the two standard ESC telemetry
+ * messages (ids 290 and 291) are absent from the dialect Mission Planner decodes
+ * with, so that pair never reached a consumer at all. They carry the MEASURED
+ * steering position in percent of the calibrated lock-to-lock range, the VESC's
+ * MOTOR current, its input voltage (the 24 V boost rail, distinct from
+ * EFI_STATUS.ignition_voltage on the 12 V side) and its FET temperature, each
+ * NaN while its own source is unhealthy, plus
+ * VESC_OK (1.0/0.0, never NaN) as the link flag. All five keep being sent while the
+ * VESC is silent, so "VESC down" stays distinguishable from "peripheral down".
+ * See the .cpp.
  *
  * EFI_STATUS carries every value in the field that NAMES it (RPM, coolant, intake
  * air temp, manifold pressure, ECU load, measured TPS, commanded throttle, module
@@ -106,7 +109,7 @@ public:
                                       // current speed reading's validity
         float       tripKm;           // resettable TRIP distance, km — always valid, never NaN
 
-        // --- Steering VESC driver telemetry (ESC_STATUS / ESC_INFO) ---------------------
+        // --- Steering VESC driver telemetry (STEER_A / VESC_V / VESC_TEMP / VESC_OK) ----
         // Gated by the STEERING DRIVER's own link health (steerDriverOk), which is entirely
         // independent of canValid: a silent VESC does not make CAN data stale, and vice versa.
         bool        steerDriverOk;        // a valid VESC reply arrived within STEER_VESC_COMM_TIMEOUT_MS
@@ -116,9 +119,6 @@ public:
         float       steerInputVoltageV;   // VESC-measured input voltage, V — the 24 V BOOST RAIL at
                                           // the load. NOT the ECU module voltage in
                                           // EFI_STATUS.ignition_voltage (12 V side, PID 0x42)
-        uint8_t     steerVescFault;       // raw VESC mc_fault_code (0 = no fault)
-        uint16_t    steerReplyCount;      // valid VESC replies since boot (wraps)
-        uint32_t    steerFaultEvents;     // 0 -> non-zero fault-code transitions since boot
 
         // --- Steering POSITION (AS5600) -------------------------------------------------
         // A DIFFERENT validity gate from the driver fields above: this is the shaft sensor's,
@@ -263,7 +263,8 @@ private:
     // Outbound scheduling
     uint32_t lastHeartbeatTx_;
     uint32_t lastReportTx_;
-    uint32_t lastEscInfoTx_;           // ESC_INFO rides its own 1 Hz timer, not the report tick
+    uint32_t lastSteerSlowTx_;         // VESC_TEMP / VESC_OK ride their own 1 Hz timer, not the
+                                       // report tick
     uint32_t lastStatustextTx_;
 
     // Inbound trip reset, latched here and performed by the vehicle layer
@@ -281,6 +282,12 @@ private:
     void requestServoOutputStream();
     void sendStatusText(uint8_t severity, const char* text);
 
+    // Send one NAMED_VALUE_FLOAT (251) from this component. `name` is a plain C string and is
+    // ZERO-PADDED into a local 10-byte buffer before packing — the library's pack helper copies
+    // exactly 10 bytes and a shorter literal would over-read. Takes DECODED scalars so this
+    // header stays free of the mavlink C library headers.
+    void sendNamedFloat(uint32_t nowMs, const char* name, float value);
+
     // Autopilot parameter subscription. Takes DECODED scalars (like handleServoOutputRaw) so
     // this header stays free of the mavlink C library headers.
     void handleParamValue(uint8_t sysid, uint8_t compid, const char* paramId, float value);
@@ -295,10 +302,6 @@ private:
 
     // Wheel speed as an EKF-fusable body-frame distance increment (gated — see the .cpp)
     void sendVisionPositionDelta(const StateReport& state);
-
-    // Map a raw VESC mc_fault_code onto the ESC_FAILURE_FLAGS bitmask. Takes a DECODED uint8_t
-    // so this header stays free of both the mavlink C library headers and the VESC types.
-    uint16_t mapVescFaultToEscFlags(uint8_t faultCode) const;
 
     // Map a gear name ("R"/"N"/"H"/"L") to its physical-sequence value [-1,0,1,2].
     // unknownValue is returned for a null or unrecognised name: the ASSUMED-gear path
