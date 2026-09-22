@@ -29,6 +29,7 @@ MavlinkInterface::MavlinkInterface()
       lastHeartbeatTx_(0),
       lastReportTx_(0),
       lastStatustextTx_(0),
+      tripResetPending_(false),
       lastFailsafe_(false),
       stateInitialized_(false) {
     for (uint8_t i = 0; i < 16; i++) {
@@ -67,6 +68,7 @@ bool MavlinkInterface::begin(uint8_t rxPin, uint8_t txPin, uint8_t uartNum, uint
     speedMaxMs_ = NAN;         // no SPEED_MAX yet → the vehicle layer does not limit at all
     speedMaxRxMs_ = 0;
     lastParamRequestMs_ = 0;   // first poll is scheduled off targetLearnedMs_
+    tripResetPending_ = false; // no inbound command yet
 
     Debug::printfFeature(DebugFeature::MAVLINK,
         "[MAV] Initialized on UART%d RX=%d TX=%d @ %lu baud (MAVLink2)\n",
@@ -106,6 +108,13 @@ void MavlinkInterface::update() {
                     mavlink_param_value_t pv;
                     mavlink_msg_param_value_decode(&msg, &pv);
                     handleParamValue(msg.sysid, msg.compid, pv.param_id, pv.param_value);
+                    break;
+                }
+                case MAVLINK_MSG_ID_COMMAND_LONG: {
+                    mavlink_command_long_t cl;
+                    mavlink_msg_command_long_decode(&msg, &cl);
+                    handleCommandLong(msg.sysid, msg.compid, cl.target_system,
+                                      cl.target_component, cl.command, cl.param1);
                     break;
                 }
                 case MAVLINK_MSG_ID_COMMAND_ACK: {
@@ -340,6 +349,75 @@ uint32_t MavlinkInterface::getSpeedMaxAgeMs() const {
 }
 
 // ============================================================================
+// INBOUND COMMANDS (COMMAND_LONG)
+// ============================================================================
+
+void MavlinkInterface::handleCommandLong(uint8_t sysid, uint8_t compid,
+                                        uint8_t targetSys, uint8_t targetComp,
+                                        uint16_t command, float param1) {
+    // STRICT addressing. This component deliberately shares the autopilot's system id and is
+    // distinguished only by MAVLINK_COMPONENT_ID, so anything not addressed EXACTLY here is
+    // dropped silently — no ACK and no log. A broadcast (target_component == 0) in particular
+    // must never be answered: doing so would put a second COMMAND_ACK on the wire for every
+    // command the GCS sends to the Pixhawk and confuse Mission Planner's confirmation logic.
+    if (targetSys != MAVLINK_SYSTEM_ID || targetComp != MAVLINK_COMPONENT_ID) {
+        return;
+    }
+
+    uint8_t result;
+    if (command == MAV_CMD_USER_1) {
+        // The magic param1 exists so a stray, replayed or mis-scripted MAV_CMD_USER_1 cannot
+        // silently destroy the operator's trip reading. Compared with a tolerance, never with
+        // == (house rule); NaN fails this comparison and is therefore denied, which is correct.
+        if (fabsf(param1 - MAVLINK_CMD_TRIP_RESET_MAGIC) <= MAVLINK_CMD_PARAM_EPSILON) {
+            // ACCEPTED means "accepted for execution": the vehicle layer performs the zeroing
+            // and the NVS write on its next iteration (< 40 ms at the ≥ 25 Hz loop rate).
+            tripResetPending_ = true;
+            result = MAV_RESULT_ACCEPTED;
+            Debug::printfFeature(DebugFeature::MAVLINK,
+                "[MAV] TRIP reset accepted from %u/%u\n", (unsigned)sysid, (unsigned)compid);
+        } else {
+            result = MAV_RESULT_DENIED;
+            Debug::printfFeature(DebugFeature::MAVLINK,
+                "[MAV] TRIP reset DENIED (param1=%.2f) from %u/%u\n",
+                param1, (unsigned)sysid, (unsigned)compid);
+        }
+    } else {
+        result = MAV_RESULT_UNSUPPORTED;
+        Debug::printfFeature(DebugFeature::MAVLINK,
+            "[MAV] command %u UNSUPPORTED from %u/%u\n",
+            (unsigned)command, (unsigned)sysid, (unsigned)compid);
+    }
+
+    // The ACK goes back to the REQUESTER (typically the ground station, 255/190), not to the
+    // learned autopilot: ArduPilot forwards it on the route it already learned from this
+    // component's own outbound HEARTBEAT / EFI_STATUS traffic.
+    if (!serial_) {
+        return;
+    }
+    mavlink_message_t msg;
+    uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+    mavlink_msg_command_ack_pack(
+        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &msg,
+        command,        // command being acknowledged
+        result,         // ACCEPTED / DENIED / UNSUPPORTED
+        0,              // progress (not a long-running command)
+        0,              // result_param2
+        sysid,          // target_system    <- the requester
+        compid);        // target_component <- the requester
+    uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+    serial_->write(buf, len);
+}
+
+bool MavlinkInterface::consumeTripResetRequest() {
+    if (!tripResetPending_) {
+        return false;
+    }
+    tripResetPending_ = false;
+    return true;
+}
+
+// ============================================================================
 // STATE REPORTING
 // ============================================================================
 
@@ -370,7 +448,7 @@ void MavlinkInterface::report(const StateReport& state) {
     // packet subscription.
     //
     // PRINCIPLE: every value sits in the field that NAMES it, so the message is self-describing.
-    // Only three fields are repurposed, and each is documented below.
+    // Only five fields are repurposed, and each is documented below.
     //
     //   rpm                         -> engine RPM (PID 0x0C)                       NaN if !canValid
     //   cylinder_head_temperature   -> coolant temperature (°C, PID 0x05)          NaN if !canValid
@@ -383,6 +461,8 @@ void MavlinkInterface::report(const StateReport& state) {
     //   fuel_consumed               -> ASSUMED gear   (repurposed)                 always valid
     //   fuel_flow                   -> PHYSICAL gear  (repurposed)                 NaN if UNKNOWN
     //   pt_compensation             -> digital-output bitmask (repurposed)         always valid
+    //   barometric_pressure         -> ODOMETER (km, total, repurposed)           always valid
+    //   fuel_pressure               -> TRIP (km, resettable, repurposed)          always valid
     //
     // Both gear values use the PHYSICAL SEQUENCE encoding [R, N, H, L] = [-1, 0, 1, 2].
     // fuel_consumed is the controller's commanded gear: while the servo moves between two gears it
@@ -393,8 +473,15 @@ void MavlinkInterface::report(const StateReport& state) {
     // confirmed PIDs 0x2F (fuel level) and 0x5C (oil temp) are absent from this ECU's supported-PID
     // bitmaps and do not answer, so no genuine fuel quantity or flow can ever be displaced. Fields
     // naming quantities this ECU could plausibly expose later (spark_dwell_time, ignition_timing,
-    // injection_time, exhaust_gas_temperature, barometric_pressure, fuel_pressure) are left at zero
-    // rather than repurposed.
+    // injection_time, exhaust_gas_temperature) are left at zero rather than repurposed.
+    //
+    // barometric_pressure and fuel_pressure pass the same permanent-absence test: this ECU has no
+    // barometric/ambient-pressure sensor (the manifold pressure it DOES measure already sits in
+    // intake_manifold_pressure, the field that names it) and the fuel PIDs are absent, so they
+    // carry the two DISTANCE counters in km. fuel_pressure reading zero is a genuine zero trip
+    // distance, even though the MAVLink definition assigns zero the meaning "unknown": reporting a
+    // non-zero distance when the operator has just reset the trip is the worse lie, so the
+    // sentinel the definition suggests is deliberately NOT substituted.
     //
     // CONSUMER NOTE: fuel_consumed != fuel_flow, or fuel_flow == NaN, is the NORMAL signature of a
     // gear in motion — not a fault. Only a persistent disagreement after the assumed gear settles
@@ -435,8 +522,8 @@ void MavlinkInterface::report(const StateReport& state) {
         // bit0 = wheel lock, bit1 = front light. Always valid (relay ground-truth), never NaN.
         float flagsVal = (float)state.digitalFlags;
 
-        // One argument per line: 19 same-typed positional floats, so a mis-ordered argument
-        // compiles cleanly and only fails on the bench. Order verified against
+        // One argument per line: 18 same-typed positional floats plus the uint8_t health, so a
+        // mis-ordered argument compiles cleanly and only fails on the bench. Order verified against
         // .pio/libdeps/esp32-s3-devkitc-1/c_library_v2/common/mavlink_msg_efi_status.h.
         mavlink_msg_efi_status_pack(
             MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &msg,
@@ -448,7 +535,7 @@ void MavlinkInterface::report(const StateReport& state) {
             loadVal,       // engine_load                 <- ECU CALCULATED LOAD (0x04)
             tpsVal,        // throttle_position           <- MEASURED TPS (0x11)
             0.0f,          // spark_dwell_time            (unused)
-            0.0f,          // barometric_pressure         (unused)
+            state.odoKm,   // barometric_pressure         <- ODOMETER (km, total)
             mapVal,        // intake_manifold_pressure    <- MAP (0x0B)
             iatVal,        // intake_manifold_temperature <- INTAKE AIR TEMP (0x0F)
             chtVal,        // cylinder_head_temperature   <- COOLANT (0x05)
@@ -458,14 +545,26 @@ void MavlinkInterface::report(const StateReport& state) {
             thrOutVal,     // throttle_out                <- COMMANDED THROTTLE
             flagsVal,      // pt_compensation             <- DIGITAL FLAGS bitmask (repurposed)
             voltVal,       // ignition_voltage            <- MODULE VOLTAGE (0x42)
-            0.0f);         // fuel_pressure               (unused)
+            state.tripKm); // fuel_pressure               <- TRIP (km, resettable)
         uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
         serial_->write(buf, len);
 
         // Ground speed from the hall speed sensor, in the standard VFR_HUD field the GCS
         // already graphs for a MAV_TYPE_GROUND_ROVER (no custom NAMED_VALUE_FLOAT needed).
-        // Its validity is the SENSOR's, independent of CAN health; a stale/invalid reading
-        // is reported as 0 rather than presented as genuine motion.
+        // Its validity is the SENSOR's, independent of CAN health.
+        //
+        // groundspeed is NaN when the SENSOR reading is invalid (never pulsed since boot, or
+        // latched suspicious), so a consumer can tell "no reading" from "stopped" — a zero
+        // cannot express that difference, and it fails in the misleading direction: a severed
+        // hall lead would read as a parked vehicle. A genuine 0.0 goes on the wire as 0.0,
+        // because a measurably stopped vehicle IS a measurement. There is no > 0.0f guard: it
+        // only ever kept a negative out of the field, and speedMs_ is already clamped at zero
+        // by the decay path.
+        //
+        // throttle is UNAFFECTED by this: it is a uint16_t percent with no NaN encoding and
+        // keeps its measured-with-commanded-fallback behaviour below. VISION_POSITION_DELTA is
+        // untouched too — it is a FUSABLE measurement rather than a display value and already
+        // goes silent on an invalid reading; feeding NaN into the EKF would be a far worse idea.
         //
         // throttle is MEASURED TPS while CAN is valid, falling back to the COMMANDED
         // (arbitrated servo) percent when it is not: the field is a uint16_t percent with no
@@ -475,9 +574,7 @@ void MavlinkInterface::report(const StateReport& state) {
         // fallback is in use, so a consumer can always tell measured from commanded (and the
         // value shown here then equals EFI_STATUS.throttle_out, which always carries commanded).
         // airspeed, heading, alt and climb remain zero: no source on this component.
-        float groundSpeedMs = (state.speedValid && state.speedMs > 0.0f)
-            ? state.speedMs
-            : 0.0f;
+        float groundSpeedMs = state.speedValid ? state.speedMs : NAN;
         uint16_t throttlePct = state.canValid ? state.throttlePosition : state.throttleCmdPct;
         mavlink_msg_vfr_hud_pack(
             MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &msg,

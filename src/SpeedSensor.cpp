@@ -17,6 +17,10 @@ SpeedSensor::SpeedSensor()
       pulseTotal_(0),
       speedMs_(0.0f),
       lastMovingSpeedMs_(0.0f),
+      odoMm_(0),
+      tripMm_(0),
+      lastOdoWriteMm_(0),
+      distanceDirty_(false),
       everPulsed_(false),
       suspicious_(false),
       staleHandled_(true) {
@@ -34,10 +38,23 @@ bool SpeedSensor::begin() {
     if (prefs.begin(NVS_NAMESPACE, true)) {
         int32_t ppr  = prefs.getInt("ppr", SPEED_DEFAULT_PULSES_PER_REV);
         float   circ = prefs.getFloat("circ_mm", SPEED_DEFAULT_WHEEL_CIRCUMFERENCE_MM);
+        // A key that has never been written reads as the 0 default — the correct starting
+        // odometer for a virgin NVS. There is no seeding path.
+        odoMm_  = prefs.getULong64("odo_mm", 0);
+        tripMm_ = prefs.getULong64("trip_mm", 0);
         prefs.end();
         if (ppr >= SPEED_PPR_MIN && ppr <= SPEED_PPR_MAX) pulsesPerRev_ = (uint16_t)ppr;
         if (circ >= SPEED_CIRC_MIN_MM && circ <= SPEED_CIRC_MAX_MM) wheelCircumferenceMm_ = circ;
+        Debug::printfFeature(DebugFeature::VEHICLE, "[SPEED] ODO %.3f km, TRIP %.3f km restored\n",
+                             getOdoKm(), getTripKm());
+    } else {
+        // Virgin NVS (the namespace does not exist yet) or a read failure: nothing was restored,
+        // so say so rather than reporting a "restored" 0.000 that was never stored.
+        Debug::printlnFeature(DebugFeature::VEHICLE,
+            "[SPEED] NVS read failed or namespace absent — using defaults (ODO 0.000 km, TRIP 0.000 km)");
     }
+    lastOdoWriteMm_ = odoMm_;
+    distanceDirty_  = false;   // RAM matches NVS (or both are the 0 default): nothing to write
     // One-off cleanup of the retired local-limiter keys — the ceiling now comes only from the
     // autopilot's SPEED_MAX. remove() on an absent key is a no-op, so after the first boot on
     // new firmware this costs nothing.
@@ -137,6 +154,20 @@ void SpeedSensor::update() {
     }
 
     if (delta > 0) {
+        // Distance is added HERE and nowhere else: after the wrap guard's early return, inside
+        // the branch that knows the wheel actually turned. The decay/suspicious path below adds
+        // nothing — integrating a decayed estimate would invent distance the wheel never turned.
+        // llroundf, not a truncating cast: truncating ~28 mm/pulse every window would bias the
+        // odometer low systematically, where rounding is unbiased.
+        const uint64_t stepMm = (uint64_t)llroundf(delta * distancePerPulseMm_);
+        odoMm_  += stepMm;
+        tripMm_ += stepMm;
+        distanceDirty_ = true;
+        // Unsigned and monotonic — odoMm_ never decreases, so no wrap handling is needed.
+        if (odoMm_ - lastOdoWriteMm_ >= ODO_NVS_WRITE_INTERVAL_MM) {
+            persistDistance();
+        }
+
         // Measure over the interval since the last window that SAW edges, not since the
         // last sample: below ~5 km/h one pulse period spans several sample windows, and
         // dividing by the sample interval would multiply the reading (a 1 km/h crawl would
@@ -183,6 +214,50 @@ void SpeedSensor::update() {
         speedMs_           = 0.0f;
         lastMovingSpeedMs_ = 0.0f;
     }
+}
+
+void SpeedSensor::persistDistance() {
+    // The dirty flag is the whole write budget. Several triggers repeat freely — applyFailsafe()
+    // fires on the first loop of EVERY boot (the input source is FAILSAFE until MAVLink or a
+    // browser appears) and again on every link flap, and getIgnitionState() has no hysteresis, so
+    // a servo channel jittering at a band edge can produce one "OFF transition" per inbound frame
+    // at 25 Hz. Without this guard each of those would rewrite values NVS already holds.
+    // A bare odoMm_ == lastOdoWriteMm_ test would not do: resetTrip() must write even when the
+    // vehicle has not moved a millimetre.
+    if (!distanceDirty_) {
+        return;                  // NVS already holds these values — no open, no log, no wear
+    }
+
+    Preferences prefs;
+    if (!prefs.begin(NVS_NAMESPACE, false)) {
+        // Never block and never retry in a loop. Advancing the mark here is deliberate: it
+        // disarms the 1 km trigger, which would otherwise stay true and re-attempt (and re-log)
+        // at the 5 Hz sample rate for as long as the vehicle keeps moving. distanceDirty_ stays
+        // set, so the next kilometre — or the next ignition-OFF / trip reset — tries again.
+        Debug::printlnFeature(DebugFeature::VEHICLE, "[SPEED] NVS open failed — distance not persisted");
+        lastOdoWriteMm_ = odoMm_;
+        return;
+    }
+    // Preferences returns the number of bytes written, 0 on failure. A partial write leaves the
+    // counters dirty so a later trigger retries, but the mark still advances for the same
+    // no-spinning reason as above.
+    size_t wroteOdo  = prefs.putULong64("odo_mm", odoMm_);
+    size_t wroteTrip = prefs.putULong64("trip_mm", tripMm_);
+    prefs.end();
+    lastOdoWriteMm_ = odoMm_;
+    if (wroteOdo == 0 || wroteTrip == 0) {
+        Debug::printlnFeature(DebugFeature::VEHICLE, "[SPEED] NVS write failed");
+        return;                  // still dirty — retry at the next trigger
+    }
+    distanceDirty_ = false;
+}
+
+void SpeedSensor::resetTrip() {
+    tripMm_ = 0;                 // odoMm_ is a vehicle-lifetime counter and is NEVER touched here
+    distanceDirty_ = true;       // a reset must reach NVS even if the vehicle never moved
+    persistDistance();
+    Debug::printfFeature(DebugFeature::VEHICLE, "[SPEED] TRIP reset to 0 (ODO %.3f km unchanged)\n",
+                         getOdoKm());
 }
 
 bool SpeedSensor::setPulsesPerRev(int32_t ppr) {

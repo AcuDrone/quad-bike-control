@@ -212,6 +212,15 @@ public:
     float getSpeedWheelCircumferenceMm() const { return speedSensor_.getWheelCircumferenceMm(); }
 
     /**
+     * @brief Distance counters in km (telemetry / MAVLink). READ-ONLY.
+     * Always valid — distance already driven depends on neither CAN health nor the current
+     * speed reading's validity. The odometer is a vehicle-lifetime counter with no reset path;
+     * the trip counter is cleared only by an acknowledged MAVLink trip-reset command.
+     */
+    float getOdoKm() const { return speedSensor_.getOdoKm(); }
+    float getTripKm() const { return speedSensor_.getTripKm(); }
+
+    /**
      * @brief The ceiling the limiter is enforcing, in m/s. 0 = NO LIMIT.
      *
      * There is exactly one source: the autopilot's `SPEED_MAX` parameter, held in RAM only

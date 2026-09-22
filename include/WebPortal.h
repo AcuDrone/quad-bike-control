@@ -79,6 +79,8 @@ public:
         float speed_circ_mm;      // Calibration: wheel circumference (mm)
         float speed_limit_ms;     // Enforced ceiling (m/s) from SPEED_MAX, 0 = no limit — km/h in JSON
         float speed_limit_ceil;   // Throttle ceiling the taper is applying (%, 100 = inactive)
+        float odo_km;             // Total odometer (km) — always valid, NOT gated on speed_valid
+        float trip_km;            // Resettable trip distance (km) — reset is a GCS action only
 
         // CAN bus vehicle data
         uint16_t engine_rpm;      // Engine RPM (0-16383)

@@ -75,6 +75,10 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.speed_valid = vehicleController_.isVehicleSpeedValid();
     telemetry.speed_ppr = vehicleController_.getSpeedPulsesPerRev();
     telemetry.speed_circ_mm = vehicleController_.getSpeedWheelCircumferenceMm();
+    // Distance counters — the exact millimetre counters scaled to km at this point, not a
+    // separately maintained total. Never gated: distance already driven stays true.
+    telemetry.odo_km = vehicleController_.getOdoKm();
+    telemetry.trip_km = vehicleController_.getTripKm();
     // The one and only ceiling: the autopilot's SPEED_MAX. 0 means no limit.
     telemetry.speed_limit_ms = vehicleController_.getSpeedLimitMs();
     telemetry.speed_limit_ceil = vehicleController_.getSpeedLimitCeilingPct();

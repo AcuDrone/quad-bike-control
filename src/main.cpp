@@ -298,6 +298,8 @@ void loop() {
     report.mapKpa           = vd.mapKpa;
     report.engineLoad       = vd.engineLoad;
     report.travelDirection  = vehicleController.getTravelDirection();  // PHYSICAL gear sign
+    report.odoKm            = vehicleController.getOdoKm();       // total, never resettable
+    report.tripKm           = vehicleController.getTripKm();      // resettable from the GCS
     mavlinkInterface.report(report);
 
     // Broadcast telemetry to web clients

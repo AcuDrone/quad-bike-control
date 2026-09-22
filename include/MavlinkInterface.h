@@ -18,10 +18,16 @@
  *
  * EFI_STATUS carries every value in the field that NAMES it (RPM, coolant, intake
  * air temp, manifold pressure, ECU load, measured TPS, commanded throttle, module
- * voltage), with two documented exceptions: the permanently-free fuel pair carries
- * the two GEAR values — fuel_consumed = ASSUMED (commanded) gear, fuel_flow =
- * PHYSICAL (opto-sensed) gear, NaN while unknown — and pt_compensation carries the
- * digital-output bitmask. See the field-mapping block in the .cpp.
+ * voltage), with documented exceptions in the permanently-free fields: the fuel
+ * pair carries the two GEAR values — fuel_consumed = ASSUMED (commanded) gear,
+ * fuel_flow = PHYSICAL (opto-sensed) gear, NaN while unknown — pt_compensation
+ * carries the digital-output bitmask, and barometric_pressure / fuel_pressure carry
+ * the total ODOMETER / TRIP distance in km. See the field-mapping block in the .cpp.
+ *
+ * Accepts exactly one inbound command: a TRIP RESET as COMMAND_LONG /
+ * MAV_CMD_USER_1 with a magic param1, answered with a COMMAND_ACK. Addressing is
+ * strict (this component shares the autopilot's system id), and the reset itself is
+ * performed by the vehicle layer, which owns the counters.
  *
  * Also feeds the hall wheel speed to the autopilot's EKF3 as body-frame wheel
  * odometry (VISION_POSITION_DELTA). That message carries a BODY-FRAME distance
@@ -85,6 +91,10 @@ public:
         int8_t      travelDirection;  // +1 forward gear, -1 reverse, 0 neutral/unknown — signs the
                                       // (unsigned) wheel speed for VISION_POSITION_DELTA. The sign
                                       // policy lives in the vehicle layer; this stays a transport.
+        float       odoKm;            // TOTAL odometer, km — ALWAYS valid, never NaN: distance
+                                      // already driven depends on neither CAN health nor the
+                                      // current speed reading's validity
+        float       tripKm;           // resettable TRIP distance, km — always valid, never NaN
         // Note: oil temperature is not available from the ECU and is not reported.
         // Ground speed is NOT carried in EFI_STATUS — it comes from the hall speed
         // sensor and is reported separately via VFR_HUD.
@@ -168,6 +178,19 @@ public:
     /** @brief ms since the last accepted SPEED_MAX (MAVLINK_PARAM_STALE_MS if never received). */
     uint32_t getSpeedMaxAgeMs() const;
 
+    // ---- Inbound commands (COMMAND_LONG) ------------------------------------
+
+    /**
+     * @brief Take a pending trip-reset request, clearing it.
+     *
+     * The transport validates and acknowledges the COMMAND_LONG and latches the request here;
+     * the VEHICLE layer consumes it and performs the reset, because this transport must not
+     * hold a SpeedSensor& (see the layering rule in openspec/project.md).
+     *
+     * @return true exactly once per accepted MAV_CMD_USER_1 trip reset
+     */
+    bool consumeTripResetRequest();
+
 private:
     HardwareSerial* serial_;
 
@@ -207,6 +230,9 @@ private:
     uint32_t lastReportTx_;
     uint32_t lastStatustextTx_;
 
+    // Inbound trip reset, latched here and performed by the vehicle layer
+    bool     tripResetPending_;        // set by an accepted MAV_CMD_USER_1, cleared on consumption
+
     // Change detection for STATUSTEXT
     char     lastGear_[4];
     char     lastIgnition_[12];
@@ -223,6 +249,13 @@ private:
     // this header stays free of the mavlink C library headers.
     void handleParamValue(uint8_t sysid, uint8_t compid, const char* paramId, float value);
     void requestSpeedMaxParam();
+
+    // Inbound COMMAND_LONG. Takes DECODED scalars for the same reason as handleParamValue, so
+    // this header stays free of the mavlink C library headers. Addressing is strict: this
+    // component shares the autopilot's system id, so only an exact target_system/target_component
+    // match is handled and a broadcast is ignored WITHOUT an ACK.
+    void handleCommandLong(uint8_t sysid, uint8_t compid, uint8_t targetSys, uint8_t targetComp,
+                           uint16_t command, float param1);
 
     // Wheel speed as an EKF-fusable body-frame distance increment (gated — see the .cpp)
     void sendVisionPositionDelta(const StateReport& state);

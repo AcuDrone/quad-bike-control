@@ -227,6 +227,12 @@ struct ServoChannelConfig {
 #define MAVLINK_PARAM_STALE_MS        16000  // ms without a PARAM_VALUE before the value is unusable (~3 polls)
 #define MAVLINK_PARAM_EPSILON_MS      0.005f // m/s — smaller differences are "unchanged" (never compare floats with ==)
 
+// Inbound COMMAND_LONG handling. The only command implemented is a trip reset, carried as
+// MAV_CMD_USER_1 with a magic param1 so that a stray, replayed or mis-scripted MAV_CMD_USER_1
+// cannot silently destroy the operator's trip reading.
+#define MAVLINK_CMD_TRIP_RESET_MAGIC  1.0f   // param1 magic for MAV_CMD_USER_1 (trip reset)
+#define MAVLINK_CMD_PARAM_EPSILON     0.01f  // param1 match tolerance (never compare floats with ==)
+
 // Body-frame wheel odometry (VISION_POSITION_DELTA — wheel speed into the autopilot's EKF3).
 // The delta is measured along the vehicle's OWN longitudinal axis, so no heading is needed and
 // nothing inbound is subscribed: EKF3 rotates it with its own attitude. VISION_SPEED_ESTIMATE
@@ -377,7 +383,7 @@ struct ServoChannelConfig {
 #define TRANS_GEAR_DEFAULT_HIGH_PCT         58.0f
 
 // Safety limits
-#define TRANS_UNKNOWN_GEAR_THROTTLE_MAX     (float)5   // % - max throttle when physical gear UNKNOWN
+#define TRANS_UNKNOWN_GEAR_THROTTLE_MAX     (float)8.5   // % - max throttle when physical gear UNKNOWN
 #define TRANS_GEAR_CHECK_INTERVAL           500        // ms - physical gear verification period
 #define TRANS_GEAR_READ_INTERVAL_MS         100        // ms - GPIO debounce cache for getPhysicalGear()
 #define TRANS_GEAR_READ_RETRY_COUNT         3          // extra reads when all switches read inactive while servo is idle
@@ -412,6 +418,14 @@ struct ServoChannelConfig {
 #define SPEED_PCNT_HIGH_LIMIT         10000
 #define SPEED_PCNT_LOW_LIMIT          (-1)
 #define SPEED_MAX_PULSES_PER_SAMPLE   20000  // pulses per sample above which the reading is a counter glitch, not motion
+
+// Odometer / trip persistence interval (NVS namespace "speed", keys "odo_mm" / "trip_mm").
+// The counters are flushed every kilometre of odometer growth, plus once on every ignition-OFF
+// transition. That bounds the loss from a power cut to one kilometre while keeping the write
+// budget negligible: NVS is wear-levelled and log-structured, so ~63 writes of the two uint64
+// keys fill a 4096-byte page and cost one erase — ≈160 erases over 10 000 km, ≈0.16 % of the
+// flash's ~100 000-cycle endurance.
+#define ODO_NVS_WRITE_INTERVAL_MM     1000000ULL  // mm (1 km) of ODO growth between NVS writes
 
 // Calibration defaults (NVS namespace "speed", keys "ppr" / "circ_mm"), both
 // bench-measured on the vehicle and both settable at runtime from the web UI

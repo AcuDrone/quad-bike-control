@@ -791,6 +791,19 @@
                         stepped. With no valid sensor reading the limiter does not act.
                     </div>
                 </div>
+
+                <!-- Distance counters. READ-ONLY: the trip reset is a ground-station action
+                     (MAV_CMD_USER_1), so there is deliberately no button or input here. -->
+                <div style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: baseline; font-size: 0.85em;">
+                        <span data-i18n="lbl_odo" style="color: var(--muted-foreground);">Odometer</span>
+                        <span id="odo-value">--</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 4px; font-size: 0.85em;">
+                        <span data-i18n="lbl_trip" style="color: var(--muted-foreground);">Trip</span>
+                        <span id="trip-value">--</span>
+                    </div>
+                </div>
                 <div id="speed-status-msg" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
             </div>
 
@@ -1001,6 +1014,9 @@
                 lbl_speed_limit: 'Speed limit',
                 lbl_speed_limit_ceil: 'Limiting',
                 lim_none: 'none',
+                lbl_odo: 'Odometer',
+                lbl_trip: 'Trip',
+                unit_km: 'km',
                 speed_limiter_hint: "The limit comes only from the autopilot's SPEED_MAX parameter; 0 (or no link) means no limit. Approaching it the throttle ceiling is tapered down smoothly instead of being stepped. With no valid sensor reading the limiter does not act.",
                 speed_saving: 'Saving speed settings...',
                 invalid_speed_ppr: 'Pulses/rev must be 1-1000',
@@ -1229,6 +1245,9 @@
                 lbl_speed_limit: 'Обмеження швидкості',
                 lbl_speed_limit_ceil: 'Обмежується',
                 lim_none: 'немає',
+                lbl_odo: 'Одометр',
+                lbl_trip: 'Пробіг',
+                unit_km: 'км',
                 speed_limiter_hint: 'Обмеження береться лише з параметра SPEED_MAX автопілота; 0 (або відсутній зв\'язок) означає, що обмеження немає. При наближенні до нього стеля дроселя плавно знижується, а не падає стрибком. Без достовірних показань датчика обмежувач не діє.',
                 speed_saving: 'Збереження налаштувань швидкості...',
                 invalid_speed_ppr: 'Імпульсів на оберт має бути 1-1000',
@@ -2136,6 +2155,19 @@
                     ceilRow.style.display = 'none';
                 }
             }
+
+            // Distance counters. Deliberately NOT gated on speed_valid: a stale or unhealthy
+            // sensor does not invalidate distance already driven. A missing field shows "--"
+            // rather than a misleading 0.000.
+            [['odo-value', data.odo_km], ['trip-value', data.trip_km]].forEach(function (pair) {
+                const el = document.getElementById(pair[0]);
+                if (!el) return;
+                // Number.isFinite, not typeof === 'number': NaN and Infinity are both numbers
+                // and would render as "NaN km" / "Infinity km".
+                el.textContent = Number.isFinite(pair[1])
+                    ? pair[1].toFixed(3) + ' ' + t('unit_km')
+                    : '--';
+            });
         }
 
         function saveSpeedPpr() {

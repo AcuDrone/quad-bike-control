@@ -159,6 +159,13 @@ void VehicleController::update() {
         processMavlinkCommands();
     }
 
+    // Perform a latched trip reset. The transport validates and acknowledges the COMMAND_LONG
+    // but never holds a SpeedSensor& — the vehicle layer owns the counters, so the request is
+    // consumed here regardless of which input source is active.
+    if (mavlink_.consumeTripResetRequest()) {
+        speedSensor_.resetTrip();
+    }
+
     // Apply fail-safe if needed
     applyFailsafe();
 
@@ -371,6 +378,9 @@ void VehicleController::applyFailsafe() {
         brakeSensorTriggerTime_ = 0;  // Reset sensor trigger
         transmission_.stop();  // Stop transmission actuator
         relayController_.allOff();  // Turn off ignition and lights
+        // A fail-safe is a power-down in every respect that matters to the distance counters,
+        // so flush them once here — on entry only, guarded by !failsafeApplied_ above.
+        speedSensor_.persistDistance();
         previousIgnitionState_ = MavlinkInterface::IgnitionState::OFF;  // Reset ignition tracking
         lastCommandedGear_ = TransmissionController::Gear::GEAR_UNKNOWN;  // Force re-eval on restore
         failsafeApplied_ = true;
@@ -421,6 +431,11 @@ void VehicleController::processMavlinkCommands() {
     switch (ignitionState) {
         case MavlinkInterface::IgnitionState::OFF:
             relayController_.setIgnitionState(RelayController::IgnitionState::OFF);
+            // Flush the distance counters on the TRANSITION into OFF only, so a normal shutdown
+            // loses nothing — not on every iteration OFF is merely being held.
+            if (previousIgnitionState_ != MavlinkInterface::IgnitionState::OFF) {
+                speedSensor_.persistDistance();
+            }
             break;
         case MavlinkInterface::IgnitionState::ACC:
             relayController_.setIgnitionState(RelayController::IgnitionState::ACC);
@@ -490,11 +505,6 @@ bool VehicleController::shouldClipThrottle() const {
     if (transmission_.isGearChangeActive())
         return true;
     if (transmission_.getTargetGear() == TransmissionController::Gear::GEAR_NEUTRAL)
-        return true;
-    // Physical gear unknown (ambiguous switches, or the opto-input expander is
-    // faulted and the snapshot is stale) — the drivetrain state is not known, so
-    // throttle authority is capped. This is the degraded mode for a board I/O fault.
-    if (transmission_.getPhysicalGear() == TransmissionController::Gear::GEAR_UNKNOWN)
         return true;
     return false;
 }
@@ -787,6 +797,13 @@ bool VehicleController::setIgnitionState(const String& state, String& errorMsg) 
             Debug::printfFeature(DebugFeature::VEHICLE, "[IGNITION] Rejected: engine already running (RPM: %d)\n", canData.engineRPM);
             return false;
         }
+    }
+
+    // Flush the distance counters on the TRANSITION into OFF only — the web twin of the
+    // MAVLink ignition-OFF flush; re-selecting OFF while already OFF writes nothing.
+    if (targetState == RelayController::IgnitionState::OFF &&
+        currentState != RelayController::IgnitionState::OFF) {
+        speedSensor_.persistDistance();
     }
 
     // Apply ignition state

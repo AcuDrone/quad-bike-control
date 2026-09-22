@@ -1,73 +1,77 @@
 ## 1. Constants (`include/Constants.h`)
-- [ ] 1.1 In the `VEHICLE SPEED SENSOR` block, after `SPEED_MAX_PULSES_PER_SAMPLE`, add
+- [x] 1.1 In the `VEHICLE SPEED SENSOR` block, after `SPEED_MAX_PULSES_PER_SAMPLE`, add
   `ODO_NVS_WRITE_INTERVAL_MM` (`1000000ULL` = 1 km) with a comment stating the write budget:
   one NVS write per kilometre plus one per ignition-OFF, wear-levelled, ≈0.16 % of flash endurance
   over 10 000 km.
-- [ ] 1.2 In the `MAVLINK_PARAM_*` neighbourhood add the inbound-command block:
+- [x] 1.2 In the `MAVLINK_PARAM_*` neighbourhood add the inbound-command block:
   `MAVLINK_CMD_TRIP_RESET_MAGIC` (`1.0f`) and `MAVLINK_CMD_PARAM_EPSILON` (`0.01f`), commented as
   "`param1` magic for `MAV_CMD_USER_1`; never compare floats with `==`".
-- [ ] 1.3 **No new config key, no NVS-tunable value, no web-settable parameter** — grep the diff to
+- [x] 1.3 **No new config key, no NVS-tunable value, no web-settable parameter** — grep the diff to
   confirm nothing in `Constants.h` gained a runtime setter.
 
 ## 2. SpeedSensor: accumulators and persistence
-- [ ] 2.1 `include/SpeedSensor.h`: private `uint64_t odoMm_`, `uint64_t tripMm_`,
+- [x] 2.1 `include/SpeedSensor.h`: private `uint64_t odoMm_`, `uint64_t tripMm_`,
   `uint64_t lastOdoWriteMm_`; public `getOdoMm()`, `getTripMm()`, `getOdoKm()`, `getTripKm()`
   (float, `× 1e-6`), `resetTrip()` and `persistDistance()`. Update the class-comment block: the
   `"speed"` namespace now holds calibration **and** distance.
-- [ ] 2.2 Initialise all three to 0 in the constructor initialiser list.
-- [ ] 2.3 `begin()`: load `odo_mm` and `trip_mm` from the existing `"speed"` namespace with
+- [x] 2.2 Initialise all three to 0 in the constructor initialiser list.
+- [x] 2.3 `begin()`: load `odo_mm` and `trip_mm` from the existing `"speed"` namespace with
   `getULong64(key, 0)`; a missing key reads 0. Seed `lastOdoWriteMm_ = odoMm_`. Log the loaded
   values on the `VEHICLE` feature (`[SPEED] ODO 1234.567 km, TRIP 12.345 km restored`).
-- [ ] 2.4 `update()`: inside the existing `if (delta > 0)` branch — i.e. **after** the
+- [x] 2.4 `update()`: inside the existing `if (delta > 0)` branch — i.e. **after** the
   `delta > SPEED_MAX_PULSES_PER_SAMPLE` wrap-guard `return` — add
   `const uint64_t stepMm = (uint64_t)llroundf(delta * distancePerPulseMm_);` and add it to both
   accumulators. Nothing is added in the decay/suspicious path.
-- [ ] 2.5 `update()`: after accumulating, if `odoMm_ - lastOdoWriteMm_ >= ODO_NVS_WRITE_INTERVAL_MM`
+- [x] 2.5 `update()`: after accumulating, if `odoMm_ - lastOdoWriteMm_ >= ODO_NVS_WRITE_INTERVAL_MM`
   call `persistDistance()`. The comparison is unsigned and monotonic — no wrap handling needed.
-- [ ] 2.6 `persistDistance()`: open `"speed"` read-write, `putULong64("odo_mm", odoMm_)` and
+- [x] 2.6 `persistDistance()`: open `"speed"` read-write, `putULong64("odo_mm", odoMm_)` and
   `putULong64("trip_mm", tripMm_)`, `end()`, set `lastOdoWriteMm_ = odoMm_`. Tolerate a failed
   `begin()` by logging and returning — never block, never retry in a loop.
-- [ ] 2.7 `resetTrip()`: zero `tripMm_`, call `persistDistance()` immediately, log
+- [x] 2.7 `resetTrip()`: zero `tripMm_`, call `persistDistance()` immediately, log
   `[SPEED] TRIP reset to 0 (ODO %.3f km unchanged)`. It SHALL NOT touch `odoMm_`.
-- [ ] 2.8 Confirm by inspection that no code path anywhere can decrease or zero `odoMm_`, and that
+- [x] 2.8 Confirm by inspection that no code path anywhere can decrease or zero `odoMm_`, and that
   the calibration setters (`setPulsesPerRev`, `setWheelCircumferenceMm`) leave both accumulators
   untouched.
 
 ## 3. VehicleController: ignition-OFF flush and trip-reset consumption
-- [ ] 3.1 `src/VehicleController.cpp`, `processMavlinkCommands()`: in the ignition switch's
+- [x] 3.1 `src/VehicleController.cpp`, `processMavlinkCommands()`: in the ignition switch's
   `case MavlinkInterface::IgnitionState::OFF` (currently line 422), flush on the **transition
   only** — `if (previousIgnitionState_ != MavlinkInterface::IgnitionState::OFF)
   speedSensor_.persistDistance();` — using the `previousIgnitionState_` tracker already written at
   the bottom of the same function (line 440). Do not flush while OFF is merely being held.
-- [ ] 3.2 Same flush on the web ignition path: `VehicleController::setIgnitionState()` (line 764)
+- [x] 3.2 Same flush on the web ignition path: `VehicleController::setIgnitionState()` (line 764)
   when the parsed target is `OFF` and the current relay state is not already OFF.
-- [ ] 3.3 `applyFailsafe()` (line 373, the `relayController_.allOff()` branch): flush once on
+- [x] 3.3 `applyFailsafe()` (line 373, the `relayController_.allOff()` branch): flush once on
   fail-safe entry, alongside the existing `previousIgnitionState_` reset — a fail-safe is a
   power-down in every respect that matters to the counters.
-- [ ] 3.4 `update()`: `if (mavlink_.consumeTripResetRequest()) speedSensor_.resetTrip();` —
+- [x] 3.4 `update()`: `if (mavlink_.consumeTripResetRequest()) speedSensor_.resetTrip();` —
   the transport never holds a `SpeedSensor&`.
-- [ ] 3.5 `include/VehicleController.h`: read-only accessors `getOdoKm()` / `getTripKm()`
+- [x] 3.5 `include/VehicleController.h`: read-only accessors `getOdoKm()` / `getTripKm()`
   forwarding to `speedSensor_`, beside the existing `getSpeedPulsesPerRev()` pair (line 211).
 
 ## 4. MavlinkInterface: report ODO/TRIP, handle the inbound trip reset
-- [ ] 4.1 `include/MavlinkInterface.h`: add `float odoKm;` and `float tripKm;` to `StateReport`,
+- [x] 4.1 `include/MavlinkInterface.h`: add `float odoKm;` and `float tripKm;` to `StateReport`,
   documented as always valid (never `NaN`, independent of CAN health).
-- [ ] 4.2 `src/MavlinkInterface.cpp`, the `mavlink_msg_efi_status_pack()` call (line 441): replace
+- [x] 4.2 `src/MavlinkInterface.cpp`, the `mavlink_msg_efi_status_pack()` call (line 441): replace
   the `0.0f, // barometric_pressure (unused)` argument with `state.odoKm` and the
   `0.0f); // fuel_pressure (unused)` argument with `state.tripKm`, and update the field-mapping
   comments to `<- ODOMETER (km, total)` and `<- TRIP (km, resettable)`.
-- [ ] 4.3 `src/main.cpp`: populate `StateReport::odoKm` / `tripKm` from the new
+- [x] 4.3 `src/main.cpp`: populate `StateReport::odoKm` / `tripKm` from the new
   `VehicleController` accessors where the rest of the report is filled.
-- [ ] 4.4 `include/MavlinkInterface.h`: private `bool tripResetPending_`, `uint8_t cmdAckSysid_`,
-  `uint8_t cmdAckCompid_`; public `bool consumeTripResetRequest()` (returns the flag and clears
-  it); private `void handleCommandLong(uint8_t sysid, uint8_t compid, uint8_t targetSys,
+- [x] 4.4 `include/MavlinkInterface.h`: private `bool tripResetPending_`; public
+  `bool consumeTripResetRequest()` (returns the flag and clears it); private
+  `void handleCommandLong(uint8_t sysid, uint8_t compid, uint8_t targetSys,
   uint8_t targetComp, uint16_t command, float param1)` — **decoded scalars only**, the header stays
   free of mavlink headers.
-- [ ] 4.5 Initialise the new members in the constructor list and clear them in `begin()`.
-- [ ] 4.6 Add `case MAVLINK_MSG_ID_COMMAND_LONG:` to the RX dispatch (beside the existing
+  *Note:* the `cmdAckSysid_` / `cmdAckCompid_` members this task originally specified were
+  **dropped as dead state** — the `COMMAND_ACK` is packed from `handleCommandLong()`'s own `sysid`
+  / `compid` parameters in the same call, so nothing ever read them back.
+- [x] 4.5 Initialise `tripResetPending_` in the constructor list and clear it in `begin()` (the two
+  dropped ACK-address members needed neither).
+- [x] 4.6 Add `case MAVLINK_MSG_ID_COMMAND_LONG:` to the RX dispatch (beside the existing
   `COMMAND_ACK` case at line 111): decode with `mavlink_msg_command_long_decode()` and call
   `handleCommandLong()`.
-- [ ] 4.7 Implement `handleCommandLong()`:
+- [x] 4.7 Implement `handleCommandLong()`:
   - return immediately unless `targetSys == MAVLINK_SYSTEM_ID && targetComp ==
     MAVLINK_COMPONENT_ID` — **no ACK** for a broadcast (`targetComp == 0`) or another component;
   - `command == MAV_CMD_USER_1` and `fabsf(param1 - MAVLINK_CMD_TRIP_RESET_MAGIC) <=
@@ -77,12 +81,12 @@
     `[MAV] TRIP reset DENIED (param1=%.2f) from %u/%u`;
   - any other command → ACK `MAV_RESULT_UNSUPPORTED`, log
     `[MAV] command %u UNSUPPORTED from %u/%u`.
-- [ ] 4.8 Send the `COMMAND_ACK` with `mavlink_msg_command_ack_pack()` from
+- [x] 4.8 Send the `COMMAND_ACK` with `mavlink_msg_command_ack_pack()` from
   `MAVLINK_SYSTEM_ID`/`MAVLINK_COMPONENT_ID`, `target_system = msg.sysid`,
   `target_component = msg.compid`, `progress = 0`, `result_param2 = 0`.
-- [ ] 4.9 Confirm the existing `COMMAND_ACK` **inbound** case still only logs
+- [x] 4.9 Confirm the existing `COMMAND_ACK` **inbound** case still only logs
   `MAV_CMD_SET_MESSAGE_INTERVAL` results and is not confused by the ESP32's own outbound ACKs.
-- [ ] 4.10 `src/MavlinkInterface.cpp:478-488`, the `VFR_HUD` pack: replace
+- [x] 4.10 `src/MavlinkInterface.cpp:478-488`, the `VFR_HUD` pack: replace
   `float groundSpeedMs = (state.speedValid && state.speedMs > 0.0f) ? state.speedMs : 0.0f;` with
   `float groundSpeedMs = state.speedValid ? state.speedMs : NAN;`. A genuine `0.0` now reaches the
   wire as `0.0`; the `> 0.0f` guard goes, since `speedMs_` is already clamped at zero by the decay
@@ -90,45 +94,46 @@
   consumer can tell "no reading" from "stopped", `throttle` is unchanged (a `uint16_t` percent has
   no `NaN` encoding), and `VISION_POSITION_DELTA` is untouched — it is a fusable measurement and
   already goes silent on an invalid reading.
-- [ ] 4.11 Confirm no other outbound path substitutes zero for an invalid speed: grep
+- [x] 4.11 Confirm no other outbound path substitutes zero for an invalid speed: grep
   `speedValid` across `src/` and check `sendVisionPositionDelta()` still *suppresses* rather than
   reporting, and that the speed limiter's fail-open behaviour is untouched.
 
 ## 5. Telemetry and web UI
-- [ ] 5.1 `include/WebPortal.h`: add `float odo_km;` and `float trip_km;` to the telemetry struct,
+- [x] 5.1 `include/WebPortal.h`: add `float odo_km;` and `float trip_km;` to the telemetry struct,
   in the hall-sensor block beside `vehicle_speed_ms` (line 76).
-- [ ] 5.2 `src/TelemetryManager.cpp`: populate both from the `VehicleController` accessors beside
+- [x] 5.2 `src/TelemetryManager.cpp`: populate both from the `VehicleController` accessors beside
   the existing `vehicle_speed_ms` / `speed_valid` lines (line 74).
-- [ ] 5.3 `src/WebPortal.cpp`: serialise `doc["odo_km"]` and `doc["trip_km"]` with
+- [x] 5.3 `src/WebPortal.cpp`: serialise `doc["odo_km"]` and `doc["trip_km"]` with
   `serialized(String(value, 3))`, unconditionally — independent of CAN and MAVLink status, beside
   `vehicle_speed` (line 578).
-- [ ] 5.4 `data/index.html`: two read-only rows in the speed card (after the speed-limit rows,
+- [x] 5.4 `data/index.html`: two read-only rows in the speed card (after the speed-limit rows,
   ~line 786), `id="odo-value"` and `id="trip-value"`; **no button, no input, no reset control**.
-- [ ] 5.5 `data/index.html`, `updateSpeedDisplay()` (~line 2094): render both as
+- [x] 5.5 `data/index.html`, `updateSpeedDisplay()` (~line 2094): render both as
   `value.toFixed(3) + ' ' + t('unit_km')`, defaulting to `--` when the field is absent. They are
   **not** gated on `speed_valid`: a stale sensor does not invalidate distance already driven.
-- [ ] 5.6 `data/index.html`: add `lbl_odo`, `lbl_trip` and `unit_km` to **both** the `en` and `uk`
+- [x] 5.6 `data/index.html`: add `lbl_odo`, `lbl_trip` and `unit_km` to **both** the `en` and `uk`
   dictionaries (Odometer / Trip / km — Одометр / Пробіг / км) and verify EN/UK key parity.
-- [ ] 5.7 `MAVLINK_SETUP.md`: add two rows to the "Vehicle state reported back to the autopilot"
+- [x] 5.7 `MAVLINK_SETUP.md`: add two rows to the "Vehicle state reported back to the autopilot"
   table (`Total odometer (km)` → `barometric_pressure`, `Trip distance (km)` → `fuel_pressure`,
   source "GPIO 8 / X2", component 25, 5 Hz, always valid); add a short **Trip reset** subsection
   documenting `COMMAND_LONG` / `MAV_CMD_USER_1` / `param1 = 1`, the strict addressing, the three
   ACK results, and that ODO cannot be reset.
-- [ ] 5.7a `MAVLINK_SETUP.md` line 79, the `Ground speed (hall sensor)` row: note **"`NaN` when the
+- [x] 5.7a `MAVLINK_SETUP.md` line 79, the `Ground speed (hall sensor)` row: note **"`NaN` when the
   sensor is invalid (never pulsed or latched suspicious); a genuine 0.0 means stopped"**, and say in
   the surrounding text that `VFR_HUD.throttle` and `VISION_POSITION_DELTA` are unaffected.
-- [ ] 5.8 `WEB_PORTAL_SETUP.md`: one short note that the portal **displays** ODO and TRIP and that
+- [x] 5.8 `WEB_PORTAL_SETUP.md`: one short note that the portal **displays** ODO and TRIP and that
   the trip reset is a ground-station action only.
 
 ## 6. Build and static checks
-- [ ] 6.1 `pio run -e esp32-s3-devkitc-1` completes with no errors and no new warnings from `src/`
+- [x] 6.1 `pio run -e esp32-s3-devkitc-1` completes with no errors and no new warnings from `src/`
   or `include/`.
-- [ ] 6.2 `grep -rn 'odoMm_' src include` shows assignment only in `begin()` (load) and the
+- [x] 6.2 `grep -rn 'odoMm_' src include` shows assignment only in `begin()` (load) and the
   `delta > 0` branch of `update()` — never a decrement, never a zero.
-- [ ] 6.3 `grep -rn 'resetTrip' src include` shows exactly one call site, in
+- [x] 6.3 `grep -rn 'resetTrip' src include` shows exactly one call site, in
   `VehicleController::update()`, reached only via `consumeTripResetRequest()`.
 - [ ] 6.4 `[WEB] telemetry JSON peak:` stays below 4096 with no overflow warning (two extra keys,
-  ~30 bytes).
+  ~30 bytes). *Verified by inspection only (`StaticJsonDocument<4096>`, +~34 B); the runtime peak
+  is confirmed on the bench.*
 
 ## 7. Bench and road verification
 - [ ] 7.1 **[OPERATOR]** Flash firmware **and** `pio run -t uploadfs` (`data/` changed).

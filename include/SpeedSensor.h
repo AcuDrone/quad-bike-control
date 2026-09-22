@@ -25,10 +25,16 @@
  *    (the fingerprint of a mid-motion wire fault). Each consumer picks its own
  *    fail-safe direction from that.
  *
- * This class is the single owner of the NVS namespace `"speed"`, which now holds
- * only the calibration (pulses/rev + wheel circumference). The max-speed limiter
- * has NO persisted configuration: its ceiling comes solely from the autopilot's
- * SPEED_MAX parameter and is applied in `VehicleController`.
+ * This class is the single owner of the NVS namespace `"speed"`, which holds the
+ * calibration (pulses/rev + wheel circumference) AND the two distance counters
+ * (`odo_mm` / `trip_mm`). The max-speed limiter has NO persisted configuration:
+ * its ceiling comes solely from the autopilot's SPEED_MAX parameter and is
+ * applied in `VehicleController`.
+ *
+ * Distance is accumulated in exact `uint64_t` MILLIMETRES from counted pulses
+ * only — the decayed estimate emitted during pulse silence adds nothing, and a
+ * sample rejected by the wrap guard adds nothing. The odometer only ever
+ * increases; the trip counter is cleared solely by `resetTrip()`.
  *
  * All speeds here are METRES PER SECOND. km/h exists only at the presentation
  * edge (web JSON, human-readable debug strings).
@@ -63,6 +69,29 @@ public:
     /** @brief Running pulse total since boot (diagnostics / bench calibration) */
     uint32_t getPulseTotal() const { return pulseTotal_; }
 
+    // ---- Distance counters (NVS "speed", keys "odo_mm" / "trip_mm") ---------
+
+    /** @brief Exact total odometer in millimetres — the authoritative counter */
+    uint64_t getOdoMm() const { return odoMm_; }
+
+    /** @brief Exact trip distance in millimetres — the authoritative counter */
+    uint64_t getTripMm() const { return tripMm_; }
+
+    /** @brief Total odometer in km — a PRESENTATION of getOdoMm(), never read back */
+    float getOdoKm() const { return (float)(odoMm_ * 1e-6); }
+
+    /** @brief Trip distance in km — a PRESENTATION of getTripMm(), never read back */
+    float getTripKm() const { return (float)(tripMm_ * 1e-6); }
+
+    /** @brief Zero the TRIP counter and persist immediately. The odometer is untouched. */
+    void resetTrip();
+
+    /**
+     * @brief Flush both counters to NVS now (ignition OFF / fail-safe / trip reset).
+     * A no-op — no NVS open, no log — when nothing has changed since the last successful write.
+     */
+    void persistDistance();
+
     // ---- Calibration (NVS "speed") -----------------------------------------
 
     uint16_t getPulsesPerRev() const { return pulsesPerRev_; }
@@ -94,6 +123,16 @@ private:
     uint32_t pulseTotal_;        // running total since begin()
     float    speedMs_;
     float    lastMovingSpeedMs_; // last non-zero speed, for the decel plausibility check
+
+    // Distance counters (exact millimetres — never decremented, never zeroed except tripMm_)
+    uint64_t odoMm_;             // total odometer, vehicle lifetime
+    uint64_t tripMm_;            // resettable trip distance
+    uint64_t lastOdoWriteMm_;    // odoMm_ at the last write ATTEMPT (the 1 km write trigger)
+    bool     distanceDirty_;     // true when RAM differs from what NVS holds — the ONLY thing
+                                 // that lets persistDistance() open NVS at all. Without it a
+                                 // fail-safe on every boot, a link flap, or a servo channel
+                                 // jittering at an ignition band edge would each rewrite
+                                 // unchanged values (the last case at the 25 Hz frame rate).
 
     // Health
     bool     everPulsed_;

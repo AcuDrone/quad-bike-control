@@ -541,10 +541,11 @@ bool WebPortal::parseWebCommand(uint8_t* data, size_t len) {
 // ============================================================================
 
 String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
-    // Capacity headroom: ~52 top-level fields (incl. 4 steering-VESC fields, the
-    // 5 rail / board-I/O fields and the 10 hall-speed / limiter fields) + a 16-element array +
-    // a 4-member object, plus copied String values. Sized to 4096 to leave room for
-    // the transient `probe` object (only present while probe results are fresh).
+    // Capacity headroom: 56 top-level fields (incl. 4 steering-VESC fields, the
+    // 5 rail / board-I/O fields and the 12 hall-speed / limiter / distance fields) + a 16-element
+    // array + the nested probe / po / bm / dtc / gearDefaults objects, plus copied String values.
+    // Sized to 4096 to leave room for the transient `probe` object (only present while probe
+    // results are fresh).
     StaticJsonDocument<4096> doc;
 
     doc["timestamp"] = telemetry.timestamp;
@@ -582,6 +583,14 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // The enforced ceiling, from the autopilot's SPEED_MAX alone. 0 = no limit.
     doc["speed_limit_kmh"] = serialized(String(telemetry.speed_limit_ms * MS_TO_KMH, 1));
     doc["speed_limit_ceil"] = serialized(String(telemetry.speed_limit_ceil, 0));
+    // Distance counters, in km to 3 decimals. Emitted UNCONDITIONALLY — independent of CAN
+    // status, MAVLink status and speed_valid: a recorded distance is not invalidated by a bus
+    // going quiet or by the sensor going unhealthy. Display only; there is no reset command.
+    // serialized() bypasses ArduinoJson's own NaN handling, so a non-finite float would emit a
+    // bare `nan` token and break the WHOLE document for the browser's JSON.parse — the counters
+    // are integers scaled by 1e-6 and cannot be non-finite, but the guard costs nothing.
+    doc["odo_km"] = serialized(String(isfinite(telemetry.odo_km) ? telemetry.odo_km : 0.0f, 3));
+    doc["trip_km"] = serialized(String(isfinite(telemetry.trip_km) ? telemetry.trip_km : 0.0f, 3));
 
     // CAN bus vehicle data
     if (telemetry.can_status == "connected") {
