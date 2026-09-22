@@ -48,7 +48,7 @@ commanded by the controller, the reported value SHALL be unambiguous as to which
 - **AND** `engine_load` SHALL NOT carry any gear encoding — the gear values are reported in the fuel
   fields instead, which is what frees this field for its named quantity
 
-#### Scenario: Report measured and commanded throttle in EFI_STATUS
+#### Scenario: Report measured throttle position in EFI_STATUS
 - **WHEN** the engine-telemetry interval elapses
 - **THEN** the `EFI_STATUS` message SHALL carry the ECU-measured throttle position (OBD-II PID
   `0x11`) in the `throttle_position` field, as a percentage, and `NaN` when CAN `VehicleData` is
@@ -108,6 +108,23 @@ commanded by the controller, the reported value SHALL be unambiguous as to which
   physical-gear reading is the only value gated on gear-switch validity
 - **AND** the firmware SHALL NOT attempt to distinguish mid-shift from a sensor fault on the wire;
   that inference belongs to the consumer, which has both gear values and a clock
+
+#### Scenario: Preserve existing EFI_STATUS field assignments
+- **WHEN** ECU values are mapped into `EFI_STATUS` after this remap
+- **THEN** the `rpm`, `cylinder_head_temperature`, `intake_manifold_temperature`,
+  `intake_manifold_pressure` and `ignition_voltage` fields SHALL continue to carry the quantities
+  they already carried — engine RPM, coolant temperature, intake air temperature, manifold absolute
+  pressure and control module supply voltage respectively
+- **AND** the `pt_compensation` field SHALL continue to carry the digital-output bitmask
+- **AND** the ONLY assignments that move SHALL be the gear value, which vacates `engine_load` for
+  `fuel_consumed` (assumed gear) and `fuel_flow` (physically sensed gear), and the ECU-measured
+  throttle position, which vacates `throttle_out` for `throttle_position`
+- **AND** `engine_load` SHALL therefore carry the ECU's own calculated engine load, and
+  `throttle_out` the commanded/arbitrated throttle, each being the quantity that field names
+- **AND** any ECU value without a free, semantically appropriate field SHALL be omitted from MAVLink
+  rather than mapped onto a mismatched field
+- **AND** a value already carried in one `EFI_STATUS` field SHALL NOT be duplicated into a second
+  field of the same message
 
 #### Scenario: Repurpose only permanently-free fields
 - **WHEN** a value is carried in an `EFI_STATUS` field that does not name it
