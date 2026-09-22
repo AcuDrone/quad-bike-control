@@ -300,6 +300,21 @@ void loop() {
     report.travelDirection  = vehicleController.getTravelDirection();  // PHYSICAL gear sign
     report.odoKm            = vehicleController.getOdoKm();       // total, never resettable
     report.tripKm           = vehicleController.getTripKm();      // resettable from the GCS
+    // Steering VESC telemetry (ESC_STATUS / ESC_INFO). Gate: the DRIVER's own link health.
+    const SteeringController& steering = vehicleController.getSteering();
+    report.steerDriverOk      = steering.isDriverOk();
+    report.steerMotorCurrentA = steering.getMotorCurrent();        // MOTOR current, not input
+    report.steerFetTempC      = steering.getFetTemp();
+    report.steerInputVoltageV = steering.getInputVoltage();        // 24 V boost rail at the VESC
+    report.steerVescFault     = steering.getVescFault();           // raw mc_fault_code
+    report.steerReplyCount    = steering.getVescReplyCount();
+    report.steerFaultEvents   = steering.getVescFaultEvents();
+    // Steering POSITION from the same controller but a DIFFERENT gate: the AS5600's, not the
+    // VESC's. Filled unconditionally — the gating is applied where the message is packed, so
+    // this stays a plain snapshot.
+    report.steerPercent     = steering.getSteeringPercent();       // -100 left .. 0 .. +100 right
+    report.steerSensorOk    = steering.isSensorOk();
+    report.steerCalibrated  = steering.isCalibrated();
     mavlinkInterface.report(report);
 
     // Broadcast telemetry to web clients

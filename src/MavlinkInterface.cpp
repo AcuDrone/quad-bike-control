@@ -28,6 +28,7 @@ MavlinkInterface::MavlinkInterface()
       lastParamRequestMs_(0),
       lastHeartbeatTx_(0),
       lastReportTx_(0),
+      lastEscInfoTx_(0),
       lastStatustextTx_(0),
       tripResetPending_(false),
       lastFailsafe_(false),
@@ -69,6 +70,7 @@ bool MavlinkInterface::begin(uint8_t rxPin, uint8_t txPin, uint8_t uartNum, uint
     speedMaxRxMs_ = 0;
     lastParamRequestMs_ = 0;   // first poll is scheduled off targetLearnedMs_
     tripResetPending_ = false; // no inbound command yet
+    lastEscInfoTx_ = 0;        // first ESC_INFO goes out on the first report() call
 
     Debug::printfFeature(DebugFeature::MAVLINK,
         "[MAV] Initialized on UART%d RX=%d TX=%d @ %lu baud (MAVLink2)\n",
@@ -586,11 +588,164 @@ void MavlinkInterface::report(const StateReport& state) {
         len = mavlink_msg_to_send_buffer(buf, &msg);
         serial_->write(buf, len);
 
+        // Steering VESC electrical telemetry in the STANDARD ESC message, not in a repurposed
+        // EFI_STATUS field: ESC_STATUS names voltage, current and rpm outright, so nothing here
+        // has to be repurposed at all except the one field documented below. The four EFI_STATUS
+        // fields still at 0.0f name engine quantities this ECU could plausibly expose later, so
+        // they stay RESERVED and fail the permanent-absence test a repurposing must pass.
+        // NAMED_VALUE_FLOAT is not an option for the same reason it was rejected project-wide:
+        // every instance shares message id 251 and collides by name in a name-agnostic store.
+        //
+        //   index      -> 0, the STEERING ESC (this vehicle has exactly one ESC, and it is not
+        //                 a propulsion motor — ESC_INFO.count = 1 says so on the wire)
+        //   voltage[0] -> VESC-measured INPUT voltage: the 24 V BOOST RAIL, measured at the load
+        //                 by the VESC itself. This is a DIFFERENT physical quantity from
+        //                 EFI_STATUS.ignition_voltage (the ECU control-module supply on the 12 V
+        //                 side, PID 0x42) and from the board-side ADC reading on GPIO 9 — a
+        //                 divergence between the ADC and this value IS the sagging-rail diagnostic.
+        //   current[0] -> average MOTOR current, the steering load/stall diagnostic. NOT the input
+        //                 current: one physical ESC gets one current[] slot, so only one of the two
+        //                 can occupy it honestly, and the motor current is the one that moves with
+        //                 steering effort.
+        //   rpm[0]     -> MEASURED STEERING POSITION — see the block below.
+        //
+        // Slots 1..3 carry NaN (voltage/current) and 0 (rpm) and are NOT data: ESC_INFO.count = 1
+        // is what tells a consumer to ignore them, including that the zeros in rpm[1..3] are not
+        // positions. A consumer summing current[] across all four slots without checking count
+        // gets NaN — the standard MAVLink "unknown float" hazard, same as EFI_STATUS already has.
+        //
+        // voltage[0]/current[0] are gated by the VESC's OWN link health (state.steerDriverOk:
+        // a valid reply within STEER_VESC_COMM_TIMEOUT_MS), never by canValid. While it is false
+        // they are NaN rather than the last value seen — the same stale-number trap the CAN
+        // gating above avoids — and the message KEEPS BEING SENT, so "peripheral alive, ESC down"
+        // stays distinguishable from "peripheral gone".
+        //
+        // rpm[0]: the ONE repurposed field here, and the one a future maintainer will question.
+        //   * It carries the MEASURED steering position in CENTI-PERCENT of the calibrated
+        //     lock-to-lock range: -10000 = left lock, 0 = centre, +10000 = right lock. Negative
+        //     is LEFT, positive is RIGHT (the accessor's own convention, and the sense the rpm
+        //     field's own description gives a negative value). It is percent of CALIBRATED
+        //     TRAVEL, NOT degrees — the firmware holds no counts-to-degrees calibration anywhere.
+        //   * The VESC's own ERPM is deliberately NOT decoded and NOT forwarded: the Flipsky
+        //     75200 drives a BRUSHED motor with no motor sensor, so its ERPM is a commutation
+        //     estimate that does not exist here. The quantity the field names is therefore
+        //     permanently unmeasurable on this vehicle — the same permanent-absence test
+        //     barometric_pressure and fuel_pressure pass above. The AS5600 meanwhile sits on the
+        //     very shaft this ESC drives, downstream of its gearbox.
+        //   * THE EXCEPTION TO THAT PERMANENCE, stated plainly: if the VESC ever gains an encoder
+        //     or the steering motor becomes BLDC, rpm becomes a real measurement, this encoding
+        //     MUST revert to the ERPM the field names, and the steering position must move
+        //     elsewhere (ACTUATOR_OUTPUT_STATUS is the fallback) — a breaking change for the MP
+        //     plugin, in lockstep with the flash, exactly like the EFI_STATUS remap precedent.
+        //   * INT32_MIN = POSITION UNKNOWN (AS5600 unhealthy or steering not calibrated). rpm[] is
+        //     int32_t and has no NaN, so the sentinel must be in-band — and 0 CANNOT be it,
+        //     because 0 is exactly straight-ahead. getSteeringPercent() itself returns 0.0f when
+        //     uncalibrated, so passing it through unguarded would report "wheels dead centre" for
+        //     a vehicle whose steering position is entirely unknown: the same "a real zero is a
+        //     real reading" trap the fuel_pressure note above records, resolved the same way —
+        //     pick an encoding a real reading can never produce. A consumer averaging or plotting
+        //     rpm[] without testing for the sentinel gets a wild outlier, the integer counterpart
+        //     of the NaN hazard.
+        //   * Its validity gate is the AS5600's, NOT the VESC's, so rpm[0] can be live while
+        //     voltage[0]/current[0] are NaN (VESC unplugged, sensor fine) and equally INT32_MIN
+        //     while they are live (VESC healthy, steering uncalibrated) — the same
+        //     sensor-driven-NaN caveat fuel_flow already carries above.
+        //   * CONSUMER NOTE: the COMMANDED steering is already on the link as SERVO_OUTPUT_RAW
+        //     from the autopilot's steering channel, so rpm[0] completes the command-vs-actual
+        //     pair for steering exactly as throttle_out vs throttle_position does for throttle.
+        //     A transient disagreement is the actuator slewing; a persistent one is a fault.
+        float escVoltage[4] = { state.steerDriverOk ? state.steerInputVoltageV : NAN,
+                                NAN, NAN, NAN };
+        float escCurrent[4] = { state.steerDriverOk ? state.steerMotorCurrentA : NAN,
+                                NAN, NAN, NAN };
+        int32_t escRpm[4] = { 0, 0, 0, 0 };
+        // Kept as its own statement, NOT folded into the steerDriverOk ternaries above: the two
+        // validity gates are different sensors with different failure modes, and a reviewer must
+        // be able to see that at a glance.
+        escRpm[0] = (state.steerSensorOk && state.steerCalibrated)
+                        ? (int32_t)lroundf(state.steerPercent * 100.0f)
+                        : INT32_MIN;
+
+        // One argument per line, as with EFI_STATUS. Order verified against
+        // .pio/libdeps/esp32-s3-devkitc-1/c_library_v2/common/mavlink_msg_esc_status.h
+        // (index, time_usec, rpm, voltage, current — the three arrays are POINTERS).
+        mavlink_msg_esc_status_pack(
+            MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &msg,
+            MAVLINK_ESC_INDEX,                // index      <- slot 0 = the STEERING ESC
+            (uint64_t)esp_timer_get_time(),   // time_usec  <- 64-bit monotonic boot µs.
+                                              //               NEVER micros(): 32-bit, wraps every
+                                              //               ~71 min, presenting a fresh sample
+                                              //               as an ancient one (same lesson as
+                                              //               VISION_POSITION_DELTA below).
+            escRpm,                           // rpm[4]     <- MEASURED STEERING POSITION (repurposed)
+            escVoltage,                       // voltage[4] <- VESC input voltage (24 V boost rail)
+            escCurrent);                      // current[4] <- VESC average MOTOR current
+        len = mavlink_msg_to_send_buffer(buf, &msg);
+        serial_->write(buf, len);
+
 #if MAVLINK_VISO_ENABLED
         // The same wheel speed again, but as a FUSABLE measurement rather than a display
         // value (VFR_HUD above is display-only). Heavily gated — see the function.
         sendVisionPositionDelta(state);
 #endif
+    }
+
+    // ESC_INFO — the STATIC/SLOW half of the ESC pair, on its OWN 1 Hz timer rather than the
+    // 5 Hz report tick (the lastHeartbeatTx_ pattern above). Its payload is type, count,
+    // temperature and flags: 46 bytes at 5 Hz would be four fifths waste, and the underlying data
+    // refreshes at only 3.3 Hz (STEER_VESC_TELEM_MS) while a MOSFET's thermal time constant is
+    // seconds. Like ESC_STATUS it is sent UNCONDITIONALLY — gated by its timer alone, never by
+    // state.steerDriverOk and never by link state — because suppressing it would make "this
+    // component is alive and its ESC is down" look identical to "this component is gone", and
+    // those need different responses from the operator. (This is the deliberate opposite of the
+    // VISION_POSITION_DELTA policy: that message is a FUSABLE measurement feeding the EKF, where
+    // silence is the only safe degradation; these two are DISPLAY values, where a positively
+    // signalled "unknown" beats silence.)
+    //
+    //   info bit0        -> ESC online = state.steerDriverOk
+    //   counter          -> valid GET_VALUES replies since boot; uint16_t, WRAPS (~5.5 h at
+    //                       3.3 Hz) — only its ADVANCE is meaningful, and a frozen counter beside
+    //                       a live message is itself the "VESC silent" diagnostic
+    //   temperature[0]   -> FET temperature in CENTI-DEGREES C, clamped strictly BELOW INT16_MAX
+    //                       so a real temperature can never be mistaken for the sentinel;
+    //                       INT16_MAX is the value the message definition itself assigns to
+    //                       "data not supplied by ESC", and is what slots 1..3 always carry
+    //   failure_flags[0] -> VESC mc_fault_code mapped onto ESC_FAILURE_FLAGS (see the helper);
+    //                       forced to 0 while the driver is down, because a fault code read from
+    //                       a dead link is not a fault observation
+    //   error_count[0]   -> fault EPISODES since boot, sent unconditionally: it is cumulative
+    //                       history, not a live reading, so it is never blanked and never reset
+    if (now - lastEscInfoTx_ >= MAVLINK_ESC_INFO_TX_MS) {
+        lastEscInfoTx_ = now;
+
+        int16_t escTemp[4] = { INT16_MAX, INT16_MAX, INT16_MAX, INT16_MAX };
+        if (state.steerDriverOk) {
+            escTemp[0] = (int16_t)constrain(lroundf(state.steerFetTempC * 100.0f),
+                                            -32768L, 32766L);   // strictly below INT16_MAX
+        }
+        uint16_t escFlags[4] = { 0, 0, 0, 0 };
+        escFlags[0] = state.steerDriverOk ? mapVescFaultToEscFlags(state.steerVescFault) : 0;
+        uint32_t escErrors[4] = { 0, 0, 0, 0 };
+        escErrors[0] = state.steerFaultEvents;
+
+        // One argument per line, as with EFI_STATUS. Order verified against
+        // .pio/libdeps/esp32-s3-devkitc-1/c_library_v2/common/mavlink_msg_esc_info.h
+        // (index, time_usec, counter, count, connection_type, info, failure_flags, error_count,
+        // temperature — the three arrays are POINTERS).
+        mavlink_msg_esc_info_pack(
+            MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &msg,
+            MAVLINK_ESC_INDEX,                 // index            <- slot 0 = the STEERING ESC
+            (uint64_t)esp_timer_get_time(),    // time_usec        <- same monotonic clock as
+                                               //                     ESC_STATUS; NEVER micros()
+            state.steerReplyCount,             // counter          <- valid replies since boot (wraps)
+            MAVLINK_ESC_COUNT,                 // count            <- 1: slots 1..3 are NOT data
+            ESC_CONNECTION_TYPE_SERIAL,        // connection_type  <- dedicated UART to the VESC
+            state.steerDriverOk ? 1 : 0,       // info             <- bit0 = ESC online
+            escFlags,                          // failure_flags[4] <- mapped mc_fault_code
+            escErrors,                         // error_count[4]   <- fault EPISODES since boot
+            escTemp);                          // temperature[4]   <- FET temp, cdegC / INT16_MAX
+        uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+        serial_->write(buf, len);
     }
 
     // STATUSTEXT on gear / ignition / fail-safe transitions (rate-limited).
@@ -725,6 +880,36 @@ float MavlinkInterface::encodeGear(const char* gear, float unknownValue) {
         case 'H': return  1.0f;
         case 'L': return  2.0f;
         default:  return unknownValue;
+    }
+}
+
+uint16_t MavlinkInterface::mapVescFaultToEscFlags(uint8_t faultCode) const {
+    // VESC mc_fault_code (a small enum) -> ESC_FAILURE_FLAGS (a bitmask).
+    //
+    // The numeric codes follow the canonical bldc datatypes.h declaration order
+    // (NONE, OVER_VOLTAGE, UNDER_VOLTAGE, DRV, ABS_OVER_CURRENT, OVER_TEMP_FET,
+    // OVER_TEMP_MOTOR, ...) — the SAME VESC-firmware-version assumption the payload offsets in
+    // include/VescProtocol.h:60-70 already document, with the same mitigation: BENCH-VERIFY the
+    // enumeration against VESC Tool for the flashed firmware before this mapping is trusted
+    // (add-vesc-esc-telemetry task 6.8). Newer firmware only appends codes, so the ones mapped
+    // here are stable, and the default catch-all exists precisely so an unknown code degrades to
+    // "generic failure" rather than to silence — a fault is never reported as health.
+    switch (faultCode) {
+        case 0:  return 0;                                 // FAULT_CODE_NONE
+        case 1:  return ESC_FAILURE_OVER_VOLTAGE;          // FAULT_CODE_OVER_VOLTAGE      (exact)
+        case 2:  return ESC_FAILURE_OVER_VOLTAGE;          // FAULT_CODE_UNDER_VOLTAGE
+            // LOSSY, and deliberately so: ESC_FAILURE_FLAGS has NO under-voltage bit (the enum
+            // stops at ESC_FAILURE_GENERIC and offers only OVER_VOLTAGE). The category is right
+            // and the direction is not, which still beats GENERIC for triage — and brownout is
+            // the case this vehicle is most likely to hit (a 24 V boost rail sagging under the
+            // Jetson + Starlink load). Because the direction is ambiguous, the RAW code stays
+            // reachable on the web portal (steer_vesc_fault) and the serial console.
+        case 3:  return ESC_FAILURE_GENERIC;               // FAULT_CODE_DRV — a gate-driver fault
+                                                           // has no MAVLink equivalent
+        case 4:  return ESC_FAILURE_OVER_CURRENT;          // FAULT_CODE_ABS_OVER_CURRENT  (exact)
+        case 5:  return ESC_FAILURE_OVER_TEMPERATURE;      // FAULT_CODE_OVER_TEMP_FET     (exact)
+        case 6:  return ESC_FAILURE_OVER_TEMPERATURE;      // FAULT_CODE_OVER_TEMP_MOTOR   (exact)
+        default: return ESC_FAILURE_GENERIC;               // forward-compatible catch-all
     }
 }
 

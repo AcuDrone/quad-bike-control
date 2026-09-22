@@ -14,7 +14,8 @@ mapping) and the **wire contract** (every outbound message field by field, with 
 | Protocol | MAVLink **2**, forced on the outbound channel (`MAVLINK_STATUS_FLAG_OUT_MAVLINK1` cleared) |
 | Link | UART1, 8N1, **115200** (`MAVLINK_BAUD_RATE`), channel `MAVLINK_COMM_0` |
 
-ArduPilot forwards **target-less** messages (`HEARTBEAT`, `EFI_STATUS`, `VFR_HUD`, `STATUSTEXT`, and
+ArduPilot forwards **target-less** messages (`HEARTBEAT`, `EFI_STATUS`, `VFR_HUD`, `ESC_STATUS`,
+`ESC_INFO`, `STATUSTEXT`, and
 `VISION_POSITION_DELTA`, which it also consumes itself) from TELEM2 to every other MAVLink port, so
 they reach the GCS unchanged; `COMMAND_ACK` **is** addressed — to the requester — and rides the route
 ArduPilot learned from this component's own outbound traffic. Mission Planner will **not** populate
@@ -85,8 +86,8 @@ outputs must align with these indices (see `ServoChannelConfig` in `include/Cons
 
 ## Vehicle state reported back to the autopilot
 
-Nine outbound message types: five periodic, one reactive acknowledgement, three requests toward the
-autopilot. Scheduling is internal to `MavlinkInterface::report()`, called every loop iteration from
+Eleven outbound message types: seven periodic, one reactive acknowledgement, three requests toward
+the autopilot. Scheduling is internal to `MavlinkInterface::report()`, called every loop iteration from
 `src/main.cpp`; the `StateReport` snapshot it consumes is declared in `include/MavlinkInterface.h`.
 
 | Message | Id | Rate | Purpose | Gating |
@@ -94,6 +95,8 @@ autopilot. Scheduling is internal to `MavlinkInterface::report()`, called every 
 | `HEARTBEAT` | 0 | 1 Hz (`MAVLINK_HEARTBEAT_TX_MS` = 1000 ms) | Component liveness + fail-safe state | none |
 | `EFI_STATUS` | 225 | 5 Hz (`MAVLINK_REPORT_TX_MS` = 200 ms) | All engine/vehicle telemetry in one message | none — fields go NaN instead |
 | `VFR_HUD` | 74 | 5 Hz (same tick) | Hall ground speed + throttle for a HUD | none |
+| `ESC_STATUS` | 291 | 5 Hz (same tick) | Steering VESC voltage/current + **measured steering position** | none — fields go NaN / `INT32_MIN` instead |
+| `ESC_INFO` | 290 | 1 Hz (`MAVLINK_ESC_INFO_TX_MS` = 1000 ms) | Steering VESC online state, FET temperature, failure flags, counters | none — fields go to their sentinels instead |
 | `VISION_POSITION_DELTA` | 11011 | ≤ 5 Hz (same tick) | Wheel odometry as an EKF3-fusable body-frame delta | **heavily gated** — silence over zeros |
 | `STATUSTEXT` | 253 | on change, ≥ 250 ms apart | Gear / ignition / fail-safe transitions | only on an actual change |
 | `COMMAND_ACK` | 77 | reactive | Answer to a `COMMAND_LONG` addressed exactly to 1/25 | broadcasts get **no** ACK |
@@ -102,7 +105,19 @@ autopilot. Scheduling is internal to `MavlinkInterface::report()`, called every 
 | `PARAM_REQUEST_READ` | 20 | 0.2 Hz | Poll `SPEED_MAX` | link up + autopilot learned |
 
 Engine data comes from the CAN bus (`CANController::VehicleData`); ground speed, odometer and trip
-come from the hall wheel-speed sensor (GPIO 8 / X2), independently of CAN health.
+come from the hall wheel-speed sensor (GPIO 8 / X2), independently of CAN health. Steering-ESC
+electrical data comes from the VESC's own UART, and the measured steering position from the AS5600
+on the steering shaft — three more sources, each with its own validity gate.
+
+Value-to-field summary for the two ESC messages (⚑ = repurposed field):
+
+| Value | Field | Rate | Source | Comp |
+|-------|-------|------|--------|------|
+| Steering ESC input voltage (V) | `ESC_STATUS.voltage[0]` | 5 Hz | VESC UART | 25 |
+| Steering motor current (A) | `ESC_STATUS.current[0]` | 5 Hz | VESC UART | 25 |
+| ⚑ Steering position, **MEASURED** (centi-percent) | `ESC_STATUS.rpm[0]` | 5 Hz | AS5600 | 25 |
+| Steering ESC FET temp (cdegC) | `ESC_INFO.temperature[0]` | 1 Hz | VESC UART | 25 |
+| Steering ESC health / failure flags | `ESC_INFO.info` / `ESC_INFO.failure_flags[0]` | 1 Hz | VESC UART | 25 |
 
 ### `HEARTBEAT` (0) — 1 Hz
 
@@ -270,6 +285,195 @@ already clamped at zero by the decay path.
 more dangerous direction. (`throttle_position` is what the ECU **measured**; `throttle_out` is the
 **arbitrated servo output** — autopilot, web, gear-change boost, speed-limit cap or fail-safe idle —
 not the raw demand of any one input.)
+
+### Steering ESC telemetry (`ESC_STATUS` / `ESC_INFO`)
+
+The **steering VESC** (Flipsky 75200) is the only smart driver on this vehicle. Its telemetry rides
+the two standard ESC messages, which name voltage, current, temperature and failure flags outright —
+so unlike `EFI_STATUS` almost nothing has to be repurposed. **`index = 0` is the STEERING ESC, not a
+propulsion motor**, and `ESC_INFO.count = 1` says so on the wire: **slots 1–3 carry no data and must
+be ignored**, including the zeros in `rpm[1..3]`, which are not positions.
+
+`ESC_STATUS` rides the existing 5 Hz report tick beside `EFI_STATUS` and `VFR_HUD`, so a GCS-side log
+lines all the live values up without interpolation. `ESC_INFO` has its own 1 Hz timer
+(`MAVLINK_ESC_INFO_TX_MS`): its payload is static-ish, and 46 bytes at 5 Hz would be four fifths
+waste. The underlying data refreshes at **3.3 Hz** (`STEER_VESC_TELEM_MS` = 300 ms), so `ESC_STATUS`
+repeats a sample roughly every third message — a consumer that cares watches `ESC_INFO.counter`
+advance.
+
+#### `ESC_STATUS` (291) — 5 Hz
+
+| Field | MAVLink meaning / unit | What we send | Validity | Source |
+|-------|------------------------|--------------|----------|--------|
+| `index` | ESC index | `0` — the **steering** ESC | always | `MAVLINK_ESC_INDEX` |
+| `time_usec` | [µs] since boot or epoch | 64-bit monotonic boot µs (`esp_timer_get_time()`) | always | clock |
+| ⚑ `rpm[0]` | [rpm] ESC shaft speed | **MEASURED steering position, centi-percent** — see below | **`INT32_MIN` = position unknown** | `state.steerPercent` gated by `steerSensorOk && steerCalibrated` |
+| `rpm[1..3]` | [rpm] | `0` — **not data** (`count = 1`) | — | literal |
+| `voltage[0]` | [V] Voltage measured from each ESC | **VESC-measured input voltage — the 24 V BOOST RAIL at the load** | **NaN while the VESC is silent** | `state.steerInputVoltageV` gated by `steerDriverOk` |
+| `voltage[1..3]` | [V] | `NaN` — **not data** | — | literal |
+| `current[0]` | [A] Current measured from each ESC | **VESC average MOTOR current** (load / stall diagnostic) | **NaN while the VESC is silent** | `state.steerMotorCurrentA` gated by `steerDriverOk` |
+| `current[1..3]` | [A] | `NaN` — **not data** | — | literal |
+
+- **`voltage[0]` is not `EFI_STATUS.ignition_voltage`.** That field is the **ECU control-module
+  supply** on the **12 V** side (PID `0x42`); this one is the **24 V boost rail** that powers the
+  steering VESC, measured **by the VESC itself, at the load**. Different rails, different
+  quantities, each already in the field that names it. The board-side ADC on GPIO 9 measures the
+  same rail at the *board* and keeps its existing web-telemetry path — a **divergence between the
+  two under load is the sagging-rail diagnostic**, which is exactly why both are kept.
+- **`current[0]` is MOTOR current, not input current.** The same `COMM_GET_VALUES` payload carries
+  both (`avg_motor_current` at offset 5, decoded; `avg_input_current` at offset 9, not decoded), but
+  `ESC_STATUS` gives one physical ESC exactly one `current[]` slot, so only one of them can occupy
+  it honestly. Motor current is the one that moves with steering effort.
+
+#### ⚑ `rpm[0]` — the MEASURED steering position
+
+`rpm[0]` is the **only repurposed field in this pair**. It carries the **measured steering position
+in CENTI-PERCENT of the calibrated lock-to-lock range**:
+
+| Value | Meaning |
+|-------|---------|
+| `-10000` | full **LEFT** lock |
+| `0` | dead centre, straight ahead |
+| `+10000` | full **RIGHT** lock |
+| `INT32_MIN` (`-2147483648`) | **position UNKNOWN** — AS5600 unhealthy **or** steering not calibrated |
+
+**Negative is LEFT, positive is RIGHT** — the sign convention of
+`SteeringController::getSteeringPercent()`, and the sense the `rpm` field's own description gives a
+negative value (reverse rotation). It is **percent of calibrated travel, NOT degrees**: the firmware
+holds no counts-to-degrees calibration anywhere (the AS5600's 0–4095 counts are only ever normalised
+against the stored centre and the two limits), and the two halves are scaled independently because
+the travel is asymmetric.
+
+**The VESC's own ERPM is deliberately not reported.** The 75200 drives a **brushed** motor with no
+motor sensor, so its ERPM is a commutation estimate that does not exist here — a meaningless number
+that *looks* like data. The quantity the field names is therefore permanently unmeasurable on this
+vehicle, which is the *permanent-absence* test every repurposing on this link must pass, and the
+AS5600 meanwhile sits on the very shaft this ESC drives, downstream of its gearbox.
+
+> ⚠ **The exception to that permanence.** If the VESC ever gains an encoder, or the steering motor is
+> replaced with a BLDC, `rpm` becomes a real measurement: this encoding **must** then revert to the
+> ERPM the field names and the steering position must move elsewhere
+> (`ACTUATOR_OUTPUT_STATUS` is the fallback). That is a **breaking** change for the plugin, in
+> lockstep with the flash — the same rule as the `EFI_STATUS` remap. A hardware change must not
+> silently invalidate this encoding.
+
+**Why `INT32_MIN` and not `0`.** `rpm[]` is `int32_t` and has **no NaN**, so the "unknown" sentinel
+has to be in band — and **`0` cannot be it, because `0` is exactly straight-ahead**.
+`getSteeringPercent()` itself returns `0.0f` when uncalibrated, so passing it through unguarded would
+report "wheels dead centre" for a vehicle whose steering position is entirely unknown. Same trap as
+the `fuel_pressure` note above, resolved by the same rule: the encoding must be one a real reading
+can never produce, and `INT32_MIN` is unreachable from a ±10000 range.
+
+**Its validity gate is the AS5600's, not the VESC's** — `isSensorOk() && isCalibrated()`,
+**independent** of `ESC_INFO.info` bit 0 and of the `NaN`s in `voltage[0]`/`current[0]`. All four
+combinations are reachable and all four are meaningful:
+
+| VESC | AS5600 | `voltage[0]`/`current[0]` | `rpm[0]` |
+|------|--------|---------------------------|----------|
+| healthy | healthy + calibrated | live | live position |
+| **silent** | healthy + calibrated | `NaN` | **live position** — a dead ESC does not blind the shaft sensor |
+| healthy | unhealthy or uncalibrated | live | **`INT32_MIN`** |
+| **silent** | unhealthy or uncalibrated | `NaN` | `INT32_MIN` |
+
+This is the same sensor-driven caveat `fuel_flow` already carries: "everything is unknown, so one
+subsystem is down" does **not** hold in reverse for this field.
+
+**Consumer note.** The **commanded** steering already reaches the GCS as `SERVO_OUTPUT_RAW` from the
+autopilot's steering channel; `rpm[0]` adds the **measured** half, so command-vs-actual becomes
+visible for steering exactly as `throttle_out` vs `throttle_position` already makes it visible for
+throttle. A transient disagreement is the actuator slewing; a persistent one is a steering fault.
+
+> ⚠ **Generic-tool hazard.** A log viewer or Inspector plots this as an **RPM** swinging to ±10000
+> and labels it that way — inherent to the repurposing. The intended consumer is the QuadBike MP
+> plugin, which labels it correctly. `INT32_MIN` is conspicuous enough in a plot to prompt a look at
+> this document rather than a wrong reading.
+
+#### `ESC_INFO` (290) — 1 Hz
+
+| Field | MAVLink meaning / unit | What we send | Validity | Source |
+|-------|------------------------|--------------|----------|--------|
+| `index` | ESC index | `0` — the **steering** ESC | always | `MAVLINK_ESC_INDEX` |
+| `time_usec` | [µs] since boot or epoch | same monotonic clock as `ESC_STATUS` | always | clock |
+| `counter` | Messages/frames received from the ESC | **Valid `COMM_GET_VALUES` replies since boot** | **always sent** — see the wrap note | `state.steerReplyCount` |
+| `count` | Total number of ESCs | `1` — **slots 1–3 are not data** | always | `MAVLINK_ESC_COUNT` |
+| `connection_type` | `ESC_CONNECTION_TYPE` | `ESC_CONNECTION_TYPE_SERIAL` (1) — a dedicated UART | always | literal |
+| `info` | ESC information bitmap | **bit 0 = ESC online** (`isDriverOk()`); other bits 0 | always | `state.steerDriverOk` |
+| `failure_flags[0]` | `ESC_FAILURE_FLAGS` bitmask | **VESC `mc_fault_code` mapped** — table below | **`0` while the VESC is silent** | `state.steerVescFault` gated by `steerDriverOk` |
+| `failure_flags[1..3]` | | `0` — **not data** | — | literal |
+| `error_count[0]` | Number of reported errors by ESC | **Fault EPISODES since boot** (0 → non-zero transitions) | **always valid**, never blanked, never reset | `state.steerFaultEvents` |
+| `error_count[1..3]` | | `0` — **not data** | — | literal |
+| `temperature[0]` | [cdegC] Temperature, `INT16_MAX` if not supplied | **VESC FET temperature, centi-degrees C** | **`INT16_MAX` while the VESC is silent** | `state.steerFetTempC` gated by `steerDriverOk` |
+| `temperature[1..3]` | [cdegC] | `INT16_MAX` — **not data** | — | literal |
+
+`temperature[0]` is clamped **strictly below** `INT16_MAX` (to `32766`), so a real temperature can
+never be mistaken for the "not supplied" sentinel. `error_count[0]` counts **episodes, not samples**:
+a fault that persists across many replies counts **once**, it is never reset when the fault clears or
+the link recovers, and there is no command or web control that zeroes it.
+
+> `counter` is a `uint16_t` and **wraps** — about every 5.5 h at the 3.3 Hz poll rate. Only its
+> **advance** is meaningful: a counter frozen while the messages keep arriving is itself the
+> "VESC silent" diagnostic.
+
+#### VESC fault code → `ESC_FAILURE_FLAGS`
+
+| VESC `mc_fault_code` | Value | `ESC_FAILURE_FLAGS` | Value | Note |
+|---|---|---|---|---|
+| `FAULT_CODE_NONE` | 0 | — | `0` | no failure |
+| `FAULT_CODE_OVER_VOLTAGE` | 1 | `ESC_FAILURE_OVER_VOLTAGE` | 2 | exact |
+| `FAULT_CODE_UNDER_VOLTAGE` | 2 | `ESC_FAILURE_OVER_VOLTAGE` | 2 | **lossy — see below** |
+| `FAULT_CODE_DRV` | 3 | `ESC_FAILURE_GENERIC` | 64 | a gate-driver fault has no MAVLink equivalent |
+| `FAULT_CODE_ABS_OVER_CURRENT` | 4 | `ESC_FAILURE_OVER_CURRENT` | 1 | exact |
+| `FAULT_CODE_OVER_TEMP_FET` | 5 | `ESC_FAILURE_OVER_TEMPERATURE` | 4 | exact |
+| `FAULT_CODE_OVER_TEMP_MOTOR` | 6 | `ESC_FAILURE_OVER_TEMPERATURE` | 4 | exact |
+| any other non-zero | ≥ 7 | `ESC_FAILURE_GENERIC` | 64 | forward-compatible catch-all |
+
+- **The under-voltage mapping is lossy on purpose.** `ESC_FAILURE_FLAGS` has **no under-voltage
+  bit** — the enum offers only `OVER_VOLTAGE` and stops at `ESC_FAILURE_GENERIC`. The category is
+  right and the **direction is not**, which still beats `GENERIC` for triage, and brownout is the
+  case this vehicle is most likely to hit (a 24 V boost rail sagging under the Jetson + Starlink
+  load). Because the direction is ambiguous, the **raw** code stays visible on the **web portal**
+  (`steer_vesc_fault`) and the serial console; it is deliberately **not** on the MAVLink link.
+- **The numeric codes are VESC-firmware-version dependent.** They follow the canonical bldc
+  `datatypes.h` declaration order — the same assumption `include/VescProtocol.h` already documents
+  for the payload offsets, with the same mitigation: **bench-verify against VESC Tool for the
+  flashed firmware** before the mapping is trusted, and record the firmware version in the
+  commissioning notes. Newer firmware only appends codes, and the catch-all exists precisely so an
+  unknown code degrades to "generic failure" rather than to silence — **a fault is never reported as
+  health**.
+
+#### Validity: "no reading" is signalled positively, and both messages keep flowing
+
+While the steering driver link is unhealthy — no valid reply within `STEER_VESC_COMM_TIMEOUT_MS`
+(1000 ms), or **no reply ever since boot** — the VESC-sourced values go to their sentinels rather
+than repeating the last number seen:
+
+| Field | While the VESC is silent | A consumer must |
+|-------|--------------------------|-----------------|
+| `ESC_STATUS.voltage[0]`, `current[0]` | `NaN` | render `--` |
+| `ESC_INFO.temperature[0]` | `INT16_MAX` (32767) | render `--` |
+| `ESC_INFO.info` bit 0 | `0` | read this as "ESC offline" |
+| `ESC_INFO.failure_flags[0]` | `0` | a fault code read from a dead link is not a fault observation |
+| `ESC_INFO.counter` | **stops advancing**, still sent | watch the advance, not the value |
+| `ESC_INFO.error_count[0]` | **holds**, still sent | cumulative history, never blanked |
+| `ESC_STATUS.rpm[0]` | **unaffected** — its gate is the AS5600's | keep reading it |
+
+> **Both messages keep being sent in that state.** Suppression would make "the peripheral is alive
+> and its ESC is down" look identical to "the peripheral is gone", and those need different
+> responses from the operator. A message carrying `NaN` with `info` bit 0 clear says precisely
+> *"I am alive, my ESC is not."* This is the deliberate **opposite** of the `VISION_POSITION_DELTA`
+> policy: that message is a **fusable** measurement feeding the EKF, where silence is the only safe
+> degradation; these two are **display** values, where a positively signalled "unknown" beats
+> silence.
+
+> ⚠ **Array hazards.** A consumer summing or averaging `voltage[]` / `current[]` across all four
+> slots without checking `count` gets `NaN` — the standard MAVLink "unknown float" hazard, the same
+> one `EFI_STATUS` already presents. A consumer averaging or plotting `rpm[]` without testing for
+> `INT32_MIN` gets a **wild outlier** instead of a gap: the integer counterpart of the same hazard,
+> and the cost of an integer field having no not-a-number.
+
+Nothing in this path is a control input: no ESC telemetry value triggers a steering stop, stall
+latch, interlock or fail-safe. The existing fault-code stop and communication fail-safe inside
+`SteeringController` remain the only consumers of that data for control purposes.
 
 ### `VISION_POSITION_DELTA` (11011) — ≤ 5 Hz, heavily gated
 
@@ -487,17 +691,28 @@ inverse holds too: a field that *can* be `NaN` and is not is a real measurement,
 | `EFI_STATUS.barometric_pressure` (ODO) / `fuel_pressure` (TRIP) | distance already driven depends on neither CAN health nor the current speed reading |
 | `EFI_STATUS.health` | constant `1`; **not** a health signal — do not read CAN state from it |
 | `VFR_HUD.throttle` | `uint16_t` percent, no NaN encoding — falls back to commanded |
+| `ESC_INFO.counter` / `error_count[0]` | cumulative history, not a live reading — a frozen counter is itself the diagnostic |
+| `ESC_INFO.info` / `count` / `connection_type` / `index` | locally known; `info` bit 0 **is** the ESC's health, so it is always populated |
 | all `HEARTBEAT`, `COMMAND_ACK` and `VISION_POSITION_DELTA` fields | all locally known; VISO goes **silent** rather than invalid |
+
+Sentinels that are **not** `NaN`, because the field has no `NaN` encoding:
+
+| Field | Sentinel | Means |
+|-------|----------|-------|
+| `ESC_STATUS.rpm[0]` (`int32_t`) | `INT32_MIN` (`-2147483648`) | steering position unknown — **`0` is a real reading: straight ahead** |
+| `ESC_INFO.temperature[n]` (`int16_t`) | `INT16_MAX` (`32767`) | not supplied by the ESC (the definition's own sentinel); real values are clamped below it |
 
 ### Telling "CAN down" from "sensor down"
 
-Three independent validity domains share the link. They do **not** move together:
+Five independent validity domains share the link. They do **not** move together:
 
 | Domain | Gate | Fields it controls |
 |--------|------|--------------------|
 | **CAN / ECU** | `state.canValid` (`CANController::VehicleData::dataValid`) | `rpm`, `engine_load`, `throttle_position`, `intake_manifold_pressure`, `intake_manifold_temperature`, `cylinder_head_temperature`, `ignition_voltage` — **seven** fields, all NaN together |
 | **Gear switches** | physical gear reads UNKNOWN | `fuel_flow` only |
 | **Hall speed sensor** | `state.speedValid` = `SpeedSensor::isValid()` | `VFR_HUD.groundspeed` (→ `NaN`) and `VISION_POSITION_DELTA` (→ silence) |
+| **Steering VESC link** | `state.steerDriverOk` = `SteeringController::isDriverOk()` | `ESC_STATUS.voltage[0]`/`current[0]` (→ `NaN`), `ESC_INFO.temperature[0]` (→ `INT16_MAX`), `info` bit 0 (→ 0), `failure_flags[0]` (→ 0) |
+| **Steering position sensor** | `steerSensorOk && steerCalibrated` (AS5600 + stored calibration) | `ESC_STATUS.rpm[0]` only (→ `INT32_MIN`) |
 
 - **All seven CAN fields NaN at once** → CAN/ECU is down (or the engine harness is off); gear,
   `throttle_out`, flags, ODO, TRIP and ground speed are unaffected.
@@ -506,6 +721,12 @@ Three independent validity domains share the link. They do **not** move together
   reverse for this field.
 - **`VFR_HUD.groundspeed` NaN and the VISO count frozen, CAN fields fine** → the hall sensor has
   never pulsed since boot or is latched suspicious; ODO/TRIP stop advancing but stay valid.
+- **ESC fields at their sentinels with `info` bit 0 clear, everything else fine** → the VESC is
+  unplugged, unpowered or silent past its comm timeout. The messages **keep arriving**, which is how
+  this is told apart from "the peripheral is gone"; CAN, gear, speed and `rpm[0]` are unaffected.
+- **`rpm[0]` = `INT32_MIN` alone, ESC voltage/current live** → the AS5600 is unhealthy or the
+  steering is uncalibrated. Says **nothing** about the VESC — like `fuel_flow`, this field has its
+  own sensor, its own gate and its own sentinel, and the reverse implication does not hold.
 - **Nothing at all from 1/25** → the peripheral or the serial link is gone. The two `HEARTBEAT`s are
   independent: the Pixhawk's continuing while comp 25's stops is exactly this case.
 
@@ -525,6 +746,18 @@ Three independent validity domains share the link. They do **not** move together
 | Manifold pressure (kPa) | — | `intake_manifold_pressure` | **new** |
 | Commanded throttle (%) | — | `throttle_out` | **new** — always valid, never NaN |
 
+#### Steering ESC pair (290 / 291) — **non-breaking**
+
+The plugin must add packet subscriptions for **msg id 291 (`ESC_STATUS`)** and **290 (`ESC_INFO`)**
+to display steering-ESC telemetry. **Nothing it decodes today changes**, so an un-updated plugin
+keeps working exactly as before and simply does not show the new data — two unknown message ids on a
+link that already carries five.
+
+Mission Planner will **not** populate its native `esc1_*` fields from component 25 (it fills those
+from the autopilot's own stream), so the plugin reads the **raw packet**, exactly as it already does
+for `EFI_STATUS`. Filter on `compid == 25`, honour `ESC_INFO.count = 1` (ignore slots 1–3), render
+`NaN` / `INT16_MAX` / `INT32_MIN` as `--`, and label `rpm[0]` as **steering position**, not RPM.
+
 **Failure mode if the plugin is NOT updated:** it keeps reading gear from `engine_load`, now the
 ECU's calculated load, 0–100 %. The GCS shows a "gear" ranging up to 100 that tracks engine effort —
 wildly out of range rather than a plausible wrong gear, so the mismatch is obvious, but the gear
@@ -535,29 +768,7 @@ Rules that keep such changes rare:
 1. **Every value sits in the field that names it**, and a repurposing must pass the
    *permanent-absence* test and be documented at the pack site.
 2. **Reserved fields stay at `0.0`** — never repurposed (see the four above).
-3. **Adding a new message id is not breaking**: an un-updated plugin ignores it (precedent:
-   `VISION_POSITION_DELTA`; the proposed ESC pair follows it).
+3. **Adding a new message id is not breaking**: an un-updated plugin ignores it (precedents:
+   `VISION_POSITION_DELTA`, and the `ESC_STATUS` / `ESC_INFO` pair).
 4. **Consumers harden by treating an out-of-range value as "--"** — a gear outside `-1..2`, say,
    turns a field-remap mismatch into a clean "no data" instead of a nonsense number.
-
-## Proposed, NOT yet implemented — steering ESC telemetry
-
-> ⚠ **Status: proposal only.** Nothing here is on the wire today; no `ESC_STATUS` or `ESC_INFO` is
-> packed anywhere in `src/MavlinkInterface.cpp`. **`openspec/changes/add-vesc-esc-telemetry/`
-> (`proposal.md` + `design.md`) is authoritative** — that directory is under active editing and this
-> summary will go stale.
-
-The change publishes the **steering VESC's** telemetry (Flipsky 75200, the only smart driver on the
-vehicle) as two new messages from component 1/25, moving nothing in the five existing ones — so it is
-not breaking (precedent: `VISION_POSITION_DELTA`). Both use one slot, `index = 0`, and follow the
-conventions above: while `isDriverOk()` is false the values go to their unknown sentinels but **both
-messages keep being sent** with `ESC_INFO.info` bit0 clear, so a consumer can tell "link up, VESC
-down" from "peripheral gone".
-
-| Message | Rate | Content |
-|---------|------|---------|
-| `ESC_STATUS` (291) | 5 Hz (existing tick) | `time_usec` = monotonic boot µs; `voltage[0]` = VESC input voltage (the **24 V boost rail** — distinct from `EFI_STATUS.ignition_voltage` on the 12 V side); `current[0]` = average **motor** current (stall/load diagnostic), not input current; `rpm[0]` = **measured steering position in centi-percent** of the calibrated lock-to-lock range (`getSteeringPercent() × 100`, −10000 … +10000, negative = left), **`INT32_MIN` = unknown** — `int32_t` has no NaN and `0` is exactly straight-ahead. VESC ERPM deliberately not forwarded. Slots 1–3: `voltage`/`current` = `NaN`, `rpm` = 0 |
-| `ESC_INFO` (290) | 1 Hz (`MAVLINK_ESC_INFO_TX_MS`) | `count` = 1; `connection_type` = `ESC_CONNECTION_TYPE_SERIAL` (1); `info` bit0 = `isDriverOk()`; `counter` = valid `COMM_GET_VALUES` replies since boot (`uint16_t`, wraps); `temperature[0]` = FET temperature in **centi-degrees C** clamped to `int16_t`, **`INT16_MAX`** ("not supplied") while the driver is down and always for slots 1–3; `failure_flags[0]` = VESC `mc_fault_code` mapped onto `ESC_FAILURE_FLAGS`; `error_count[0]` = 0 → non-zero fault transitions |
-
-`rpm[0]` is the one field not gated by `isDriverOk()`: it has its own sensor, gate and sentinel,
-exactly the way `fuel_flow` already works.
