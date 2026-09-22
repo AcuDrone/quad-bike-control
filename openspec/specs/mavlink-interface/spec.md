@@ -109,7 +109,8 @@ report invalid signal so the vehicle controller activates fail-safe.
 ### Requirement: Vehicle State Reporting via Standard MAVLink Messages
 The system SHALL report vehicle state back to the MAVLink network using standard MAVLink messages, on
 a fixed schedule. Engine data is sourced from the CAN `VehicleData`; vehicle ground speed is sourced
-from the hall-effect speed sensor and reported via `VFR_HUD`. Every ECU value carried in
+from the hall-effect speed sensor and reported via `VFR_HUD`, and the distance counters derived from
+that same sensor are reported in `EFI_STATUS`. Every ECU value carried in
 `EFI_STATUS` SHALL occupy the field that names that quantity, so the message is self-describing to a
 consumer reading the MAVLink field names alone. A field MAY be repurposed for a value it does not
 name ONLY where the named quantity is confirmed to be permanently unavailable on this vehicle, and
@@ -126,8 +127,8 @@ commanded by the controller, the reported value SHALL be unambiguous as to which
 - **WHEN** the engine-telemetry interval elapses (default 5 Hz)
 - **THEN** a single `EFI_STATUS` message is sent from this component carrying engine RPM, coolant
   temperature, intake air temperature, manifold absolute pressure, ECU calculated engine load,
-  measured and commanded throttle, module supply voltage, both gear values, the digital-output
-  bitmask and a health flag
+  measured and commanded throttle, module supply voltage, both gear values, the total odometer and
+  trip distance, the digital-output bitmask and a health flag
 - **AND** all of those values SHALL be carried in distinct fields of that one message, rather than
   as per-value `NAMED_VALUE_FLOAT` messages, which share a single message id and therefore collide
   in any name-agnostic store
@@ -215,6 +216,22 @@ commanded by the controller, the reported value SHALL be unambiguous as to which
 - **AND** the firmware SHALL NOT attempt to distinguish mid-shift from a sensor fault on the wire;
   that inference belongs to the consumer, which has both gear values and a clock
 
+#### Scenario: Report the odometer and the trip distance in EFI_STATUS
+- **WHEN** the engine-telemetry interval elapses
+- **THEN** the `EFI_STATUS` message SHALL carry the TOTAL odometer in the `barometric_pressure`
+  field, in kilometres as a float
+- **AND** SHALL carry the resettable TRIP distance in the `fuel_pressure` field, in kilometres as a
+  float
+- **AND** both values SHALL be the vehicle layer's exact millimetre counters scaled by `1e-6`,
+  reported to the precision float32 allows — the millimetre counter, not this float, SHALL remain
+  the authoritative value
+- **AND** both SHALL ALWAYS be valid and SHALL NEVER be reported as `NaN`, because distance already
+  driven depends on neither CAN health nor the current speed reading's validity
+- **AND** neither value SHALL be reported as a `NAMED_VALUE_FLOAT`, for the same message-id
+  collision reason that keeps the gear values in `EFI_STATUS`
+- **AND** the odometer SHALL NEVER decrease between two messages, and a trip reset SHALL be
+  observable as `fuel_pressure` falling to zero while `barometric_pressure` is unchanged
+
 #### Scenario: Preserve existing EFI_STATUS field assignments
 - **WHEN** ECU values are mapped into `EFI_STATUS` after this remap
 - **THEN** the `rpm`, `cylinder_head_temperature`, `intake_manifold_temperature`,
@@ -235,14 +252,22 @@ commanded by the controller, the reported value SHALL be unambiguous as to which
 #### Scenario: Repurpose only permanently-free fields
 - **WHEN** a value is carried in an `EFI_STATUS` field that does not name it
 - **THEN** the only such fields SHALL be `fuel_consumed` and `fuel_flow` (carrying the two gear
-  values) and `pt_compensation` (carrying the digital-output bitmask)
+  values), `pt_compensation` (carrying the digital-output bitmask), `barometric_pressure` (carrying
+  the total odometer in km) and `fuel_pressure` (carrying the trip distance in km)
 - **AND** the fuel fields SHALL be justified by the bench-confirmed permanent absence of the
   corresponding ECU signals on this vehicle (PIDs `0x2F` fuel level and `0x5C` oil temperature do
   not answer and are absent from the supported-PID bitmaps), so no genuine fuel quantity or flow can
   ever be displaced
-- **AND** fields naming engine quantities this ECU could plausibly expose later — `spark_dwell_time`,
-  `barometric_pressure`, `ignition_timing`, `injection_time`, `exhaust_gas_temperature`,
-  `fuel_pressure` — SHALL be left unused rather than repurposed
+- **AND** `barometric_pressure` SHALL be justified on the same terms: this ECU has no barometric or
+  ambient-pressure sensor, no such PID answers the probe, and the manifold pressure it does measure
+  is already carried in `intake_manifold_pressure`, the field that names it
+- **AND** `fuel_pressure` reading zero SHALL be understood as a genuine zero trip distance, even
+  though the MAVLink field definition assigns zero the meaning "unknown"; the sentinel value that
+  definition suggests SHALL NOT be substituted, because reporting a non-zero distance when the
+  operator has just reset the trip is the worse error
+- **AND** fields naming engine quantities this ECU could plausibly expose later —
+  `spark_dwell_time`, `ignition_timing`, `injection_time`, `exhaust_gas_temperature` — SHALL be left
+  unused rather than repurposed
 - **AND** any ECU value without a free, semantically appropriate field SHALL be omitted from MAVLink
   rather than mapped onto a mismatched field
 - **AND** a value already carried in one `EFI_STATUS` field SHALL NOT be duplicated into a second
@@ -276,12 +301,14 @@ commanded by the controller, the reported value SHALL be unambiguous as to which
 #### Scenario: Report vehicle speed via VFR_HUD
 - **WHEN** the engine-telemetry interval elapses
 - **AND** the hall-effect speed sensor reading is valid
-- **THEN** a `VFR_HUD` message SHALL be sent with `groundspeed` set to the sensor speed converted to
-  metres per second
+- **THEN** a `VFR_HUD` message SHALL be sent with `groundspeed` set to the sensor speed in metres
+  per second, INCLUDING a genuine `0.0` when the vehicle is measurably stopped
 - **AND** the GCS SHALL be able to display and graph it as ground speed for the ground rover
-- **WHEN** the hall sensor reading is invalid or stale
-- **THEN** `groundspeed` SHALL be reported as 0 (or the `VFR_HUD` message suppressed for that tick) so
-  a stale reading is not presented as genuine motion
+- **WHEN** the hall sensor reading is invalid — never pulsed since boot, or latched suspicious
+- **THEN** `groundspeed` SHALL be reported as `NaN` rather than as `0`, so that "no reading" is
+  distinguishable on the wire from "stopped"
+- **AND** the `VFR_HUD` message SHALL still be sent for that tick, because its `throttle` field is
+  governed by CAN validity and not by the speed sensor
 
 #### Scenario: Report state changes as status text
 - **WHEN** the current gear, ignition state, or fail-safe state changes
@@ -294,9 +321,9 @@ commanded by the controller, the reported value SHALL be unambiguous as to which
 - **AND** the `rpm`, `cylinder_head_temperature`, `intake_manifold_temperature`,
   `intake_manifold_pressure`, `engine_load`, `throttle_position` and `ignition_voltage` fields SHALL
   ALL be reported as `NaN`, so a ground station shows "no data" rather than misleading zeros
-- **AND** the `fuel_consumed` (assumed gear), `throttle_out` (commanded throttle) and
-  `pt_compensation` (digital-output bitmask) fields SHALL remain valid, because none of them depends
-  on CAN health
+- **AND** the `fuel_consumed` (assumed gear), `throttle_out` (commanded throttle),
+  `pt_compensation` (digital-output bitmask), `barometric_pressure` (odometer) and `fuel_pressure`
+  (trip distance) fields SHALL remain valid, because none of them depends on CAN health
 - **AND** `fuel_flow` (physical gear) SHALL be governed by the gear-switch validity alone and SHALL
   be unaffected by CAN validity, so a lone `fuel_flow` `NaN` alongside otherwise-populated fields
   means "gear sensor unsure" and says nothing about CAN
@@ -509,14 +536,30 @@ reported as unavailable so the vehicle layer stops limiting altogether.
 ### Requirement: Outbound Speed Reporting in Metres per Second
 The interface SHALL receive the vehicle's ground speed from the vehicle layer already in metres
 per second, which is both the firmware's internal unit and the unit every MAVLink speed field
-uses. It SHALL NOT perform a km/h conversion on any outbound speed path.
+uses. It SHALL NOT perform a km/h conversion on any outbound speed path. Where the reading is
+unavailable, the interface SHALL say so in the field's own encoding rather than substituting a
+plausible number.
 
 #### Scenario: VFR_HUD groundspeed needs no conversion
 - **WHEN** a `VFR_HUD` message is packed
 - **THEN** the `groundspeed` field SHALL carry the reported sensor speed directly
 - **AND** no division by 3.6 SHALL be applied, because the reported speed is already m/s
-- **AND** an invalid or non-positive reading SHALL still be reported as zero rather than as
-  genuine motion
+- **AND** a valid reading of `0.0` SHALL be carried through as `0.0`, because a measurably stopped
+  vehicle is a genuine measurement
+
+#### Scenario: Report an invalid ground speed as NaN
+- **WHEN** a `VFR_HUD` message is packed
+- **AND** the hall-effect speed sensor reading is invalid — it has never pulsed since boot, or it
+  is latched suspicious after an implausible pulse loss
+- **THEN** `groundspeed` SHALL be packed as `NaN`, NOT as `0`
+- **AND** a consumer SHALL therefore be able to distinguish "no reading" from "stopped", which a
+  zero cannot express
+- **AND** the substitution SHALL NOT be applied in the other direction: a valid reading SHALL NEVER
+  be replaced by `NaN`, and `NaN` SHALL NEVER be used to mean "stopped"
+- **AND** `VFR_HUD.throttle` SHALL be unaffected — it is a `uint16_t` percentage with no `NaN`
+  encoding and keeps its measured-TPS-with-commanded-fallback behaviour
+- **AND** `VISION_POSITION_DELTA` SHALL be unaffected — it is a fusable measurement, not a display
+  value, and already goes silent rather than reporting an invalid reading at all
 
 #### Scenario: The odometry delta needs no conversion
 - **WHEN** a `VISION_POSITION_DELTA` message is packed
@@ -524,4 +567,78 @@ uses. It SHALL NOT perform a km/h conversion on any outbound speed path.
   travel direction, with no unit conversion
 - **AND** the neutral-rolling suppression threshold SHALL be expressed in metres per second
   (`MAVLINK_VISO_NEUTRAL_ZERO_MS`)
+
+### Requirement: Inbound Command Handling and Trip Reset
+The system SHALL accept inbound `COMMAND_LONG` (#76) messages addressed to THIS component and
+SHALL answer each one with a `COMMAND_ACK`. Because this component deliberately shares the
+autopilot's system id (`MAVLINK_SYSTEM_ID`) and is distinguished only by `MAVLINK_COMPONENT_ID`,
+the addressing check SHALL be strict: a command SHALL be handled only when BOTH
+`target_system == MAVLINK_SYSTEM_ID` AND `target_component == MAVLINK_COMPONENT_ID`. A broadcast
+(`target_component == 0`) or a command addressed to any other component SHALL be ignored silently,
+with NO acknowledgement, so that this peripheral can never answer for the autopilot.
+
+The only command this system implements is a **trip reset**, carried as `MAV_CMD_USER_1` (31010)
+with a magic `param1`. The odometer SHALL NOT be resettable by any command.
+
+The handler SHALL follow the existing transport policy: `include/MavlinkInterface.h` stays free of
+mavlink headers, so the handler SHALL take decoded scalars (the `handleServoOutputRaw` /
+`handleParamValue` pattern), and the transport SHALL NOT hold a reference to the speed sensor —
+it SHALL latch a pending request that the vehicle layer consumes and performs.
+
+#### Scenario: Accept a trip reset addressed to this component
+- **WHEN** a `COMMAND_LONG` arrives with `target_system == MAVLINK_SYSTEM_ID`,
+  `target_component == MAVLINK_COMPONENT_ID`, `command == MAV_CMD_USER_1` (31010) and `param1`
+  equal to `MAVLINK_CMD_TRIP_RESET_MAGIC`
+- **THEN** a trip-reset request SHALL be latched for the vehicle layer to perform
+- **AND** the vehicle layer SHALL zero the trip counter and persist it on its next control
+  iteration
+- **AND** a `COMMAND_ACK` with `MAV_RESULT_ACCEPTED` SHALL be sent
+- **AND** one line SHALL be logged on the serial console naming the requester's system and
+  component (for example `[MAV] TRIP reset accepted from 255/190`)
+- **AND** the odometer SHALL be left unchanged
+
+#### Scenario: Compare the magic parameter with a tolerance
+- **WHEN** `param1` is evaluated against `MAVLINK_CMD_TRIP_RESET_MAGIC`
+- **THEN** the comparison SHALL use a tolerance rather than float equality, in line with the
+  existing rule against comparing floats with `==`
+- **AND** a `param1` of `NaN` SHALL fail the comparison and SHALL therefore be denied, not accepted
+
+#### Scenario: Deny a trip reset with the wrong parameter
+- **WHEN** a `COMMAND_LONG` for `MAV_CMD_USER_1` is addressed to this component with any `param1`
+  other than the magic value
+- **THEN** a `COMMAND_ACK` with `MAV_RESULT_DENIED` SHALL be sent
+- **AND** the rejection SHALL be logged with the offending `param1` value and the requester
+- **AND** the trip counter SHALL be left unchanged, so a stray, replayed or mis-scripted
+  `MAV_CMD_USER_1` cannot silently destroy the operator's reading
+
+#### Scenario: Report any other command as unsupported
+- **WHEN** a `COMMAND_LONG` carrying any command other than `MAV_CMD_USER_1` is addressed
+  specifically to this system AND this component
+- **THEN** a `COMMAND_ACK` with `MAV_RESULT_UNSUPPORTED` SHALL be sent
+- **AND** the command id and the requester SHALL be logged
+- **AND** no vehicle state SHALL change
+
+#### Scenario: Ignore broadcasts and commands for other components
+- **WHEN** a `COMMAND_LONG` arrives with `target_component == 0` (broadcast), with a
+  `target_component` that is not `MAVLINK_COMPONENT_ID`, or with a `target_system` that is not
+  `MAVLINK_SYSTEM_ID`
+- **THEN** the message SHALL be discarded with NO `COMMAND_ACK` and no log line
+- **AND** a normal ground-station session against the autopilot (arming, mode changes, mission
+  upload) SHALL therefore produce no acknowledgement from this component at all
+
+#### Scenario: Acknowledge back to the requester, not to the autopilot
+- **WHEN** a `COMMAND_ACK` is sent
+- **THEN** its `target_system` and `target_component` SHALL be the `sysid` and `compid` of the
+  message that requested the command, not the learned autopilot's
+- **AND** the ACK SHALL be sent from this component's own `MAVLINK_SYSTEM_ID` /
+  `MAVLINK_COMPONENT_ID`
+- **AND** delivery SHALL rely on the autopilot's existing routing, which has already learned this
+  component's address from its outbound `HEARTBEAT` and `EFI_STATUS` traffic — no additional
+  routing configuration SHALL be required
+
+#### Scenario: The odometer is not resettable over MAVLink
+- **WHEN** any inbound command is processed
+- **THEN** there SHALL be NO command, parameter or magic value that zeroes or decreases the
+  odometer
+- **AND** only the trip counter SHALL be clearable
 

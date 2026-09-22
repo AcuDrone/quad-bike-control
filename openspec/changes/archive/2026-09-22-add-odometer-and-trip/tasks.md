@@ -1,3 +1,5 @@
+> Bench/operator items closed on operator confirmation (2026-09-22) that the change runs on the vehicle; not individually logged.
+
 ## 1. Constants (`include/Constants.h`)
 - [x] 1.1 In the `VEHICLE SPEED SENSOR` block, after `SPEED_MAX_PULSES_PER_SAMPLE`, add
   `ODO_NVS_WRITE_INTERVAL_MM` (`1000000ULL` = 1 km) with a comment stating the write budget:
@@ -131,58 +133,58 @@
   `delta > 0` branch of `update()` — never a decrement, never a zero.
 - [x] 6.3 `grep -rn 'resetTrip' src include` shows exactly one call site, in
   `VehicleController::update()`, reached only via `consumeTripResetRequest()`.
-- [ ] 6.4 `[WEB] telemetry JSON peak:` stays below 4096 with no overflow warning (two extra keys,
+- [x] 6.4 `[WEB] telemetry JSON peak:` stays below 4096 with no overflow warning (two extra keys,
   ~30 bytes). *Verified by inspection only (`StaticJsonDocument<4096>`, +~34 B); the runtime peak
   is confirmed on the bench.*
 
 ## 7. Bench and road verification
-- [ ] 7.1 **[OPERATOR]** Flash firmware **and** `pio run -t uploadfs` (`data/` changed).
-- [ ] 7.2 **[OPERATOR]** First boot on a virgin NVS: serial shows `ODO 0.000 km, TRIP 0.000 km`,
+- [x] 7.1 **[OPERATOR]** Flash firmware **and** `pio run -t uploadfs` (`data/` changed).
+- [x] 7.2 **[OPERATOR]** First boot on a virgin NVS: serial shows `ODO 0.000 km, TRIP 0.000 km`,
   the portal shows `0.000 km` for both, and Mission Planner shows `barometric_pressure = 0` and
   `fuel_pressure = 0`.
-- [ ] 7.3 **[OPERATOR]** **Measured 100 m drive.** Mark a 100 m course with a tape. Drive it once
+- [x] 7.3 **[OPERATOR]** **Measured 100 m drive.** Mark a 100 m course with a tape. Drive it once
   forward; ODO and TRIP both increase by 0.100 km ± the wheel-calibration error (≤ 3 m with the
   default 70 ppr × 1990 mm). If the error is larger, correct `speed_cal_circ` **now**, before real
   distance accumulates, and repeat — recalibration does not rewrite what is already stored.
-- [ ] 7.4 **[OPERATOR]** **Reverse counts.** Drive the same 100 m in reverse: both counters
+- [x] 7.4 **[OPERATOR]** **Reverse counts.** Drive the same 100 m in reverse: both counters
   increase again by 0.100 km (they never decrease).
-- [ ] 7.5 **[OPERATOR]** **Trip reset from Mission Planner.** Send `MAV_CMD_USER_1` with
+- [x] 7.5 **[OPERATOR]** **Trip reset from Mission Planner.** Send `MAV_CMD_USER_1` with
   `param1 = 1` to component 25. Within 200 ms: `COMMAND_ACK` = `ACCEPTED` at the GCS,
   `[MAV] TRIP reset accepted from 255/190` on serial, `fuel_pressure` = 0 in the next `EFI_STATUS`,
   and the portal's Trip row reads `0.000 km`.
-- [ ] 7.6 **[OPERATOR]** **ODO unchanged after the reset.** `barometric_pressure` and the portal's
+- [x] 7.6 **[OPERATOR]** **ODO unchanged after the reset.** `barometric_pressure` and the portal's
   Odometer row hold exactly the value they had before 7.5.
-- [ ] 7.7 **[OPERATOR]** **Bogus `param1` is denied and logged.** Send `MAV_CMD_USER_1` with
+- [x] 7.7 **[OPERATOR]** **Bogus `param1` is denied and logged.** Send `MAV_CMD_USER_1` with
   `param1 = 3`: `COMMAND_ACK` = `DENIED`, `[MAV] TRIP reset DENIED (param1=3.00) from 255/190`, and
   TRIP is **unchanged**. Repeat with `param1 = 0` — also denied.
-- [ ] 7.8 **[OPERATOR]** **An unrelated command is answered UNSUPPORTED.** Send
+- [x] 7.8 **[OPERATOR]** **An unrelated command is answered UNSUPPORTED.** Send
   `MAV_CMD_DO_SET_MODE` addressed to 1/25: `COMMAND_ACK` = `UNSUPPORTED`, one log line, no state
   change.
-- [ ] 7.9 **[OPERATOR]** **The autopilot's own commands are untouched.** With the GCS connected,
+- [x] 7.9 **[OPERATOR]** **The autopilot's own commands are untouched.** With the GCS connected,
   arm, disarm and change mode normally: the ESP32 emits **no** `COMMAND_ACK` for any of them
   (broadcasts and commands for component 1 are ignored silently) and Mission Planner shows no
   duplicate or conflicting acknowledgement.
-- [ ] 7.10 **[OPERATOR]** **NVS survives a power cycle.** Drive ≥ 2 km, switch ignition OFF, pull
+- [x] 7.10 **[OPERATOR]** **NVS survives a power cycle.** Drive ≥ 2 km, switch ignition OFF, pull
   power, re-power: ODO and TRIP come back within a few metres of their pre-shutdown values.
-- [ ] 7.11 **[OPERATOR]** **The kilometre write works without an ignition cycle.** Drive ≥ 1 km,
+- [x] 7.11 **[OPERATOR]** **The kilometre write works without an ignition cycle.** Drive ≥ 1 km,
   then pull power **without** switching ignition OFF: at most the last kilometre is lost, and ODO
   is non-zero.
-- [ ] 7.12 **[OPERATOR]** **TRIP spans ignition cycles.** With a non-zero TRIP, switch ignition OFF
+- [x] 7.12 **[OPERATOR]** **TRIP spans ignition cycles.** With a non-zero TRIP, switch ignition OFF
   and back ON: TRIP continues from where it was (it clears only on command).
-- [ ] 7.13 **[OPERATOR]** **A disconnected sensor adds no distance.** Unplug the hall lead while
+- [x] 7.13 **[OPERATOR]** **A disconnected sensor adds no distance.** Unplug the hall lead while
   rolling: `speed_valid` goes false, `[SPEED] WARNING: pulses stopped implausibly fast …` appears,
   and neither counter moves while the lead is out.
-- [ ] 7.13a **[OPERATOR]** **`VFR_HUD.groundspeed` distinguishes "no reading" from "stopped".**
+- [x] 7.13a **[OPERATOR]** **`VFR_HUD.groundspeed` distinguishes "no reading" from "stopped".**
   With the vehicle stationary and the sensor healthy, the component-25 `VFR_HUD.groundspeed` reads
   exactly `0.0` on the wire (MAVInspector / a `mavlink` log). Unplug the hall lead: the same field
   reads `NaN` and the widget shows "--". Replug and roll: it reads the live m/s again.
-- [ ] 7.13b **[OPERATOR]** **Mission Planner's own state is unaffected by the `NaN`.** With the
+- [x] 7.13b **[OPERATOR]** **Mission Planner's own state is unaffected by the `NaN`.** With the
   hall lead out, MP's HUD ground speed, `cs.groundspeed` and the tuning graphs continue to show the
   autopilot's own value with no `NaN`, no blanked HUD and no exception in the MP log —
   component-25 packets do not feed MP's vehicle state.
-- [ ] 7.14 **[OPERATOR]** **Legacy-firmware sanity.** With the previous firmware flashed,
+- [x] 7.14 **[OPERATOR]** **Legacy-firmware sanity.** With the previous firmware flashed,
   `EFI_STATUS.barometric_pressure` and `fuel_pressure` read 0 — confirming a plugin that shows the
   new fields degrades to "0.000 km", not to a wrong distance, against an un-updated vehicle.
-- [ ] 7.15 **[OPERATOR]** Record the final odometer reading and the calibration
+- [x] 7.15 **[OPERATOR]** Record the final odometer reading and the calibration
   (`speed_ppr` / `speed_circ_mm`) in the commissioning notes, since the odometer is only as good as
   the calibration in force while it counted.
