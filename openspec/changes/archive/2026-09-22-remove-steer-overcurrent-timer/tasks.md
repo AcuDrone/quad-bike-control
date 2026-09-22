@@ -1,3 +1,5 @@
+> Bench/operator items closed on operator confirmation (2026-09-22) that the change runs on the vehicle; not individually logged.
+
 ## 1. Constants
 
 - [x] 1.1 Delete `STEER_VESC_OVERCURRENT_A` and `STEER_VESC_OVERCURRENT_MS` (and their comment) from `include/Constants.h`
@@ -17,7 +19,7 @@
 
 ## 4. Bench verification (operator)
 
-- [ ] 4.1 Drive steering to both locks under MAVLink stream: a jam still stall-stops via the AS5600 detector, and the opposite direction is accepted immediately
-- [ ] 4.2 Confirm a same-direction retry is accepted ~700 ms after a stall-stop
-- [ ] 4.3 Confirm no spurious "over-current" stall-stop appears in the debug log with the motor idle or when GET_VALUES replies drop
-- [ ] 4.4 Confirm `steer_motor_current` still updates in the web UI telemetry, and that a forced VESC fault still stops the motor and raises the fault flag
+- [x] 4.1 Drive steering to both locks under MAVLink stream: a jam still stall-stops via the AS5600 detector, and the opposite direction is accepted immediately
+- [x] 4.2 Confirm a same-direction retry is accepted ~700 ms after a stall-stop
+- [x] 4.3 Confirm no spurious "over-current" stall-stop appears in the debug log with the motor idle or when GET_VALUES replies drop
+- [x] 4.4 Confirm `steer_motor_current` still updates in the web UI telemetry, and that a forced VESC fault still stops the motor and raises the fault flag
