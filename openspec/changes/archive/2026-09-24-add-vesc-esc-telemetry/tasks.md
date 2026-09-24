@@ -139,6 +139,9 @@ they have no consumer, so the hunks of commit `89f84a6` that added them are reve
 
 ## 7. Bench verification `[OPERATOR]`
 Nothing below can be done from the repo; all of it needs the vehicle powered and a GCS attached.
+> Archived 2026-09-24 with bench verification pending — operator decision; the items below
+> remain open as a field checklist.
+
 - [ ] 7.1 `pio run -t upload` (firmware only — **no** `uploadfs`, `data/` is unchanged).
 - [ ] 7.2 MAVLink Inspector: `NAMED_VALUE_FLOAT` arriving from **sysid 1 / compid 25** at ≈17 Hz
   total, and all five names seen within a few seconds. The Inspector keeps ONE node per msgid and
