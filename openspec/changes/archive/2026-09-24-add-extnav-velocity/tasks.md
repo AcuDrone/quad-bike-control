@@ -40,6 +40,9 @@
 - [x] 6.1 `pio run` completes with no errors and no new warnings (clean rebuild 2026-08-21: SUCCESS, zero warnings originating in `src/` or `include/`).
 
 ## 7. Bench verification
+> Archived 2026-09-24 with bench verification pending — operator decision; the unchecked items
+> below remain open as a field checklist.
+
 - [x] 7.1 Autopilot parameters set and the delta path proven to fuse. (Done 2026-08-21, real Pixhawk 2.4.8 / Rover 4.7.0 fmuv3: `VISO_TYPE` confirmed present; `VISO_TYPE=1`, `EK3_SRC1_VELXY=6`, `EK3_SRC1_POSXY=0`, `GPS1_TYPE=0`, origin set from the GCS. `VISION_SPEED_ESTIMATE` @ 5 Hz left EKF flags at `0x00A7` (const-pos) with velocity 0; switching to `VISION_POSITION_DELTA` @ 5 Hz moved EKF3 to `AID_RELATIVE` (flags `0x012F`) and `GLOBAL_POSITION_INT` velocity tracked an injected 10 km/h at |v| ≈ 2.6–2.7 m/s. Speed and direction were bench-injected — the gear sensor was unplugged and the hall path was not driven.)
 - [x] 7.1b SITL end-to-end protocol validation (2026-08-21, Rover 4.7 SITL on the bench Jetson, injected via MAVLink2Rest at 5 Hz): with `VISO_TYPE=1`, `EK3_SRC1_VELXY=6`, `EK3_SRC1_POSXY=0`, `GPS1_TYPE=0` and an EKF origin set, EKF3 engaged AID_RELATIVE (flags 0x00A7→0x012F) within seconds; fused velocity tracked a scripted profile within ~1 % at 10 km/h cruise, decayed to zero on stop, and inverted exactly on a reverse leg (−1.39 m/s → |v|=1.38 with both NED components mirrored). `PreArm: VisOdom` went not-healthy→healthy with the stream. Validates the message semantics, param set, dt integration and sign convention — the ESP32 firmware path itself is covered by 7.2-7.6.
 - [x] 7.1c SITL steering-scaling proof (2026-08-21, same rig): with `MANUAL_OPTIONS=1`, `MOT_SPD_SCA_BASE=2.5`, MANUAL mode armed, full-lock steering via RC override, the injected odometry attenuated `servo1_raw` exactly per `base/speed` — 1900 at standstill, 1860 (scale 0.90) at 10 km/h, 1620 (scale 0.30) at 30 km/h. This closes the loop on the feature's purpose: wheel speed reaches the EKF and the EKF speed drives Manual-mode steering desensitization. Note: instantaneous speed STEPS (8.3→1.0 m/s) are innovation-rejected and can wander the estimate until a timeout reset — physically real ramps track cleanly; reinforces the silence-over-zeros gate design (a dying sensor must go silent, not step to zero).
@@ -50,6 +53,9 @@
 - [ ] 7.6 Sign check on the bench: reverse gear flips the sign of `position_delta[0]`.
 
 ## 8. On-vehicle verification
+> Archived 2026-09-24 with bench verification pending — operator decision; the items below
+> remain open as a field checklist.
+
 - [ ] 8.1 **Prerequisite:** calibrate the compass. The body-frame delta is rotated by the EKF's own attitude, so a bad heading now silently steers the fused travel direction with nothing on the ESP32 side to gate it.
 - [ ] 8.2 Fill in `VISO_POS_X/Y/Z` with the measured lever arm from the IMU to the measuring wheel hub.
 - [ ] 8.3 Real-wheel fusion check (the bench run used an injected speed): drive the hall sensor from the actual wheel and confirm the EKF velocity tracks `VFR_HUD.groundspeed` on a steady straight-line run.
