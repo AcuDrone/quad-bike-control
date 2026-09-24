@@ -189,6 +189,35 @@
 #define ACC_PRECRANK_DWELL_MS      2000  // ms - ignition/ECU line (Relay_1+Relay_2) must be powered this long before the starter (Relay_3) engages
 #define ENGINE_RUNNING_RPM_THRESHOLD 1500  // RPM - engine considered running above this
 
+// ----------------------------------------------------------------------------
+// ENGINE HOUR METER ("мотогодини") — NVS namespace "engine", key "hours_s"
+// ----------------------------------------------------------------------------
+// Deliberately NOT ENGINE_RUNNING_RPM_THRESHOLD (1500). That one is a gear-change /
+// crank-interlock SAFETY threshold, chosen to sit safely ABOVE idle; an hour meter
+// built on it would refuse to count idling, which is exactly the running time an
+// hour meter exists to record. Nothing in this repo documents this engine's idle
+// RPM, so the floor rests on a physical argument instead: a starter cranks at
+// ~200-300 RPM and a petrol engine idles at 800-1500, so anything above ~300 means
+// the crank is turning under its own power or under the starter — both are running
+// time. Below it, "ignition on, engine stopped" (CAN valid, rpm 0) counts nothing.
+#define ENGINE_HOURS_MIN_RPM          300    // RPM - at or above this the crank is turning
+
+// Single-update cap. The main loop is cooperative and non-blocking, so a delta of
+// even 200 ms is already unusual; 5 s is an order of magnitude above anything the
+// loop legitimately does. A longer delta is a symptom (a stall, a long flash
+// operation, a debugger halt), not attested running time, and is DISCARDED whole —
+// at most this much real running time is lost per stall event.
+#define ENGINE_HOURS_MAX_DELTA_MS     5000   // ms - a longer single update adds nothing
+
+// Hour-meter persistence interval, in ACCUMULATED seconds of growth (not wall clock:
+// a parked vehicle with the controller powered writes nothing). Plus one write on every
+// ignition-OFF transition and on fail-safe entry, which makes a normal shutdown lossless
+// and bounds a power-cut loss to 10 minutes. The budget: NVS is wear-levelled and
+// log-structured, so ~126 writes of the one uint64 key fill a 4096-byte page and cost
+// one erase — 6 writes per engine-hour means ≈480 erases over 10 000 engine hours,
+// ≈0.48 % of the flash's ~100 000-cycle endurance. A quad engine is rebuilt long before.
+#define ENGINE_HOURS_NVS_WRITE_INTERVAL_S  600ULL  // s of accumulated growth between NVS writes
+
 // ============================================================================
 // MAVLINK / COMMAND CHANNEL CONFIGURATION
 // ============================================================================

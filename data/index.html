@@ -695,6 +695,19 @@
                         <div class="telemetry-label" data-i18n="lbl_engine_rpm">Engine RPM</div>
                         <div class="telemetry-value" id="can-rpm">0</div>
                     </div>
+                    <!-- Engine hour meter: read-only, never reset. Updated OUTSIDE the
+                         can_status gate below — running time already accumulated is not
+                         invalidated by the bus going quiet. -->
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_engine_hours">Engine hours</div>
+                        <div class="telemetry-value" id="can-engine-hours">--</div>
+                    </div>
+                    <!-- Trip engine hours: read-only here too. Cleared only by the GCS trip
+                         reset, the same command that zeroes the trip distance. -->
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_engine_trip_hours">Trip hours</div>
+                        <div class="telemetry-value" id="can-engine-trip-hours">--</div>
+                    </div>
                     <div class="telemetry-item">
                         <div class="telemetry-label" data-i18n="lbl_coolant_temp">Coolant Temp</div>
                         <div class="telemetry-value" id="can-coolant">--°C</div>
@@ -1014,6 +1027,9 @@
                 lbl_speed_limit: 'Speed limit',
                 lbl_speed_limit_ceil: 'Limiting',
                 lim_none: 'none',
+                lbl_engine_hours: 'Engine hours',
+                lbl_engine_trip_hours: 'Trip hours',
+                unit_h: 'h',
                 lbl_odo: 'Odometer',
                 lbl_trip: 'Trip',
                 unit_km: 'km',
@@ -1245,6 +1261,9 @@
                 lbl_speed_limit: 'Обмеження швидкості',
                 lbl_speed_limit_ceil: 'Обмежується',
                 lim_none: 'немає',
+                lbl_engine_hours: 'Мотогодини',
+                lbl_engine_trip_hours: 'Мотогодини місії',
+                unit_h: 'год',
                 lbl_odo: 'Одометр',
                 lbl_trip: 'Пробіг',
                 unit_km: 'км',
@@ -1609,6 +1628,25 @@
                 document.getElementById('can-fuel').textContent = '--%';
                 document.getElementById('can-status-text').textContent = t('can_disconnected');
                 document.getElementById('can-status-text').style.color = 'var(--danger)';
+            }
+
+            // Engine hour meter — rendered OUTSIDE the can_status branch above (and outside its
+            // else), because accumulated running time is not invalidated by the bus going quiet;
+            // it merely stops growing. Number.isFinite, not typeof === 'number': NaN and Infinity
+            // are both numbers and would render as "NaN h" / "Infinity h".
+            const engHoursEl = document.getElementById('can-engine-hours');
+            if (engHoursEl) {
+                engHoursEl.textContent = Number.isFinite(data.engine_hours)
+                    ? data.engine_hours.toFixed(2) + ' ' + t('unit_h')
+                    : '--';
+            }
+            // Trip engine hours — same treatment, same reason. A 0.00 here is a GENUINE zero
+            // after a trip reset, which is why the placeholder is reserved for a missing field.
+            const engTripHoursEl = document.getElementById('can-engine-trip-hours');
+            if (engTripHoursEl) {
+                engTripHoursEl.textContent = Number.isFinite(data.engine_trip_hours)
+                    ? data.engine_trip_hours.toFixed(2) + ' ' + t('unit_h')
+                    : '--';
             }
 
             // Update ECU probe results (present transiently while running / fresh)

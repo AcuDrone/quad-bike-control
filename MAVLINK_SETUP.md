@@ -154,13 +154,13 @@ documented exception, and the reason they are one is set out in their own sectio
 | 4 | ⚑ `fuel_flow` | [cm³/min] Fuel flow | **PHYSICAL (opto-sensed) gear** — same absent-PID justification | **NaN when the gear reads UNKNOWN** — sensor-driven, *not* CAN-driven | `physGearVal` |
 | 5 | `engine_load` | [%] Engine load | **ECU calculated load** (PID `0x04`) | NaN if `!canValid` | `state.engineLoad` |
 | 6 | `throttle_position` | [%] Throttle position | **MEASURED throttle** (PID `0x11`) | NaN if `!canValid` | `state.throttlePosition` |
-| 7 | `spark_dwell_time` | [ms] Spark dwell | `0.0` — **unused, reserved** | — | literal |
+| 7 | ⚑ `spark_dwell_time` | [ms] Spark dwell | **ENGINE HOURS, total, h** — repurposed: spark dwell has no standard OBD-II Mode 01 PID, so this ECU can never surface it | **always valid**, never NaN | `state.engineHours` |
 | 8 | ⚑ `barometric_pressure` | [kPa] Barometric pressure | **ODOMETER, total, km** — repurposed: this ECU has no ambient-pressure sensor | **always valid**, never NaN | `state.odoKm` |
 | 9 | `intake_manifold_pressure` | [kPa] MAP | **Manifold absolute pressure** (PID `0x0B`) | NaN if `!canValid` | `state.mapKpa` |
 | 10 | `intake_manifold_temperature` | [°C] | **Intake air temperature** (PID `0x0F`) | NaN if `!canValid` | `state.intakeTemp` |
 | 11 | `cylinder_head_temperature` | [°C] | **Coolant temperature** (PID `0x05`) | NaN if `!canValid` | `state.coolantTemp` |
 | 12 | `ignition_timing` | [deg] Crank angle | `0.0` — **unused, reserved** | — | literal |
-| 13 | `injection_time` | [ms] | `0.0` — **unused, reserved** | — | literal |
+| 13 | ⚑ `injection_time` | [ms] | **TRIP ENGINE HOURS, resettable, h** — repurposed: injection time has no direct OBD-II Mode 01 PID (it is only derivable from the fuel trims), so this ECU can never surface it directly | **always valid**, never NaN; **0 is a genuine zero** | `state.engineTripHours` |
 | 14 | `exhaust_gas_temperature` | [°C] | `0.0` — **unused, reserved** | — | literal |
 | 15 | `throttle_out` | [%] Output throttle | **COMMANDED (arbitrated) throttle** | **always valid**, never NaN | `state.throttleCmdPct` |
 | 16 | ⚑ `pt_compensation` | Pressure/temp compensation | **Digital-output bitmask** — repurposed: this ECU publishes no compensation factor | **always valid** (relay ground truth) | `state.digitalFlags` |
@@ -174,9 +174,20 @@ argument but the 17th field). The pack site writes one argument per line precise
 same-typed positional floats would otherwise let a mis-ordered argument compile cleanly and fail only
 on the bench.
 
-**The four reserved fields** (`spark_dwell_time`, `ignition_timing`, `injection_time`,
-`exhaust_gas_temperature`) name quantities this ECU **could plausibly expose later** over OBD-II, so
-they are deliberately not repurposed. A consumer must treat `0.0` in these four as "not reported".
+**The two reserved fields** (`ignition_timing`, `exhaust_gas_temperature`) name quantities this ECU
+**could plausibly expose later** over OBD-II — ignition timing is PID `0x0E`, exhaust gas
+temperature is PID `0x78`, both standard Mode 01 — so they are deliberately not repurposed. A
+consumer must treat `0.0` in these two as "not reported".
+
+They used to be four. The test is whether the named quantity is *permanently* unavailable on this
+bus, and the two that left the set are the two with **no direct Mode 01 PID**:
+
+- **`spark_dwell_time`** — an internal coil-charging interval that OBD-II never standardised a way
+  to ask for. There is no PID to enable and no plausible firmware change on either side that would
+  make this ECU able to report it. It now carries the **total** engine hour meter.
+- **`injection_time`** — likewise has no PID of its own; it is only *derivable*, from the fuel-trim
+  PIDs (`0x06`/`0x07`) plus engine load, so it could never arrive on this bus as a field the way
+  timing and EGT could. It now carries the **trip** engine hours.
 
 The 2026-08-14 bench probe confirmed PIDs `0x2F` (fuel level) and `0x5C` (oil temperature) are
 **absent** from this ECU's supported-PID bitmaps — that is what makes the fuel pair safe to
@@ -246,8 +257,54 @@ power cycle). They are reported in **kilometres** and are **always valid**, neve
 > **NaN**, not `0.0001`, means unknown. The consumer is this repository's own plugin, which decodes
 > by field position.
 
-A trip reset is observable on the wire as `fuel_pressure` falling to zero while
-`barometric_pressure` is unchanged. The odometer never decreases between two messages.
+A trip reset is observable on the wire as `fuel_pressure` **and** `injection_time` (the trip hours,
+see below) falling to zero together, while `barometric_pressure` and `spark_dwell_time` are
+unchanged. The odometer never decreases between two messages.
+
+#### Engine hours
+
+The engine hour meter ("мотогодини") is **two** counters — a total and a resettable trip, exactly as
+the distance pair is — each carried in **hours** as a float. They come from a different source than
+the distance counters (the CAN bus, not the hall sensor) and live in their own NVS namespace
+(`"engine"`, keys `"hours_s"` and `"trip_s"`, exact `uint64` seconds each).
+
+| Counter | Field | Resettable |
+|---------|-------|------------|
+| **ENGINE HOURS** — total, engine lifetime | `spark_dwell_time` | **no** — there is no command, parameter, magic value or web control that zeroes or decreases it. The only way back to zero is an NVS erase. |
+| **TRIP HOURS** ("мотогодини місії") — since the last reset | `injection_time` | yes — by the **same** `MAV_CMD_USER_1` that clears the TRIP distance (see "Trip reset"). There is no separate command and no separate `param1` magic. |
+
+The two hour counters advance in **lockstep**: the same whole-second amount, from the same single
+sub-second carry, in the same place — they can never disagree about how long the engine ran, they
+differ only in when they were last zeroed. Both are written by one NVS `persist()`, so a shutdown
+cannot save one and lose the other, and `resetTrip()` writes through immediately rather than waiting
+for the next interval.
+
+> **`injection_time = 0` is a genuine zero**, the same note `fuel_pressure` carries: it means "the
+> trip has just been reset", not "unknown". Nothing substitutes a sentinel.
+
+**What makes it count.** Time accrues only while the CAN data is **valid** *and* the reported engine
+RPM is at or above `ENGINE_HOURS_MIN_RPM` (300). Two consequences follow, both deliberate:
+
+- **Idling counts.** 300 RPM sits well below this engine's idle, because idling is running time and
+  wears the engine on the same schedule. This is a *different* threshold from
+  `ENGINE_RUNNING_RPM_THRESHOLD` (1500), which is a gear-change and crank interlock chosen to sit
+  safely above idle; sharing them would build an hour meter that ignores the yard.
+- **Ignition on with the engine stopped does not count.** The ECU answers on ACC and reports
+  `rpm = 0`, which is CAN-*valid* — so it is the RPM floor, not the validity flag, that stops the
+  meter there.
+
+**During a CAN outage the meter STOPS GROWING; it does not go `NaN`.** Accumulated running time is
+history and stays true when the bus goes quiet. The elapsed interval is *discarded*, not banked, so
+reconnecting does not credit the meter with the outage — the meter under-counts a CAN fault rather
+than inventing hours through one, which is the same failure direction the odometer takes for a hall
+sensor dropout. A consumer that sees a flat hour meter alongside a field of `NaN`s is looking at a
+CAN outage; one that sees a flat meter alongside live sub-idle RPM is looking at a stopped engine.
+
+The **total** never decreases between two messages; the **trip** decreases only on an accepted trip
+reset, and only to zero. On first flash both NVS keys are absent, so both read `0.00` and count from
+that moment: it is "hours since this firmware", not "hours since the engine was built", and there is
+no seeding path. (A vehicle upgrading from the total-only firmware keeps its total and starts the
+trip at zero — `"trip_s"` simply does not exist yet and reads as `0`.)
 
 #### Trip reset
 
@@ -259,8 +316,14 @@ A trip reset is observable on the wire as `fuel_pressure` falling to zero while
 | `target_system` | `1` |
 | `target_component` | `25` — **not** 0 |
 
+**One command zeroes BOTH trip readings** — the TRIP distance (`fuel_pressure`) and the TRIP engine
+hours (`injection_time`). They describe the same "since the operator last pressed reset" interval in
+two units, so clearing one and leaving the other would leave the pair permanently incomparable.
+There is **no second command and no second `param1` value**; the totals — ODO
+(`barometric_pressure`) and total engine hours (`spark_dwell_time`) — are untouched.
+
 The magic `param1` exists so a stray, replayed or mis-scripted `MAV_CMD_USER_1` cannot silently
-destroy the operator's trip reading; it is compared with a tolerance, not float equality, so `NaN`
+destroy the operator's trip readings; it is compared with a tolerance, not float equality, so `NaN`
 fails and is denied. See `COMMAND_ACK` below for the replies.
 
 ### `VFR_HUD` (74) — 5 Hz
@@ -534,14 +597,15 @@ and the ESP32 can never answer for the Pixhawk. The ACK goes back to the **reque
 
 | Inbound | `result` | Effect |
 |---------|----------|--------|
-| `MAV_CMD_USER_1` (31010), `param1` within `MAVLINK_CMD_PARAM_EPSILON` (0.01) of `MAVLINK_CMD_TRIP_RESET_MAGIC` (1.0) | `MAV_RESULT_ACCEPTED` (0) | TRIP zeroed and persisted by the vehicle layer on its next iteration (< 40 ms at ≥ 25 Hz); ODO unchanged |
+| `MAV_CMD_USER_1` (31010), `param1` within `MAVLINK_CMD_PARAM_EPSILON` (0.01) of `MAVLINK_CMD_TRIP_RESET_MAGIC` (1.0) | `MAV_RESULT_ACCEPTED` (0) | **TRIP km *and* TRIP engine hours** both zeroed and persisted by the vehicle layer on its next iteration (< 40 ms at ≥ 25 Hz); **ODO and total engine hours unchanged**. On the wire: `fuel_pressure` **and** `injection_time` both fall to zero in the next `EFI_STATUS`, while `barometric_pressure` and `spark_dwell_time` are unchanged |
 | `MAV_CMD_USER_1`, any other `param1` — **`NaN` included**, since `fabsf(NaN - 1.0) <= eps` is false | `MAV_RESULT_DENIED` (2) | nothing changes; `param1` and the requester are logged |
 | Any other command | `MAV_RESULT_UNSUPPORTED` (3) | nothing changes; the command id and the requester are logged |
 
 The transport only **latches** the request (`tripResetPending_`); the vehicle layer consumes it via
 `consumeTripResetRequest()`, because the transport must not hold a `SpeedSensor&`. `ACCEPTED`
-therefore means "accepted for execution", not "already done". **The odometer cannot be reset by any
-means.**
+therefore means "accepted for execution", not "already done". Both trip counters are cleared inside
+that one consumption, so they can never diverge. **The odometer and the total engine hour meter
+cannot be reset by any means.**
 
 ## Requests toward the autopilot
 
@@ -632,6 +696,7 @@ inverse holds too: a field that *can* be `NaN` and is not is a real measurement,
 | `EFI_STATUS.throttle_out` (commanded throttle) | the arbitrated servo output is always known locally |
 | `EFI_STATUS.pt_compensation` (digital flags) | relay ground truth |
 | `EFI_STATUS.barometric_pressure` (ODO) / `fuel_pressure` (TRIP) | distance already driven depends on neither CAN health nor the current speed reading |
+| `EFI_STATUS.spark_dwell_time` (total engine hours) / `injection_time` (trip engine hours) | time already run is history; during a CAN outage both stop growing rather than going unknown |
 | `EFI_STATUS.health` | constant `1`; **not** a health signal — do not read CAN state from it |
 | `VFR_HUD.throttle` | `uint16_t` percent, no NaN encoding — falls back to commanded |
 | `VESC_OK` | locally known; it **is** the VESC link's health, and an "unknown" here would defeat its only purpose |
@@ -683,6 +748,24 @@ Five independent validity domains share the link. They do **not** move together:
 | Manifold pressure (kPa) | — | `intake_manifold_pressure` | **new** |
 | Commanded throttle (%) | — | `throttle_out` | **new** — always valid, never NaN |
 
+#### Engine hours in `spark_dwell_time` / `injection_time` — **non-breaking**
+
+Two new read-only fields, both in slots the plugin ignores today, so **nothing it decodes moves** and
+an un-updated plugin keeps working and simply does not show the values.
+
+| Value | Field | Plugin action |
+|-------|-------|---------------|
+| Engine hours (total) | `EFI_STATUS.spark_dwell_time` | **new** — read-only, **hours**, render to **2 decimals**, always valid (never `NaN`), monotonically non-decreasing |
+| Engine hours (trip, "мотогодини місії") | `EFI_STATUS.injection_time` | **new** — read-only, **hours**, render to **2 decimals**, always valid (never `NaN`); falls to `0.00` on a trip reset, where **0 is a genuine zero** |
+
+Offer **no reset control** for either: the total has no reset on any interface, and the trip hours
+are cleared by the **existing** trip-reset command, which needs **no change** — the same
+`MAV_CMD_USER_1` / `param1 = 1` that zeroes the TRIP km now zeroes the trip hours too, in the same
+`EFI_STATUS` tick. A plugin that already sends it is already correct; a plugin that shows both trip
+readings should expect them to clear together. Against **legacy firmware** both fields are a literal
+`0.0`, so an updated plugin degrades to `0.00 h` — a visibly absent value rather than a wrong one —
+which is why this can ship ahead of or behind the flash.
+
 #### Steering VESC named floats (251) — **non-breaking**
 
 The plugin must add **one** packet subscription, for **msg id 251 (`NAMED_VALUE_FLOAT`)**, and
@@ -723,7 +806,7 @@ Rules that keep such changes rare:
 
 1. **Every value sits in the field that names it**, and a repurposing must pass the
    *permanent-absence* test and be documented at the pack site.
-2. **Reserved fields stay at `0.0`** — never repurposed (see the four above).
+2. **Reserved fields stay at `0.0`** — never repurposed (see the three above).
 3. **Adding a new message id is not breaking**: an un-updated plugin ignores it (precedents:
    `VISION_POSITION_DELTA`, and the steering `NAMED_VALUE_FLOAT` set).
 4. **Consumers harden by treating an out-of-range value as "--"** — a gear outside `-1..2`, say,

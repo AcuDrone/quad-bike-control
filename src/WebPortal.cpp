@@ -591,6 +591,12 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // are integers scaled by 1e-6 and cannot be non-finite, but the guard costs nothing.
     doc["odo_km"] = serialized(String(isfinite(telemetry.odo_km) ? telemetry.odo_km : 0.0f, 3));
     doc["trip_km"] = serialized(String(isfinite(telemetry.trip_km) ? telemetry.trip_km : 0.0f, 3));
+    // Engine hour meter, in hours to 2 decimals. Emitted UNCONDITIONALLY and deliberately
+    // OUTSIDE the CAN block below: accumulated running time is not invalidated by the bus
+    // going quiet — it merely stops growing. Display only; there is no reset command here —
+    // the trip hours are zeroed by the SAME GCS trip reset that clears the trip distance.
+    doc["engine_hours"] = serialized(String(isfinite(telemetry.engine_hours) ? telemetry.engine_hours : 0.0f, 2));
+    doc["engine_trip_hours"] = serialized(String(isfinite(telemetry.engine_trip_hours) ? telemetry.engine_trip_hours : 0.0f, 2));
 
     // CAN bus vehicle data
     if (telemetry.can_status == "connected") {

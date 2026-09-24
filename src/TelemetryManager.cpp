@@ -79,6 +79,10 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     // separately maintained total. Never gated: distance already driven stays true.
     telemetry.odo_km = vehicleController_.getOdoKm();
     telemetry.trip_km = vehicleController_.getTripKm();
+    // Engine hour meter — the exact second counter scaled to hours at this point, not a
+    // separately maintained total. Never gated: time already run stays true.
+    telemetry.engine_hours = vehicleController_.getEngineHours();
+    telemetry.engine_trip_hours = vehicleController_.getEngineTripHours();
     // The one and only ceiling: the autopilot's SPEED_MAX. 0 means no limit.
     telemetry.speed_limit_ms = vehicleController_.getSpeedLimitMs();
     telemetry.speed_limit_ceil = vehicleController_.getSpeedLimitCeilingPct();

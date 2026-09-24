@@ -494,9 +494,11 @@ void MavlinkInterface::report(const StateReport& state) {
     //
     // Why the fuel pair is safe to repurpose FOREVER on this vehicle: the 2026-08-14 bench probe
     // confirmed PIDs 0x2F (fuel level) and 0x5C (oil temp) are absent from this ECU's supported-PID
-    // bitmaps and do not answer, so no genuine fuel quantity or flow can ever be displaced. Fields
-    // naming quantities this ECU could plausibly expose later (spark_dwell_time, ignition_timing,
-    // injection_time, exhaust_gas_temperature) are left at zero rather than repurposed.
+    // bitmaps and do not answer, so no genuine fuel quantity or flow can ever be displaced. The
+    // two remaining fields naming quantities this ECU could plausibly expose later over a
+    // standard Mode 01 PID (ignition_timing 0x0E, exhaust_gas_temperature 0x78) are left at zero
+    // rather than repurposed; spark_dwell_time and injection_time have no such PID and carry the
+    // total and trip hour meters.
     //
     // barometric_pressure and fuel_pressure pass the same permanent-absence test: this ECU has no
     // barometric/ambient-pressure sensor (the manifold pressure it DOES measure already sits in
@@ -557,13 +559,23 @@ void MavlinkInterface::report(const StateReport& state) {
             physGearVal,   // fuel_flow                   <- PHYSICAL GEAR (repurposed)
             loadVal,       // engine_load                 <- ECU CALCULATED LOAD (0x04)
             tpsVal,        // throttle_position           <- MEASURED TPS (0x11)
-            0.0f,          // spark_dwell_time            (unused)
+            state.engineHours, // spark_dwell_time        <- ENGINE HOURS (h, total)
+                           // Repurposed and permanently free: spark dwell has NO standard
+                           // OBD-II Mode 01 PID at all, so unlike ignition_timing (PID 0x0E),
+                           // exhaust_gas_temperature (PID 0x78) and injection_time (derivable
+                           // from the fuel trims) this ECU can never surface it. Always valid.
             state.odoKm,   // barometric_pressure         <- ODOMETER (km, total)
             mapVal,        // intake_manifold_pressure    <- MAP (0x0B)
             iatVal,        // intake_manifold_temperature <- INTAKE AIR TEMP (0x0F)
             chtVal,        // cylinder_head_temperature   <- COOLANT (0x05)
             0.0f,          // ignition_timing             (unused)
-            0.0f,          // injection_time              (unused)
+            state.engineTripHours, // injection_time      <- TRIP ENGINE HOURS (h, resettable)
+                           // Repurposed: of the reserved fields injection time is the one with
+                           // no direct OBD-II Mode 01 PID — it is only DERIVABLE from the fuel
+                           // trims plus load, unlike ignition_timing (PID 0x0E) and
+                           // exhaust_gas_temperature (PID 0x78), which this ECU could answer
+                           // directly one day. Always valid; 0 is a GENUINE zero after a reset.
+
             0.0f,          // exhaust_gas_temperature     (unused)
             thrOutVal,     // throttle_out                <- COMMANDED THROTTLE
             flagsVal,      // pt_compensation             <- DIGITAL FLAGS bitmask (repurposed)

@@ -14,6 +14,7 @@
 #include "BoardInputs.h"
 #include "CANController.h"
 #include "SpeedSensor.h"
+#include "EngineHourMeter.h"
 
 /**
  * @brief Vehicle control coordination layer
@@ -38,6 +39,12 @@ public:
      * this starts the startup grace window and the sampling schedule.
      */
     void initBoostRail();
+
+    /**
+     * @brief Load the engine hour meter from NVS. Call once from setup().
+     * Cannot live in the constructor: this controller is a global built before NVS is ready.
+     */
+    void initEngineHourMeter();
 
     /**
      * @brief Initialize CAN controller
@@ -221,6 +228,19 @@ public:
     float getTripKm() const { return speedSensor_.getTripKm(); }
 
     /**
+     * @brief Engine hour meter ("мотогодини"). READ-ONLY.
+     * Always valid: the TOTAL only ever increases and has NO reset path on any interface
+     * (no command, no web control, no constant — only an NVS erase); the TRIP total
+     * ("мотогодини місії") counts in lockstep with it and is zeroed only by the SAME
+     * latched trip reset that clears the trip DISTANCE. Both stop growing rather than going
+     * unknown while CAN data is invalid.
+     */
+    uint64_t getEngineSeconds() const { return engineHours_.getEngineSeconds(); }
+    float getEngineHours() const { return engineHours_.getEngineHours(); }
+    uint64_t getEngineTripSeconds() const { return engineHours_.getTripSeconds(); }
+    float getEngineTripHours() const { return engineHours_.getTripHours(); }
+
+    /**
      * @brief The ceiling the limiter is enforcing, in m/s. 0 = NO LIMIT.
      *
      * There is exactly one source: the autopilot's `SPEED_MAX` parameter, held in RAM only
@@ -299,6 +319,7 @@ private:
     RelayController& relayController_;
     BoardInputs& boardInputs_;     // opto inputs (gear switches + brake endstop)
     SpeedSensor& speedSensor_;     // hall speed sensor (updated from main.cpp)
+    EngineHourMeter engineHours_;  // OWNED by value: a counter, not a shared device
     CANController canController_;  // CAN bus controller (owned, not reference)
 
     // 24V boost rail state

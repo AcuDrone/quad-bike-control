@@ -111,6 +111,10 @@ void VehicleController::updateRailMonitor() {
     }
 }
 
+void VehicleController::initEngineHourMeter() {
+    engineHours_.begin();
+}
+
 bool VehicleController::initCAN() {
     Preferences prefs;
     if (prefs.begin("boost", true)) {
@@ -151,6 +155,14 @@ void VehicleController::update() {
     transData.sensorSpeedSuspicious = speedSensor_.isSuspicious();
     transmission_.setVehicleData(transData);
 
+    // Engine hour meter, from the SAME snapshot the transmission just got — no second
+    // getVehicleData() call, so the two consumers can never see different data in one
+    // iteration. An invalid CAN reading means the engine state is UNKNOWN, not "off": the
+    // interval is discarded rather than counted, because an unknown state must not invent
+    // hours. ENGINE_HOURS_MIN_RPM, not ENGINE_RUNNING_RPM_THRESHOLD — an hour meter must
+    // count idling, which the 1500 RPM gear-change safety threshold sits above.
+    engineHours_.update(canData.dataValid && canData.engineRPM >= ENGINE_HOURS_MIN_RPM, millis());
+
     // Update relay controller with engine RPM (for automatic cranking stop)
     relayController_.update(canData.engineRPM);
 
@@ -162,8 +174,15 @@ void VehicleController::update() {
     // Perform a latched trip reset. The transport validates and acknowledges the COMMAND_LONG
     // but never holds a SpeedSensor& — the vehicle layer owns the counters, so the request is
     // consumed here regardless of which input source is active.
+    //
+    // ONE gesture clears BOTH trip readings. The trip distance and the trip hours describe the
+    // same "since the operator last pressed reset" interval in two units, so a command that
+    // zeroed one and left the other would leave the pair permanently incomparable. This is the
+    // ONLY call site of EngineHourMeter::resetTrip(): there is no second command, no extra
+    // param1 magic and no web control — deliberately, so the two can never diverge.
     if (mavlink_.consumeTripResetRequest()) {
         speedSensor_.resetTrip();
+        engineHours_.resetTrip();   // TRIP hours only — the TOTAL hour meter is untouched
     }
 
     // Apply fail-safe if needed
@@ -378,9 +397,11 @@ void VehicleController::applyFailsafe() {
         brakeSensorTriggerTime_ = 0;  // Reset sensor trigger
         transmission_.stop();  // Stop transmission actuator
         relayController_.allOff();  // Turn off ignition and lights
-        // A fail-safe is a power-down in every respect that matters to the distance counters,
-        // so flush them once here — on entry only, guarded by !failsafeApplied_ above.
+        // A fail-safe is a power-down in every respect that matters to the persisted counters
+        // (distance and engine hours), so flush both once here — on entry only, guarded by
+        // !failsafeApplied_ above.
         speedSensor_.persistDistance();
+        engineHours_.persist();
         previousIgnitionState_ = MavlinkInterface::IgnitionState::OFF;  // Reset ignition tracking
         lastCommandedGear_ = TransmissionController::Gear::GEAR_UNKNOWN;  // Force re-eval on restore
         failsafeApplied_ = true;
@@ -431,10 +452,12 @@ void VehicleController::processMavlinkCommands() {
     switch (ignitionState) {
         case MavlinkInterface::IgnitionState::OFF:
             relayController_.setIgnitionState(RelayController::IgnitionState::OFF);
-            // Flush the distance counters on the TRANSITION into OFF only, so a normal shutdown
-            // loses nothing — not on every iteration OFF is merely being held.
+            // Flush the persisted counters (distance and engine hours) on the TRANSITION into
+            // OFF only, so a normal shutdown loses nothing — not on every iteration OFF is
+            // merely being held.
             if (previousIgnitionState_ != MavlinkInterface::IgnitionState::OFF) {
                 speedSensor_.persistDistance();
+                engineHours_.persist();
             }
             break;
         case MavlinkInterface::IgnitionState::ACC:
@@ -799,11 +822,13 @@ bool VehicleController::setIgnitionState(const String& state, String& errorMsg) 
         }
     }
 
-    // Flush the distance counters on the TRANSITION into OFF only — the web twin of the
-    // MAVLink ignition-OFF flush; re-selecting OFF while already OFF writes nothing.
+    // Flush the persisted counters (distance and engine hours) on the TRANSITION into OFF
+    // only — the web twin of the MAVLink ignition-OFF flush; re-selecting OFF while already
+    // OFF writes nothing.
     if (targetState == RelayController::IgnitionState::OFF &&
         currentState != RelayController::IgnitionState::OFF) {
         speedSensor_.persistDistance();
+        engineHours_.persist();
     }
 
     // Apply ignition state

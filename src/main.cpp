@@ -224,6 +224,9 @@ void setup() {
         Debug::println("[INIT] ERROR: Speed sensor PCNT init failed — speed stays invalid");
     }
 
+    // Restore the engine hour meter from NVS (must run after NVS is up, so not in a ctor)
+    vehicleController.initEngineHourMeter();
+
     // Initialize CAN controller
     if (!vehicleController.initCAN()) {
         Debug::printlnFeature(DebugFeature::CAN, "WARNING: CAN controller failed (will continue without vehicle data)");
@@ -300,6 +303,8 @@ void loop() {
     report.travelDirection  = vehicleController.getTravelDirection();  // PHYSICAL gear sign
     report.odoKm            = vehicleController.getOdoKm();       // total, never resettable
     report.tripKm           = vehicleController.getTripKm();      // resettable from the GCS
+    report.engineHours      = vehicleController.getEngineHours(); // total, no reset on any interface
+    report.engineTripHours  = vehicleController.getEngineTripHours(); // zeroed by the TRIP reset
     // Steering VESC telemetry (STEER_A / VESC_V / VESC_TEMP / VESC_OK named floats).
     // Gate: the DRIVER's own link health.
     const SteeringController& steering = vehicleController.getSteering();

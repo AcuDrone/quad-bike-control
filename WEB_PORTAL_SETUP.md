@@ -61,6 +61,7 @@ After the ESP32 boots:
 - S-bus status
 - Speed and speed limit
 - Odometer and trip distance (km)
+- Engine hours, total and trip (h)
 
 **Odometer / trip (read-only):** the speed card **displays** the total odometer (`odo_km`) and the
 trip distance (`trip_km`), both in km to 3 decimals and both shown whatever the sensor's health —
@@ -68,6 +69,14 @@ distance already driven is not invalidated by the sensor going quiet. The portal
 control**: clearing the trip is a **ground-station action only** (`MAV_CMD_USER_1`, see
 `MAVLINK_SETUP.md` → "Trip reset"), because the operator drives from the GCS and not from the
 vehicle's own WiFi. The odometer cannot be reset at all.
+
+**Engine hours (read-only):** the Vehicle Data (CAN) card **displays** the engine hour meter
+(`engine_hours`) in hours to 2 decimals, shown whatever the CAN status — accumulated running time is
+not invalidated by the bus going quiet, it merely stops growing — and the portal offers **no reset**,
+because the meter has no reset on any interface (see `MAVLINK_SETUP.md` → "Engine hours"). The trip
+hours ("мотогодини місії", `engine_trip_hours`) are displayed the same way directly beneath it, also
+read-only: they are zeroed by the **ground-station** trip reset, the same `MAV_CMD_USER_1` that
+clears the trip distance.
 
 **Speed limit (read-only):** the throttle limiter's ceiling comes **only** from the autopilot's
 `SPEED_MAX` parameter (`speed_limit_kmh` in telemetry; `0` / "none" means no limit). The web

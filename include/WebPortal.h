@@ -81,6 +81,8 @@ public:
         float speed_limit_ceil;   // Throttle ceiling the taper is applying (%, 100 = inactive)
         float odo_km;             // Total odometer (km) — always valid, NOT gated on speed_valid
         float trip_km;            // Resettable trip distance (km) — reset is a GCS action only
+        float engine_hours;       // Engine hour meter (h) — always valid, NOT gated on can_status
+        float engine_trip_hours;  // Trip engine hours (h) — same, zeroed by the GCS trip reset
 
         // CAN bus vehicle data
         uint16_t engine_rpm;      // Engine RPM (0-16383)

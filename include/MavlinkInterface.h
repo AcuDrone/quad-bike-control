@@ -108,6 +108,11 @@ public:
                                       // already driven depends on neither CAN health nor the
                                       // current speed reading's validity
         float       tripKm;           // resettable TRIP distance, km — always valid, never NaN
+        float       engineHours;      // total ENGINE HOUR METER, h — ALWAYS valid, never NaN:
+                                      // accumulated running time is history. While CAN is invalid
+                                      // it STOPS GROWING rather than going unknown.
+        float       engineTripHours;  // resettable TRIP engine hours, h — always valid, never NaN;
+                                      // 0 is a GENUINE zero after a trip reset, not "unknown"
 
         // --- Steering VESC driver telemetry (STEER_A / VESC_V / VESC_TEMP / VESC_OK) ----
         // Gated by the STEERING DRIVER's own link health (steerDriverOk), which is entirely
