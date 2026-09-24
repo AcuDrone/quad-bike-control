@@ -4,8 +4,13 @@
 #include <Arduino.h>
 
 // ============================================================================
-// GPIO PIN ASSIGNMENTS
+// GPIO PIN ASSIGNMENTS — hand-wired ESP32-S3-DevKitC-1
 // ============================================================================
+//
+// WIRING AUTHORITY: GPIO_PINOUT_S3.md. Relays are driven straight from GPIO,
+// gear switches and the brake limit sensor are read straight with digitalRead()
+// — there are no I2C port expanders and no 24V boost rail on this board.
+// The debug console is UART0 (GPIO43/44) via the DevKit's USB-UART bridge.
 
 // MAVLink telemetry link (UART to Pixhawk TELEM2)
 #define PIN_MAVLINK_RX      GPIO_NUM_8   // UART1 RX (non-inverted)
@@ -19,11 +24,9 @@
 // Steering Actuator — driven by a Flipsky 75200 VESC over UART2 (brushed-DC mode).
 // See "VESC STEERING DRIVER CONFIGURATION" below.
 //
-// RESERVED / FREED: the former BTS7960 steering PWM pins (GPIO17/18) and their
-// LEDC channels (6/7) are freed by this change and left reserved — NOT reused —
-// so the wiring change stays localized and the freed channels remain available.
-#define PIN_STEER_RPWM      GPIO_NUM_17   // RESERVED/FREED (was steering RPWM, LEDC ch6)
-#define PIN_STEER_LPWM      GPIO_NUM_18   // RESERVED/FREED (was steering LPWM, LEDC ch7)
+// The former BTS7960 steering PWM pins (GPIO17/18) and their LEDC channels (6/7)
+// were freed when the BTS7960 driver was removed. GPIO17 is now the hall speed
+// sensor input; GPIO18 and LEDC channels 6/7 stay reserved/free.
 #define LEDC_CH_STEER_RPWM  6             // RESERVED/FREED
 #define LEDC_CH_STEER_LPWM  7             // RESERVED/FREED
 
@@ -34,8 +37,13 @@
 #define VESC_UART_BAUD      115200        // VESC app default baud
 
 // Steering Position Sensor (AS5600 absolute magnetic angle sensor, I2C addr 0x36)
+// The only device on "Wire"; the bus is opened once in main.cpp and no driver
+// may re-open it with different parameters.
 #define PIN_STEER_SDA       GPIO_NUM_41   // I2C SDA
 #define PIN_STEER_SCL       GPIO_NUM_42   // I2C SCL
+// The AS5600 sits at the end of a long cable run to the steering column, so
+// signal integrity wins over speed: 100 kHz. 400 kHz was tried and rejected.
+#define I2C_BUS_FREQ_HZ     100000       // "Wire" bus speed (see note above)
 
 // Throttle Servo (PWM via LEDC)
 #define PIN_THROTTLE_PWM    GPIO_NUM_3   // LEDC Channel 1
@@ -48,33 +56,65 @@
 #define LEDC_CH_BRAKE_RPWM  4
 #define LEDC_CH_BRAKE_LPWM  5
 
-// ============================================================================
-// FUTURE EXPANSION - RESERVED GPIO PINS
-// ============================================================================
-
-// SPI CAN Controller (for vehicle CAN bus communication)
-#define PIN_CAN_MOSI        GPIO_NUM_11   // SPI MOSI
-#define PIN_CAN_MISO        GPIO_NUM_13   // SPI MISO
+// SPI CAN Controller (MCP2515 + transceiver, 8 MHz crystal → MCP_8MHZ)
+#define PIN_CAN_MOSI        GPIO_NUM_11  // SPI MOSI
+#define PIN_CAN_MISO        GPIO_NUM_13  // SPI MISO
 #define PIN_CAN_SCK         GPIO_NUM_12  // SPI SCK
 #define PIN_CAN_CS          GPIO_NUM_10  // SPI Chip Select
 
+// Relays — driven directly from GPIO (active HIGH), no port expander
 #define PIN_RELAY1      GPIO_NUM_36
 #define PIN_RELAY2      GPIO_NUM_37
 #define PIN_RELAY3      GPIO_NUM_38
 #define PIN_WHEEL_LOCK  GPIO_NUM_39   // Relay 4 — front-wheel lock (also JTAG MTCK; JTAG unused here)
 
+// Gear position switches and brake limit sensor — direct inputs with INPUT_PULLUP
 #define PIN_GEAR_REVERSE  GPIO_NUM_19
 #define PIN_GEAR_NEUTRAL  GPIO_NUM_20
 #define PIN_GEAR_LOW      GPIO_NUM_21
 #define PIN_GEAR_HIGH     GPIO_NUM_47
 #define PIN_BRAKE_SENSOR  GPIO_NUM_14
 
-///////
+// Driveline speed sensor (hall) pulse input, PCNT counted.
+// Freed when the BTS7960 steering driver was removed (was PIN_STEER_RPWM).
+// ⚠ Hall speed sensor, direct input (no opto isolation on the DevKit) — wiring to
+// be confirmed on the bench. A 12V sensor needs level shifting before this pin.
+#define PIN_SPEED_SENSOR    GPIO_NUM_17
+// GPIO18 (former PIN_STEER_LPWM) stays RESERVED/FREE.
 
 // Cranking Parameters
 #define CRANKING_TIMEOUT           2000  // ms - maximum cranking duration
 #define ACC_PRECRANK_DWELL_MS      2000  // ms - ignition/ECU line (R1) must be powered this long before the starter (R2) engages
 #define ENGINE_RUNNING_RPM_THRESHOLD 1500  // RPM - engine considered running above this
+
+// ----------------------------------------------------------------------------
+// ENGINE HOUR METER ("мотогодини") — NVS namespace "engine", key "hours_s"
+// ----------------------------------------------------------------------------
+// Deliberately NOT ENGINE_RUNNING_RPM_THRESHOLD (1500). That one is a gear-change /
+// crank-interlock SAFETY threshold, chosen to sit safely ABOVE idle; an hour meter
+// built on it would refuse to count idling, which is exactly the running time an
+// hour meter exists to record. Nothing in this repo documents this engine's idle
+// RPM, so the floor rests on a physical argument instead: a starter cranks at
+// ~200-300 RPM and a petrol engine idles at 800-1500, so anything above ~300 means
+// the crank is turning under its own power or under the starter — both are running
+// time. Below it, "ignition on, engine stopped" (CAN valid, rpm 0) counts nothing.
+#define ENGINE_HOURS_MIN_RPM          300    // RPM - at or above this the crank is turning
+
+// Single-update cap. The main loop is cooperative and non-blocking, so a delta of
+// even 200 ms is already unusual; 5 s is an order of magnitude above anything the
+// loop legitimately does. A longer delta is a symptom (a stall, a long flash
+// operation, a debugger halt), not attested running time, and is DISCARDED whole —
+// at most this much real running time is lost per stall event.
+#define ENGINE_HOURS_MAX_DELTA_MS     5000   // ms - a longer single update adds nothing
+
+// Hour-meter persistence interval, in ACCUMULATED seconds of growth (not wall clock:
+// a parked vehicle with the controller powered writes nothing). Plus one write on every
+// ignition-OFF transition and on fail-safe entry, which makes a normal shutdown lossless
+// and bounds a power-cut loss to 10 minutes. The budget: NVS is wear-levelled and
+// log-structured, so ~126 writes of the one uint64 key fill a 4096-byte page and cost
+// one erase — 6 writes per engine-hour means ≈480 erases over 10 000 engine hours,
+// ≈0.48 % of the flash's ~100 000-cycle endurance. A quad engine is rebuilt long before.
+#define ENGINE_HOURS_NVS_WRITE_INTERVAL_S  600ULL  // s of accumulated growth between NVS writes
 
 // ============================================================================
 // MAVLINK / COMMAND CHANNEL CONFIGURATION
@@ -100,15 +140,51 @@ struct ServoChannelConfig {
 #define MAVLINK_HEARTBEAT_TIMEOUT_MS  3000   // ms without an autopilot heartbeat before link is "down"
 #define MAVLINK_HEARTBEAT_TX_MS       1000   // ms between outbound HEARTBEAT messages (1 Hz)
 #define MAVLINK_REPORT_TX_MS          200    // ms between outbound engine/state reports (5 Hz)
+#define MAVLINK_STEER_SLOW_TX_MS      1000   // ms between the SLOW steering-VESC named floats
+                                             // (VESC_TEMP, VESC_OK) — 1 Hz. The other three
+                                             // (STEER_POS, STEER_A, VESC_V) ride the
+                                             // MAVLINK_REPORT_TX_MS tick at 5 Hz
 #define MAVLINK_STATUSTEXT_MIN_MS     250    // ms minimum spacing between STATUSTEXT messages
+
+// Autopilot parameter subscription (READ-ONLY — the firmware never sends PARAM_SET).
+// Exactly one parameter is subscribed: ArduPilot's SPEED_MAX (m/s) — the ONLY source of the
+// firmware's max-speed limiter ceiling. Both an unsolicited PARAM_VALUE and a periodic
+// PARAM_REQUEST_READ are honored: ArduPilot's broadcast-on-set behaviour is version- and
+// routing-dependent, so the POLL is the change detector and the broadcast only makes it sooner.
+#define MAVLINK_PARAM_SPEED_MAX_ID    "SPEED_MAX"  // ArduPilot cruise-speed ceiling (m/s); 0 = "no limit"
+#define MAVLINK_PARAM_SPEED_MAX_MS    30.0f  // m/s — ArduPilot's own range bound; above this → rejected
+#define MAVLINK_PARAM_POLL_MS         5000   // ms between PARAM_REQUEST_READ polls (never stops)
+#define MAVLINK_PARAM_FIRST_DELAY_MS  1000   // ms after the autopilot is learned before the first request
+#define MAVLINK_PARAM_STALE_MS        16000  // ms without a PARAM_VALUE before the value is unusable (~3 polls)
+#define MAVLINK_PARAM_EPSILON_MS      0.005f // m/s — smaller differences are "unchanged" (never compare floats with ==)
+
+// Inbound COMMAND_LONG handling. The only command implemented is a trip reset, carried as
+// MAV_CMD_USER_1 with a magic param1 so that a stray, replayed or mis-scripted MAV_CMD_USER_1
+// cannot silently destroy the operator's trip reading.
+#define MAVLINK_CMD_TRIP_RESET_MAGIC  1.0f   // param1 magic for MAV_CMD_USER_1 (trip reset)
+#define MAVLINK_CMD_PARAM_EPSILON     0.01f  // param1 match tolerance (never compare floats with ==)
+
+// Body-frame wheel odometry (VISION_POSITION_DELTA — wheel speed into the autopilot's EKF3).
+// The delta is measured along the vehicle's OWN longitudinal axis, so no heading is needed and
+// nothing inbound is subscribed: EKF3 rotates it with its own attitude. VISION_SPEED_ESTIMATE
+// (earth-frame) was falsified on the 2026-08-21 bench — see
+// openspec/changes/add-extnav-velocity/design.md.
+#define MAVLINK_VISO_ENABLED           1     // compile-time switch; runtime switch is the autopilot's VISO_TYPE
+#define MAVLINK_VISO_CONFIDENCE        100.0f  // 0-100 quality → EKF3 velErr = EK3_VIS_VERR_MIN..MAX; 100 picks
+                                             // the MIN end (0.1 m/s default), well under the 1.0 aiding gate
+#define MAVLINK_VISO_MAX_DT_US         1000000 // µs: a longer gap since the last send is treated as a break —
+                                             // re-baseline (skip one interval) rather than integrate a stale dt
+#define MAVLINK_VISO_NEUTRAL_ZERO_MS   0.14f // m/s — in NEUTRAL only readings below this are sent (as a
+                                             // zero-motion update); above it the direction sign is
+                                             // unrecoverable → stay silent
 
 // ESP32 MAVLink identity (distinct component on the vehicle's system)
 #define MAVLINK_SYSTEM_ID             1      // Same system as the autopilot
 #define MAVLINK_COMPONENT_ID          25     // MAV_COMP_ID_USER1 (peripheral component)
 
 // Command channel value range (microseconds) — SERVO_OUTPUT_RAW carries µs directly
-#define RC_US_MIN     1000   // Minimum command microseconds
-#define RC_US_MAX     2000   // Maximum command microseconds
+#define RC_US_MIN     1100   // Minimum command microseconds
+#define RC_US_MAX     1900   // Maximum command microseconds
 #define RC_US_CENTER  1500   // Center point (split between throttle and brake)
 
 // Deadband Configuration
@@ -183,12 +259,13 @@ struct ServoChannelConfig {
 // Re-command guard + stall latch (MAVLink streams steering at ~25 Hz; without
 // these the stall/move timers never elapse — the fixed re-command bug).
 #define STEER_RETARGET_TOLERANCE  10    // AS5600 counts — re-command within this of the current target is a no-op (timers keep running)
-#define STEER_STALL_COOLDOWN_MS   1500  // ms — same-direction moves refused after a stall; opposite direction always allowed
+#define STEER_STALL_COOLDOWN_MS   700   // ms — same-direction moves refused after a stall; opposite direction always allowed
 
 // VESC steering driver telemetry monitor + failsafe
+// (Over-current is left to the VESC itself: Motor Current Max clamp, Absolute Max
+//  Current fault — surfaced here as a fault code — and MOSFET temperature limiting.
+//  Mechanical jams are caught by the AS5600 stall detector, STEER_STALL_TIMEOUT.)
 #define STEER_VESC_TELEM_MS         300   // ms — COMM_GET_VALUES poll period (~3 Hz)
-#define STEER_VESC_OVERCURRENT_A    18.0f // A — motor current above this (sustained) trips a stall-stop (below the VESC hardware limit)
-#define STEER_VESC_OVERCURRENT_MS   400   // ms — over-current must persist this long before tripping
 #define STEER_VESC_COMM_TIMEOUT_MS  1000  // ms — no valid GET_VALUES reply for this long -> driver fault (stop, reject moves)
 
 // Throttle Servo Parameters
@@ -237,7 +314,7 @@ struct ServoChannelConfig {
 #define TRANS_GEAR_DEFAULT_HIGH_PCT         58.0f
 
 // Safety limits
-#define TRANS_UNKNOWN_GEAR_THROTTLE_MAX     (float)5   // % - max throttle when physical gear UNKNOWN
+#define TRANS_UNKNOWN_GEAR_THROTTLE_MAX     (float)8.5   // % - max throttle when physical gear UNKNOWN
 #define TRANS_GEAR_CHECK_INTERVAL           500        // ms - physical gear verification period
 #define TRANS_GEAR_READ_INTERVAL_MS         100        // ms - GPIO debounce cache for getPhysicalGear()
 #define TRANS_GEAR_READ_RETRY_COUNT         3          // extra reads when all switches read inactive while servo is idle
@@ -253,9 +330,84 @@ struct ServoChannelConfig {
 #define BRAKE_HOLD_SPEED          30    // PWM (0-255) applied against spring return when at target position
 
 // ============================================================================
+// VEHICLE SPEED SENSOR (12V toothed-ring pickup, PCNT on PIN_SPEED_SENSOR)
+// ============================================================================
+
+// Sampling / signal conditioning
+#define SPEED_SAMPLE_INTERVAL_MS      200    // ms between PCNT samples (5 Hz, matches telemetry)
+// No edges for this long => the reported speed decays to 0 m/s. With the measured
+// calibration one pulse at ~1 km/h takes only ~0.10 s (28.8 mm/pulse ÷ 278 mm/s), so
+// 2 s keeps a wide margin: it only trips on a genuinely stopped or disconnected sensor,
+// never on a crawling vehicle.
+#define SPEED_STALE_TIMEOUT_MS        2000   // ms
+// PCNT hardware glitch filter. Highest expected pulse rate with the measured calibration
+// is ≈960 Hz at 100 km/h (period ~1.04 ms), so a 1 µs filter rejects harness noise while
+// consuming <0.2% of the shortest half-period. Hardware ceiling is ~12.7 µs (1023 APB cycles).
+#define SPEED_GLITCH_FILTER_NS        1000   // ns
+// PCNT counter limits. The hardware zeroes the counter at these watch points and the
+// unit accumulates the overflow itself (accum_count), so update() polls a running total.
+#define SPEED_PCNT_HIGH_LIMIT         10000
+#define SPEED_PCNT_LOW_LIMIT          (-1)
+#define SPEED_MAX_PULSES_PER_SAMPLE   20000  // pulses per sample above which the reading is a counter glitch, not motion
+
+// Odometer / trip persistence interval (NVS namespace "speed", keys "odo_mm" / "trip_mm").
+// The counters are flushed every kilometre of odometer growth, plus once on every ignition-OFF
+// transition. That bounds the loss from a power cut to one kilometre while keeping the write
+// budget negligible: NVS is wear-levelled and log-structured, so ~63 writes of the two uint64
+// keys fill a 4096-byte page and cost one erase — ≈160 erases over 10 000 km, ≈0.16 % of the
+// flash's ~100 000-cycle endurance.
+#define ODO_NVS_WRITE_INTERVAL_MM     1000000ULL  // mm (1 km) of ODO growth between NVS writes
+
+// Calibration defaults (NVS namespace "speed", keys "ppr" / "circ_mm"), both
+// bench-measured on the vehicle and both settable at runtime from the web UI
+// (speed_cal_ppr / speed_cal_circ) — no reflash needed to change them.
+// The fitted pickup reads a 70-tooth ring, NOT discrete magnets.
+#define SPEED_DEFAULT_PULSES_PER_REV       70      // pulses per wheel revolution (toothed ring)
+#define SPEED_DEFAULT_WHEEL_CIRCUMFERENCE_MM 1990.0f  // mm (25" ATV tyre, measured roll-out)
+
+// Accepted calibration ranges (web command validation)
+#define SPEED_PPR_MIN                 1
+#define SPEED_PPR_MAX                 1000
+#define SPEED_CIRC_MIN_MM             100.0f
+#define SPEED_CIRC_MAX_MM             10000.0f
+
+// Health heuristic: the fingerprint of a mid-motion wire fault is pulses ceasing
+// faster than the vehicle could physically have stopped. If the last observed speed
+// would need more than the stale timeout to bleed off at this deceleration, the
+// silence is implausible and the reading is latched suspicious (isValid() false)
+// until pulses resume. A normal stop decelerates through the samples instead.
+#define SPEED_MAX_PLAUSIBLE_DECEL_MS2    2.2f   // m/s² (≈8 km/h per second)
+
+// Maximum-speed throttle limiter. The ceiling has exactly ONE source: the autopilot's SPEED_MAX
+// parameter (m/s), held in RAM only. There is no local ceiling, no NVS key and no master switch —
+// the limiter is always armed, and "no usable SPEED_MAX" (link down, stale, never received) or
+// SPEED_MAX = 0 simply means NO LIMITING, exactly as ArduPilot itself reads a zero.
+#define SPEED_LIMIT_WARN_MS           5000   // ms between "limiter armed but speed invalid" warnings
+
+// Proportional taper. Authority is withdrawn GRADUALLY as the ceiling is approached rather than
+// in one step at the limit: a step lurches a heavy vehicle, invites hunting around the threshold,
+// and does both exactly where it hurts most — mid-corner.
+#define SPEED_LIMIT_TAPER_BAND_MS      1.4f   // m/s (≈5 km/h) - the ceiling starts falling this far BELOW
+                                              // the limit
+#define SPEED_LIMIT_FLOOR_PCT          10.0f  // % - throttle ceiling at/above the limit; never a hard cut
+#define SPEED_LIMIT_CEILING_SLEW_PCT_S 200.0f // %/s - max ceiling movement (both directions) — no servo snap.
+                                              // Applied to the CEILING, not the demand: the driver's own
+                                              // stick moves are never slowed by the limiter.
+#define SPEED_LIMIT_LOG_MIN_MS         1000   // ms hold-off between "speed limit" logs
+#define SPEED_LIMIT_LOG_EPSILON_MS     0.015f // m/s (≈0.05 km/h) - smaller ceiling moves are not worth a log
+
+// PRESENTATION ONLY. Every speed inside the firmware is m/s; this exists solely for the web JSON
+// and human-readable debug strings, and must never appear in a control-path computation.
+#define MS_TO_KMH                      3.6f
+
+// ============================================================================
 // SERIAL DEBUG
 // ============================================================================
 
+// The console is UART0 (GPIO43 TX / GPIO44 RX) through the DevKit's on-board
+// USB-UART bridge — the "COM" port. The native USB CDC console must NOT be enabled
+// on this board: its D-/D+ pins (GPIO19/20) carry the R/N gear switches.
+// The firmware never waits for a host.
 #define SERIAL_BAUD_RATE      115200 // Serial monitor baud rate
 #define DEBUG_ENABLED         true   // Default debug output state (runtime-toggleable via Debug utility or web portal)
 
@@ -324,12 +476,31 @@ enum class InputSource {
 #define CAN_DATA_STALE_TIMEOUT    5000  // ms - Mark data invalid if not updated
 #define CAN_RETRY_ATTEMPTS        3     // Number of retry attempts on error
 
+// CAN Diagnostics / Recovery (bring-up aids, all non-blocking)
+#define CAN_MAX_CONSEC_SEND_FAILURES 3     // Consecutive sendMsgBuf() failures before abortTX()
+#define CAN_RX_LOG_INTERVAL          1000  // ms - rate limit for unmatched-RX-frame logging
+#define CAN_HEALTH_LOG_INTERVAL      5000  // ms - rate limit for TEC/REC/EFLG health logging
+#define CAN_OVERFLOW_LOG_INTERVAL    5000  // ms - rate limit for RXnOVR overflow logging
+#define CAN_REINIT_NO_DATA_MS        15000 // ms - full chip re-init when polling but no valid OBD response for this long (heals a wedged TX / latched ABAT once the ECU powers up)
+#define CAN_REINIT_MIN_INTERVAL_MS   15000 // ms - minimum spacing between forced re-inits
+
+// MCP2515 hardware acceptance filtering (standard 11-bit IDs only).
+// The ECU floods the bus with broadcast frames (Delphi MT05 sends 0x301 etc.) which
+// overrun the two RX buffers faster than the loop can drain them. Accept only the
+// OBD-II response window 0x7E8-0x7EF: (id & 0x7F8) == 0x7E8.
+// The coryjfowler MCP_CAN library expects standard mask/filter IDs shifted left by 16
+// (mcp2515_write_mf() takes bits 26:16 as the 11-bit ID when ext == 0).
+#define CAN_RX_ID_MASK            0x7F8   // 11-bit acceptance mask (care bits 10:3)
+#define CAN_RX_ID_FILTER          0x7E8   // 11-bit acceptance filter (OBD-II ECU responses)
+#define CAN_RX_ID_MASK_REG   (((uint32_t)CAN_RX_ID_MASK) << 16)    // 0x07F80000
+#define CAN_RX_ID_FILTER_REG (((uint32_t)CAN_RX_ID_FILTER) << 16)  // 0x07E80000
+
 // ECU Capability Probe (on-demand diagnostic sweep)
 #define CAN_PROBE_RETRY_ATTEMPTS  1     // Retries per probe request (keeps worst-case sweep duration bounded)
 #define PROBE_RESULT_TTL          8000  // ms - window during which completed probe results are embedded in telemetry
 
 // Transmission Safety (CAN-based)
-#define TRANS_SPEED_INTERLOCK_THRESHOLD  5     // km/h - Block gear changes above this speed
+#define TRANS_SPEED_INTERLOCK_THRESHOLD_MS  1.4f  // m/s (≈5 km/h) - Block gear changes above this speed
 #define TRANS_CAN_TIMEOUT                5000  // ms - Allow gear change if CAN fails this long
 
 // PID-Controlled RPM Boost During Gear Changes

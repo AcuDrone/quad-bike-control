@@ -69,24 +69,46 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.mav_active = mavlink_.isSignalValid();
     telemetry.web_control = vehicleController_.isWebControl();
 
+    // Hall speed sensor — populated independently of CAN validity
+    // m/s here as everywhere inside the firmware; WebPortal converts to km/h for the UI.
+    telemetry.vehicle_speed_ms = vehicleController_.getVehicleSpeedMs();
+    telemetry.speed_valid = vehicleController_.isVehicleSpeedValid();
+    telemetry.speed_ppr = vehicleController_.getSpeedPulsesPerRev();
+    telemetry.speed_circ_mm = vehicleController_.getSpeedWheelCircumferenceMm();
+    // Distance counters — the exact millimetre counters scaled to km at this point, not a
+    // separately maintained total. Never gated: distance already driven stays true.
+    telemetry.odo_km = vehicleController_.getOdoKm();
+    telemetry.trip_km = vehicleController_.getTripKm();
+    // Engine hour meter — the exact second counter scaled to hours at this point, not a
+    // separately maintained total. Never gated: time already run stays true.
+    telemetry.engine_hours = vehicleController_.getEngineHours();
+    telemetry.engine_trip_hours = vehicleController_.getEngineTripHours();
+    // The one and only ceiling: the autopilot's SPEED_MAX. 0 means no limit.
+    telemetry.speed_limit_ms = vehicleController_.getSpeedLimitMs();
+    telemetry.speed_limit_ceil = vehicleController_.getSpeedLimitCeilingPct();
+
     CANController::VehicleData vehicleData = vehicleController_.getVehicleData();
     if (vehicleData.dataValid) {
         telemetry.engine_rpm = vehicleData.engineRPM;
-        telemetry.vehicle_speed = vehicleData.vehicleSpeed;
         telemetry.coolant_temp = vehicleData.coolantTemp;
         telemetry.oil_temp = vehicleData.oilTemp;
         telemetry.throttle_position = vehicleData.throttlePosition;
         telemetry.fuel_level = vehicleData.fuelLevel;
         telemetry.map_kpa = vehicleData.mapKpa;
+        telemetry.module_voltage_mv = vehicleData.moduleVoltageMv;
+        telemetry.intake_temp = vehicleData.intakeTemp;
+        telemetry.engine_load = vehicleData.engineLoad;
         telemetry.can_status = "connected";
     } else {
         telemetry.engine_rpm = 0;
-        telemetry.vehicle_speed = 0;
         telemetry.coolant_temp = 0;
         telemetry.oil_temp = 0;
         telemetry.throttle_position = 0;
         telemetry.fuel_level = 0;
         telemetry.map_kpa = 0;
+        telemetry.module_voltage_mv = 0;
+        telemetry.intake_temp = 0;
+        telemetry.engine_load = 0;
         telemetry.can_status = "disconnected";
     }
 

@@ -9,9 +9,12 @@
  * @brief Vehicle data structure for transmission safety checks
  */
 struct TransmissionVehicleData {
-    uint8_t vehicleSpeed;       // km/h (0-255)
+    uint8_t vehicleSpeed;       // km/h (0-255) — CAN-sourced; dead (OBD-II PID 0x0D is disabled)
     uint32_t lastUpdateTime;    // millis() timestamp
     bool dataValid;             // true if CAN communication is healthy
+    float sensorSpeedMs;        // hall speed sensor reading (m/s) — the live speed source
+    bool sensorSpeedValid;      // hall sensor health; false means "speed unknown", NOT "stopped"
+    bool sensorSpeedSuspicious; // latched implausible pulse loss; reading is a decaying upper bound
 };
 
 /**
@@ -87,7 +90,11 @@ public:
     void initGearSensors();
 
     /**
-     * @brief Read physical gear from hall-effect switches
+     * @brief Read the physical gear from the hall-effect switches (direct GPIO).
+     *
+     * Cached for `TRANS_GEAR_READ_INTERVAL_MS`. An ambiguous reading (none or more
+     * than one switch asserted) while the servo is idle is re-read up to
+     * `TRANS_GEAR_READ_RETRY_COUNT` times to filter transient bounces.
      */
     Gear getPhysicalGear() const;
 

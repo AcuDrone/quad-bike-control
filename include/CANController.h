@@ -25,6 +25,9 @@ public:
         uint8_t throttlePosition;   // % (0-100)
         uint8_t fuelLevel;          // % (0-100)
         uint8_t mapKpa;             // Manifold absolute pressure, kPa absolute (0-255)
+        uint16_t moduleVoltageMv;   // Control module supply voltage, mV (raw (A*256)+B is already mV)
+        int8_t intakeTemp;          // Intake air temperature °C (-40 to +215)
+        uint8_t engineLoad;         // Calculated engine load % (0-100)
         uint32_t lastUpdateTime;    // millis() timestamp of last successful update
         bool dataValid;             // true if CAN communication is healthy
     };
@@ -154,7 +157,7 @@ private:
         uint8_t retryCount;
     };
 
-    static constexpr uint8_t PID_COUNT = 4;
+    static constexpr uint8_t PID_COUNT = 7;
 
     // OBD-II PIDs (Mode 01 - Current Data)
     static constexpr uint8_t PID_ENGINE_RPM = 0x0C;
@@ -163,11 +166,23 @@ private:
     // static constexpr uint8_t PID_OIL_TEMP = 0x5C;
     static constexpr uint8_t PID_THROTTLE_POS = 0x11;
     static constexpr uint8_t PID_MAP = 0x0B;
+    static constexpr uint8_t PID_MODULE_VOLTAGE = 0x42;
+    static constexpr uint8_t PID_INTAKE_TEMP = 0x0F;
+    static constexpr uint8_t PID_ENGINE_LOAD = 0x04;
     // static constexpr uint8_t PID_FUEL_LEVEL = 0x2F;
 
     MCP_CAN* mcp_can_;              // MCP2515 CAN controller object
     VehicleData vehicleData_;       // Current vehicle data
     bool initialized_;              // Initialization status
+    gpio_num_t csPin_;              // MCP2515 chip-select (raw register access, see readRegister())
+
+    // ---- Diagnostics / recovery state ---------------------------------------
+    uint8_t consecutiveSendFailures_; // sendMsgBuf() failures since the last successful send
+    uint32_t lastRxLogTime_;          // millis() of the last unmatched-frame log (rate limit)
+    uint32_t lastHealthLogTime_;      // millis() of the last TEC/REC/EFLG health log (rate limit)
+    uint32_t lastOverflowLogTime_;    // millis() of the last RXnOVR log (rate limit)
+    uint32_t rxOverflowSuppressed_;   // RXnOVR clears since the last overflow log line
+    uint32_t lastReinitTime_;         // millis() of the last forced re-init (also the boot reference before any response)
 
     // State machine
     OBDState state_;
@@ -201,6 +216,36 @@ private:
     int8_t selectNextPID();
     void parseAndStore(uint8_t index, const uint8_t* data, uint8_t len);
     bool isDataStale() const;
+
+    // ---- Diagnostics / recovery helpers --------------------------------------
+    // Raw MCP2515 register access. The vendored coryjfowler library keeps
+    // mcp2515_readRegister()/mcp2515_modifyRegister() private and exposes no
+    // getMode()/clearRXnOVR(), so mode readback and EFLG overflow clearing are
+    // done here over the same SPI bus/settings the library uses (10 MHz, MODE0).
+    uint8_t readRegister(uint8_t address) const;
+    void modifyRegister(uint8_t address, uint8_t mask, uint8_t data) const;
+
+    // Re-initialize the MCP2515 after a bus-off condition (shared by the send-failure
+    // and response-timeout paths). Non-blocking apart from the library's own SPI waits.
+    void recoverFromBusOff();
+
+    // Rate-limited (~1/s) dump of a received frame that did not match the expected response
+    void logUnmatchedFrame(unsigned long canId, uint8_t len, const uint8_t* buf);
+
+    // Rate-limited (~5 s, only while dataValid == false) TEC/REC/EFLG health line
+    void logHealth();
+
+    // Clear MCP_EFLG_RX0OVR/RX1OVR if set, logging at most once per CAN_OVERFLOW_LOG_INTERVAL
+    void checkRxOverflow();
+
+    // Program the MCP2515 masks/filters so only standard IDs 0x7E8-0x7EF reach the RX
+    // buffers. Must run after begin() and before setMode(MCP_NORMAL) — init_Mask()/
+    // init_Filt() drop the chip into CONFIG mode and restore the library's cached mode.
+    bool applyRxFilters();
+
+    // While IDLE: pull any queued frames out of the MCP2515 RX buffers so they
+    // never sit full between polls; unmatched frames go through logUnmatchedFrame()
+    void drainRxBuffers();
 
     // Probe sequencer helpers
     void updateProbe();

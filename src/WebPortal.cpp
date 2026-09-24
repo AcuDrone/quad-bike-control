@@ -536,46 +536,17 @@ bool WebPortal::parseWebCommand(uint8_t* data, size_t len) {
     return true;
 }
 
-bool WebPortal::validateCommand(const WebCommand& cmd, InputSource inputSource) {
-    // Only allow web commands when input source is WEB (not MAVLINK or FAILSAFE)
-    if (inputSource != InputSource::WEB) {
-        return false;
-    }
-
-    // Validate command type
-    if (cmd.cmd != "set_gear" && cmd.cmd != "set_steering" && cmd.cmd != "set_throttle") {
-        return false;
-    }
-
-    // Validate ranges
-    if (cmd.cmd == "set_steering") {
-        if (cmd.floatValue < -100.0f || cmd.floatValue > 100.0f) {
-            return false;
-        }
-    } else if (cmd.cmd == "set_throttle") {
-        if (cmd.floatValue < 0.0f || cmd.floatValue > 100.0f) {
-            return false;
-        }
-    } else if (cmd.cmd == "set_gear") {
-        if (cmd.strValue != "R" && cmd.strValue != "N" &&
-            cmd.strValue != "L" && cmd.strValue != "H") {
-            return false;
-        }
-    }
-
-    return true;
-}
-
 // ============================================================================
 // PRIVATE METHODS - JSON FORMATTING
 // ============================================================================
 
 String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
-    // Capacity headroom: ~38 top-level fields (incl. 4 steering-VESC fields) + a
-    // 16-element array + a 4-member object, plus copied String values. Sized to
-    // 3584 to leave room for the transient `probe` object (only present while
-    // probe results are fresh; steady-state wire size is unchanged).
-    StaticJsonDocument<3584> doc;
+    // Capacity headroom: 56 top-level fields (incl. 4 steering-VESC fields, the
+    // 5 rail / board-I/O fields and the 12 hall-speed / limiter / distance fields) + a 16-element
+    // array + the nested probe / po / bm / dtc / gearDefaults objects, plus copied String values.
+    // Sized to 4096 to leave room for the transient `probe` object (only present while probe
+    // results are fresh).
+    StaticJsonDocument<4096> doc;
 
     doc["timestamp"] = telemetry.timestamp;
     doc["gear"] = telemetry.gear;
@@ -600,15 +571,44 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["mav_active"] = telemetry.mav_active;
     doc["web_control"] = telemetry.web_control;
 
+    // Hall speed sensor — deliberately OUTSIDE the CAN-connected block: speed is a
+    // separate physical source with its own health, so it must display whenever the
+    // sensor is live regardless of `can_status`.
+    // THE PRESENTATION EDGE: the firmware carries m/s, the UI speaks km/h. These two
+    // multiplications are the only place a road speed changes unit on the way out.
+    doc["vehicle_speed"] = serialized(String(telemetry.vehicle_speed_ms * MS_TO_KMH, 1));
+    doc["speed_valid"] = telemetry.speed_valid;
+    doc["speed_ppr"] = telemetry.speed_ppr;
+    doc["speed_circ_mm"] = serialized(String(telemetry.speed_circ_mm, 0));
+    // The enforced ceiling, from the autopilot's SPEED_MAX alone. 0 = no limit.
+    doc["speed_limit_kmh"] = serialized(String(telemetry.speed_limit_ms * MS_TO_KMH, 1));
+    doc["speed_limit_ceil"] = serialized(String(telemetry.speed_limit_ceil, 0));
+    // Distance counters, in km to 3 decimals. Emitted UNCONDITIONALLY — independent of CAN
+    // status, MAVLink status and speed_valid: a recorded distance is not invalidated by a bus
+    // going quiet or by the sensor going unhealthy. Display only; there is no reset command.
+    // serialized() bypasses ArduinoJson's own NaN handling, so a non-finite float would emit a
+    // bare `nan` token and break the WHOLE document for the browser's JSON.parse — the counters
+    // are integers scaled by 1e-6 and cannot be non-finite, but the guard costs nothing.
+    doc["odo_km"] = serialized(String(isfinite(telemetry.odo_km) ? telemetry.odo_km : 0.0f, 3));
+    doc["trip_km"] = serialized(String(isfinite(telemetry.trip_km) ? telemetry.trip_km : 0.0f, 3));
+    // Engine hour meter, in hours to 2 decimals. Emitted UNCONDITIONALLY and deliberately
+    // OUTSIDE the CAN block below: accumulated running time is not invalidated by the bus
+    // going quiet — it merely stops growing. Display only; there is no reset command here —
+    // the trip hours are zeroed by the SAME GCS trip reset that clears the trip distance.
+    doc["engine_hours"] = serialized(String(isfinite(telemetry.engine_hours) ? telemetry.engine_hours : 0.0f, 2));
+    doc["engine_trip_hours"] = serialized(String(isfinite(telemetry.engine_trip_hours) ? telemetry.engine_trip_hours : 0.0f, 2));
+
     // CAN bus vehicle data
     if (telemetry.can_status == "connected") {
         doc["engine_rpm"] = telemetry.engine_rpm;
-        doc["vehicle_speed"] = telemetry.vehicle_speed;
         doc["coolant_temp"] = telemetry.coolant_temp;
         doc["oil_temp"] = telemetry.oil_temp;
         doc["throttle_position"] = telemetry.throttle_position;
         doc["fuel_level"] = telemetry.fuel_level;
         doc["map_kpa"] = telemetry.map_kpa;
+        doc["ecu_voltage"] = serialized(String(telemetry.module_voltage_mv / 1000.0f, 2));
+        doc["intake_temp"] = telemetry.intake_temp;
+        doc["engine_load"] = telemetry.engine_load;
     }
     doc["can_status"] = telemetry.can_status;
 
@@ -714,6 +714,19 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
 
     String json;
     serializeJson(doc, json);
+
+    // Capacity/size high-water mark. Logged only when a new peak is reached (not on
+    // every 5 Hz broadcast), so both the steady state and the larger probe-present
+    // peak are reported exactly once each.
+    static size_t peakUsage = 0;
+    if (doc.memoryUsage() > peakUsage) {
+        peakUsage = doc.memoryUsage();
+        Debug::printfFeature(DebugFeature::WEB,
+            "[WEB] telemetry JSON peak: mem=%u/%u bytes, serialized=%u bytes%s\n",
+            (unsigned)peakUsage, (unsigned)doc.capacity(), (unsigned)json.length(),
+            telemetry.probe_present ? " (probe present)" : "");
+    }
+
     return json;
 }
 

@@ -22,6 +22,9 @@ TransmissionController::TransmissionController()
     vehicleData_.vehicleSpeed = 0;
     vehicleData_.lastUpdateTime = 0;
     vehicleData_.dataValid = false;
+    vehicleData_.sensorSpeedMs = 0.0f;
+    vehicleData_.sensorSpeedValid = false;
+    vehicleData_.sensorSpeedSuspicious = false;
 
     gearPositions_[(int)Gear::GEAR_HIGH]    = TRANS_GEAR_DEFAULT_HIGH_PCT;
     gearPositions_[(int)Gear::GEAR_LOW]     = TRANS_GEAR_DEFAULT_LOW_PCT;
@@ -180,8 +183,29 @@ bool TransmissionController::needsThrottleBoost() const {
 bool TransmissionController::canChangeGear(Gear targetGear) const {
     if (targetGear == Gear::GEAR_NEUTRAL) return true;
 
+    // The hall speed sensor is the live speed source and is authoritative while healthy
+    // (CAN speed is dead — PID 0x0D is disabled). While latched suspicious its reading is a
+    // decaying physical upper bound on speed, so it is still trusted for this interlock.
+    if (vehicleData_.sensorSpeedValid || vehicleData_.sensorSpeedSuspicious) {
+        if (vehicleData_.sensorSpeedMs > TRANS_SPEED_INTERLOCK_THRESHOLD_MS) {
+            Debug::printfFeature(DebugFeature::TRANSMISSION,
+                "[TRANS] Gear change blocked: vehicle moving at %.2f m/s (%.1f km/h)\n",
+                vehicleData_.sensorSpeedMs, vehicleData_.sensorSpeedMs * MS_TO_KMH);
+            return false;
+        }
+        return true;
+    }
+
+    // Sensor uninitialized: fall back to the reviewed CAN-timeout policy below rather than
+    // inventing a new one. A stuck-blocked gearbox is itself a hazard, and no firmware can
+    // prove motion when a passive pulse sensor is silent.
+    Debug::printlnFeature(DebugFeature::TRANSMISSION,
+        "[TRANS] WARNING: speed sensor reading unavailable — falling back to CAN policy");
+
     if (vehicleData_.dataValid) {
-        if (vehicleData_.vehicleSpeed > TRANS_SPEED_INTERLOCK_THRESHOLD) {
+        // The CAN field is natively km/h (uint8), so the m/s threshold is converted here —
+        // a presentation-edge conversion for a foreign unit, not an internal one.
+        if ((float)vehicleData_.vehicleSpeed > TRANS_SPEED_INTERLOCK_THRESHOLD_MS * MS_TO_KMH) {
             Debug::printfFeature(DebugFeature::TRANSMISSION,
                 "[TRANS] Gear change blocked: vehicle moving at %d km/h\n",
                 vehicleData_.vehicleSpeed);

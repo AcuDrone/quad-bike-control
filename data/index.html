@@ -393,6 +393,10 @@
                         <div class="telemetry-value" id="telemetry-steering">0%</div>
                     </div>
                     <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_speed">Speed</div>
+                        <div class="telemetry-value" id="telemetry-speed">-- km/h</div>
+                    </div>
+                    <div class="telemetry-item">
                         <div class="telemetry-label" data-i18n="lbl_mav_link">MAVLink Link</div>
                         <div class="telemetry-value" id="telemetry-mav">Inactive</div>
                     </div>
@@ -673,9 +677,18 @@
                         <div class="telemetry-label" data-i18n="lbl_engine_rpm">Engine RPM</div>
                         <div class="telemetry-value" id="can-rpm">0</div>
                     </div>
+                    <!-- Engine hour meter: read-only, never reset. Updated OUTSIDE the
+                         can_status gate below — running time already accumulated is not
+                         invalidated by the bus going quiet. -->
                     <div class="telemetry-item">
-                        <div class="telemetry-label" data-i18n="lbl_speed">Speed</div>
-                        <div class="telemetry-value" id="can-speed">0 km/h</div>
+                        <div class="telemetry-label" data-i18n="lbl_engine_hours">Engine hours</div>
+                        <div class="telemetry-value" id="can-engine-hours">--</div>
+                    </div>
+                    <!-- Trip engine hours: read-only here too. Cleared only by the GCS trip
+                         reset, the same command that zeroes the trip distance. -->
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_engine_trip_hours">Trip hours</div>
+                        <div class="telemetry-value" id="can-engine-trip-hours">--</div>
                     </div>
                     <div class="telemetry-item">
                         <div class="telemetry-label" data-i18n="lbl_coolant_temp">Coolant Temp</div>
@@ -692,6 +705,18 @@
                     <div class="telemetry-item">
                         <div class="telemetry-label" data-i18n="lbl_map">MAP</div>
                         <div class="telemetry-value" id="can-map">-- kPa</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_ecu_voltage">ECU Voltage</div>
+                        <div class="telemetry-value" id="can-ecu-voltage">-- V</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_intake_temp">Intake Air Temp</div>
+                        <div class="telemetry-value" id="can-intake-temp">--°C</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_engine_load">Engine Load</div>
+                        <div class="telemetry-value" id="can-engine-load">--%</div>
                     </div>
                     <div class="telemetry-item">
                         <div class="telemetry-label" data-i18n="lbl_fuel_level">Fuel Level</div>
@@ -711,6 +736,70 @@
                 </div>
                 <div id="probe-status" style="margin-top: 8px; font-size: 0.8em; color: var(--muted-foreground); min-height: 1.2em;"></div>
                 <div id="probe-results" style="display: none; margin-top: 10px; font-size: 0.82em;"></div>
+            </div>
+
+            <!-- Speed Sensor (hall pulse input, independent of CAN) -->
+            <div class="card">
+                <h2 data-i18n="card_speed_sensor">🛞 Speed Sensor</h2>
+                <p data-i18n="speed_sensor_help" style="font-size: 0.8em; color: var(--muted-foreground); margin-bottom: 12px;">
+                    Speed is measured by the driveline hall sensor, not the CAN bus. Set pulses per
+                    revolution and the fitted tyre circumference to calibrate it.
+                </p>
+                <div class="telemetry-grid">
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_speed">Speed</div>
+                        <div class="telemetry-value" id="speed-value">-- km/h</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_speed_status">Sensor</div>
+                        <div class="telemetry-value" id="speed-status" data-i18n="speed_no_signal">No signal</div>
+                    </div>
+                </div>
+
+                <div style="margin-top: 14px;">
+                    <label data-i18n="lbl_speed_ppr" style="font-size: 0.8em; color: var(--muted-foreground);">Pulses per revolution</label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px;">
+                        <input type="number" id="speed-ppr-input" min="1" max="1000" step="1" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button onclick="saveSpeedPpr()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                    </div>
+                </div>
+                <div style="margin-top: 10px;">
+                    <label data-i18n="lbl_speed_circ" style="font-size: 0.8em; color: var(--muted-foreground);">Wheel circumference (mm)</label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px;">
+                        <input type="number" id="speed-circ-input" min="100" max="10000" step="1" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button onclick="saveSpeedCirc()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                    </div>
+                </div>
+
+                <div style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: baseline; font-size: 0.85em;">
+                        <span data-i18n="lbl_speed_limit" style="color: var(--muted-foreground);">Speed limit</span>
+                        <span id="speed-limit-value">--</span>
+                    </div>
+                    <div id="speed-limit-ceil-row" style="display: none; justify-content: space-between; align-items: baseline; margin-top: 4px; font-size: 0.85em; color: var(--warning);">
+                        <span data-i18n="lbl_speed_limit_ceil">Limiting</span>
+                        <span id="speed-limit-ceil">--</span>
+                    </div>
+                    <div data-i18n="speed_limiter_hint" style="font-size: 0.75em; color: var(--muted-foreground); margin-top: 6px;">
+                        The limit comes only from the autopilot's SPEED_MAX parameter; 0 (or no link) means no
+                        limit. Approaching it the throttle ceiling is tapered down smoothly instead of being
+                        stepped. With no valid sensor reading the limiter does not act.
+                    </div>
+                </div>
+
+                <!-- Distance counters. READ-ONLY: the trip reset is a ground-station action
+                     (MAV_CMD_USER_1), so there is deliberately no button or input here. -->
+                <div style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: baseline; font-size: 0.85em;">
+                        <span data-i18n="lbl_odo" style="color: var(--muted-foreground);">Odometer</span>
+                        <span id="odo-value">--</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 4px; font-size: 0.85em;">
+                        <span data-i18n="lbl_trip" style="color: var(--muted-foreground);">Trip</span>
+                        <span id="trip-value">--</span>
+                    </div>
+                </div>
+                <div id="speed-status-msg" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
             </div>
 
             <!-- System Maintenance -->
@@ -860,6 +949,7 @@
                 lbl_wheel_lock: 'Wheel Lock:',
                 lock_locked: 'LOCKED',
                 lock_unlocked: 'UNLOCKED',
+                gear_unknown: 'unknown gear',
                 h_telemetry: 'Telemetry',
                 lbl_ignition_state: 'Ignition State',
                 lbl_cranking: 'Cranking',
@@ -885,16 +975,41 @@
                 // Vehicle data (CAN) card
                 card_can: '🚗 Vehicle Data (CAN)',
                 lbl_engine_rpm: 'Engine RPM',
-                lbl_speed: 'Speed',
                 lbl_coolant_temp: 'Coolant Temp',
                 lbl_oil_temp: 'Oil Temp',
                 lbl_throttle_pos: 'Throttle Pos',
                 lbl_map: 'MAP',
+                lbl_ecu_voltage: 'ECU Voltage',
+                lbl_intake_temp: 'Intake Air Temp',
+                lbl_engine_load: 'Engine Load',
                 lbl_fuel_level: 'Fuel Level',
                 lbl_can_status: 'CAN Status',
                 can_connected: 'connected',
                 can_disconnected: 'disconnected',
                 unit_kmh: 'km/h',
+
+                // Speed sensor card (hall pulse input — independent of CAN)
+                card_speed_sensor: '🛞 Speed Sensor',
+                speed_sensor_help: 'Speed is measured by the driveline hall sensor, not the CAN bus. Set pulses per revolution and the fitted tyre circumference to calibrate it.',
+                lbl_speed: 'Speed',
+                lbl_speed_status: 'Sensor',
+                speed_ok: 'OK',
+                speed_no_signal: 'No signal',
+                lbl_speed_ppr: 'Pulses per revolution',
+                lbl_speed_circ: 'Wheel circumference (mm)',
+                lbl_speed_limit: 'Speed limit',
+                lbl_speed_limit_ceil: 'Limiting',
+                lim_none: 'none',
+                lbl_engine_hours: 'Engine hours',
+                lbl_engine_trip_hours: 'Trip hours',
+                unit_h: 'h',
+                lbl_odo: 'Odometer',
+                lbl_trip: 'Trip',
+                unit_km: 'km',
+                speed_limiter_hint: "The limit comes only from the autopilot's SPEED_MAX parameter; 0 (or no link) means no limit. Approaching it the throttle ceiling is tapered down smoothly instead of being stepped. With no valid sensor reading the limiter does not act.",
+                speed_saving: 'Saving speed settings...',
+                invalid_speed_ppr: 'Pulses/rev must be 1-1000',
+                invalid_speed_circ: 'Circumference must be 100-10000 mm',
 
                 // ECU probe
                 btn_probe_ecu: '🔍 Probe ECU',
@@ -1059,6 +1174,7 @@
                 lbl_wheel_lock: 'Блок. колеса:',
                 lock_locked: 'ЗАБЛОКОВАНО',
                 lock_unlocked: 'РОЗБЛОКОВАНО',
+                gear_unknown: 'невідома передача',
                 h_telemetry: 'Телеметрія',
                 lbl_ignition_state: 'Стан запалювання',
                 lbl_cranking: 'Прокрутка',
@@ -1084,16 +1200,41 @@
                 // Vehicle data (CAN) card
                 card_can: '🚗 Дані авто (CAN)',
                 lbl_engine_rpm: 'Оберти двигуна',
-                lbl_speed: 'Швидкість',
                 lbl_coolant_temp: 'Темп. охол. рідини',
                 lbl_oil_temp: 'Темп. оливи',
                 lbl_throttle_pos: 'Полож. дроселя',
                 lbl_map: 'MAP',
+                lbl_ecu_voltage: 'Напруга ЕБК',
+                lbl_intake_temp: 'Темп. впуск. повітря',
+                lbl_engine_load: 'Навантаження двигуна',
                 lbl_fuel_level: 'Рівень пального',
                 lbl_can_status: 'Стан CAN',
                 can_connected: 'підключено',
                 can_disconnected: 'відключено',
                 unit_kmh: 'км/год',
+
+                // Speed sensor card (hall pulse input — independent of CAN)
+                card_speed_sensor: '🛞 Датчик швидкості',
+                speed_sensor_help: 'Швидкість вимірює датчик Холла на трансмісії, а не шина CAN. Задайте кількість імпульсів на оберт та довжину кола встановленої шини для калібрування.',
+                lbl_speed: 'Швидкість',
+                lbl_speed_status: 'Датчик',
+                speed_ok: 'Справний',
+                speed_no_signal: 'Немає сигналу',
+                lbl_speed_ppr: 'Імпульсів на оберт',
+                lbl_speed_circ: 'Довжина кола колеса (мм)',
+                lbl_speed_limit: 'Обмеження швидкості',
+                lbl_speed_limit_ceil: 'Обмежується',
+                lim_none: 'немає',
+                lbl_engine_hours: 'Мотогодини',
+                lbl_engine_trip_hours: 'Мотогодини місії',
+                unit_h: 'год',
+                lbl_odo: 'Одометр',
+                lbl_trip: 'Пробіг',
+                unit_km: 'км',
+                speed_limiter_hint: 'Обмеження береться лише з параметра SPEED_MAX автопілота; 0 (або відсутній зв\'язок) означає, що обмеження немає. При наближенні до нього стеля дроселя плавно знижується, а не падає стрибком. Без достовірних показань датчика обмежувач не діє.',
+                speed_saving: 'Збереження налаштувань швидкості...',
+                invalid_speed_ppr: 'Імпульсів на оберт має бути 1-1000',
+                invalid_speed_circ: 'Довжина кола має бути 100-10000 мм',
 
                 // ECU probe
                 btn_probe_ecu: '🔍 Опитати ЕБК',
@@ -1236,6 +1377,7 @@
         let ws;
         let wsConnected = false;
         let currentInputSource = 'FAILSAFE';
+        let lastControlsInputSource = null;
         let controlsEnabled = false;
 
         // Track which controls are being actively used
@@ -1328,6 +1470,13 @@
                     steerCenterStatus(data.success ? data.message : t('error_prefix') + data.message,
                                       data.success ? 'var(--success)' : 'var(--danger)');
                 }
+                // Speed sensor calibration / limiter status
+                if (data.message && (data.message.includes('Pulses/rev') ||
+                    data.message.includes('Wheel circumference') || data.message.includes('Speed limit') ||
+                    data.message.includes('Speed limiter'))) {
+                    speedStatusMsg(data.success ? data.message : t('error_prefix') + data.message,
+                                   data.success ? 'var(--success)' : 'var(--danger)');
+                }
             }
         }
 
@@ -1371,6 +1520,10 @@
             // Update steering
             document.getElementById('telemetry-steering').textContent = (data.steering_pct || 0) + '%';
 
+            // Update hall-sensor speed — deliberately independent of can_status. An
+            // invalid reading shows "--" rather than a misleading 0.
+            updateSpeedDisplay(data);
+
             // Update MAVLink link status
             document.getElementById('telemetry-mav').textContent = data.mav_active ? t('mav_active') : t('mav_inactive');
 
@@ -1392,7 +1545,6 @@
             // Update CAN data
             if (data.can_status === 'connected') {
                 document.getElementById('can-rpm').textContent = data.engine_rpm || 0;
-                document.getElementById('can-speed').textContent = (data.vehicle_speed || 0) + ' ' + t('unit_kmh');
                 document.getElementById('can-throttle-pos').textContent = (data.throttle_position || 0) + '%';
 
                 // Coolant temperature with color coding
@@ -1421,19 +1573,43 @@
 
                 document.getElementById('can-fuel').textContent = (data.fuel_level || 0) + '%';
                 document.getElementById('can-map').textContent = (data.map_kpa != null ? data.map_kpa : '--') + ' kPa';
+                document.getElementById('can-ecu-voltage').textContent = (data.ecu_voltage != null ? data.ecu_voltage.toFixed(2) : '--') + ' V';
+                document.getElementById('can-intake-temp').textContent = (data.intake_temp != null ? data.intake_temp : '--') + '°C';
+                document.getElementById('can-engine-load').textContent = (data.engine_load != null ? data.engine_load : '--') + '%';
 
                 document.getElementById('can-status-text').textContent = t('can_connected');
                 document.getElementById('can-status-text').style.color = 'var(--success)';
             } else {
                 document.getElementById('can-rpm').textContent = '--';
-                document.getElementById('can-speed').textContent = '-- ' + t('unit_kmh');
                 document.getElementById('can-coolant').textContent = '--°C';
                 document.getElementById('can-oil').textContent = '--°C';
                 document.getElementById('can-throttle-pos').textContent = '--%';
                 document.getElementById('can-map').textContent = '-- kPa';
+                document.getElementById('can-ecu-voltage').textContent = '-- V';
+                document.getElementById('can-intake-temp').textContent = '--°C';
+                document.getElementById('can-engine-load').textContent = '--%';
                 document.getElementById('can-fuel').textContent = '--%';
                 document.getElementById('can-status-text').textContent = t('can_disconnected');
                 document.getElementById('can-status-text').style.color = 'var(--danger)';
+            }
+
+            // Engine hour meter — rendered OUTSIDE the can_status branch above (and outside its
+            // else), because accumulated running time is not invalidated by the bus going quiet;
+            // it merely stops growing. Number.isFinite, not typeof === 'number': NaN and Infinity
+            // are both numbers and would render as "NaN h" / "Infinity h".
+            const engHoursEl = document.getElementById('can-engine-hours');
+            if (engHoursEl) {
+                engHoursEl.textContent = Number.isFinite(data.engine_hours)
+                    ? data.engine_hours.toFixed(2) + ' ' + t('unit_h')
+                    : '--';
+            }
+            // Trip engine hours — same treatment, same reason. A 0.00 here is a GENUINE zero
+            // after a trip reset, which is why the placeholder is reserved for a missing field.
+            const engTripHoursEl = document.getElementById('can-engine-trip-hours');
+            if (engTripHoursEl) {
+                engTripHoursEl.textContent = Number.isFinite(data.engine_trip_hours)
+                    ? data.engine_trip_hours.toFixed(2) + ' ' + t('unit_h')
+                    : '--';
             }
 
             // Update ECU probe results (present transiently while running / fresh)
@@ -1445,7 +1621,8 @@
             const switchingIndicator = document.getElementById('gear-switching-indicator');
             if (data.gear_switching) {
                 switchingIndicator.style.display = 'block';
-                switchingIndicator.textContent = t('switching_to', data.gear || 'N');
+                switchingIndicator.textContent = t('switching_to',
+                    (!data.gear || data.gear === '?') ? t('gear_unknown') : data.gear);
             } else {
                 switchingIndicator.style.display = 'none';
             }
@@ -1510,6 +1687,7 @@
                 wheelLockState = data.wheel_lock_on;
                 updateWheelLockButton(data.wheel_lock_on);
             }
+
             if (data.steer_position !== undefined) {
                 document.getElementById('steer-pos').textContent = data.steer_position;
             }
@@ -1637,6 +1815,12 @@
         function updateControlsAvailability() {
             const webControlActive = currentInputSource === 'WEB' || currentInputSource === 'FAILSAFE';
             controlsEnabled = webControlActive && wsConnected;
+
+            if (currentInputSource === 'WEB' && lastControlsInputSource !== 'WEB') {
+                document.getElementById('throttle-slider').value = 0;
+                document.getElementById('throttle-value').textContent = '0%';
+            }
+            lastControlsInputSource = currentInputSource;
 
             // Update warning visibility
             const warning = document.getElementById('control-warning');
@@ -1880,6 +2064,102 @@
             }
         }
 
+        // ── Speed sensor (hall pulse input, independent of CAN) ─────────────
+        function speedStatusMsg(text, color) {
+            const el = document.getElementById('speed-status-msg');
+            if (!el) return;
+            el.textContent = text;
+            el.style.color = color;
+        }
+
+        function syncSpeedInput(id, value) {
+            if (value === undefined || value === null) return;
+            const el = document.getElementById(id);
+            if (el && document.activeElement !== el) {
+                el.value = value;
+            }
+        }
+
+        function updateSpeedDisplay(data) {
+            const valid = data.speed_valid === true;
+            const kmh = (typeof data.vehicle_speed === 'number') ? data.vehicle_speed : 0;
+            // speed_valid = false means the reading is UNKNOWN (sensor never pulsed or a
+            // suspicious dropout), not "stopped" — show "--" instead of a misleading 0.
+            const text = valid ? kmh.toFixed(1) + ' ' + t('unit_kmh') : '-- ' + t('unit_kmh');
+            ['telemetry-speed', 'speed-value'].forEach(function (id) {
+                const el = document.getElementById(id);
+                if (el) el.textContent = text;
+            });
+
+            const statusEl = document.getElementById('speed-status');
+            if (statusEl) {
+                statusEl.textContent = valid ? t('speed_ok') : t('speed_no_signal');
+                statusEl.style.color = valid ? 'var(--success)' : 'var(--danger)';
+            }
+
+            syncSpeedInput('speed-ppr-input', data.speed_ppr);
+            syncSpeedInput('speed-circ-input', data.speed_circ_mm);
+
+            // The limit has exactly one source — the autopilot's SPEED_MAX. 0 (or no usable
+            // value at all) means no limiting, so it is shown as "none" rather than as 0 km/h,
+            // which would read like "stopped". Both units are shown: the operator sets the
+            // parameter in m/s in the ground station but reads the vehicle in km/h.
+            const limEl = document.getElementById('speed-limit-value');
+            if (limEl) {
+                const lim = (typeof data.speed_limit_kmh === 'number') ? data.speed_limit_kmh : 0;
+                limEl.textContent = (lim > 0)
+                    ? lim.toFixed(1) + ' ' + t('unit_kmh') + ' (' + (lim / 3.6).toFixed(1) + ' m/s)'
+                    : t('lim_none');
+                limEl.style.color = (lim > 0) ? 'var(--foreground)' : 'var(--muted-foreground)';
+            }
+
+            // The taper ceiling is only interesting while it is actually holding throttle back.
+            const ceilRow = document.getElementById('speed-limit-ceil-row');
+            if (ceilRow) {
+                const ceil = (typeof data.speed_limit_ceil === 'number') ? data.speed_limit_ceil : 100;
+                if (ceil < 100) {
+                    ceilRow.style.display = 'flex';
+                    const ceilEl = document.getElementById('speed-limit-ceil');
+                    if (ceilEl) ceilEl.textContent = ceil.toFixed(0) + ' %';
+                } else {
+                    ceilRow.style.display = 'none';
+                }
+            }
+
+            // Distance counters. Deliberately NOT gated on speed_valid: a stale or unhealthy
+            // sensor does not invalidate distance already driven. A missing field shows "--"
+            // rather than a misleading 0.000.
+            [['odo-value', data.odo_km], ['trip-value', data.trip_km]].forEach(function (pair) {
+                const el = document.getElementById(pair[0]);
+                if (!el) return;
+                // Number.isFinite, not typeof === 'number': NaN and Infinity are both numbers
+                // and would render as "NaN km" / "Infinity km".
+                el.textContent = Number.isFinite(pair[1])
+                    ? pair[1].toFixed(3) + ' ' + t('unit_km')
+                    : '--';
+            });
+        }
+
+        function saveSpeedPpr() {
+            const val = parseInt(document.getElementById('speed-ppr-input').value, 10);
+            if (isNaN(val) || val < 1 || val > 1000) {
+                speedStatusMsg(t('invalid_speed_ppr'), 'var(--danger)');
+                return;
+            }
+            sendCommand('speed_cal_ppr', val);
+            speedStatusMsg(t('speed_saving'), 'var(--muted-foreground)');
+        }
+
+        function saveSpeedCirc() {
+            const val = parseFloat(document.getElementById('speed-circ-input').value);
+            if (isNaN(val) || val < 100 || val > 10000) {
+                speedStatusMsg(t('invalid_speed_circ'), 'var(--danger)');
+                return;
+            }
+            sendCommand('speed_cal_circ', val);
+            speedStatusMsg(t('speed_saving'), 'var(--muted-foreground)');
+        }
+
         function setIgnition(state) {
             sendCommand('set_ignition', state);
         }
@@ -1895,6 +2175,7 @@
             wheelLockState = !wheelLockState;
             sendCommand('set_wheel_lock', wheelLockState);
         }
+
 
         // ---- Web-control latched takeover ----
         let webControlState = false;

@@ -30,8 +30,7 @@ SteeringController::SteeringController(IMotorDriver& motor)
       stallLatched_(false),
       stallLatchDir_(0),
       stallLatchTime_(0),
-      steerDriverOk_(false),
-      overCurrentStart_(0) {
+      steerDriverOk_(false) {
 }
 
 bool SteeringController::begin(gpio_num_t sdaPin, gpio_num_t sclPin) {
@@ -284,7 +283,6 @@ bool SteeringController::serviceDriver(uint32_t now) {
         isMoving_ = false;
         jogDir_ = 0;
         jogPulseUntil_ = 0;
-        overCurrentStart_ = 0;
         return false;
     }
     if (!steerDriverOk_) {
@@ -293,27 +291,15 @@ bool SteeringController::serviceDriver(uint32_t now) {
     steerDriverOk_ = true;
 
     // Nonzero VESC fault code -> immediate stop + latch (current drive direction).
+    // This is the over-current backstop: the VESC raises a fault on Absolute Max
+    // Current (and on over-temperature), and clamps at Motor Current Max below that.
     if (motor_.hasFault()) {
-        overCurrentStart_ = 0;
         if (isMoving_ || jogDir_ != 0) {
             triggerStallStop(lastDriveDir_, "vesc-fault");
         } else {
             motor_.stop();
         }
         return false;
-    }
-
-    // Sustained over-current -> stall-stop + latch (real over-current backstop).
-    if (motor_.motorCurrentA() > STEER_VESC_OVERCURRENT_A) {
-        if (overCurrentStart_ == 0) {
-            overCurrentStart_ = now;
-        } else if (now - overCurrentStart_ >= STEER_VESC_OVERCURRENT_MS) {
-            overCurrentStart_ = 0;
-            triggerStallStop(lastDriveDir_, "over-current");
-            return false;
-        }
-    } else {
-        overCurrentStart_ = 0;
     }
 
     return true;

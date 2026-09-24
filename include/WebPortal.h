@@ -71,14 +71,29 @@ public:
         bool mav_active;          // True if MAVLink command stream is valid
         bool web_control;         // True if latched web-control override is engaged
 
+        // Hall speed sensor — emitted independently of CAN health (not part of the
+        // CAN-gated block below), because it is a wholly separate physical source.
+        float vehicle_speed_ms;   // Vehicle speed (m/s) from the hall sensor — serialised as km/h
+        bool speed_valid;         // Sensor health: false = reading unknown, NOT "stopped"
+        uint16_t speed_ppr;       // Calibration: pulses per revolution
+        float speed_circ_mm;      // Calibration: wheel circumference (mm)
+        float speed_limit_ms;     // Enforced ceiling (m/s) from SPEED_MAX, 0 = no limit — km/h in JSON
+        float speed_limit_ceil;   // Throttle ceiling the taper is applying (%, 100 = inactive)
+        float odo_km;             // Total odometer (km) — always valid, NOT gated on speed_valid
+        float trip_km;            // Resettable trip distance (km) — reset is a GCS action only
+        float engine_hours;       // Engine hour meter (h) — always valid, NOT gated on can_status
+        float engine_trip_hours;  // Trip engine hours (h) — same, zeroed by the GCS trip reset
+
         // CAN bus vehicle data
         uint16_t engine_rpm;      // Engine RPM (0-16383)
-        uint8_t vehicle_speed;    // Vehicle speed km/h (0-255)
         int8_t coolant_temp;      // Coolant temperature °C (-40 to +215)
         int8_t oil_temp;          // Oil temperature °C (-40 to +215)
         uint8_t throttle_position; // Throttle position % (0-100)
         uint8_t fuel_level;       // Fuel tank level % (0-100)
         uint8_t map_kpa;          // Manifold absolute pressure, kPa (0-255)
+        uint16_t module_voltage_mv; // Control module supply voltage, mV
+        int8_t intake_temp;       // Intake air temperature °C (-40 to +215)
+        uint8_t engine_load;      // Calculated engine load % (0-100)
         String can_status;        // CAN status: "connected", "disconnected"
 
         // MAVLink command channel + link data
@@ -228,14 +243,6 @@ private:
      * @return true if command parsed successfully
      */
     bool parseWebCommand(uint8_t* data, size_t len);
-
-    /**
-     * Validate command based on input source priority
-     * @param cmd Command to validate
-     * @param inputSource Current input source
-     * @return true if command is allowed
-     */
-    bool validateCommand(const WebCommand& cmd, InputSource inputSource);
 
     /**
      * Create JSON telemetry message

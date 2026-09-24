@@ -12,7 +12,9 @@
 #include "TelemetryManager.h"
 #include "MavlinkInterface.h"
 #include "RelayController.h"
+#include "SpeedSensor.h"
 #include "nvs_flash.h"
+#include <Wire.h>
 
 // ============================================================================
 // ACTUATOR INSTANCES
@@ -35,12 +37,15 @@ BTS7960Controller brakeActuator;
 // MAVLink interface to Pixhawk (TELEM2)
 MavlinkInterface mavlinkInterface;
 
-// Relay Controller for ignition and lights
+// Relay Controller for ignition, starter, lights and wheel lock — direct GPIO
 RelayController relayController;
+
+// Driveline speed sensor (hall pickup, PCNT on PIN_SPEED_SENSOR)
+SpeedSensor speedSensor;
 
 // Vehicle Controller (coordinates all actuators and input sources)
 VehicleController vehicleController(steeringActuator, throttle, transmissionActuator, brakeActuator,
-                                     mavlinkInterface, relayController);
+                                     mavlinkInterface, relayController, speedSensor);
 
 // Web Portal for telemetry and manual control
 WebPortal webPortal;
@@ -49,11 +54,33 @@ WebPortal webPortal;
 TelemetryManager telemetryManager(vehicleController, webPortal, mavlinkInterface);
 
 // ============================================================================
+// BRING-UP HELPERS
+// ============================================================================
+
+// Probe the 7-bit address range 0x08-0x77 on the bus and print a single summary
+// line. Master-gated only (no feature flag) so a plain `debug on` shows it.
+static void scanI2CBus(TwoWire& bus, const char* label) {
+    String found;
+    for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
+        bus.beginTransmission(addr);
+        if (bus.endTransmission() == 0) {
+            char hex[8];
+            snprintf(hex, sizeof(hex), " 0x%02X", addr);
+            found += hex;
+        }
+    }
+    Debug::println("[I2C] " + String(label) + " devices:" + (found.isEmpty() ? " none" : found));
+}
+
+// ============================================================================
 // SETUP
 // ============================================================================
 
 void setup() {
-    // Initialize serial for debugging
+    // Console is UART0 (GPIO43 TX / GPIO44 RX) through the DevKit's on-board
+    // USB-UART bridge, the "COM" port. The native USB CDC console is NOT usable
+    // here: its D-/D+ pins (GPIO19/20) carry the R/N gear switches.
+    // Never wait for a host — the vehicle must boot with no laptop attached.
     Serial.begin(SERIAL_BAUD_RATE);
 
     // Initialize NVS first (required by Debug utility)
@@ -78,11 +105,13 @@ void setup() {
     Serial.println("[INIT] Debug utility initialized");
 
     // Feature debug flags — MUST be set after Debug::begin(), which overwrites
-    // the in-memory flags with the NVS-stored state
-    // Debug::setFeatureEnabled(DebugFeature::CAN, true);
+    // the in-memory flags with the NVS-stored state. Uncomment one to trace it.
+    // Debug::setFeatureEnabled(DebugFeature::CAN, true);           // MCP2515 health, unmatched RX, overflow
+    // Debug::setFeatureEnabled(DebugFeature::RELAY, true);         // relay/ignition switching
+    // Debug::setFeatureEnabled(DebugFeature::BRAKE, true);         // brake moves + endstop
+    // Debug::setFeatureEnabled(DebugFeature::VEHICLE, true);       // speed sensor + vehicle state
     // Debug::setFeatureEnabled(DebugFeature::TRANSMISSION, true);
-    // Debug::setFeatureEnabled(DebugFeature::VEHICLE, true);
-    // Debug::setFeatureEnabled(DebugFeature::MAVLINK, true);  // diagnose command-stream / fail-safe flapping
+    // Debug::setFeatureEnabled(DebugFeature::MAVLINK, true);       // diagnose command-stream / fail-safe flapping
     Debug::setFeatureEnabled(DebugFeature::SERVO, false);
 
     // Ungated state dump so a disabled master switch is visible on the monitor
@@ -90,7 +119,21 @@ void setup() {
                   Debug::isEnabled() ? "ON" : "OFF",
                   Debug::isFeatureEnabled(DebugFeature::SERVO) ? "ON" : "OFF");
 
-    Debug::println("\n=== ESP32-S3 Quad Bike Control ===");
+    Debug::println("\n=== ESP32-S3 Quad Bike Control (DevKitC-1) ===");
+
+    // ── I2C bus ──────────────────────────────────────────────────────────────
+    // main.cpp is the single owner of the bus: it is opened here, before any
+    // consumer, so no driver depends on another driver's initialization succeeding.
+    // The AS5600 steering angle sensor is its only device.
+    if (!Wire.begin(PIN_STEER_SDA, PIN_STEER_SCL, I2C_BUS_FREQ_HZ)) {
+        Debug::println("[INIT] ERROR: I2C (Wire) init failed");
+    }
+
+    // Enumerate the bus before any driver claims it, so a missing or mis-wired
+    // sensor is obvious from the boot log alone.
+    if (Debug::isEnabled()) {
+        scanI2CBus(Wire, "I2C (Wire)");
+    }
 
     // Initialize throttle servo (loads calibration from NVS, moves to calibrated idle)
     if (!throttle.begin(PIN_THROTTLE_PWM, LEDC_CH_THROTTLE)) {
@@ -137,7 +180,7 @@ void setup() {
     pinMode(PIN_BRAKE_SENSOR, INPUT);
     Debug::printfFeature(DebugFeature::BRAKE, "Brake sensor: %s\n",
         digitalRead(PIN_BRAKE_SENSOR) ? "Released (HIGH)" : "Pressed (LOW)");
- 
+
     // Initialize MAVLink interface (Pixhawk TELEM2)
     if (!mavlinkInterface.begin()) {
         Debug::printlnFeature(DebugFeature::MAVLINK, "ERROR: MAVLink interface failed");
@@ -146,6 +189,14 @@ void setup() {
     if (!relayController.begin()) {
         Debug::printlnFeature(DebugFeature::RELAY, "ERROR: Relay controller failed");
     }
+
+    // Initialize the driveline speed sensor (loads calibration from NVS, starts PCNT)
+    if (!speedSensor.begin()) {
+        Debug::println("[INIT] ERROR: Speed sensor PCNT init failed — speed stays invalid");
+    }
+
+    // Restore the engine hour meter from NVS (must run after NVS is up, so not in a ctor)
+    vehicleController.initEngineHourMeter();
 
     // Initialize CAN controller
     if (!vehicleController.initCAN()) {
@@ -165,6 +216,10 @@ void setup() {
 // ============================================================================
 
 void loop() {
+    // Sample the hall speed counter (rate-limited internally) before the control
+    // logic and telemetry read the speed this iteration.
+    speedSensor.update();
+
     // Update MAVLink interface (parse inbound, request command stream)
     mavlinkInterface.update();
 
@@ -189,6 +244,9 @@ void loop() {
     CANController::VehicleData vd = vehicleController.getVehicleData();
     String gearToStr   = vehicleController.getTargetGearString();  // current step / assumed gear
     String gearFromStr = vehicleController.getFromGearString();    // gear the step is leaving
+    // Named local, NOT a temporary: StateReport stores a const char* into this String, so it
+    // must outlive the report() call below (same lifetime pattern as the two gear strings above).
+    String gearPhysStr = vehicleController.getCurrentGearString();  // physically sensed ("?" = unknown)
     MavlinkInterface::StateReport report;
     report.canValid     = vd.dataValid;
     report.engineRpm    = vd.engineRPM;
@@ -200,6 +258,33 @@ void loop() {
     report.failsafe     = (vehicleController.getInputSource() == InputSource::FAILSAFE);
     report.digitalFlags = (vehicleController.getWheelLock()  ? EFI_DIGITAL_FLAG_WHEEL_LOCK  : 0)
                         | (vehicleController.getFrontLight() ? EFI_DIGITAL_FLAG_FRONT_LIGHT : 0);
+    report.speedValid   = vehicleController.isVehicleSpeedValid();
+    report.speedMs      = vehicleController.getVehicleSpeedMs();
+    report.intakeTemp   = vd.intakeTemp;
+    report.moduleVoltageMv = vd.moduleVoltageMv;
+    report.throttlePosition = vd.throttlePosition;              // measured (ECU)
+    report.throttleCmdPct   = vehicleController.getThrottlePercent();  // commanded (arbitrated)
+    report.gearPhysical     = gearPhysStr.c_str();               // measured (gear switches)
+    report.mapKpa           = vd.mapKpa;
+    report.engineLoad       = vd.engineLoad;
+    report.travelDirection  = vehicleController.getTravelDirection();  // PHYSICAL gear sign
+    report.odoKm            = vehicleController.getOdoKm();       // total, never resettable
+    report.tripKm           = vehicleController.getTripKm();      // resettable from the GCS
+    report.engineHours      = vehicleController.getEngineHours(); // total, no reset on any interface
+    report.engineTripHours  = vehicleController.getEngineTripHours(); // zeroed by the TRIP reset
+    // Steering VESC telemetry (STEER_A / VESC_V / VESC_TEMP / VESC_OK named floats).
+    // Gate: the DRIVER's own link health.
+    const SteeringController& steering = vehicleController.getSteering();
+    report.steerDriverOk      = steering.isDriverOk();
+    report.steerMotorCurrentA = steering.getMotorCurrent();        // MOTOR current, not input
+    report.steerFetTempC      = steering.getFetTemp();
+    report.steerInputVoltageV = steering.getInputVoltage();        // supply voltage at the VESC
+    // Steering POSITION from the same controller but a DIFFERENT gate: the AS5600's, not the
+    // VESC's. Filled unconditionally — the gating is applied where the message is packed, so
+    // this stays a plain snapshot.
+    report.steerPercent     = steering.getSteeringPercent();       // -100 left .. 0 .. +100 right
+    report.steerSensorOk    = steering.isSensorOk();
+    report.steerCalibrated  = steering.isCalibrated();
     mavlinkInterface.report(report);
 
     // Broadcast telemetry to web clients

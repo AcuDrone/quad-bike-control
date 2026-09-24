@@ -33,12 +33,20 @@ The system SHALL use a BTS7960 motor driver for the brake actuator, driven throu
 - **WHEN** the brake actuator is commanded via `BTS7960Controller::setSpeed()`
 - **THEN** RPWM/LPWM PWM outputs SHALL be set as specified in the existing brake scenarios
 - **AND** RPWM and LPWM SHALL never be driven high simultaneously
+- **AND** the outputs SHALL be `PIN_BRAKE_LPWM` (GPIO6) and `PIN_BRAKE_RPWM` (GPIO7) routed to
+  connector X7
 
 #### Scenario: Steering no longer uses BTS7960
 - **WHEN** the steering actuator is commanded
 - **THEN** the command SHALL be issued through the `IMotorDriver` abstraction backed by the VESC UART driver
 - **AND** no `BTS7960Controller` instance SHALL be associated with the steering actuator
-- **AND** the freed steering PWM GPIOs (17/18) and LEDC channels (6/7) SHALL remain reserved and unassigned to other functions
+
+#### Scenario: Former steering PWM pins are reallocated, not reserved
+- **WHEN** the pin map is read
+- **THEN** GPIO17 and GPIO18 SHALL be allocated to the MAVLink UART1 (TX and RX respectively)
+- **AND** the former steering PWM constants and their LEDC channel constants SHALL be deleted rather
+  than kept as reserved placeholders
+- **AND** LEDC channels 6 and 7 SHALL be available for future use with no reservation
 
 ### Requirement: Actuator Safety Limits
 The system SHALL enforce safety limits on all actuator operations.
@@ -63,19 +71,51 @@ The system SHALL enforce safety limits on all actuator operations.
 **Note**: BTS7960 enable pins are hardwired, so the brake driver cannot be fully disabled and coasts to a stop. The steering VESC releases the motor (coast) when commanded to zero duty and also releases automatically on its own configured comm timeout if commands stop.
 
 ### Requirement: Hardware Configuration
-The system SHALL define all hardware pin assignments in centralized configuration.
+The system SHALL define all hardware pin assignments in centralized configuration
+(`include/Constants.h`), matching the hand-wired ESP32-S3-DevKitC-1 as documented in
+`GPIO_PINOUT_S3.md`. There SHALL be exactly one pin map and no board-selection build flag.
 
 #### Scenario: Load pin configuration at startup
 - **WHEN** system initializes
-- **THEN** all pin assignments are loaded from Constants.h
+- **THEN** all pin assignments are loaded from `Constants.h`
+- **AND** pins are validated against ESP32-S3 available GPIO (not ESP32-C6)
 - **AND** pin conflicts are checked and reported
-- **AND** pins are validated against ESP32-C6 available GPIO
+
+#### Scenario: DevKitC-1 pin assignments
+- **WHEN** `Constants.h` is read
+- **THEN** the following assignments SHALL be in effect:
+  - `PIN_THROTTLE_PWM` = GPIO3 (LEDC channel 1, 50 Hz)
+  - `PIN_TRANS_SERVO` = GPIO9 (LEDC channel 2, 50 Hz)
+  - `PIN_MAVLINK_RX` = GPIO8, `PIN_MAVLINK_TX` = GPIO15 (UART1)
+  - `PIN_VESC_TX` = GPIO4, `PIN_VESC_RX` = GPIO5 (UART2)
+  - `PIN_BRAKE_LPWM` = GPIO6, `PIN_BRAKE_RPWM` = GPIO7 (LEDC channels 5/4)
+  - `PIN_CAN_CS` = GPIO10, `PIN_CAN_MOSI` = GPIO11, `PIN_CAN_SCK` = GPIO12, `PIN_CAN_MISO` = GPIO13
+  - `PIN_STEER_SDA` = GPIO41, `PIN_STEER_SCL` = GPIO42 (`Wire`, AS5600 only, 100 kHz)
+  - `PIN_BRAKE_SENSOR` = GPIO14
+  - `PIN_SPEED_SENSOR` = GPIO17 (PCNT hall pulse input)
+  - `PIN_GEAR_REVERSE` = GPIO19, `PIN_GEAR_NEUTRAL` = GPIO20, `PIN_GEAR_LOW` = GPIO21,
+    `PIN_GEAR_HIGH` = GPIO47
+  - `PIN_RELAY1` = GPIO36, `PIN_RELAY2` = GPIO37, `PIN_RELAY3` = GPIO38, `PIN_WHEEL_LOCK` = GPIO39
+
+#### Scenario: Reserved and unused pins
+- **WHEN** `Constants.h` is read
+- **THEN** GPIO18 SHALL be left free/reserved (the former `PIN_STEER_LPWM`)
+- **AND** `LEDC_CH_STEER_RPWM` (6) and `LEDC_CH_STEER_LPWM` (7) SHALL remain defined but unallocated
+- **AND** `PIN_STEER_RPWM` and `PIN_STEER_LPWM` SHALL NOT be defined — GPIO17 is now the speed sensor
+- **AND** no reference to those two symbols SHALL remain in `src/` or `include/`
 
 #### Scenario: Configure PWM parameters
 - **WHEN** PWM peripherals are initialized
 - **THEN** servo PWM frequency is set to 50Hz (20ms period)
 - **AND** motor PWM frequency is set to 1-20kHz (configurable)
 - **AND** PWM resolution is set to 12-16 bits based on frequency
+- **AND** LEDC channels 1 (throttle), 2 (transmission), 4 (brake RPWM) and 5 (brake LPWM) SHALL be
+  the only channels allocated; channels 3, 6 and 7 SHALL be free
+
+#### Scenario: Wiring document is authoritative
+- **WHEN** `Constants.h` and `GPIO_PINOUT_S3.md` disagree about a pin
+- **THEN** the document SHALL be treated as authoritative for what the board is physically wired to
+- **AND** the divergence SHALL be resolved before the firmware is run on the vehicle
 
 ### Requirement: Actuator State Monitoring
 The system SHALL track and report current state of all actuators.
@@ -170,7 +210,7 @@ The steering `IMotorDriver` SHALL be implemented by a VESC driver that commands 
 - **AND** it SHALL implement only `COMM_SET_DUTY` and `COMM_GET_VALUES`
 
 ### Requirement: Steering Re-command Guard and Stall Latch
-The steering controller SHALL NOT restart its move and stall timers when re-commanded to the current target, and SHALL latch out further motion in a stalled direction for a cooldown, so that stall detection and move timeout function under the continuous MAVLink command stream.
+The steering controller SHALL NOT restart its move and stall timers when re-commanded to the current target, and SHALL latch out further motion in a stalled direction for a cooldown of `STEER_STALL_COOLDOWN_MS` (700 ms), so that stall detection and move timeout function under the continuous MAVLink command stream.
 
 #### Scenario: Re-command within tolerance is a no-op
 - **WHEN** `setSteeringPercent()` is called while a move is in progress
@@ -183,32 +223,34 @@ The steering controller SHALL NOT restart its move and stall timers when re-comm
 - **THEN** a fresh move SHALL start with the move/stall timers reset
 
 #### Scenario: Stall latches out the stalled direction
-- **WHEN** a stall-stop occurs (position loop stall, firmware over-current, or a VESC fault)
+- **WHEN** a stall-stop occurs (position loop stall or a nonzero VESC fault code)
 - **THEN** the controller SHALL record the stalled direction and latch time and stop the motor
-- **AND** a subsequent move that would push further in the stalled direction SHALL be refused while less than `STEER_STALL_COOLDOWN_MS` has elapsed
+- **AND** a subsequent move that would push further in the stalled direction SHALL be refused while less than `STEER_STALL_COOLDOWN_MS` (700 ms) has elapsed
 
 #### Scenario: Opposite-direction escape and post-cooldown retry
 - **WHEN** the controller is stall-latched
 - **AND** a new move commands the opposite direction (away from or across the jam)
 - **THEN** the move SHALL be accepted immediately and the latch cleared
-- **WHEN** the controller is stall-latched and a same-direction move is commanded after `STEER_STALL_COOLDOWN_MS` has elapsed
+- **WHEN** the controller is stall-latched and a same-direction move is commanded after `STEER_STALL_COOLDOWN_MS` (700 ms) has elapsed
 - **THEN** the move SHALL be accepted and the latch cleared
 
-### Requirement: VESC Telemetry Fault Monitoring and Communication Failsafe
-The steering controller SHALL poll VESC telemetry to enforce a firmware-level over-current and fault backstop, and SHALL fail safe when the VESC is unresponsive.
+### Requirement: VESC Fault Monitoring and Communication Failsafe
+The steering controller SHALL poll VESC telemetry to enforce a firmware-level fault backstop, and SHALL fail safe when the VESC is unresponsive. Over-current protection SHALL be left to the VESC itself (its *Motor Current Max* clamp, its *Absolute Max Current* fault, and its MOSFET temperature limiting), and mechanical jams SHALL be left to the AS5600 position stall detector; the firmware SHALL NOT run its own sustained-over-current timer.
 
 #### Scenario: Poll VESC telemetry periodically
 - **WHEN** the steering driver is active
 - **THEN** it SHALL request `COMM_GET_VALUES` at approximately `STEER_VESC_TELEM_MS` intervals (~2-5 Hz)
 - **AND** decode motor current, FET temperature, input voltage, and fault code
 
-#### Scenario: Sustained over-current triggers stall-stop
-- **WHEN** decoded motor current exceeds `STEER_VESC_OVERCURRENT_A` for at least `STEER_VESC_OVERCURRENT_MS`
-- **THEN** the controller SHALL invoke the stall-stop path (stop + stall latch in the current drive direction)
+#### Scenario: Motor current is reported but not acted on
+- **WHEN** decoded motor current is high, or a `COMM_GET_VALUES` reply is lost and the last decoded sample is stale
+- **THEN** the controller SHALL NOT trip a stall-stop on current magnitude
+- **AND** the decoded value SHALL still be published as `steer_motor_current` telemetry
 
 #### Scenario: VESC fault code stops the motor
 - **WHEN** `COMM_GET_VALUES` reports a nonzero VESC fault code
 - **THEN** the controller SHALL stop the motor and raise a fault flag in telemetry
+- **AND** if a move or jog was in progress it SHALL take the stall-stop path (stop + stall latch in the current drive direction)
 
 #### Scenario: Unresponsive VESC fails safe
 - **WHEN** no valid `COMM_GET_VALUES` reply is received for `STEER_VESC_COMM_TIMEOUT_MS`

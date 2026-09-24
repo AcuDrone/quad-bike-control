@@ -12,6 +12,8 @@
 #include "MavlinkInterface.h"
 #include "RelayController.h"
 #include "CANController.h"
+#include "SpeedSensor.h"
+#include "EngineHourMeter.h"
 
 /**
  * @brief Vehicle control coordination layer
@@ -26,7 +28,14 @@ public:
                       TransmissionController& transmission,
                       BTS7960Controller& brake,
                       MavlinkInterface& mavlink,
-                      RelayController& relayController);
+                      RelayController& relayController,
+                      SpeedSensor& speedSensor);
+
+    /**
+     * @brief Load the engine hour meter from NVS. Call once from setup().
+     * Cannot live in the constructor: this controller is a global built before NVS is ready.
+     */
+    void initEngineHourMeter();
 
     /**
      * @brief Initialize CAN controller
@@ -73,6 +82,18 @@ public:
     String getCurrentGearString() const;
 
     /**
+     * @brief Direction of travel implied by the gearbox: +1 forward, -1 reverse, 0 unknown.
+     *
+     * Signs the (unsigned) wheel-speed reading for the MAVLink external-navigation
+     * velocity. Derived from the PHYSICAL gear (the gear switches), never from the
+     * assumed/commanded one: the transmission command path is sensorless and time-based,
+     * and an assumption must never sign a measurement the autopilot's EKF will fuse.
+     * An ambiguous or faulted reading yields 0, which suppresses the sample.
+     * @return +1 (LOW/HIGH), -1 (REVERSE) or 0 (NEUTRAL/UNKNOWN)
+     */
+    int8_t getTravelDirection() const;
+
+    /**
      * @brief Get the current target/step gear as string (R/N/L/H).
      * During a multi-step sequence this is the gear currently being moved to.
      * @return Gear string
@@ -112,6 +133,14 @@ public:
     uint16_t getThrottleUs() const { return throttle_.getCurrentUs(); }
 
     /**
+     * @brief Get the commanded throttle as a percent of the calibrated window (0-100).
+     * Derived from the servo's live pulse width, so this is the ARBITRATED output —
+     * whatever actually won among autopilot command, web command, gear-change boost
+     * override, speed-limit cap and fail-safe idle — not any single input's demand.
+     */
+    uint8_t getThrottlePercent() const { return throttle_.usToPercent(throttle_.getCurrentUs()); }
+
+    /**
      * @brief Get calibrated throttle idle/full endpoints (µs) and calibration state
      */
     uint16_t getThrottleIdleUs() const { return throttle_.getIdleUs(); }
@@ -141,6 +170,54 @@ public:
      * @brief Get the latest ECU capability probe snapshot (for telemetry)
      */
     CANController::ProbeResults getProbeResults() const { return canController_.getProbeResults(); }
+
+    /**
+     * @brief Hall-sensor vehicle speed (m/s) and its health flag.
+     * Independent of CAN status — a CAN outage does not blank these.
+     */
+    float getVehicleSpeedMs() const { return speedSensor_.getSpeedMs(); }
+    bool isVehicleSpeedValid() const { return speedSensor_.isValid(); }
+
+    /** @brief Speed-sensor calibration (telemetry / web UI) */
+    uint16_t getSpeedPulsesPerRev() const { return speedSensor_.getPulsesPerRev(); }
+    float getSpeedWheelCircumferenceMm() const { return speedSensor_.getWheelCircumferenceMm(); }
+
+    /**
+     * @brief Distance counters in km (telemetry / MAVLink). READ-ONLY.
+     * Always valid — distance already driven depends on neither CAN health nor the current
+     * speed reading's validity. The odometer is a vehicle-lifetime counter with no reset path;
+     * the trip counter is cleared only by an acknowledged MAVLink trip-reset command.
+     */
+    float getOdoKm() const { return speedSensor_.getOdoKm(); }
+    float getTripKm() const { return speedSensor_.getTripKm(); }
+
+    /**
+     * @brief Engine hour meter ("мотогодини"). READ-ONLY.
+     * Always valid: the TOTAL only ever increases and has NO reset path on any interface
+     * (no command, no web control, no constant — only an NVS erase); the TRIP total
+     * ("мотогодини місії") counts in lockstep with it and is zeroed only by the SAME
+     * latched trip reset that clears the trip DISTANCE. Both stop growing rather than going
+     * unknown while CAN data is invalid.
+     */
+    uint64_t getEngineSeconds() const { return engineHours_.getEngineSeconds(); }
+    float getEngineHours() const { return engineHours_.getEngineHours(); }
+    uint64_t getEngineTripSeconds() const { return engineHours_.getTripSeconds(); }
+    float getEngineTripHours() const { return engineHours_.getTripHours(); }
+
+    /**
+     * @brief The ceiling the limiter is enforcing, in m/s. 0 = NO LIMIT.
+     *
+     * There is exactly one source: the autopilot's `SPEED_MAX` parameter, held in RAM only
+     * (never persisted — there is no local ceiling any more). When no usable value is
+     * available — never received, zero, out of range, stale, or the link is down — this
+     * returns 0 and the limiter does nothing, exactly as ArduPilot reads `SPEED_MAX = 0`.
+     */
+    float getSpeedLimitMs() const;
+
+    /**
+     * @brief Throttle ceiling the proportional taper is currently applying (%, 100 = inactive)
+     */
+    float getSpeedLimitCeilingPct() const { return limiterCeilingPct_; }
 
     /**
      * @brief Set ignition state with safety interlocks
@@ -204,6 +281,8 @@ private:
     // Input and output references
     MavlinkInterface& mavlink_;
     RelayController& relayController_;
+    SpeedSensor& speedSensor_;     // hall speed sensor (updated from main.cpp)
+    EngineHourMeter engineHours_;  // OWNED by value: a counter, not a shared device
     CANController canController_;  // CAN bus controller (owned, not reference)
 
     // State tracking
@@ -237,6 +316,21 @@ private:
     TransmissionController::Gear lastCommandedGear_;         // Last gear requested via MAVLink (dedup guard)
 
     bool transmissionInitialized_;  // True after first engine-running restore
+
+    uint32_t lastSpeedLimitWarnMs_; // rate limit for the "limiter armed, speed invalid" log
+
+    // Limiter ceiling tracking (log on change only)
+    float    lastSpeedLimitMs_;     // NAN sentinel = nothing logged yet
+    uint32_t lastSpeedLimitLogMs_;
+
+    // Proportional taper state. The ceiling is what gets rate-limited, never the demand.
+    float    limiterCeilingPct_;    // currently applied throttle ceiling (%, 100 = inactive)
+    uint32_t limiterLastMs_;        // millis() of the last taper evaluation (0 = first call)
+
+    // Standing web throttle demand (%), re-limited every loop so a vehicle accelerating past
+    // the ceiling on an unchanged web command is still clamped. Reset to 0 on every path that
+    // idles the throttle — a demand that outlives an idle command would reopen the throttle.
+    float    webThrottleDemandPct_;
 
     /**
      * @brief Apply fail-safe commands (center steering, idle throttle, stop actuators)
@@ -355,6 +449,35 @@ private:
      * CAN data is invalid.
      */
     void processCanProbeCommand(WebPortal& webPortal);
+
+    /**
+     * @brief Speed-sensor calibration commands (`speed_cal_ppr`, `speed_cal_circ`).
+     * Accepted regardless of the active input source, like the other calibration commands.
+     * There is deliberately no limiter command: the ceiling is the autopilot's alone.
+     */
+    void processSpeedCalPprCommand(float value, WebPortal& webPortal);
+    void processSpeedCalCircCommand(float value, WebPortal& webPortal);
+
+    /**
+     * @brief Max-speed throttle limiter, applied to the arbitrated driver/MAVLink/web
+     * throttle command only (the gear-boost PID owns throttle during a shift and is
+     * never touched here). Fails OPEN: an invalid/stale speed reading does not clamp.
+     *
+     * A PROPORTIONAL taper, not a step: the ceiling is 100 % at
+     * `limit - SPEED_LIMIT_TAPER_BAND_MS`, falls linearly to SPEED_LIMIT_FLOOR_PCT at the
+     * limit, and holds the floor above it — never a hard cut mid-corner. The ceiling itself
+     * is slew-limited so engagement cannot snap the servo. With no limit (0 m/s) the demand
+     * passes through untouched.
+     * @return the throttle percentage to command
+     */
+    float applySpeedLimit(float throttlePct);
+
+    /**
+     * @brief Log a limit change once, then hold off.
+     * Suppressed logs deliberately do NOT update the remembered state, so the settled value
+     * is logged on the next opportunity rather than being lost.
+     */
+    void logSpeedLimitChange(float limitMs);
 
     // Returns true when throttle should be clamped to TRANS_UNKNOWN_GEAR_THROTTLE_MAX.
     // Clips when gear position is invalid and physical gear is not neutral

@@ -7,13 +7,15 @@ VehicleController::VehicleController(SteeringController& steering,
                                      TransmissionController& transmission,
                                      BTS7960Controller& brake,
                                      MavlinkInterface& mavlink,
-                                     RelayController& relayController)
+                                     RelayController& relayController,
+                                     SpeedSensor& speedSensor)
     : steering_(steering),
       throttle_(throttle),
       transmission_(transmission),
       brake_(brake),
       mavlink_(mavlink),
       relayController_(relayController),
+      speedSensor_(speedSensor),
       currentInputSource_(InputSource::FAILSAFE),
       failsafeApplied_(false),
       webControl_(false),
@@ -34,7 +36,17 @@ VehicleController::VehicleController(SteeringController& steering,
       lastPIDThrottleUs_(THROTTLE_DEFAULT_IDLE_US),
       previousIgnitionState_(MavlinkInterface::IgnitionState::OFF),
       lastCommandedGear_(TransmissionController::Gear::GEAR_UNKNOWN),
-      transmissionInitialized_(false) {
+      transmissionInitialized_(false),
+      lastSpeedLimitWarnMs_(0),
+      lastSpeedLimitMs_(NAN),
+      lastSpeedLimitLogMs_(0),
+      limiterCeilingPct_(100.0f),
+      limiterLastMs_(0),
+      webThrottleDemandPct_(0.0f) {
+}
+
+void VehicleController::initEngineHourMeter() {
+    engineHours_.begin();
 }
 
 bool VehicleController::initCAN() {
@@ -61,13 +73,26 @@ void VehicleController::update() {
         Debug::printlnFeature(DebugFeature::VEHICLE, "[VEHICLE] Transmission initialized on engine start");
     }
 
-    // Pass vehicle data to transmission for safety checks
+    // Pass vehicle data to transmission for safety checks. Speed comes from the hall
+    // sensor (the CAN speed field is dead); the CAN fields still drive the timeout
+    // fallback used when the sensor reading is unavailable.
     CANController::VehicleData canData = canController_.getVehicleData();
     TransmissionVehicleData transData;
     transData.vehicleSpeed = canData.vehicleSpeed;
     transData.lastUpdateTime = canData.lastUpdateTime;
     transData.dataValid = canData.dataValid;
+    transData.sensorSpeedMs = speedSensor_.getSpeedMs();
+    transData.sensorSpeedValid = speedSensor_.isValid();
+    transData.sensorSpeedSuspicious = speedSensor_.isSuspicious();
     transmission_.setVehicleData(transData);
+
+    // Engine hour meter, from the SAME snapshot the transmission just got — no second
+    // getVehicleData() call, so the two consumers can never see different data in one
+    // iteration. An invalid CAN reading means the engine state is UNKNOWN, not "off": the
+    // interval is discarded rather than counted, because an unknown state must not invent
+    // hours. ENGINE_HOURS_MIN_RPM, not ENGINE_RUNNING_RPM_THRESHOLD — an hour meter must
+    // count idling, which the 1500 RPM gear-change safety threshold sits above.
+    engineHours_.update(canData.dataValid && canData.engineRPM >= ENGINE_HOURS_MIN_RPM, millis());
 
     // Update relay controller with engine RPM (for automatic cranking stop)
     relayController_.update(canData.engineRPM);
@@ -77,8 +102,35 @@ void VehicleController::update() {
         processMavlinkCommands();
     }
 
+    // Perform a latched trip reset. The transport validates and acknowledges the COMMAND_LONG
+    // but never holds a SpeedSensor& — the vehicle layer owns the counters, so the request is
+    // consumed here regardless of which input source is active.
+    //
+    // ONE gesture clears BOTH trip readings. The trip distance and the trip hours describe the
+    // same "since the operator last pressed reset" interval in two units, so a command that
+    // zeroed one and left the other would leave the pair permanently incomparable. This is the
+    // ONLY call site of EngineHourMeter::resetTrip(): there is no second command, no extra
+    // param1 magic and no web control — deliberately, so the two can never diverge.
+    if (mavlink_.consumeTripResetRequest()) {
+        speedSensor_.resetTrip();
+        engineHours_.resetTrip();   // TRIP hours only — the TOTAL hour meter is untouched
+    }
+
     // Apply fail-safe if needed
     applyFailsafe();
+
+    // Re-apply the limiter to the STANDING web throttle demand every loop. The MAVLink path
+    // already re-reads its channel every iteration, so it was always re-limited; the web path
+    // used to clamp only at command time, which meant a vehicle accelerating past the ceiling on
+    // an unchanged 80 % slider was never clamped until the operator touched the slider again.
+    // Calibration owns the servo directly, and the gear-boost PID writes µs — both stay clear.
+    if (currentInputSource_ == InputSource::WEB && !gearBoostActive_ && !throttle_.isCalibrating()) {
+        float demandPct = webThrottleDemandPct_;
+        if (shouldClipThrottle()) {
+            demandPct = min(TRANS_UNKNOWN_GEAR_THROTTLE_MAX, demandPct);
+        }
+        throttle_.setThrottlePercent(applySpeedLimit(demandPct));
+    }
 
     // PID-controlled RPM boost during gear changes or manual test (overrides MAVLink/web throttle)
     if (transmission_.needsThrottleBoost() || gearBoostActive_ || boostManualActive_) {
@@ -104,6 +156,10 @@ void VehicleController::setInputSource(InputSource source) {
                      (source == InputSource::MAVLINK) ? INPUT_SOURCE_NAME_MAVLINK :
                      (source == InputSource::WEB) ? INPUT_SOURCE_NAME_WEB :
                      INPUT_SOURCE_NAME_FAILSAFE);
+        if (source == InputSource::WEB) {
+            webThrottleDemandPct_ = 0.0f;
+            throttle_.idle();
+        }
     }
     currentInputSource_ = source;
 }
@@ -116,6 +172,7 @@ void VehicleController::setWebControl(bool on) {
         // Snap to a safe state on takeover so we don't inherit the autopilot's live throttle.
         // Steering / gear / brake hold their current positions (no lurch).
         throttle_.idle();
+        webThrottleDemandPct_ = 0.0f;   // never inherit a stale demand into the next loop
         gearBoostActive_ = false;
         boostManualActive_ = false;
     }
@@ -144,6 +201,7 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
     } else if (cmd.cmd == "set_wheel_lock") {
         // Front-wheel lock always available (not restricted by input source)
         processWheelLockCommand(cmd.boolValue, webPortal);
+        return;
         return;
     } else if (cmd.cmd == "steer_cal_center" || cmd.cmd == "steer_cal_left" || cmd.cmd == "steer_cal_right") {
         processSteerCalCommand(cmd.cmd, webPortal);
@@ -178,6 +236,12 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
     } else if (cmd.cmd == "throttle_cal_cancel") {
         processThrottleCalCancel(webPortal);
         return;
+    } else if (cmd.cmd == "speed_cal_ppr") {
+        processSpeedCalPprCommand(cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "speed_cal_circ") {
+        processSpeedCalCircCommand(cmd.floatValue, webPortal);
+        return;
     } else if (cmd.cmd == "can_probe") {
         // ECU capability probe — available regardless of input source (diagnostic)
         processCanProbeCommand(webPortal);
@@ -185,6 +249,11 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
     }
 
     Debug::printfFeature(DebugFeature::VEHICLE, "[WEB] Command end %s\n", cmd.cmd);
+    if (currentInputSource_ != InputSource::WEB) {
+        webPortal.sendResponse(false, "MAVLink control active");
+        return;
+    }
+
     // Process control commands
     if (cmd.cmd == "set_gear") {
         processGearCommand(cmd.strValue, webPortal);
@@ -204,7 +273,22 @@ String VehicleController::getCurrentGearString() const {
         case TransmissionController::Gear::GEAR_NEUTRAL: return "N";
         case TransmissionController::Gear::GEAR_LOW: return "L";
         case TransmissionController::Gear::GEAR_HIGH: return "H";
-        default: return "N";
+        // Physical gear unknown (ambiguous switches or none active):
+        // report it as unknown rather than presenting a plausible gear as current.
+        default: return "?";
+    }
+}
+
+int8_t VehicleController::getTravelDirection() const {
+    // PHYSICAL gear only — see the header. Both forward ratios drive the same direction.
+    switch (transmission_.getPhysicalGear()) {
+        case TransmissionController::Gear::GEAR_REVERSE: return -1;
+        case TransmissionController::Gear::GEAR_LOW:     return  1;
+        case TransmissionController::Gear::GEAR_HIGH:    return  1;
+        // NEUTRAL, and GEAR_UNKNOWN (ambiguous switches, none active, or the
+        // brief mid-shift window): no direction to report, so the sample is suppressed
+        // rather than signed by a guess.
+        default: return 0;
     }
 }
 
@@ -235,11 +319,17 @@ void VehicleController::applyFailsafe() {
         Debug::printlnFeature(DebugFeature::VEHICLE, "[FAILSAFE] Entering safe state");
         steering_.setSteeringPercent(0.0f);
         throttle_.idle();
+        webThrottleDemandPct_ = 0.0f;  // a demand that outlives the idle would reopen the throttle
         brake_.stop();         // Stop brake actuator (hold position)
         brakeIsMoving_ = false;
         brakeSensorTriggerTime_ = 0;  // Reset sensor trigger
         transmission_.stop();  // Stop transmission actuator
         relayController_.allOff();  // Turn off ignition and lights
+        // A fail-safe is a power-down in every respect that matters to the persisted counters
+        // (distance and engine hours), so flush both once here — on entry only, guarded by
+        // !failsafeApplied_ above.
+        speedSensor_.persistDistance();
+        engineHours_.persist();
         previousIgnitionState_ = MavlinkInterface::IgnitionState::OFF;  // Reset ignition tracking
         lastCommandedGear_ = TransmissionController::Gear::GEAR_UNKNOWN;  // Force re-eval on restore
         failsafeApplied_ = true;
@@ -265,7 +355,7 @@ void VehicleController::processMavlinkCommands() {
         if (shouldClipThrottle()) {
             throttlePct = min(TRANS_UNKNOWN_GEAR_THROTTLE_MAX, throttlePct);
         }
-        throttle_.setThrottlePercent(throttlePct);
+        throttle_.setThrottlePercent(applySpeedLimit(throttlePct));
     }
 
     // Apply gear selection — retry until setGear() accepts the command
@@ -290,6 +380,13 @@ void VehicleController::processMavlinkCommands() {
     switch (ignitionState) {
         case MavlinkInterface::IgnitionState::OFF:
             relayController_.setIgnitionState(RelayController::IgnitionState::OFF);
+            // Flush the persisted counters (distance and engine hours) on the TRANSITION into
+            // OFF only, so a normal shutdown loses nothing — not on every iteration OFF is
+            // merely being held.
+            if (previousIgnitionState_ != MavlinkInterface::IgnitionState::OFF) {
+                speedSensor_.persistDistance();
+                engineHours_.persist();
+            }
             break;
         case MavlinkInterface::IgnitionState::ACC:
             relayController_.setIgnitionState(RelayController::IgnitionState::ACC);
@@ -371,8 +468,129 @@ void VehicleController::processThrottleCommand(float value, WebPortal& webPortal
     if (shouldClipThrottle()) {
         value = min(TRANS_UNKNOWN_GEAR_THROTTLE_MAX, value);
     }
-    throttle_.setThrottlePercent(value);
+    // Record the operator's standing demand; update() re-limits it every loop from here on.
+    webThrottleDemandPct_ = value;
+    throttle_.setThrottlePercent(applySpeedLimit(value));
     webPortal.sendResponse(true, "Throttle set");
+}
+
+// ============================================================================
+// MAX-SPEED LIMITER — SPEED_MAX ceiling and proportional taper
+// ============================================================================
+
+float VehicleController::getSpeedLimitMs() const {
+    // ONE source, no arbitration and no master switch: the autopilot's SPEED_MAX. Anything that
+    // makes that value untrustworthy — never received, zero, out of range, stale, link down —
+    // is reported as 0, which means NO LIMITING. That matches ArduPilot's own reading of a zero
+    // SPEED_MAX and the value Mission Planner's speed-limit sign writes to clear a limit.
+    if (!mavlink_.hasSpeedMaxParam()) {
+        return 0.0f;
+    }
+    return mavlink_.getSpeedMaxMs();
+}
+
+void VehicleController::logSpeedLimitChange(float limitMs) {
+    bool changed = isnan(lastSpeedLimitMs_) ||
+                   fabsf(limitMs - lastSpeedLimitMs_) > SPEED_LIMIT_LOG_EPSILON_MS;
+    if (!changed) {
+        return;
+    }
+    uint32_t now = millis();
+    // Hold-off. While suppressed the remembered state is deliberately NOT updated, so whatever
+    // the value settles on is logged on the next opportunity instead of being swallowed.
+    if (lastSpeedLimitLogMs_ != 0 && (now - lastSpeedLimitLogMs_) < SPEED_LIMIT_LOG_MIN_MS) {
+        return;
+    }
+    lastSpeedLimitLogMs_ = now;
+    lastSpeedLimitMs_ = limitMs;
+    if (limitMs <= 0.0f) {
+        Debug::printlnFeature(DebugFeature::VEHICLE,
+            "[SPEED] Speed limit: none (no usable SPEED_MAX) — not limiting");
+    } else {
+        Debug::printfFeature(DebugFeature::VEHICLE,
+            "[SPEED] Speed limit: %.2f m/s (%.1f km/h) from SPEED_MAX\n",
+            limitMs, limitMs * MS_TO_KMH);
+    }
+}
+
+float VehicleController::applySpeedLimit(float throttlePct) {
+    float limitMs = getSpeedLimitMs();
+    logSpeedLimitChange(limitMs);
+
+    if (limitMs <= 0.0f) {
+        // No usable SPEED_MAX => no limiting at all. Reset the taper so the next limit that
+        // arrives never resumes from a stale low ceiling.
+        limiterCeilingPct_ = 100.0f;
+        limiterLastMs_ = 0;
+        return throttlePct;
+    }
+
+    // Fail OPEN on sensor loss. The limiter only ever acts NEAR AND ABOVE the maximum speed, and a
+    // lost sensor reads 0 m/s — clamping throttle on a reading we do not trust, mid-manoeuvre,
+    // is the more dangerous failure. Over-speed protection assumes a working sensor.
+    if (!speedSensor_.isValid()) {
+        uint32_t now = millis();
+        if (lastSpeedLimitWarnMs_ == 0 || (now - lastSpeedLimitWarnMs_) >= SPEED_LIMIT_WARN_MS) {
+            lastSpeedLimitWarnMs_ = now;
+            Debug::printlnFeature(DebugFeature::VEHICLE,
+                "[SPEED] WARNING: speed limit active but speed reading is invalid — not clamping (fail open)");
+        }
+        limiterCeilingPct_ = 100.0f;
+        limiterLastMs_ = 0;
+        return throttlePct;
+    }
+    lastSpeedLimitWarnMs_ = 0;
+
+    // Proportional taper: full authority up to `limit - band`, falling linearly to the floor at
+    // the limit, floor above it. A floor rather than zero — cutting all drive mid-corner is a
+    // stability event, not a safety feature.
+    float over = speedSensor_.getSpeedMs() - (limitMs - SPEED_LIMIT_TAPER_BAND_MS);
+    float targetPct;
+    if (over <= 0.0f) {
+        targetPct = 100.0f;
+    } else if (over >= SPEED_LIMIT_TAPER_BAND_MS) {
+        targetPct = SPEED_LIMIT_FLOOR_PCT;
+    } else {
+        targetPct = 100.0f - (100.0f - SPEED_LIMIT_FLOOR_PCT) * (over / SPEED_LIMIT_TAPER_BAND_MS);
+    }
+
+    // Slew-limit the CEILING (not the demand — the driver's own stick moves must pass through at
+    // full rate). dt is capped at 1 s and the first evaluation adopts the target directly, so a
+    // stalled or just-restarted loop cannot integrate an unknown interval into a step change.
+    uint32_t now = millis();
+    if (limiterLastMs_ == 0) {
+        limiterCeilingPct_ = targetPct;
+    } else {
+        float dt = (now - limiterLastMs_) / 1000.0f;
+        if (dt > 1.0f) dt = 1.0f;
+        float maxStep = SPEED_LIMIT_CEILING_SLEW_PCT_S * dt;
+        float delta = constrain(targetPct - limiterCeilingPct_, -maxStep, maxStep);
+        limiterCeilingPct_ += delta;
+    }
+    limiterLastMs_ = now;
+    limiterCeilingPct_ = constrain(limiterCeilingPct_, SPEED_LIMIT_FLOOR_PCT, 100.0f);
+
+    return min(throttlePct, limiterCeilingPct_);
+}
+
+void VehicleController::processSpeedCalPprCommand(float value, WebPortal& webPortal) {
+    int32_t ppr = (int32_t)lroundf(value);
+    if (!speedSensor_.setPulsesPerRev(ppr)) {
+        webPortal.sendResponse(false, "Pulses/rev out of range (" + String(SPEED_PPR_MIN) + "-" +
+                                      String(SPEED_PPR_MAX) + ")");
+        return;
+    }
+    webPortal.sendResponse(true, "Pulses/rev set to " + String(ppr));
+}
+
+void VehicleController::processSpeedCalCircCommand(float value, WebPortal& webPortal) {
+    if (!speedSensor_.setWheelCircumferenceMm(value)) {
+        webPortal.sendResponse(false, "Wheel circumference out of range (" +
+                                      String((int)SPEED_CIRC_MIN_MM) + "-" +
+                                      String((int)SPEED_CIRC_MAX_MM) + " mm)");
+        return;
+    }
+    webPortal.sendResponse(true, "Wheel circumference set to " + String(value, 0) + " mm");
 }
 
 void VehicleController::processThrottleCalBegin(WebPortal& webPortal) {
@@ -530,6 +748,15 @@ bool VehicleController::setIgnitionState(const String& state, String& errorMsg) 
             Debug::printfFeature(DebugFeature::VEHICLE, "[IGNITION] Rejected: engine already running (RPM: %d)\n", canData.engineRPM);
             return false;
         }
+    }
+
+    // Flush the persisted counters (distance and engine hours) on the TRANSITION into OFF
+    // only — the web twin of the MAVLink ignition-OFF flush; re-selecting OFF while already
+    // OFF writes nothing.
+    if (targetState == RelayController::IgnitionState::OFF &&
+        currentState != RelayController::IgnitionState::OFF) {
+        speedSensor_.persistDistance();
+        engineHours_.persist();
     }
 
     // Apply ignition state
@@ -760,6 +987,7 @@ void VehicleController::updateGearBoostPID() {
         Debug::printlnFeature(DebugFeature::VEHICLE, "[BOOST] Gear change complete, releasing PID");
         canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM);
         throttle_.idle();
+        webThrottleDemandPct_ = 0.0f;  // the boost released to IDLE — don't let the old web demand undo it
         gearBoostActive_ = false;
         return;
     }
@@ -786,6 +1014,7 @@ void VehicleController::updateGearBoostPID() {
         canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM);
         gearBoostActive_ = false;
         throttle_.idle();
+        webThrottleDemandPct_ = 0.0f;  // same reasoning as the normal release above
         return;
     }
 
