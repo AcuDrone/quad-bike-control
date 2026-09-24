@@ -256,6 +256,41 @@ public:
     float getSpeedLimitCeilingPct() const { return limiterCeilingPct_; }
 
     /**
+     * @brief Where the steering speed-scaling base in use came from.
+     * Reported to the portal so "the steering feels weak" can be diagnosed without a console.
+     */
+    enum class SteerScaleSource : uint8_t {
+        NONE = 0,       // no base at all — not scaling
+        LOCAL = 1,      // the ESP32's own NVS value (steer_sca_base)
+        AUTOPILOT = 2   // the autopilot's MOT_SPD_SCA_BASE
+    };
+
+    /**
+     * @brief The steering speed-scaling base in use, m/s. 0 = none, i.e. no scaling.
+     *
+     * Local NVS value first, the autopilot's `MOT_SPD_SCA_BASE` second, nothing third. The
+     * priority is fixed and one-directional: there is no arbitration and no compile-time
+     * default, because a base nobody chose would silently restrict the steering of an
+     * unconfigured vehicle.
+     */
+    float getSteerScaleBaseMs() const;
+
+    /** @brief Source of the base returned by getSteerScaleBaseMs(). */
+    SteerScaleSource getSteerScaleSource() const;
+
+    /**
+     * @brief The scale actually applied to autopilot steering commands after rate limiting,
+     * 0..1. ALWAYS finite and never NaN — 1.0 is the definite answer "not scaling".
+     */
+    float getSteerScale() const { return steerScaleApplied_; }
+
+    /**
+     * @brief Live bench test-speed override in m/s, 0 when none is in force.
+     * RAM only, never persisted, and it reaches NOTHING but the steering-scale calculation.
+     */
+    float getSteerTestSpeedMs() const;
+
+    /**
      * @brief Set ignition state with safety interlocks
      * @param state Ignition state string (OFF/ACC/IGNITION/START)
      * @param errorMsg Output parameter for error message if operation fails
@@ -371,6 +406,23 @@ private:
     // Proportional taper state. The ceiling is what gets rate-limited, never the demand.
     float    limiterCeilingPct_;    // currently applied throttle ceiling (%, 100 = inactive)
     uint32_t limiterLastMs_;        // millis() of the last taper evaluation (0 = first call)
+
+    // Steering speed scaling. `steerScaBaseMs_` is the LOCAL (NVS-backed) base in m/s; 0 means
+    // "not set", which falls through to the autopilot's MOT_SPD_SCA_BASE and then to no scaling
+    // at all. The applied scale is what gets rate-limited, never the steering command.
+    float    steerScaBaseMs_;       // local base from NVS "steering"/steer_sca_base (0 = not set)
+    float    steerScaleApplied_;    // scale actually applied, 0..1 (1 = not scaling) — never NaN
+    uint32_t steerScaleLastMs_;     // millis() of the last slew evaluation (0 = first call)
+    uint32_t lastSteerScaleWarnMs_; // rate limit for the "no base" / "speed invalid" warnings
+    float    lastSteerScaleLogged_; // NAN sentinel = nothing logged yet
+    uint32_t lastSteerScaleLogMs_;
+
+    // Bench test-speed override. RAM ONLY, never persisted, cleared by a reboot and by its own
+    // STEER_SCALE_TEST_SPEED_MS fuse. It substitutes a speed for the SCALING CALCULATION ONLY —
+    // the odometry, VFR_HUD, the SPEED_MAX limiter, the transmission interlock and the odometer
+    // all keep using the real measured speed, so a bench setting cannot become a driving one.
+    float    steerTestSpeedMs_;     // 0 = no override in force
+    uint32_t steerTestSpeedSetMs_;  // millis() the override was set (0 = none)
 
     // Standing web throttle demand (%), re-limited every loop so a vehicle accelerating past
     // the ceiling on an unchanged web command is still clamped. Reset to 0 on every path that
@@ -514,6 +566,44 @@ private:
      */
     void processSpeedCalPprCommand(float value, WebPortal& webPortal);
     void processSpeedCalCircCommand(float value, WebPortal& webPortal);
+
+    /**
+     * @brief Steering speed-scaling commands (`set_steer_sca_base`, `set_test_speed`).
+     * Accepted regardless of the active input source, like the calibration commands above.
+     * The base is persisted to NVS; the test speed is RAM-only and expires by itself.
+     */
+    void processSetSteerScaBaseCommand(float value, WebPortal& webPortal);
+    void processSetTestSpeedCommand(float value, WebPortal& webPortal);
+
+    /**
+     * @brief Speed-scale the AUTOPILOT steering command. ArduPilot's own formula,
+     * `scale = min(1, base / speed)`, applied as `steeringPct *= scale` — the percentage is
+     * already signed about a centre of zero, so this scales the DEVIATION FROM CENTRE and
+     * leaves a centred command centred.
+     *
+     * ANY fault gives scale = 1 and an unmodified command: no base, an invalid speed reading,
+     * or an autopilot mode that is known and is not Rover MANUAL. There is deliberately NO
+     * hold, NO substitute speed and NO minimum floor — every one of those is a way for a sensor
+     * fault to leave the driver with restricted steering, which is the failure this exists to
+     * eliminate. An unknown or stale mode is treated as MANUAL: it is the mode this vehicle is
+     * driven in, and being wrong only means the assist keeps working.
+     *
+     * The applied scale is slew-limited (STEER_SCALE_SLEW_PER_S, both directions); the rate
+     * limit is on the SCALE, never on the command, so the driver's own steering movements are
+     * never slowed by the assist.
+     *
+     * @return the steering percentage to command
+     */
+    float applySteeringScale(float steeringPct);
+
+    /**
+     * @brief Log a scale change once, then hold off.
+     * Suppressed logs deliberately do NOT update the remembered state, so whatever the scale
+     * settles on is logged on the next opportunity rather than being lost — the
+     * logSpeedLimitChange() rule.
+     */
+    void logSteerScaleChange(float scale, float speedMs, bool speedIsTest,
+                             float baseMs, SteerScaleSource source);
 
     /**
      * @brief Max-speed throttle limiter, applied to the arbitrated driver/MAVLink/web

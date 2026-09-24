@@ -318,6 +318,9 @@ void loop() {
     report.steerPercent     = steering.getSteeringPercent();       // -100 left .. 0 .. +100 right
     report.steerSensorOk    = steering.isSensorOk();
     report.steerCalibrated  = steering.isCalibrated();
+    // The applied steering speed-scale (STEER_SCA). Always finite, 1.0 = not scaling — there is
+    // no "unknown" state, so this is never gated and never NaN.
+    report.steerScale       = vehicleController.getSteerScale();
     mavlinkInterface.report(report);
 
     // Broadcast telemetry to web clients

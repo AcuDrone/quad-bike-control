@@ -7,7 +7,7 @@
 #include <esp_timer.h>  // esp_timer_get_time() — 64-bit monotonic µs (micros() wraps every ~71 min)
 
 namespace {
-// The five steering-VESC NAMED_VALUE_FLOAT names, as compile-time literals. They are NEVER
+// The six steering NAMED_VALUE_FLOAT names, as compile-time literals. They are NEVER
 // built at runtime: the wire field is exactly 10 bytes and the truncation a longer name would
 // suffer is silent, so each one is checked here instead. sizeof(literal) - 1 is the length
 // without the terminator; a name of exactly 10 characters is legal and goes out WITHOUT a NUL
@@ -17,12 +17,14 @@ constexpr char NV_STEER_A[]   = "STEER_A";     // VESC average MOTOR current, A
 constexpr char NV_VESC_V[]    = "VESC_V";      // VESC input voltage (24 V boost rail), V
 constexpr char NV_VESC_TEMP[] = "VESC_TEMP";   // VESC FET temperature, °C
 constexpr char NV_VESC_OK[]   = "VESC_OK";     // VESC link flag, 1.0 / 0.0 — never NaN
+constexpr char NV_STEER_SCA[] = "STEER_SCA";   // applied steering speed-scale, 0..1 — never NaN
 
 static_assert(sizeof(NV_STEER_POS) - 1 <= 10, "NAMED_VALUE_FLOAT name field is 10 bytes");
 static_assert(sizeof(NV_STEER_A)   - 1 <= 10, "NAMED_VALUE_FLOAT name field is 10 bytes");
 static_assert(sizeof(NV_VESC_V)    - 1 <= 10, "NAMED_VALUE_FLOAT name field is 10 bytes");
 static_assert(sizeof(NV_VESC_TEMP) - 1 <= 10, "NAMED_VALUE_FLOAT name field is 10 bytes");
 static_assert(sizeof(NV_VESC_OK)   - 1 <= 10, "NAMED_VALUE_FLOAT name field is 10 bytes");
+static_assert(sizeof(NV_STEER_SCA) - 1 <= 10, "NAMED_VALUE_FLOAT name field is 10 bytes");
 }  // namespace
 
 MavlinkInterface::MavlinkInterface()
@@ -42,9 +44,10 @@ MavlinkInterface::MavlinkInterface()
       targetKnown_(false),
       lastStreamRequestTime_(0),
       targetLearnedMs_(0),
-      speedMaxMs_(NAN),
-      speedMaxRxMs_(0),
-      lastParamRequestMs_(0),
+      baseMode_(0),
+      customMode_(0),
+      modeReceived_(false),
+      modeRxMs_(0),
       lastHeartbeatTx_(0),
       lastReportTx_(0),
       lastSteerSlowTx_(0),
@@ -57,6 +60,13 @@ MavlinkInterface::MavlinkInterface()
     }
     lastGear_[0] = '\0';
     lastIgnition_[0] = '\0';
+
+    // The subscription table. Built here rather than as a file-scope constant because each
+    // entry carries mutable state (value / receipt time / poll timestamp) beside its constants.
+    params_[PARAM_IDX_SPEED_MAX]    = { MAVLINK_PARAM_SPEED_MAX_ID,
+                                        MAVLINK_PARAM_SPEED_MAX_MS,    NAN, 0, 0 };
+    params_[PARAM_IDX_SPD_SCA_BASE] = { MAVLINK_PARAM_SPD_SCA_BASE_ID,
+                                        MAVLINK_PARAM_SPD_SCA_BASE_MAX, NAN, 0, 0 };
 }
 
 bool MavlinkInterface::begin(uint8_t rxPin, uint8_t txPin, uint8_t uartNum, uint32_t baud) {
@@ -85,11 +95,19 @@ bool MavlinkInterface::begin(uint8_t rxPin, uint8_t txPin, uint8_t uartNum, uint
     rateWindowStart_ = now;
     rateWindowCount_ = 0;
     lastOdomTimeUs_ = 0;       // no odometry baseline yet → the first send re-baselines
-    speedMaxMs_ = NAN;         // no SPEED_MAX yet → the vehicle layer does not limit at all
-    speedMaxRxMs_ = 0;
-    lastParamRequestMs_ = 0;   // first poll is scheduled off targetLearnedMs_
+    // No parameter values yet → the vehicle layer does not limit at all and does not scale
+    // steering from an autopilot base. The first poll of each is scheduled off targetLearnedMs_.
+    for (uint8_t i = 0; i < PARAM_COUNT; i++) {
+        params_[i].valueMs = NAN;
+        params_[i].rxMs = 0;
+        params_[i].lastRequestMs = 0;
+    }
+    baseMode_ = 0;             // no flight mode yet → consumers see it as unavailable
+    customMode_ = 0;
+    modeReceived_ = false;
+    modeRxMs_ = 0;
     tripResetPending_ = false; // no inbound command yet
-    lastSteerSlowTx_ = 0;      // first VESC_TEMP / VESC_OK go out on the first report() call
+    lastSteerSlowTx_ = 0;      // first VESC_TEMP / VESC_OK / STEER_SCA go out on the first report()
 
     Debug::printfFeature(DebugFeature::MAVLINK,
         "[MAV] Initialized on UART%d RX=%d TX=%d @ %lu baud (MAVLink2)\n",
@@ -110,9 +128,14 @@ void MavlinkInterface::update() {
         uint8_t c = (uint8_t)serial_->read();
         if (mavlink_parse_char(MAVLINK_COMM_0, c, &msg, &status)) {
             switch (msg.msgid) {
-                case MAVLINK_MSG_ID_HEARTBEAT:
-                    handleHeartbeat(msg.sysid, msg.compid);
+                case MAVLINK_MSG_ID_HEARTBEAT: {
+                    // Decoded now, where it used to be only timestamped: the autopilot's flight
+                    // mode gates the steering speed scaling, which is correct in MANUAL only.
+                    mavlink_heartbeat_t hb;
+                    mavlink_msg_heartbeat_decode(&msg, &hb);
+                    handleHeartbeat(msg.sysid, msg.compid, hb.base_mode, hb.custom_mode);
                     break;
+                }
                 case MAVLINK_MSG_ID_SERVO_OUTPUT_RAW: {
                     mavlink_servo_output_raw_t so;
                     mavlink_msg_servo_output_raw_decode(&msg, &so);
@@ -172,18 +195,27 @@ void MavlinkInterface::update() {
         lastStreamRequestTime_ = now;
     }
 
-    // Poll the autopilot's SPEED_MAX. The poll NEVER stops once a value has been received —
-    // it IS the change detector. ArduPilot does broadcast a PARAM_VALUE after a PARAM_SET, but
-    // whether that broadcast reaches a peripheral component depends on the firmware version and
-    // the routing between ports, so the unsolicited path (handled in the RX switch) is treated as
-    // an optimisation and this poll as the guarantee. One 20-byte request every 5 s is negligible
-    // beside the 25 Hz command stream on the same 115200 link.
-    if (targetKnown_ && isLinkUp() &&
-        (lastParamRequestMs_ == 0
-            ? (now - targetLearnedMs_) >= MAVLINK_PARAM_FIRST_DELAY_MS
-            : (now - lastParamRequestMs_) >= MAVLINK_PARAM_POLL_MS)) {
-        requestSpeedMaxParam();
-        lastParamRequestMs_ = now;
+    // Poll the subscribed autopilot parameters (SPEED_MAX, MOT_SPD_SCA_BASE). The poll NEVER
+    // stops once a value has been received — it IS the change detector. ArduPilot does broadcast
+    // a PARAM_VALUE after a PARAM_SET, but whether that broadcast reaches a peripheral component
+    // depends on the firmware version and the routing between ports, so the unsolicited path
+    // (handled in the RX switch) is treated as an optimisation and this poll as the guarantee.
+    // Two 20-byte requests every 5 s are negligible beside the 25 Hz command stream on the same
+    // 115200 link.
+    //
+    // At most ONE request leaves per loop iteration (the break). That is the stagger: two
+    // PARAM_REQUEST_READ frames due in the same millisecond would contend for the same window on
+    // the 115200 link, and at the ≥ 25 Hz loop rate the second one follows within 40 ms anyway.
+    if (targetKnown_ && isLinkUp()) {
+        for (uint8_t i = 0; i < PARAM_COUNT; i++) {
+            if (params_[i].lastRequestMs == 0
+                    ? (now - targetLearnedMs_) >= MAVLINK_PARAM_FIRST_DELAY_MS
+                    : (now - params_[i].lastRequestMs) >= MAVLINK_PARAM_POLL_MS) {
+                requestParam(i);
+                params_[i].lastRequestMs = now;
+                break;
+            }
+        }
     }
 
     // Rolling command-rate estimate
@@ -216,31 +248,56 @@ void MavlinkInterface::update() {
         // viso count means a gate is closed (link, speed validity, or rolling in
         // neutral/unknown); a dt far from MAVLINK_REPORT_TX_MS means the baseline keeps
         // being re-established, i.e. a gate is flapping.
-        // spdmax/age/valid make the SPEED_MAX subscription diagnosable on serial alone:
-        // "nan" = never received, a sawtooth age 0→MAVLINK_PARAM_POLL_MS = the poll is answered,
-        // and valid:N with a real value = stale or link down (the vehicle layer stops limiting).
+        // spdmax/scabase + age/valid make BOTH parameter subscriptions diagnosable on serial
+        // alone: "nan" = never received, a sawtooth age 0→MAVLINK_PARAM_POLL_MS = the poll is
+        // answered, and valid:N with a real value = stale or link down (the vehicle layer stops
+        // limiting / stops scaling). mode is the autopilot's custom_mode with its availability
+        // flag, so "not scaling because the autopilot is not in MANUAL" (Rover MANUAL = 0) is
+        // distinguishable from "not scaling because there is no base" without a ground station.
         Debug::printfFeature(DebugFeature::MAVLINK,
-            "[MAV] viso:%lu dt:%lums spdmax:%.2fm/s age:%lums valid:%s\n",
+            "[MAV] viso:%lu dt:%lums spdmax:%.2fm/s age:%lums valid:%s "
+            "scabase:%.2fm/s age:%lums valid:%s mode:%lu/%s\n",
             (unsigned long)odomTxCount_, (unsigned long)lastOdomDtMs_,
-            speedMaxMs_, (unsigned long)getSpeedMaxAgeMs(),
-            hasSpeedMaxParam() ? "Y" : "N");
+            params_[PARAM_IDX_SPEED_MAX].valueMs, (unsigned long)getSpeedMaxAgeMs(),
+            hasSpeedMaxParam() ? "Y" : "N",
+            params_[PARAM_IDX_SPD_SCA_BASE].valueMs, (unsigned long)getSpdScaBaseAgeMs(),
+            hasSpdScaBaseParam() ? "Y" : "N",
+            (unsigned long)customMode_, hasAutopilotMode() ? "Y" : "N");
     }
 }
 
-void MavlinkInterface::handleHeartbeat(uint8_t sysid, uint8_t compid) {
+void MavlinkInterface::handleHeartbeat(uint8_t sysid, uint8_t compid,
+                                       uint8_t baseMode, uint32_t customMode) {
     // Accept the autopilot's heartbeat as the command target.
     if (compid == MAV_COMP_ID_AUTOPILOT1) {
         if (!targetKnown_) {
             targetSystem_ = sysid;
             targetComponent_ = compid;
             targetKnown_ = true;
-            targetLearnedMs_ = millis();   // schedules the first SPEED_MAX request
+            targetLearnedMs_ = millis();   // schedules the first parameter requests
             Debug::printfFeature(DebugFeature::MAVLINK,
                 "[MAV] Autopilot learned: sys=%u comp=%u\n", sysid, compid);
         }
         lastHeartbeatTime_ = millis();
         heartbeatSeen_ = true;
+
+        // The flight mode is stored for the LEARNED autopilot ONLY — not for every heartbeat
+        // that happens to carry MAV_COMP_ID_AUTOPILOT1. A ground station or any other component
+        // sharing the wire must not be able to make this vehicle believe it is in another mode.
+        if (sysid == targetSystem_ && compid == targetComponent_) {
+            baseMode_ = baseMode;
+            customMode_ = customMode;
+            modeReceived_ = true;
+            modeRxMs_ = lastHeartbeatTime_;
+        }
     }
+}
+
+bool MavlinkInterface::hasAutopilotMode() const {
+    // Received since begin() AND the link is up. There is no separate staleness gate: the
+    // heartbeat IS the link timer, so isLinkUp() already means "a heartbeat within
+    // MAVLINK_HEARTBEAT_TIMEOUT_MS", and modeRxMs_ is kept for diagnostics only.
+    return modeReceived_ && isLinkUp();
 }
 
 void MavlinkInterface::handleServoOutputRaw(const uint16_t* servoUs) {
@@ -287,10 +344,18 @@ void MavlinkInterface::requestServoOutputStream() {
 }
 
 // ============================================================================
-// AUTOPILOT PARAMETER SUBSCRIPTION (SPEED_MAX) — READ-ONLY
+// AUTOPILOT PARAMETER SUBSCRIPTION (SPEED_MAX, MOT_SPD_SCA_BASE) — READ-ONLY
 // ============================================================================
+//
+// ONE mechanism for both parameters: one poll, one PARAM_VALUE handler, one sender filter, one
+// param_id termination fix and one set of value-hygiene rules. Each table entry keeps its own
+// value, receipt time, poll timestamp and upper bound — nothing else differs between them.
+// A second, parallel copy of this code is exactly how one of the two ends up missing a fix.
 
-void MavlinkInterface::requestSpeedMaxParam() {
+void MavlinkInterface::requestParam(uint8_t index) {
+    if (index >= PARAM_COUNT || !serial_) {
+        return;
+    }
     mavlink_message_t msg;
     uint8_t buf[MAVLINK_MAX_PACKET_LEN];
 
@@ -299,7 +364,7 @@ void MavlinkInterface::requestSpeedMaxParam() {
     mavlink_msg_param_request_read_pack(
         MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &msg,
         targetSystem_, targetComponent_,
-        MAVLINK_PARAM_SPEED_MAX_ID,
+        params_[index].id,
         -1);
     uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
     serial_->write(buf, len);
@@ -307,8 +372,9 @@ void MavlinkInterface::requestSpeedMaxParam() {
 
 void MavlinkInterface::handleParamValue(uint8_t sysid, uint8_t compid,
                                         const char* paramId, float value) {
-    // Only the LEARNED autopilot may move this vehicle's speed ceiling. A ground station on the
-    // same wire (typically sysid 255) must not be able to, and neither may any other component.
+    // Only the LEARNED autopilot may move this vehicle's speed ceiling or its steering-scale
+    // base. A ground station on the same wire (typically sysid 255) must not be able to, and
+    // neither may any other component.
     if (!targetKnown_ || sysid != targetSystem_ || compid != targetComponent_) {
         return;
     }
@@ -318,56 +384,81 @@ void MavlinkInterface::handleParamValue(uint8_t sysid, uint8_t compid,
     char id[17];
     memcpy(id, paramId, 16);
     id[16] = '\0';
-    if (strcmp(id, MAVLINK_PARAM_SPEED_MAX_ID) != 0) {
-        return;
-    }
 
-    // Reject anything that is not a usable speed, and leave the previous value standing: one
-    // corrupt frame must not invalidate a good subscription. NaN matters most — it makes every
-    // "speed <= limit" comparison false, which would pin the throttle ceiling at the floor.
-    if (isnan(value) || isinf(value) || value < 0.0f || value > MAVLINK_PARAM_SPEED_MAX_MS) {
+    uint8_t index = PARAM_COUNT;
+    for (uint8_t i = 0; i < PARAM_COUNT; i++) {
+        if (strcmp(id, params_[i].id) == 0) {
+            index = i;
+            break;
+        }
+    }
+    if (index >= PARAM_COUNT) {
+        return;   // not one of ours
+    }
+    SubscribedParam& p = params_[index];
+
+    // Reject anything that is not a usable speed, and leave the previous value AND its timestamp
+    // standing: one corrupt frame must not invalidate a good subscription. NaN matters most — for
+    // SPEED_MAX it makes every "speed <= limit" comparison false, which would pin the throttle
+    // ceiling at the floor.
+    if (isnan(value) || isinf(value) || value < 0.0f || value > p.maxMs) {
         Debug::printfFeature(DebugFeature::MAVLINK,
-            "[MAV] SPEED_MAX rejected: %.3f (expect 0..%.1f m/s)\n",
-            value, MAVLINK_PARAM_SPEED_MAX_MS);
+            "[MAV] %s rejected: %.3f (expect 0..%.1f m/s)\n", p.id, value, p.maxMs);
         return;
     }
 
-    bool changed = isnan(speedMaxMs_) || fabsf(value - speedMaxMs_) > MAVLINK_PARAM_EPSILON_MS;
-    speedMaxMs_ = value;
-    speedMaxRxMs_ = millis();
+    bool changed = isnan(p.valueMs) || fabsf(value - p.valueMs) > MAVLINK_PARAM_EPSILON_MS;
+    p.valueMs = value;
+    p.rxMs = millis();
 
     // Log on change only — a 5 s poll of an unchanged parameter would otherwise fill the console.
     if (changed) {
         Debug::printfFeature(DebugFeature::MAVLINK,
-            "[MAV] SPEED_MAX = %.2f m/s (%.1f km/h)%s\n",
-            value, value * MS_TO_KMH,
-            (value <= 0.0f) ? " — 0 means \"no limit\", the limiter does nothing" : "");
+            "[MAV] %s = %.2f m/s (%.1f km/h)%s\n",
+            p.id, value, value * MS_TO_KMH,
+            (value <= 0.0f)
+                ? ((index == PARAM_IDX_SPEED_MAX)
+                       ? " — 0 means \"no limit\", the limiter does nothing"
+                       : " — 0 means \"no scaling\" from this source")
+                : "");
     }
 }
 
-bool MavlinkInterface::hasSpeedMaxParam() const {
-    if (isnan(speedMaxMs_) || speedMaxMs_ <= 0.0f) {
-        return false;   // never received, or the "no limit" zero
+bool MavlinkInterface::hasParam(uint8_t index) const {
+    if (index >= PARAM_COUNT) {
+        return false;
+    }
+    const SubscribedParam& p = params_[index];
+    if (isnan(p.valueMs) || p.valueMs <= 0.0f) {
+        return false;   // never received, or the "no limit" / "no scaling" zero
     }
     if (!isLinkUp()) {
         return false;   // cable out / autopilot down — fall back within the heartbeat timeout
     }
-    return (millis() - speedMaxRxMs_) < MAVLINK_PARAM_STALE_MS;
+    return (millis() - p.rxMs) < MAVLINK_PARAM_STALE_MS;
 }
 
-float MavlinkInterface::getSpeedMaxMs() const {
-    if (isnan(speedMaxMs_)) {
+float MavlinkInterface::getParamMs(uint8_t index) const {
+    if (index >= PARAM_COUNT || isnan(params_[index].valueMs)) {
         return 0.0f;
     }
-    return speedMaxMs_;
+    return params_[index].valueMs;
 }
 
-uint32_t MavlinkInterface::getSpeedMaxAgeMs() const {
-    if (speedMaxRxMs_ == 0) {
+uint32_t MavlinkInterface::getParamAgeMs(uint8_t index) const {
+    if (index >= PARAM_COUNT || params_[index].rxMs == 0) {
         return MAVLINK_PARAM_STALE_MS;   // never received — treat as fully stale
     }
-    return millis() - speedMaxRxMs_;
+    return millis() - params_[index].rxMs;
 }
+
+bool MavlinkInterface::hasSpeedMaxParam() const { return hasParam(PARAM_IDX_SPEED_MAX); }
+float MavlinkInterface::getSpeedMaxMs() const { return getParamMs(PARAM_IDX_SPEED_MAX); }
+uint32_t MavlinkInterface::getSpeedMaxAgeMs() const { return getParamAgeMs(PARAM_IDX_SPEED_MAX); }
+
+bool MavlinkInterface::hasSpdScaBaseParam() const { return hasParam(PARAM_IDX_SPD_SCA_BASE); }
+float MavlinkInterface::getSpdScaBaseMs() const { return getParamMs(PARAM_IDX_SPD_SCA_BASE); }
+uint32_t MavlinkInterface::getSpdScaBaseAgeMs() const { return getParamAgeMs(PARAM_IDX_SPD_SCA_BASE); }
 
 // ============================================================================
 // INBOUND COMMANDS (COMMAND_LONG)
@@ -631,13 +722,13 @@ void MavlinkInterface::report(const StateReport& state) {
         //
         // The collision argument that rules NAMED_VALUE_FLOAT out elsewhere does not bite here:
         // the consumer is the QuadBike MP plugin, which dispatches on the (compid, name) pair
-        // and so never confuses these five with anything; and a name-agnostic store folding
+        // and so never confuses these six with anything; and a name-agnostic store folding
         // id 251 down to one row loses nothing, because no such store consumed these values.
         // It also gives a free upgrade path: an optional Pixhawk Lua script can re-emit the
         // same names with gcs:send_named_float without any change here.
         //
-        // Three names ride this 5 Hz report tick; VESC_TEMP and VESC_OK sit on their own 1 Hz
-        // timer below. NaN means "this source is unhealthy", never "zero", and every name keeps
+        // Three names ride this 5 Hz report tick; VESC_TEMP, VESC_OK and STEER_SCA sit on their
+        // own 1 Hz timer below. NaN means "this source is unhealthy", never "zero", and every name keeps
         // being sent while the VESC is silent, so "peripheral alive, VESC down" stays
         // distinguishable from "peripheral gone".
         //
@@ -672,7 +763,7 @@ void MavlinkInterface::report(const StateReport& state) {
 #endif
     }
 
-    // The SLOW half of the steering-VESC set, on its OWN 1 Hz timer rather than the 5 Hz
+    // The SLOW half of the steering set, on its OWN 1 Hz timer rather than the 5 Hz
     // report tick (the lastHeartbeatTx_ pattern above): a MOSFET's thermal time constant is
     // seconds and a link flag does not need five samples a second, while the underlying data
     // refreshes at only 3.3 Hz (STEER_VESC_TELEM_MS) anyway.
@@ -683,6 +774,13 @@ void MavlinkInterface::report(const StateReport& state) {
     //                STEER_VESC_COMM_TIMEOUT_MS, 0.0 = it did not. NEVER NaN — it is the name
     //                that TELLS a consumer why the other four went NaN, so an "unknown" here
     //                would defeat its only purpose.
+    //   STEER_SCA -> the steering speed-scale the VEHICLE layer is APPLYING to autopilot
+    //                steering commands, post-slew, 0..1. Not a VESC value at all — it rides
+    //                this timer because the scale moves at the pace the vehicle accelerates,
+    //                which 1 Hz resolves perfectly well. NEVER NaN: "not scaling" is the
+    //                definite answer 1.0, and a ground station must plot it as a flat line at
+    //                one rather than as a gap in the record. It is a REPORTING path only —
+    //                nothing here computes or influences the scale.
     //
     // Both are sent UNCONDITIONALLY, gated by this timer alone and never by state.steerDriverOk
     // or by link state, because suppressing them would make "this component is alive and its
@@ -693,12 +791,20 @@ void MavlinkInterface::report(const StateReport& state) {
     // signalled "unknown" beats silence.)
     //
     // The raw VESC mc_fault_code and the boot-cumulative reply / fault counters are deliberately
-    // NOT on the link: five names is the whole set. The fault code stays reachable on the web
+    // NOT on the link: six names is the whole set. The fault code stays reachable on the web
     // portal (steer_vesc_fault) and the serial console.
     if (now - lastSteerSlowTx_ >= MAVLINK_STEER_SLOW_TX_MS) {
         lastSteerSlowTx_ = now;
         sendNamedFloat(now, NV_VESC_TEMP, state.steerDriverOk ? state.steerFetTempC : NAN);
         sendNamedFloat(now, NV_VESC_OK,   state.steerDriverOk ? 1.0f : 0.0f);
+        // Belt and braces on "never NaN": the vehicle layer already guarantees a finite 0..1,
+        // but a NaN reaching the wire here would show as a GAP in the record and read as
+        // "the scale is unknown", which is a state this feature deliberately does not have.
+        float sca = state.steerScale;
+        if (!isfinite(sca)) {
+            sca = 1.0f;
+        }
+        sendNamedFloat(now, NV_STEER_SCA, constrain(sca, 0.0f, 1.0f));
     }
 
     // STATUSTEXT on gear / ignition / fail-safe transitions (rate-limited).
