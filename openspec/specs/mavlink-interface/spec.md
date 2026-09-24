@@ -110,7 +110,9 @@ report invalid signal so the vehicle controller activates fail-safe.
 The system SHALL report vehicle state back to the MAVLink network using standard MAVLink messages, on
 a fixed schedule. Engine data is sourced from the CAN `VehicleData`; vehicle ground speed is sourced
 from the hall-effect speed sensor and reported via `VFR_HUD`, and the distance counters derived from
-that same sensor are reported in `EFI_STATUS`. Every ECU value carried in
+that same sensor, together with the total and trip engine hour meters, are reported in `EFI_STATUS`.
+Every ECU value
+carried in
 `EFI_STATUS` SHALL occupy the field that names that quantity, so the message is self-describing to a
 consumer reading the MAVLink field names alone. A field MAY be repurposed for a value it does not
 name ONLY where the named quantity is confirmed to be permanently unavailable on this vehicle, and
@@ -127,8 +129,9 @@ commanded by the controller, the reported value SHALL be unambiguous as to which
 - **WHEN** the engine-telemetry interval elapses (default 5 Hz)
 - **THEN** a single `EFI_STATUS` message is sent from this component carrying engine RPM, coolant
   temperature, intake air temperature, manifold absolute pressure, ECU calculated engine load,
-  measured and commanded throttle, module supply voltage, both gear values, the total odometer and
-  trip distance, the digital-output bitmask and a health flag
+  measured and commanded throttle, module supply voltage, both gear values, the total odometer, the
+  trip distance, the total engine hour meter, the trip engine hours, the digital-output bitmask and
+  a health flag
 - **AND** all of those values SHALL be carried in distinct fields of that one message, rather than
   as per-value `NAMED_VALUE_FLOAT` messages, which share a single message id and therefore collide
   in any name-agnostic store
@@ -230,7 +233,30 @@ commanded by the controller, the reported value SHALL be unambiguous as to which
 - **AND** neither value SHALL be reported as a `NAMED_VALUE_FLOAT`, for the same message-id
   collision reason that keeps the gear values in `EFI_STATUS`
 - **AND** the odometer SHALL NEVER decrease between two messages, and a trip reset SHALL be
-  observable as `fuel_pressure` falling to zero while `barometric_pressure` is unchanged
+  observable as `fuel_pressure` falling to zero — together with `injection_time`, the trip engine
+  hours — while `barometric_pressure` and `spark_dwell_time` are unchanged
+
+#### Scenario: Report the engine hour meter in EFI_STATUS
+- **WHEN** the engine-telemetry interval elapses
+- **THEN** the `EFI_STATUS` message SHALL carry the total engine hour meter in the
+  `spark_dwell_time` field, in HOURS as a float
+- **AND** SHALL carry the resettable TRIP engine hours in the `injection_time` field, in HOURS as a
+  float
+- **AND** both values SHALL be the vehicle layer's exact whole-second counters divided by 3600 —
+  the second counters, not these floats, SHALL remain the authoritative values
+- **AND** both SHALL ALWAYS be valid and SHALL NEVER be reported as `NaN`, because accumulated
+  running time is history and depends on neither the CURRENT CAN health nor the current engine
+  state, even though only valid CAN data can make them grow
+- **AND** neither SHALL be reported as a `NAMED_VALUE_FLOAT`, for the same message-id collision
+  reason that keeps the gear values and the distance counters in `EFI_STATUS`
+- **AND** the TOTAL SHALL NEVER decrease between two messages, and no command, parameter, magic
+  value or web control SHALL exist that zeroes it
+- **AND** the TRIP value SHALL decrease only to zero and only on an accepted trip reset, and
+  `injection_time` reading zero SHALL be understood as a GENUINE zero trip-hours reading rather
+  than as "unknown", on the same terms as `fuel_pressure`
+- **AND** a trip reset SHALL therefore be observable on the wire as `fuel_pressure` AND
+  `injection_time` both falling to zero in the same message, while `barometric_pressure` and
+  `spark_dwell_time` are unchanged
 
 #### Scenario: Preserve existing EFI_STATUS field assignments
 - **WHEN** ECU values are mapped into `EFI_STATUS` after this remap
@@ -253,7 +279,9 @@ commanded by the controller, the reported value SHALL be unambiguous as to which
 - **WHEN** a value is carried in an `EFI_STATUS` field that does not name it
 - **THEN** the only such fields SHALL be `fuel_consumed` and `fuel_flow` (carrying the two gear
   values), `pt_compensation` (carrying the digital-output bitmask), `barometric_pressure` (carrying
-  the total odometer in km) and `fuel_pressure` (carrying the trip distance in km)
+  the total odometer in km), `fuel_pressure` (carrying the trip distance in km),
+  `spark_dwell_time` (carrying the total engine hour meter in hours) and `injection_time`
+  (carrying the trip engine hours in hours)
 - **AND** the fuel fields SHALL be justified by the bench-confirmed permanent absence of the
   corresponding ECU signals on this vehicle (PIDs `0x2F` fuel level and `0x5C` oil temperature do
   not answer and are absent from the supported-PID bitmaps), so no genuine fuel quantity or flow can
@@ -265,9 +293,20 @@ commanded by the controller, the reported value SHALL be unambiguous as to which
   though the MAVLink field definition assigns zero the meaning "unknown"; the sentinel value that
   definition suggests SHALL NOT be substituted, because reporting a non-zero distance when the
   operator has just reset the trip is the worse error
-- **AND** fields naming engine quantities this ECU could plausibly expose later —
-  `spark_dwell_time`, `ignition_timing`, `injection_time`, `exhaust_gas_temperature` — SHALL be left
-  unused rather than repurposed
+- **AND** `spark_dwell_time` SHALL be justified by it being a reserved engine-quantity field with
+  no route onto this bus at all: spark dwell has no standard OBD-II Mode 01 PID, so this ECU can
+  never surface it, and the field can therefore be treated as permanently free rather than merely
+  unused today
+- **AND** `injection_time` SHALL be justified on the same test: it too has NO PID of its own, being
+  only DERIVABLE from the fuel-trim PIDs together with engine load, so it can never arrive on this
+  bus as a reported field the way a standard PID could
+- **AND** `injection_time` reading zero SHALL be understood as a genuine zero trip-hours reading,
+  not as "unknown", for the identical reason `fuel_pressure` zero is a genuine zero: reporting a
+  non-zero figure when the operator has just reset the trip is the worse error
+- **AND** the fields naming engine quantities this ECU could plausibly expose later over a standard
+  Mode 01 PID — `ignition_timing` (PID `0x0E`) and `exhaust_gas_temperature` (PID `0x78`) — SHALL
+  be left unused rather than repurposed, and a consumer SHALL treat `0.0` in those two as "not
+  reported"
 - **AND** any ECU value without a free, semantically appropriate field SHALL be omitted from MAVLink
   rather than mapped onto a mismatched field
 - **AND** a value already carried in one `EFI_STATUS` field SHALL NOT be duplicated into a second
@@ -322,8 +361,12 @@ commanded by the controller, the reported value SHALL be unambiguous as to which
   `intake_manifold_pressure`, `engine_load`, `throttle_position` and `ignition_voltage` fields SHALL
   ALL be reported as `NaN`, so a ground station shows "no data" rather than misleading zeros
 - **AND** the `fuel_consumed` (assumed gear), `throttle_out` (commanded throttle),
-  `pt_compensation` (digital-output bitmask), `barometric_pressure` (odometer) and `fuel_pressure`
-  (trip distance) fields SHALL remain valid, because none of them depends on CAN health
+  `pt_compensation` (digital-output bitmask), `barometric_pressure` (odometer), `fuel_pressure`
+  (trip distance), `spark_dwell_time` (total engine hours) and `injection_time` (trip engine hours)
+  fields SHALL remain valid, because none of them depends on CAN health
+- **AND** BOTH engine hour counters SHALL simply STOP GROWING while CAN is invalid, rather than
+  being reported as `NaN` or continuing to accumulate on an assumed engine state — an unknown
+  engine state SHALL NOT invent running time
 - **AND** `fuel_flow` (physical gear) SHALL be governed by the gear-switch validity alone and SHALL
   be unaffected by CAN validity, so a lone `fuel_flow` `NaN` alongside otherwise-populated fields
   means "gear sensor unsure" and says nothing about CAN
@@ -547,7 +590,11 @@ the addressing check SHALL be strict: a command SHALL be handled only when BOTH
 with NO acknowledgement, so that this peripheral can never answer for the autopilot.
 
 The only command this system implements is a **trip reset**, carried as `MAV_CMD_USER_1` (31010)
-with a magic `param1`. The odometer SHALL NOT be resettable by any command.
+with a magic `param1`. That ONE command SHALL clear BOTH resettable trip counters — the trip
+DISTANCE and the trip ENGINE HOURS — because they describe the same "since the operator last
+reset" interval in different units and SHALL NOT be allowed to diverge. There SHALL be NO second
+command, NO additional magic `param1` value and NO separate web control for either of them. The
+odometer and the TOTAL engine hour meter SHALL NOT be resettable by any command.
 
 The handler SHALL follow the existing transport policy: `include/MavlinkInterface.h` stays free of
 mavlink headers, so the handler SHALL take decoded scalars (the `handleServoOutputRaw` /
@@ -559,12 +606,17 @@ it SHALL latch a pending request that the vehicle layer consumes and performs.
   `target_component == MAVLINK_COMPONENT_ID`, `command == MAV_CMD_USER_1` (31010) and `param1`
   equal to `MAVLINK_CMD_TRIP_RESET_MAGIC`
 - **THEN** a trip-reset request SHALL be latched for the vehicle layer to perform
-- **AND** the vehicle layer SHALL zero the trip counter and persist it on its next control
+- **AND** the vehicle layer SHALL zero the trip DISTANCE counter and persist it on its next control
   iteration
+- **AND** in the SAME operation the vehicle layer SHALL zero the trip ENGINE HOURS counter and
+  persist it, so the two trip readings can never disagree about which interval they describe
 - **AND** a `COMMAND_ACK` with `MAV_RESULT_ACCEPTED` SHALL be sent
 - **AND** one line SHALL be logged on the serial console naming the requester's system and
   component (for example `[MAV] TRIP reset accepted from 255/190`)
-- **AND** the odometer SHALL be left unchanged
+- **AND** the odometer AND the TOTAL engine hour meter SHALL be left unchanged
+- **AND** the inbound command handler SHALL NOT be changed to accommodate the second counter: it
+  SHALL still latch exactly one request, carry no reference to the vehicle's counters, and know
+  nothing of which counters the vehicle layer clears
 
 #### Scenario: Compare the magic parameter with a tolerance
 - **WHEN** `param1` is evaluated against `MAVLINK_CMD_TRIP_RESET_MAGIC`
@@ -577,8 +629,8 @@ it SHALL latch a pending request that the vehicle layer consumes and performs.
   other than the magic value
 - **THEN** a `COMMAND_ACK` with `MAV_RESULT_DENIED` SHALL be sent
 - **AND** the rejection SHALL be logged with the offending `param1` value and the requester
-- **AND** the trip counter SHALL be left unchanged, so a stray, replayed or mis-scripted
-  `MAV_CMD_USER_1` cannot silently destroy the operator's reading
+- **AND** BOTH trip counters SHALL be left unchanged, so a stray, replayed or mis-scripted
+  `MAV_CMD_USER_1` cannot silently destroy the operator's readings
 
 #### Scenario: Report any other command as unsupported
 - **WHEN** a `COMMAND_LONG` carrying any command other than `MAV_CMD_USER_1` is addressed
@@ -608,6 +660,7 @@ it SHALL latch a pending request that the vehicle layer consumes and performs.
 #### Scenario: The odometer is not resettable over MAVLink
 - **WHEN** any inbound command is processed
 - **THEN** there SHALL be NO command, parameter or magic value that zeroes or decreases the
-  odometer
-- **AND** only the trip counter SHALL be clearable
+  odometer, and none that zeroes or decreases the TOTAL engine hour meter
+- **AND** only the two trip counters — the trip distance and the trip engine hours — SHALL be
+  clearable, and only together
 
