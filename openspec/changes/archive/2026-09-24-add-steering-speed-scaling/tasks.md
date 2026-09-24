@@ -117,6 +117,10 @@ no `native` environment), so verification is build plus bench.
 
 - [x] 6.1 `/Users/s.zalozniy/.platformio/penv/bin/pio run -e esp32-s3-devkitc-1` completes with no
   errors and no warnings from `src/` or `include/`.
+
+> Archived 2026-09-24 with bench verification pending — operator decision; the items below
+> remain open as a field checklist.
+
 - [ ] 6.2 Flash firmware **and** `pio run -t uploadfs` (`data/` changed).
 - [ ] 6.3 Boot with MAVLINK debug on: the 1 Hz line shows `scabase` with an `age` sawtooth
   0 → 5000 and the autopilot's `custom_mode`; `SPEED_MAX` behaviour on that line is unchanged from
