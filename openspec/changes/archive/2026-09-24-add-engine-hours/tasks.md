@@ -141,6 +141,9 @@
   is confirmed on the bench.*
 
 ## 7. Bench and road verification
+> Archived 2026-09-24 with bench verification pending — operator decision; the items below
+> remain open as a field checklist.
+
 - [ ] 7.1 **[OPERATOR]** Flash firmware **and** `pio run -t uploadfs` (`data/` changed).
 - [ ] 7.2 **[OPERATOR]** First boot on a virgin NVS: serial shows `[ENGINE] hour meter 0.00 h
   restored` (or the "nothing restored" line), the portal shows `0.00 h`, and Mission Planner shows
@@ -278,6 +281,9 @@
   render and BOTH dictionaries; no reset control anywhere.
 
 ## 12. Trip engine hours — bench verification
+> Archived 2026-09-24 with bench verification pending — operator decision; the items below
+> remain open as a field checklist.
+
 - [ ] 12.1 **[OPERATOR]** **Lockstep.** With the engine idling, the portal's Trip hours and Engine
   hours advance by the same amount over a measured 30 minutes (both +0.50 h), and
   `injection_time - spark_dwell_time` stays constant on the wire.
