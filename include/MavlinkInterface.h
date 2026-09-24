@@ -13,11 +13,12 @@
  * the same typed command API the vehicle layer consumes
  * (steering/throttle/gear/brake/ignition/light). Also reports vehicle state back
  * to the MAVLink network: HEARTBEAT plus a single EFI_STATUS from this component,
- * a VFR_HUD carrying hall-sensor ground speed, the steering VESC's telemetry as
- * exactly five NAMED_VALUE_FLOAT values (STEER_POS, STEER_A, VESC_V at 5 Hz;
- * VESC_TEMP, VESC_OK at 1 Hz), plus STATUSTEXT for state transitions.
+ * a VFR_HUD carrying hall-sensor ground speed, the steering VESC's telemetry plus the
+ * applied steering speed-scale as exactly six NAMED_VALUE_FLOAT values (STEER_POS,
+ * STEER_A, VESC_V at 5 Hz; VESC_TEMP, VESC_OK, STEER_SCA at 1 Hz), plus STATUSTEXT
+ * for state transitions.
  *
- * Those five names are the project's ONE scoped exception to the "everything in the
+ * Those six names are the project's ONE scoped exception to the "everything in the
  * field that names it, in a single EFI_STATUS" rule: the two standard ESC telemetry
  * messages (ids 290 and 291) are absent from the dialect Mission Planner decodes
  * with, so that pair never reached a consumer at all. They carry the MEASURED
@@ -27,7 +28,8 @@
  * NaN while its own source is unhealthy, plus
  * VESC_OK (1.0/0.0, never NaN) as the link flag. All five keep being sent while the
  * VESC is silent, so "VESC down" stays distinguishable from "peripheral down".
- * See the .cpp.
+ * STEER_SCA joins them under the same exception: the steering speed-scale actually
+ * applied by the vehicle layer, 0..1 and never NaN (1.0 = not scaling). See the .cpp.
  *
  * EFI_STATUS carries every value in the field that NAMES it (RPM, coolant, intake
  * air temp, manifold pressure, ECU load, measured TPS, commanded throttle, module
@@ -49,10 +51,15 @@
  * validity or the direction sign is in doubt (a wrong measurement is worse than no
  * measurement).
  *
- * Subscribes READ-ONLY to a single autopilot parameter, `SPEED_MAX` (m/s) — the ONLY
- * source of the vehicle layer's max-speed throttle limiter ceiling. Polled with
- * PARAM_REQUEST_READ and also accepted unsolicited; never written back (no PARAM_SET),
- * and held in RAM only.
+ * Subscribes READ-ONLY to two autopilot parameters through ONE shared mechanism:
+ * `SPEED_MAX` (m/s) — the ONLY source of the vehicle layer's max-speed throttle
+ * limiter ceiling — and `MOT_SPD_SCA_BASE` (m/s), the FALLBACK source of the steering
+ * speed-scaling base. Both are polled with PARAM_REQUEST_READ and also accepted
+ * unsolicited; neither is ever written back (no PARAM_SET), and both are held in RAM only.
+ *
+ * Also decodes the learned autopilot's HEARTBEAT flight mode (base_mode / custom_mode)
+ * and exposes it, so behaviour that is only correct in MANUAL can be gated on it. The
+ * mode is OBSERVED only — never commanded, requested or changed.
  *
  * The MAVLink C library headers are included only in the .cpp to keep this
  * header lightweight.
@@ -135,6 +142,12 @@ public:
         bool        steerSensorOk;        // AS5600 reading healthy
         bool        steerCalibrated;      // centre/limits stored — steerPercent is meaningful
                                           // only while BOTH flags are true
+
+        // --- Steering speed scaling (STEER_SCA) -----------------------------------------
+        // The scale the VEHICLE layer is actually applying to autopilot steering commands
+        // after rate limiting, 0..1. NEVER NaN: 1.0 is the definite answer "not scaling",
+        // and a ground station must plot it as a flat line at one, not as a gap.
+        float       steerScale;
         // Note: oil temperature is not available from the ECU and is not reported.
         // Ground speed is NOT carried in EFI_STATUS — it comes from the hall speed
         // sensor and is reported separately via VFR_HUD.
@@ -198,10 +211,34 @@ public:
     /** @brief Count of VISION_POSITION_DELTA messages actually sent (gates passed). */
     uint32_t getOdomTxCount() const { return odomTxCount_; }
 
-    // ---- Autopilot parameter subscription (SPEED_MAX) -----------------------
+    // ---- Autopilot flight mode (decoded HEARTBEAT) --------------------------
+    //
+    // OBSERVED ONLY. Nothing here commands, requests or changes the autopilot's mode; it exists
+    // so behaviour that is only correct in MANUAL can be gated on the mode the autopilot is
+    // actually in. Stored from the LEARNED autopilot alone — a ground station on the same wire
+    // must not be able to make this vehicle believe it is in a different mode.
+
+    /**
+     * @brief True when the stored flight mode can be trusted right now.
+     * A heartbeat carrying it has been received since begin() AND the link is up.
+     */
+    bool hasAutopilotMode() const;
+
+    /**
+     * @brief Last custom_mode from the learned autopilot (0 if never received).
+     * For an ArduPilot Rover, 0 means MANUAL.
+     */
+    uint32_t getAutopilotCustomMode() const { return customMode_; }
+
+    /** @brief Last base_mode from the learned autopilot (0 if never received). */
+    uint8_t getAutopilotBaseMode() const { return baseMode_; }
+
+    // ---- Autopilot parameter subscription (SPEED_MAX, MOT_SPD_SCA_BASE) -----
     //
     // READ-ONLY: this interface polls PARAM_REQUEST_READ and accepts PARAM_VALUE, and never
-    // sends PARAM_SET. The value is RAM-only — the vehicle layer must not persist it.
+    // sends PARAM_SET. The values are RAM-only — the vehicle layer must not persist them.
+    // Both parameters share ONE table, one poll and one set of value-hygiene rules; each keeps
+    // its own value, receipt time, poll timestamp and upper bound.
 
     /**
      * @brief True when a SPEED_MAX value can be trusted right now.
@@ -217,6 +254,20 @@ public:
 
     /** @brief ms since the last accepted SPEED_MAX (MAVLINK_PARAM_STALE_MS if never received). */
     uint32_t getSpeedMaxAgeMs() const;
+
+    /**
+     * @brief True when a MOT_SPD_SCA_BASE value can be trusted right now.
+     * Identical rules to hasSpeedMaxParam(): received AND greater than zero (a non-positive base
+     * means "no scaling" both to ArduPilot and to this vehicle) AND the link is up AND the
+     * reading is younger than MAVLINK_PARAM_STALE_MS.
+     */
+    bool hasSpdScaBaseParam() const;
+
+    /** @brief Last accepted MOT_SPD_SCA_BASE in m/s (0 if never received). */
+    float getSpdScaBaseMs() const;
+
+    /** @brief ms since the last accepted MOT_SPD_SCA_BASE (MAVLINK_PARAM_STALE_MS if never received). */
+    uint32_t getSpdScaBaseAgeMs() const;
 
     // ---- Inbound commands (COMMAND_LONG) ------------------------------------
 
@@ -260,10 +311,28 @@ private:
     uint32_t lastStreamRequestTime_;   // millis() of last SET_MESSAGE_INTERVAL request (0 = none)
     uint32_t targetLearnedMs_;         // millis() the autopilot was learned (0 = not yet)
 
-    // Autopilot SPEED_MAX subscription (RAM-only, never persisted)
-    float    speedMaxMs_;              // last accepted value, m/s (NAN = never received)
-    uint32_t speedMaxRxMs_;            // millis() of the last accepted value (0 = none)
-    uint32_t lastParamRequestMs_;      // millis() of the last PARAM_REQUEST_READ (0 = none)
+    // Autopilot flight mode, from the LEARNED autopilot's HEARTBEAT only (RAM-only)
+    uint8_t  baseMode_;                // last base_mode (0 = never received)
+    uint32_t customMode_;              // last custom_mode (0 = never received; Rover 0 = MANUAL)
+    bool     modeReceived_;            // a heartbeat carrying a mode has arrived since begin()
+    uint32_t modeRxMs_;                // millis() of that heartbeat (0 = none)
+
+    // Autopilot parameter subscription table (RAM-only, never persisted). TWO entries sharing
+    // ONE poll, ONE PARAM_VALUE handler and ONE set of value-hygiene rules — a second copy of
+    // those rules is exactly how one of them ends up missing the param_id termination fix.
+    enum : uint8_t {
+        PARAM_IDX_SPEED_MAX    = 0,    // SPEED_MAX (m/s) — the throttle limiter's only ceiling
+        PARAM_IDX_SPD_SCA_BASE = 1,    // MOT_SPD_SCA_BASE (m/s) — steering scale base, fallback
+        PARAM_COUNT            = 2
+    };
+    struct SubscribedParam {
+        const char* id;                // exact param_id string to match and to request
+        float       maxMs;             // upper bound, m/s; above this → rejected
+        float       valueMs;           // last accepted value, m/s (NAN = never received)
+        uint32_t    rxMs;              // millis() of the last accepted value (0 = none)
+        uint32_t    lastRequestMs;     // millis() of the last PARAM_REQUEST_READ (0 = none)
+    };
+    SubscribedParam params_[PARAM_COUNT];
 
     // Outbound scheduling
     uint32_t lastHeartbeatTx_;
@@ -281,8 +350,9 @@ private:
     bool     lastFailsafe_;
     bool     stateInitialized_;
 
-    // Message handlers
-    void handleHeartbeat(uint8_t sysid, uint8_t compid);
+    // Message handlers. handleHeartbeat takes DECODED scalars (the handleServoOutputRaw
+    // pattern) so this header stays free of the mavlink C library headers.
+    void handleHeartbeat(uint8_t sysid, uint8_t compid, uint8_t baseMode, uint32_t customMode);
     void handleServoOutputRaw(const uint16_t* servoUs);
     void requestServoOutputStream();
     void sendStatusText(uint8_t severity, const char* text);
@@ -294,9 +364,16 @@ private:
     void sendNamedFloat(uint32_t nowMs, const char* name, float value);
 
     // Autopilot parameter subscription. Takes DECODED scalars (like handleServoOutputRaw) so
-    // this header stays free of the mavlink C library headers.
+    // this header stays free of the mavlink C library headers. One handler for the whole table:
+    // the incoming param_id is matched against every entry.
     void handleParamValue(uint8_t sysid, uint8_t compid, const char* paramId, float value);
-    void requestSpeedMaxParam();
+    void requestParam(uint8_t index);
+
+    // Shared accessors behind the per-parameter public ones above. Identical rules for every
+    // table entry: received AND > 0 AND link up AND younger than MAVLINK_PARAM_STALE_MS.
+    bool     hasParam(uint8_t index) const;
+    float    getParamMs(uint8_t index) const;
+    uint32_t getParamAgeMs(uint8_t index) const;
 
     // Inbound COMMAND_LONG. Takes DECODED scalars for the same reason as handleParamValue, so
     // this header stays free of the mavlink C library headers. Addressing is strict: this

@@ -541,11 +541,11 @@ bool WebPortal::parseWebCommand(uint8_t* data, size_t len) {
 // ============================================================================
 
 String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
-    // Capacity headroom: 56 top-level fields (incl. 4 steering-VESC fields, the
-    // 5 rail / board-I/O fields and the 12 hall-speed / limiter / distance fields) + a 16-element
-    // array + the nested probe / po / bm / dtc / gearDefaults objects, plus copied String values.
-    // Sized to 4096 to leave room for the transient `probe` object (only present while probe
-    // results are fresh).
+    // Capacity headroom: 60 top-level fields (incl. 4 steering-VESC fields, the
+    // 5 rail / board-I/O fields, the 12 hall-speed / limiter / distance fields and the
+    // 4 steering speed-scaling fields) + a 16-element array + the nested probe / po / bm / dtc /
+    // gearDefaults objects, plus copied String values. Sized to 4096 to leave room for the
+    // transient `probe` object (only present while probe results are fresh).
     StaticJsonDocument<4096> doc;
 
     doc["timestamp"] = telemetry.timestamp;
@@ -583,6 +583,13 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // The enforced ceiling, from the autopilot's SPEED_MAX alone. 0 = no limit.
     doc["speed_limit_kmh"] = serialized(String(telemetry.speed_limit_ms * MS_TO_KMH, 1));
     doc["speed_limit_ceil"] = serialized(String(telemetry.speed_limit_ceil, 0));
+    // Steering speed scaling. These four stay in m/s, NOT km/h: the base is the same quantity
+    // as the autopilot's MOT_SPD_SCA_BASE, which the operator sets in m/s in the ground station,
+    // and a unit change here would make the two impossible to compare. 1.00 = not scaling.
+    doc["steer_scale"] = serialized(String(telemetry.steer_scale, 2));
+    doc["steer_sca_base"] = serialized(String(telemetry.steer_sca_base_ms, 2));
+    doc["steer_sca_src"] = telemetry.steer_sca_src;   // 0 = none, 1 = local, 2 = autopilot
+    doc["steer_test_speed"] = serialized(String(telemetry.steer_test_speed_ms, 2));
     // Distance counters, in km to 3 decimals. Emitted UNCONDITIONALLY — independent of CAN
     // status, MAVLink status and speed_valid: a recorded distance is not invalidated by a bus
     // going quiet or by the sensor going unhealthy. Display only; there is no reset command.

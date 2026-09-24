@@ -42,6 +42,14 @@ VehicleController::VehicleController(SteeringController& steering,
       lastSpeedLimitLogMs_(0),
       limiterCeilingPct_(100.0f),
       limiterLastMs_(0),
+      steerScaBaseMs_(0.0f),
+      steerScaleApplied_(1.0f),
+      steerScaleLastMs_(0),
+      lastSteerScaleWarnMs_(0),
+      lastSteerScaleLogged_(NAN),
+      lastSteerScaleLogMs_(0),
+      steerTestSpeedMs_(0.0f),
+      steerTestSpeedSetMs_(0),
       webThrottleDemandPct_(0.0f) {
 }
 
@@ -55,6 +63,29 @@ bool VehicleController::initCAN() {
         boostTargetRpm_ = prefs.getInt("target_rpm", TRANS_GEAR_BOOST_TARGET_RPM);
         prefs.end();
     }
+
+    // The LOCAL steering speed-scaling base, from the SAME "steering" namespace as the steering
+    // calibration. Read here rather than in the constructor: this controller is a global built
+    // before NVS is ready. An absent key, a NaN, a negative value or anything above
+    // STEER_SCALE_BASE_MAX_MS is treated as "not set" (0) — the autopilot's MOT_SPD_SCA_BASE
+    // then supplies the base, and if it cannot, there is no scaling at all. A stored value is
+    // never "repaired" into a plausible number: a base nobody chose must not restrict steering.
+    if (prefs.begin("steering", true)) {
+        float base = prefs.getFloat(STEER_SCALE_BASE_NVS_KEY, 0.0f);
+        prefs.end();
+        if (isnan(base) || base < 0.0f || base > STEER_SCALE_BASE_MAX_MS) {
+            Debug::printfFeature(DebugFeature::VEHICLE,
+                "[STEER] Stored speed-scaling base %.2f out of range (0-%.1f m/s) — ignored\n",
+                base, STEER_SCALE_BASE_MAX_MS);
+            base = 0.0f;
+        }
+        steerScaBaseMs_ = base;
+    }
+    Debug::printfFeature(DebugFeature::VEHICLE,
+        "[STEER] Speed-scaling base (local): %.2f m/s%s\n",
+        steerScaBaseMs_,
+        (steerScaBaseMs_ > 0.0f) ? "" : " — not set, will use the autopilot's MOT_SPD_SCA_BASE");
+
     bool result = canController_.begin();
     canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM);
     return result;
@@ -97,9 +128,28 @@ void VehicleController::update() {
     // Update relay controller with engine RPM (for automatic cranking stop)
     relayController_.update(canData.engineRPM);
 
+    // Expire the bench test-speed override. The fuse is the whole point: an override left on
+    // must not survive as a silent steering restriction, so it clears itself whether or not
+    // anyone is looking at the portal.
+    if (steerTestSpeedSetMs_ != 0 &&
+        (millis() - steerTestSpeedSetMs_) >= STEER_SCALE_TEST_SPEED_MS) {
+        steerTestSpeedMs_ = 0.0f;
+        steerTestSpeedSetMs_ = 0;
+        Debug::printlnFeature(DebugFeature::VEHICLE,
+            "[STEER] TEST speed override expired — back to the measured speed");
+    }
+
     // Process MAVLink commands if MAVLink is active
     if (currentInputSource_ == InputSource::MAVLINK) {
         processMavlinkCommands();
+    } else {
+        // The scale is a property of the AUTOPILOT command path alone. With the web or the
+        // fail-safe in charge nothing is being scaled, so the reported scale must say so rather
+        // than freeze at whatever the autopilot path last computed — a stale 0.18 on the portal
+        // and on STEER_SCA would read as a restriction that is not actually in force. The slew
+        // baseline is cleared too, so a return to MAVLink adopts its first target directly.
+        steerScaleApplied_ = 1.0f;
+        steerScaleLastMs_ = 0;
     }
 
     // Perform a latched trip reset. The transport validates and acknowledges the COMMAND_LONG
@@ -242,6 +292,12 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
     } else if (cmd.cmd == "speed_cal_circ") {
         processSpeedCalCircCommand(cmd.floatValue, webPortal);
         return;
+    } else if (cmd.cmd == "set_steer_sca_base") {
+        processSetSteerScaBaseCommand(cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_test_speed") {
+        processSetTestSpeedCommand(cmd.floatValue, webPortal);
+        return;
     } else if (cmd.cmd == "can_probe") {
         // ECU capability probe — available regardless of input source (diagnostic)
         processCanProbeCommand(webPortal);
@@ -345,8 +401,11 @@ void VehicleController::processMavlinkCommands() {
         return;  // Safety check
     }
 
-    // Apply steering
-    float steeringPct = mavlink_.getSteering();
+    // Apply steering, speed-scaled. applySteeringScale() sits BETWEEN the transport's decoded
+    // command and the actuator — the same place ArduPilot's own MANUAL_OPTIONS scaling sat,
+    // only on the side of the link that owns the speed measurement. The web set_steering path
+    // below is deliberately NOT scaled: it is a bench control with no road speed behind it.
+    float steeringPct = applySteeringScale(mavlink_.getSteering());
     steering_.setSteeringPercent(steeringPct);
 
     // Apply throttle — skipped when gear boost PID is active (PID overrides)
@@ -591,6 +650,202 @@ void VehicleController::processSpeedCalCircCommand(float value, WebPortal& webPo
         return;
     }
     webPortal.sendResponse(true, "Wheel circumference set to " + String(value, 0) + " mm");
+}
+
+// ============================================================================
+// STEERING SPEED SCALING — ArduPilot's formula, on the side that owns the speed
+// ============================================================================
+
+float VehicleController::getSteerScaleBaseMs() const {
+    // Fixed, one-directional priority — deliberately not an arbitration. The LOCAL value wins so
+    // a vehicle can be commissioned and driven with the scaling working before anyone has
+    // touched the autopilot; MOT_SPD_SCA_BASE follows because it is the number this feature was
+    // tuned with and it is visible from the ground station. Neither → 0, which means no scaling.
+    // There is no compile-time default: a base nobody chose would silently restrict the steering
+    // of an unconfigured vehicle, which is the opposite of what this change is for.
+    if (steerScaBaseMs_ > 0.0f) {
+        return steerScaBaseMs_;
+    }
+    if (mavlink_.hasSpdScaBaseParam()) {
+        return mavlink_.getSpdScaBaseMs();   // already m/s — the firmware's internal unit
+    }
+    return 0.0f;
+}
+
+VehicleController::SteerScaleSource VehicleController::getSteerScaleSource() const {
+    if (steerScaBaseMs_ > 0.0f) {
+        return SteerScaleSource::LOCAL;
+    }
+    if (mavlink_.hasSpdScaBaseParam()) {
+        return SteerScaleSource::AUTOPILOT;
+    }
+    return SteerScaleSource::NONE;
+}
+
+float VehicleController::getSteerTestSpeedMs() const {
+    return (steerTestSpeedSetMs_ != 0) ? steerTestSpeedMs_ : 0.0f;
+}
+
+void VehicleController::logSteerScaleChange(float scale, float speedMs, bool speedIsTest,
+                                            float baseMs, SteerScaleSource source) {
+    // "Changed between scaling and not scaling" is a change even when the numbers are within
+    // epsilon of each other, because crossing that boundary is the event the operator cares
+    // about — it is what turns the assist on and off.
+    bool wasScaling = !isnan(lastSteerScaleLogged_) && lastSteerScaleLogged_ < 1.0f;
+    bool isScaling = scale < 1.0f;
+    bool changed = isnan(lastSteerScaleLogged_) ||
+                   fabsf(scale - lastSteerScaleLogged_) > STEER_SCALE_LOG_EPSILON ||
+                   wasScaling != isScaling;
+    if (!changed) {
+        return;
+    }
+    uint32_t now = millis();
+    // Hold-off. While suppressed the remembered state is deliberately NOT updated, so whatever
+    // the scale settles on is logged on the next opportunity instead of being swallowed.
+    if (lastSteerScaleLogMs_ != 0 && (now - lastSteerScaleLogMs_) < STEER_SCALE_LOG_MIN_MS) {
+        return;
+    }
+    lastSteerScaleLogMs_ = now;
+    lastSteerScaleLogged_ = scale;
+
+    const char* srcName = (source == SteerScaleSource::LOCAL)     ? "local" :
+                          (source == SteerScaleSource::AUTOPILOT) ? "MOT_SPD_SCA_BASE" : "none";
+    Debug::printfFeature(DebugFeature::VEHICLE,
+        "[STEER] Speed scale: %.2f (speed %.2f m/s%s, base %.2f m/s from %s)\n",
+        scale, speedMs, speedIsTest ? " TEST" : "", baseMs, srcName);
+}
+
+float VehicleController::applySteeringScale(float steeringPct) {
+    const float baseMs = getSteerScaleBaseMs();
+    const SteerScaleSource source = getSteerScaleSource();
+    const bool testLive = (steerTestSpeedSetMs_ != 0);
+    const float measuredMs = speedSensor_.getSpeedMs();
+    const float speedMs = testLive ? steerTestSpeedMs_ : measuredMs;
+
+    // ---- The fault gates. EVERY one of them resolves to scale = 1, and to a command that
+    // passes through untouched. Speed scaling is a comfort and assist feature: a vehicle that
+    // loses it steers the way it did before the feature existed, while a vehicle that KEEPS a
+    // restriction after a fault is a vehicle whose driver cannot turn. There is deliberately no
+    // hold, no last-known-good speed, no conservative substitute and no minimum-scale floor —
+    // this is the operator's explicit choice (2026-09-24) and must not be "improved" later.
+    uint32_t now = millis();
+    bool warn = false;
+    const char* warnText = nullptr;
+    float targetScale = 1.0f;
+
+    if (baseMs <= 0.0f) {
+        // Nothing to scale by. Matches ArduPilot's own is_positive(MOT_SPD_SCA_BASE) reading.
+        warn = true;
+        warnText = "[STEER] WARNING: no speed-scaling base (local steer_sca_base and the "
+                   "autopilot's MOT_SPD_SCA_BASE are both unavailable) — not scaling";
+    } else if (!speedSensor_.isValid()) {
+        // The speed is UNKNOWN — never pulsed since boot, latched suspicious, or the sensor is
+        // not initialised. A guess is exactly how ArduPilot got into trouble here. The gate
+        // applies even with a test override live, so the bench cannot scale on an unhealthy
+        // sensor, and even at speed: a fault must never leave the driver with restricted steering.
+        warn = true;
+        warnText = "[STEER] WARNING: speed reading invalid — not scaling (full steering authority)";
+    } else if (mavlink_.hasAutopilotMode() &&
+               mavlink_.getAutopilotCustomMode() != ROVER_CUSTOM_MODE_MANUAL) {
+        // In every other mode the autopilot computes steering from speed itself; a second,
+        // invisible reduction on top of it would be double limiting. An UNKNOWN or stale mode
+        // falls through this branch and IS scaled — the single place where an unavailable input
+        // does not disable the scaling, because MANUAL is the mode this vehicle is driven in.
+        targetScale = 1.0f;
+    } else {
+        // ArduPilot's formula, unchanged: scale = min(1, base / v). v <= base gives 1 by the
+        // formula itself, so a parked vehicle and a reading decayed to zero need no special case.
+        targetScale = (speedMs > baseMs) ? (baseMs / speedMs) : 1.0f;
+    }
+
+    if (warn) {
+        if (lastSteerScaleWarnMs_ == 0 || (now - lastSteerScaleWarnMs_) >= STEER_SCALE_WARN_MS) {
+            lastSteerScaleWarnMs_ = now;
+            Debug::printlnFeature(DebugFeature::VEHICLE, warnText);
+        }
+    } else {
+        lastSteerScaleWarnMs_ = 0;
+    }
+
+    // ---- Slew-limit the SCALE (not the command — the driver's own steering movements must
+    // pass through at full rate). dt is capped at 1 s and the first evaluation adopts the target
+    // directly, so a stalled or just-restarted loop cannot integrate an unknown interval into a
+    // step change. Same shape as applySpeedLimit()'s ceiling slew, for the same reason.
+    if (steerScaleLastMs_ == 0) {
+        steerScaleApplied_ = targetScale;
+    } else {
+        float dt = (now - steerScaleLastMs_) / 1000.0f;
+        if (dt > 1.0f) dt = 1.0f;
+        float maxStep = STEER_SCALE_SLEW_PER_S * dt;
+        float delta = constrain(targetScale - steerScaleApplied_, -maxStep, maxStep);
+        steerScaleApplied_ += delta;
+    }
+    steerScaleLastMs_ = now;
+    steerScaleApplied_ = constrain(steerScaleApplied_, 0.0f, 1.0f);
+
+    logSteerScaleChange(steerScaleApplied_, speedMs, testLive, baseMs, source);
+
+    // steeringPct is already signed about a centre of ZERO, so multiplying scales the DEVIATION
+    // FROM CENTRE and leaves a centred command centred: a driver going straight feels nothing.
+    return steeringPct * steerScaleApplied_;
+}
+
+void VehicleController::processSetSteerScaBaseCommand(float value, WebPortal& webPortal) {
+    if (isnan(value) || value < 0.0f || value > STEER_SCALE_BASE_MAX_MS) {
+        webPortal.sendResponse(false, "Steering scale base out of range (0-" +
+                                      String(STEER_SCALE_BASE_MAX_MS, 1) + " m/s)");
+        return;
+    }
+
+    steerScaBaseMs_ = value;
+
+    // Persisted into the EXISTING "steering" namespace, beside the steering calibration. Zero is
+    // a legitimate stored value and means "not set": fall back to the autopilot's
+    // MOT_SPD_SCA_BASE, or to no scaling at all.
+    Preferences prefs;
+    if (prefs.begin("steering", false)) {
+        prefs.putFloat(STEER_SCALE_BASE_NVS_KEY, value);
+        prefs.end();
+    }
+
+    if (value > 0.0f) {
+        webPortal.sendResponse(true, "Steering scale base set to " + String(value, 2) + " m/s");
+    } else {
+        webPortal.sendResponse(true, "Steering scale base cleared — using the autopilot's "
+                                     "MOT_SPD_SCA_BASE, or no scaling");
+    }
+    Debug::printfFeature(DebugFeature::VEHICLE,
+        "[STEER] Speed-scaling base (local) set to %.2f m/s\n", value);
+}
+
+void VehicleController::processSetTestSpeedCommand(float value, WebPortal& webPortal) {
+    if (isnan(value) || value < 0.0f || value > STEER_SCALE_TEST_SPEED_MAX_MS) {
+        webPortal.sendResponse(false, "Test speed out of range (0-" +
+                                      String(STEER_SCALE_TEST_SPEED_MAX_MS, 1) + " m/s)");
+        return;
+    }
+
+    if (value <= 0.0f) {
+        steerTestSpeedMs_ = 0.0f;
+        steerTestSpeedSetMs_ = 0;
+        webPortal.sendResponse(true, "Test speed cleared — using the measured speed");
+        Debug::printlnFeature(DebugFeature::VEHICLE, "[STEER] TEST speed override cleared");
+        return;
+    }
+
+    // RAM ONLY — never persisted, cleared by a reboot, and fused to STEER_SCALE_TEST_SPEED_MS.
+    // It substitutes a speed for the SCALING CALCULATION ONLY: the wheel odometry sent to the
+    // autopilot, VFR_HUD, the SPEED_MAX limiter, the transmission interlock and the odometer all
+    // keep using the real measured speed, so the bench configuration is structurally incapable
+    // of becoming a driving configuration.
+    steerTestSpeedMs_ = value;
+    steerTestSpeedSetMs_ = millis();
+    webPortal.sendResponse(true, "TEST speed " + String(value, 2) +
+                                 " m/s — temporary, clears itself in " +
+                                 String(STEER_SCALE_TEST_SPEED_MS / 1000) + " s");
+    Debug::printfFeature(DebugFeature::VEHICLE,
+        "[STEER] TEST speed override %.2f m/s (steering scale only, expires in %lu s)\n",
+        value, (unsigned long)(STEER_SCALE_TEST_SPEED_MS / 1000));
 }
 
 void VehicleController::processThrottleCalBegin(WebPortal& webPortal) {

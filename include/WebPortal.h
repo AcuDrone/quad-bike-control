@@ -79,6 +79,11 @@ public:
         float speed_circ_mm;      // Calibration: wheel circumference (mm)
         float speed_limit_ms;     // Enforced ceiling (m/s) from SPEED_MAX, 0 = no limit — km/h in JSON
         float speed_limit_ceil;   // Throttle ceiling the taper is applying (%, 100 = inactive)
+        // Steering speed scaling — so "the steering feels weak" is diagnosable from the portal.
+        float steer_scale;        // Applied scale after rate limiting, 0..1 (1 = not scaling)
+        float steer_sca_base_ms;  // Base in use (m/s), 0 = none — serialised in m/s, not km/h
+        uint8_t steer_sca_src;    // Base source: 0 = none, 1 = local NVS, 2 = MOT_SPD_SCA_BASE
+        float steer_test_speed_ms; // Live bench override (m/s), 0 = none in force
         float odo_km;             // Total odometer (km) — always valid, NOT gated on speed_valid
         float trip_km;            // Resettable trip distance (km) — reset is a GCS action only
         float engine_hours;       // Engine hour meter (h) — always valid, NOT gated on can_status

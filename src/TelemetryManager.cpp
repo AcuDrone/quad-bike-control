@@ -86,6 +86,12 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     // The one and only ceiling: the autopilot's SPEED_MAX. 0 means no limit.
     telemetry.speed_limit_ms = vehicleController_.getSpeedLimitMs();
     telemetry.speed_limit_ceil = vehicleController_.getSpeedLimitCeilingPct();
+    // Steering speed scaling: the applied scale, the base actually in use, which source that
+    // base came from, and any live bench override — the four facts that explain the scale.
+    telemetry.steer_scale = vehicleController_.getSteerScale();
+    telemetry.steer_sca_base_ms = vehicleController_.getSteerScaleBaseMs();
+    telemetry.steer_sca_src = (uint8_t)vehicleController_.getSteerScaleSource();
+    telemetry.steer_test_speed_ms = vehicleController_.getSteerTestSpeedMs();
 
     CANController::VehicleData vehicleData = vehicleController_.getVehicleData();
     if (vehicleData.dataValid) {

@@ -47,6 +47,8 @@ Non-inverted, no inverter circuit (unlike SBUS). Baud is **115200**.
 | `SERIAL2_PROTOCOL` | `2` (MAVLink2) | same | TELEM2 speaks MAVLink 2 |
 | `SERIAL2_BAUD` | `115` (115200) | same | Match the ESP32 link baud |
 | `SPEED_MAX` | m/s, `0` = no limit | same | Read-only by the ESP32; the **only** source of the throttle limiter's ceiling — see below |
+| `MANUAL_OPTIONS` | **`0`** — REQUIRED | **`0`** — REQUIRED | Turns OFF ArduPilot's own speed-scaled steering. The ESP32 does that scaling now; leaving bit 0 set scales the steering **twice** — see below |
+| `MOT_SPD_SCA_BASE` | m/s, `0` = no scaling | same | Read-only by the ESP32; the **fallback** source of the steering speed-scaling base (the ESP32's own `steer_sca_base` wins) — see below |
 | `VISO_TYPE` | `1` (MAVLink) | `1` | Enable the visual-odometry backend. **Verify the parameter exists** — see the fmuv2 caveat |
 | `EK3_SRC1_VELXY` | `6` (ExternalNav) | `6` | Fuse horizontal velocity from body odometry |
 | `EK3_SRC1_POSXY` | **`0`** (None) | **`3`** (GPS) | With no GPS there is no position source to wait for |
@@ -62,6 +64,73 @@ delta handler does no quality gating), `VISO_VEL_M_NSE` (read only by
 
 No stream-rate parameter is needed: the ESP32 requests its one inbound stream itself (see
 "Requests toward the autopilot"). If the autopilot ignores both request forms, set `SRx_RC_CHAN`.
+
+### `MANUAL_OPTIONS = 0` — required, and why
+
+**`MANUAL_OPTIONS` bit 0 enables ArduPilot's speed-scaled steering in MANUAL**
+(`AP_MotorsUGV::output_regular()`: `if (is_positive(base) && fabsf(v) > base) steering *= base /
+fabsf(v);`, with `base = MOT_SPD_SCA_BASE`). The formula is fine. **Its speed is not.** `v` comes
+from `AR_AttitudeControl::get_forward_speed()`, which asks the AHRS for a velocity estimate and,
+when EKF3 has none, **silently returns the raw GPS ground speed instead**. There is no ArduPilot
+parameter that disables that fallback while a GPS is attached.
+
+On this vehicle EKF3's horizontal velocity source **is** the ESP32 (`VISO_TYPE = 1`,
+`EK3_SRC1_VELXY = 6`, `VISION_POSITION_DELTA`), and the ESP32 deliberately goes **silent** rather
+than send zeros when its hall sensor is unhealthy. So the exact moment the speed source fails is the
+moment ArduPilot starts steering by GPS. **Observed 2026-09-24: a parked vehicle, GPS reporting
+56 m/s, steering scaled to 0.018 — effectively no steering at all.** The failure is silent, it
+happens precisely when the speed source is already unhealthy, and its result is the opposite of
+fail-safe.
+
+The scaling therefore moved to the ESP32, which measures the speed directly and knows whether to
+believe it (`SpeedSensor::isValid()`). **Clear `MANUAL_OPTIONS` to `0` as a commissioning step.** A
+vehicle that gets this firmware with bit 0 still set is scaled **twice** — once by the autopilot from
+the untrustworthy EKF/GPS speed this exists to escape, and once by the ESP32.
+
+> `VISO_TYPE = 1` stays exactly as it is. The wheel-odometry path is untouched by this change and
+> must not be "cleaned up" along with it — the two are unrelated.
+
+**Behaviour note.** Clearing `MANUAL_OPTIONS` also removes ArduPilot's *ground-speed-based* steering
+reversal in reverse; with the bit clear that reversal keys off **throttle sign** instead. This
+vehicle has a mechanical gearbox and never commands negative throttle, so the change is inert here.
+No firmware behaviour depends on it.
+
+### Steering speed scaling on the ESP32
+
+`scale = min(1, base / speed)` — ArduPilot's own formula, unchanged, applied to the **deviation from
+centre** of autopilot steering commands. It applies **in MANUAL only** (`custom_mode == 0` in the
+autopilot's `HEARTBEAT`); in every other mode the autopilot computes steering from speed itself and a
+second, invisible reduction would be double limiting. An **unknown or stale** mode is treated as
+MANUAL — the one place where an unavailable input does not disable the feature, because MANUAL is the
+mode this vehicle is driven in.
+
+The base has two sources, in a fixed one-directional priority:
+
+| Priority | Source | Notes |
+|---|---|---|
+| 1 | ESP32 NVS `steer_sca_base` (namespace `"steering"`, m/s) | Set from the web portal, no reflash. `0` or absent = "not set" |
+| 2 | Autopilot `MOT_SPD_SCA_BASE` (m/s) | Read-only subscription, same mechanism as `SPEED_MAX`; unavailable when never received, `0`, rejected, stale or the link is down |
+| — | neither | **No scaling at all**, plus a rate-limited warning. There is deliberately no compile-time default |
+
+**Any fault disables the scaling — scale = 1, full steering authority.** No base, an invalid speed
+reading (`SpeedSensor::isValid()` false for any reason), or an autopilot mode that is known and is
+not MANUAL. There is deliberately **no hold, no last-known-good speed, no substitute speed and no
+minimum-scale floor**: speed scaling is a comfort and assist feature, and every one of those would be
+a way for a sensor fault to leave the driver unable to turn. The applied scale is slew-limited to
+`STEER_SCALE_SLEW_PER_S` (2.0 /s, both directions) — applied to the **scale**, never to the steering
+command, so the driver's own movements are never slowed.
+
+The **web `set_steering` path is never scaled**: it is a bench and maintenance control with no road
+speed behind it.
+
+`set_test_speed <m/s>` (web command) substitutes a speed for **the scaling calculation only**, so the
+feature can be exercised on a stationary, disarmed bench. It is RAM-only, clears itself after
+`STEER_SCALE_TEST_SPEED_MS` (60 s), is marked `TEST` in the log and in the portal, and reaches
+neither `VISION_POSITION_DELTA`, `VFR_HUD`, the `SPEED_MAX` limiter, the transmission interlock nor
+the odometer.
+
+The applied scale is reported as the `STEER_SCA` `NAMED_VALUE_FLOAT` (below), as `steer_scale` in the
+web telemetry JSON with its base and source, and as a `[STEER] Speed scale: …` line on change.
 
 ## Servo function mapping
 
@@ -90,20 +159,20 @@ the autopilot. Scheduling is internal to `MavlinkInterface::report()`, called ev
 | `HEARTBEAT` | 0 | 1 Hz (`MAVLINK_HEARTBEAT_TX_MS` = 1000 ms) | Component liveness + fail-safe state | none |
 | `EFI_STATUS` | 225 | 5 Hz (`MAVLINK_REPORT_TX_MS` = 200 ms) | All engine/vehicle telemetry in one message | none — fields go NaN instead |
 | `VFR_HUD` | 74 | 5 Hz (same tick) | Hall ground speed + throttle for a HUD | none |
-| `NAMED_VALUE_FLOAT` | 251 | 5 Hz (same tick) ×3 + 1 Hz (`MAVLINK_STEER_SLOW_TX_MS` = 1000 ms) ×2 | The five steering-VESC values: `STEER_POS`, `STEER_A`, `VESC_V`, `VESC_TEMP`, `VESC_OK` | none — values go NaN instead (`VESC_OK` never does) |
+| `NAMED_VALUE_FLOAT` | 251 | 5 Hz (same tick) ×3 + 1 Hz (`MAVLINK_STEER_SLOW_TX_MS` = 1000 ms) ×3 | The six steering values: `STEER_POS`, `STEER_A`, `VESC_V`, `VESC_TEMP`, `VESC_OK`, `STEER_SCA` | none — values go NaN instead (`VESC_OK` and `STEER_SCA` never do) |
 | `VISION_POSITION_DELTA` | 11011 | ≤ 5 Hz (same tick) | Wheel odometry as an EKF3-fusable body-frame delta | **heavily gated** — silence over zeros |
 | `STATUSTEXT` | 253 | on change, ≥ 250 ms apart | Gear / ignition / fail-safe transitions | only on an actual change |
 | `COMMAND_ACK` | 77 | reactive | Answer to a `COMMAND_LONG` addressed exactly to 1/25 | broadcasts get **no** ACK |
 | `REQUEST_DATA_STREAM` | 66 | ≤ 1 per 3 s | Ask for `SERVO_OUTPUT_RAW` | while the command rate is below 10 Hz |
 | `COMMAND_LONG` (`SET_MESSAGE_INTERVAL`) | 76 | ≤ 1 per 3 s | Same request, modern form | same gate, sent together |
-| `PARAM_REQUEST_READ` | 20 | 0.2 Hz | Poll `SPEED_MAX` | link up + autopilot learned |
+| `PARAM_REQUEST_READ` | 20 | 0.2 Hz each | Poll `SPEED_MAX` and `MOT_SPD_SCA_BASE` (one request per loop iteration, never both at once) | link up + autopilot learned |
 
 Engine data comes from the CAN bus (`CANController::VehicleData`); ground speed, odometer and trip
 come from the hall wheel-speed sensor (GPIO 8 / X2), independently of CAN health. Steering-VESC
 electrical data comes from the VESC's own UART, and the measured steering position from the AS5600
 on the steering shaft — three more sources, each with its own validity gate.
 
-Value-to-name summary for the five steering `NAMED_VALUE_FLOAT` messages:
+Value-to-name summary for the six steering `NAMED_VALUE_FLOAT` messages:
 
 | Value | `name` | Rate | Source | Comp |
 |-------|--------|------|--------|------|
@@ -112,6 +181,7 @@ Value-to-name summary for the five steering `NAMED_VALUE_FLOAT` messages:
 | VESC input voltage, 24 V rail (V) | `VESC_V` | 5 Hz | VESC UART | 25 |
 | VESC FET temperature (°C) | `VESC_TEMP` | 1 Hz | VESC UART | 25 |
 | VESC link health (`1.0` / `0.0`) | `VESC_OK` | 1 Hz | VESC UART | 25 |
+| Applied steering speed-scale (`0`…`1`, `1` = not scaling) | `STEER_SCA` | 1 Hz | vehicle layer | 25 |
 
 ### `HEARTBEAT` (0) — 1 Hz
 
@@ -136,7 +206,7 @@ can never be produced by this vehicle's ECU. **Why one `EFI_STATUS` and not per-
 `NAMED_VALUE_FLOAT`:** all `NAMED_VALUE_FLOAT` messages share one message id and differ only by a
 name string, so any name-agnostic store (MP's Inspector, the mavlink2rest cache, unmapped
 `customField`s) keeps only the last one received. Distinct fields of one message cannot collide.
-That reasoning governs the **ECU/EFI values** here; the steering VESC's five named floats are the
+That reasoning governs the **ECU/EFI values** here; the six steering named floats are the
 documented exception, and the reason they are one is set out in their own section below.
 
 #### All 19 fields, in wire order
@@ -345,12 +415,13 @@ more dangerous direction. (`throttle_position` is what the ECU **measured**; `th
 **arbitrated servo output** — autopilot, web, gear-change boost, speed-limit cap or fail-safe idle —
 not the raw demand of any one input.)
 
-### Steering VESC telemetry (`NAMED_VALUE_FLOAT`)
+### Steering telemetry (`NAMED_VALUE_FLOAT`)
 
-The **steering VESC** (Flipsky 75200) is the only smart driver on this vehicle. Its telemetry, plus
-the measured steering position from the AS5600 on the shaft it drives, rides **exactly five**
-`NAMED_VALUE_FLOAT` (251) messages from component 25 — the **one scoped exception** to the
-"everything in the field that names it, in a single `EFI_STATUS`" rule stated above.
+The **steering VESC** (Flipsky 75200) is the only smart driver on this vehicle. Its telemetry, the
+measured steering position from the AS5600 on the shaft it drives, and the speed-scale the firmware
+is applying to that shaft's commands ride **exactly six** `NAMED_VALUE_FLOAT` (251) messages from
+component 25 — the **one scoped exception** to the "everything in the field that names it, in a
+single `EFI_STATUS`" rule stated above.
 
 | `name` | Value | Unit | Rate | Unknown | Gate |
 |--------|-------|------|------|---------|------|
@@ -359,14 +430,22 @@ the measured steering position from the AS5600 on the shaft it drives, rides **e
 | `VESC_V` | VESC-measured **input** voltage (VESC supply rail) | V | 5 Hz | `NaN` | `steerDriverOk` |
 | `VESC_TEMP` | VESC power-stage (FET) temperature | °C | 1 Hz | `NaN` | `steerDriverOk` |
 | `VESC_OK` | VESC link flag | `1.0` / `0.0` | 1 Hz | **never `NaN`** | *is* the flag |
+| `STEER_SCA` | **Applied** steering speed-scale | `0`…`1` (`1.0` = not scaling) | 1 Hz | **never `NaN`** | none — every fault resolves to `1.0` |
 
 `STEER_POS`, `STEER_A` and `VESC_V` ride the existing 5 Hz report tick beside `EFI_STATUS` and
-`VFR_HUD`, so a GCS-side log lines the live values up without interpolation. `VESC_TEMP` and
-`VESC_OK` sit on their own 1 Hz timer (`MAVLINK_STEER_SLOW_TX_MS`): a MOSFET's thermal time constant
-is seconds and a link flag needs no faster. The underlying VESC data refreshes at **3.3 Hz**
-(`STEER_VESC_TELEM_MS` = 300 ms), so the 5 Hz names repeat a sample roughly every third message.
+`VFR_HUD`, so a GCS-side log lines the live values up without interpolation. `VESC_TEMP`, `VESC_OK`
+and `STEER_SCA` sit on their own 1 Hz timer (`MAVLINK_STEER_SLOW_TX_MS`): a MOSFET's thermal time
+constant is seconds, a link flag needs no faster, and the steering scale moves at the pace the
+vehicle accelerates. The underlying VESC data refreshes at **3.3 Hz** (`STEER_VESC_TELEM_MS` =
+300 ms), so the 5 Hz names repeat a sample roughly every third message.
 
-The `time_boot_ms` field of all five carries the report tick's own `millis()`. It **wraps at 49.7
+`STEER_SCA` is not a VESC value at all — it is the scale the **vehicle layer** is applying to
+autopilot steering commands after rate limiting, admitted under the same scoped exception. It is
+**never `NaN`**: "not scaling" is the definite answer `1.0`, and a ground station must plot it as a
+flat line at one rather than as a gap in the record. It is a reporting path only; nothing on the
+MAVLink side computes or influences the scale.
+
+The `time_boot_ms` field of all six carries the report tick's own `millis()`. It **wraps at 49.7
 days** — that is what the field is *defined* as (`uint32_t` ms since boot), not a defect to fix.
 
 #### Why `NAMED_VALUE_FLOAT` here, and only here
@@ -383,9 +462,9 @@ can decode carries no telemetry, however well its field names fit.
 store (MP's Inspector, the mavlink2rest cache, an unmapped `customField`) keeps only the last one
 received — which is exactly why every engine value stays in one `EFI_STATUS`. But the intended
 consumer, the QuadBike MP plugin, dispatches on the **(compid, name)** pair and never confuses the
-five; and no name-agnostic store consumed these values in the first place. The exception is
+six; and no name-agnostic store consumed these values in the first place. The exception is
 **scoped**: the ECU values, both gears, the digital flags, the odometer and the trip stay in
-`EFI_STATUS`, and these five names are the only `NAMED_VALUE_FLOAT` this component ever sends.
+`EFI_STATUS`, and these six names are the only `NAMED_VALUE_FLOAT` this component ever sends.
 
 Also rejected:
 
@@ -437,7 +516,7 @@ Also rejected:
   visible for throttle. A transient disagreement is the actuator slewing; a persistent one is a
   steering fault.
 - **Not reported at all:** the raw VESC `mc_fault_code` and the boot-cumulative reply / fault-episode
-  counters. Five names is the whole set; the fault code stays reachable on the **web portal**
+  counters. Six names is the whole set; the fault code stays reachable on the **web portal**
   (`steer_vesc_fault`) and the serial console.
 
 #### The `name` field is 10 bytes, and truncation would be silent
@@ -445,7 +524,7 @@ Also rejected:
 `NAMED_VALUE_FLOAT.name` is a fixed **`char[10]`**, and the library's pack helper copies **exactly
 10 bytes** out of whatever pointer it is given. The firmware therefore zero-pads every name into a
 local 10-byte buffer before packing (a shorter literal would be read past its terminator and put
-`.rodata` on the wire), holds the five names as compile-time literals that are **never** built at
+`.rodata` on the wire), holds the six names as compile-time literals that are **never** built at
 runtime, and `static_assert`s each one at ≤ 10 characters. On the receiving side: a name shorter
 than 10 is NUL-padded, a name of exactly 10 carries **no terminator**, so a consumer must **trim on
 length, not on NUL**.
@@ -771,7 +850,7 @@ Decoding rules, all mandatory:
   to send it, including a Lua script on the autopilot; only component 25 is this firmware.
 - **Dispatch on the trimmed `name`.** The field is a fixed **10-byte** array. A name shorter than 10
   characters is NUL-padded; a name of exactly 10 characters carries **no terminator at all**, so
-  trim on length, never on a NUL that may not be there. All five names below are shorter than 10
+  trim on length, never on a NUL that may not be there. All six names below are shorter than 10
   today, but the decode must not depend on that.
 - **Render `NaN` as `--`.** Never as `0`.
 - **`VESC_OK == 0` greys the VESC values.** It is the name that says *why* `STEER_A`, `VESC_V` and
@@ -784,6 +863,7 @@ Decoding rules, all mandatory:
 | `VESC_V` | VESC-measured input voltage (**VESC supply rail**) | V | 5 Hz |
 | `VESC_TEMP` | VESC FET temperature | °C | 1 Hz |
 | `VESC_OK` | VESC link flag, `1.0` / `0.0` — **never `NaN`** | — | 1 Hz |
+| `STEER_SCA` | applied steering speed-scale, `0`…`1` — `1.0` = not scaling, **never `NaN`** | — | 1 Hz |
 
 Mission Planner will **not** populate any native field from these (it maps its own from the
 autopilot, component 1 only), so the plugin reads the **raw packet**, exactly as it already does for

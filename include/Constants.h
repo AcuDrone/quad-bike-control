@@ -147,12 +147,18 @@ struct ServoChannelConfig {
 #define MAVLINK_STATUSTEXT_MIN_MS     250    // ms minimum spacing between STATUSTEXT messages
 
 // Autopilot parameter subscription (READ-ONLY — the firmware never sends PARAM_SET).
-// Exactly one parameter is subscribed: ArduPilot's SPEED_MAX (m/s) — the ONLY source of the
-// firmware's max-speed limiter ceiling. Both an unsolicited PARAM_VALUE and a periodic
-// PARAM_REQUEST_READ are honored: ArduPilot's broadcast-on-set behaviour is version- and
-// routing-dependent, so the POLL is the change detector and the broadcast only makes it sooner.
+// TWO parameters are subscribed, both read-only, through ONE shared mechanism (one poll, one
+// PARAM_VALUE handler, one set of value-hygiene rules — see MavlinkInterface's param table):
+//   SPEED_MAX        (m/s) — the ONLY source of the firmware's max-speed limiter ceiling.
+//   MOT_SPD_SCA_BASE (m/s) — the FALLBACK source of the steering speed-scaling base; the
+//                            ESP32's own NVS value (steer_sca_base) takes priority over it.
+// Both an unsolicited PARAM_VALUE and a periodic PARAM_REQUEST_READ are honored: ArduPilot's
+// broadcast-on-set behaviour is version- and routing-dependent, so the POLL is the change
+// detector and the broadcast only makes it sooner.
 #define MAVLINK_PARAM_SPEED_MAX_ID    "SPEED_MAX"  // ArduPilot cruise-speed ceiling (m/s); 0 = "no limit"
 #define MAVLINK_PARAM_SPEED_MAX_MS    30.0f  // m/s — ArduPilot's own range bound; above this → rejected
+#define MAVLINK_PARAM_SPD_SCA_BASE_ID "MOT_SPD_SCA_BASE"  // ArduPilot steering speed-scaling base (m/s); 0 = "no scaling"
+#define MAVLINK_PARAM_SPD_SCA_BASE_MAX 10.0f // m/s — ArduPilot's own range bound for that parameter
 #define MAVLINK_PARAM_POLL_MS         5000   // ms between PARAM_REQUEST_READ polls (never stops)
 #define MAVLINK_PARAM_FIRST_DELAY_MS  1000   // ms after the autopilot is learned before the first request
 #define MAVLINK_PARAM_STALE_MS        16000  // ms without a PARAM_VALUE before the value is unusable (~3 polls)
@@ -395,6 +401,36 @@ struct ServoChannelConfig {
                                               // stick moves are never slowed by the limiter.
 #define SPEED_LIMIT_LOG_MIN_MS         1000   // ms hold-off between "speed limit" logs
 #define SPEED_LIMIT_LOG_EPSILON_MS     0.015f // m/s (≈0.05 km/h) - smaller ceiling moves are not worth a log
+
+// Steering speed scaling. ArduPilot's own formula, scale = min(1, base / speed), moved to the
+// ESP32 because the autopilot's speed silently falls back to raw GPS ground speed whenever EKF3
+// has no velocity estimate — which on this vehicle is exactly when the ESP32's hall sensor has
+// failed (observed 2026-09-24: parked, GPS 56 m/s, steering scaled to 0.018). Applies to the
+// AUTOPILOT steering path only, in MANUAL only, and ANY fault resolves to scale = 1: no hold, no
+// substitute speed, no minimum floor. A vehicle with full steering authority is the known-good
+// state, so every one of those would be a way for a sensor fault to leave the driver unable to
+// turn. Requires MANUAL_OPTIONS = 0 on the autopilot (an operator step — see MAVLINK_SETUP.md).
+#define STEER_SCALE_SLEW_PER_S        2.0f   // scale units/s, both directions — a full 0 → 1 sweep in
+                                             // 0.5 s: fast enough not to feel laggy, slow enough not
+                                             // to snap the wheel. Applied to the SCALE, never to the
+                                             // steering command (the driver's own moves pass at full rate)
+#define STEER_SCALE_BASE_MAX_MS       10.0f  // m/s — matches MOT_SPD_SCA_BASE's range so a local value
+                                             // and an autopilot value are interchangeable
+#define STEER_SCALE_LOG_MIN_MS        1000   // ms hold-off between "steer scale" logs
+#define STEER_SCALE_LOG_EPSILON       0.02f  // smaller scale moves are not worth a log
+#define STEER_SCALE_WARN_MS           10000  // ms between "no base" / "speed invalid" warnings,
+                                             // modelled on SPEED_LIMIT_WARN_MS
+#define STEER_SCALE_TEST_SPEED_MS     60000  // ms before a bench set_test_speed override clears itself —
+                                             // a fuse, so a bench setting can never become a driving one
+#define STEER_SCALE_TEST_SPEED_MAX_MS 30.0f  // m/s — accepted range for the bench override
+#define ROVER_CUSTOM_MODE_MANUAL      0      // ArduPilot Rover HEARTBEAT.custom_mode for MANUAL —
+                                             // the ONLY mode in which the ESP32 scales steering
+
+// NVS key for the locally stored speed-scaling base (m/s). It lives in the EXISTING "steering"
+// namespace alongside the steering calibration (c_ang / l_ang / r_ang), because it is a property
+// of the steering axis, not of the speed sensor. 0 or absent = "not set" → fall back to the
+// autopilot's MOT_SPD_SCA_BASE, and to no scaling at all when that is unavailable too.
+#define STEER_SCALE_BASE_NVS_KEY      "steer_sca_base"
 
 // PRESENTATION ONLY. Every speed inside the firmware is m/s; this exists solely for the web JSON
 // and human-readable debug strings, and must never appear in a control-path computation.

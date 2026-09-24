@@ -787,6 +787,52 @@
                     </div>
                 </div>
 
+                <!-- Steering speed scaling. Computed on the ESP32 with ArduPilot's own
+                     min(1, base / speed) formula, applied to AUTOPILOT steering in MANUAL only.
+                     Every fault resolves to 1.00 — full steering authority — so the reason line
+                     explains why it is inactive rather than leaving the operator guessing. -->
+                <div style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: baseline; font-size: 0.85em;">
+                        <span data-i18n="lbl_steer_scale" style="color: var(--muted-foreground);">Steering authority</span>
+                        <span id="steer-scale-value">--</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 4px; font-size: 0.85em;">
+                        <span data-i18n="lbl_steer_sca_base" style="color: var(--muted-foreground);">Scaling base</span>
+                        <span id="steer-sca-base-value">--</span>
+                    </div>
+                    <div id="steer-scale-reason" style="font-size: 0.78em; color: var(--muted-foreground); margin-top: 4px;"></div>
+                    <div id="steer-test-speed-row" style="display: none; margin-top: 6px; font-size: 0.85em; color: var(--warning);">
+                        <span data-i18n="lbl_steer_test_active">TEST speed active</span>
+                        <span id="steer-test-speed-value">--</span>
+                    </div>
+
+                    <div style="margin-top: 10px;">
+                        <label data-i18n="lbl_steer_sca_base_set" style="font-size: 0.8em; color: var(--muted-foreground);">Scaling base (m/s, 0 = use the autopilot's)</label>
+                        <div style="display: flex; gap: 6px; margin-top: 4px;">
+                            <input type="number" id="steer-sca-base-input" min="0" max="10" step="0.1" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                            <button onclick="saveSteerScaBase()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                        </div>
+                    </div>
+                    <div style="margin-top: 10px;">
+                        <label data-i18n="lbl_steer_test_speed" style="font-size: 0.8em; color: var(--muted-foreground);">Bench test speed (m/s)</label>
+                        <div style="display: flex; gap: 6px; margin-top: 4px;">
+                            <input type="number" id="steer-test-speed-input" min="0" max="30" step="0.1" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                            <button onclick="sendSteerTestSpeed()" data-i18n="btn_send" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 65%, black); color:var(--foreground); cursor:pointer;">Send</button>
+                        </div>
+                    </div>
+                    <div data-i18n="steer_scale_hint" style="font-size: 0.75em; color: var(--muted-foreground); margin-top: 6px;">
+                        Steering authority is reduced with road speed as scale = base / speed, on autopilot
+                        commands in MANUAL only — the web steering controls are never scaled. Any fault (no
+                        base, an invalid speed reading, another flight mode) restores full authority. Requires
+                        MANUAL_OPTIONS = 0 on the autopilot, otherwise the steering is scaled twice.
+                    </div>
+                    <div data-i18n="steer_test_speed_hint" style="font-size: 0.75em; color: var(--muted-foreground); margin-top: 4px;">
+                        The test speed is temporary: it feeds the steering scale only — never the odometry,
+                        the speed limiter or the gear interlock — and clears itself after 60 s. Send 0 to clear
+                        it now.
+                    </div>
+                </div>
+
                 <!-- Distance counters. READ-ONLY: the trip reset is a ground-station action
                      (MAV_CMD_USER_1), so there is deliberately no button or input here. -->
                 <div style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px;">
@@ -1010,6 +1056,29 @@
                 speed_saving: 'Saving speed settings...',
                 invalid_speed_ppr: 'Pulses/rev must be 1-1000',
                 invalid_speed_circ: 'Circumference must be 100-10000 mm',
+
+                // Steering speed scaling (ESP32-side, MANUAL only)
+                lbl_steer_scale: 'Steering authority',
+                lbl_steer_sca_base: 'Scaling base',
+                lbl_steer_sca_base_set: "Scaling base (m/s, 0 = use the autopilot's)",
+                lbl_steer_test_speed: 'Bench test speed (m/s)',
+                lbl_steer_test_active: 'TEST speed:',
+                btn_send: 'Send',
+                steer_sca_src_local: 'local',
+                steer_sca_src_autopilot: 'autopilot',
+                steer_sca_src_none: 'none',
+                steer_scale_full: 'full',
+                steer_reason_no_base: 'Not scaling: no base value (set one here, or set MOT_SPD_SCA_BASE on the autopilot).',
+                steer_reason_speed_invalid: 'Not scaling: the speed reading is invalid — full steering authority.',
+                steer_reason_below_base: 'Not scaling: speed is at or below the base — no reduction needed.',
+                steer_reason_not_manual: 'Not scaling: the autopilot is not in MANUAL — it scales steering itself in other modes.',
+                steer_reason_active: 'Scaling active — steering travel is reduced to the value above.',
+                steer_scale_hint: "Steering authority is reduced with road speed as scale = base / speed, on autopilot commands in MANUAL only — the web steering controls are never scaled. Any fault (no base, an invalid speed reading, another flight mode) restores full authority. Requires MANUAL_OPTIONS = 0 on the autopilot, otherwise the steering is scaled twice.",
+                steer_test_speed_hint: 'The test speed is temporary: it feeds the steering scale only — never the odometry, the speed limiter or the gear interlock — and clears itself after 60 s. Send 0 to clear it now.',
+                steer_sca_saving: 'Saving scaling base...',
+                steer_test_sending: 'Sending test speed...',
+                invalid_steer_sca_base: 'Scaling base must be 0-10 m/s',
+                invalid_steer_test_speed: 'Test speed must be 0-30 m/s',
 
                 // ECU probe
                 btn_probe_ecu: '🔍 Probe ECU',
@@ -1235,6 +1304,29 @@
                 speed_saving: 'Збереження налаштувань швидкості...',
                 invalid_speed_ppr: 'Імпульсів на оберт має бути 1-1000',
                 invalid_speed_circ: 'Довжина кола має бути 100-10000 мм',
+
+                // Steering speed scaling (ESP32-side, MANUAL only)
+                lbl_steer_scale: 'Чутливість керма',
+                lbl_steer_sca_base: 'Базова швидкість',
+                lbl_steer_sca_base_set: 'Базова швидкість (м/с, 0 = брати з автопілота)',
+                lbl_steer_test_speed: 'Тестова швидкість для стенда (м/с)',
+                lbl_steer_test_active: 'ТЕСТОВА швидкість:',
+                btn_send: 'Надіслати',
+                steer_sca_src_local: 'локальна',
+                steer_sca_src_autopilot: 'автопілот',
+                steer_sca_src_none: 'немає',
+                steer_scale_full: 'повна',
+                steer_reason_no_base: 'Масштабування вимкнено: немає базового значення (задайте його тут або MOT_SPD_SCA_BASE в автопілоті).',
+                steer_reason_speed_invalid: 'Масштабування вимкнено: показання швидкості недостовірні — кермо працює на повний хід.',
+                steer_reason_below_base: 'Масштабування вимкнено: швидкість не перевищує базову — зменшувати немає чого.',
+                steer_reason_not_manual: 'Масштабування вимкнено: автопілот не в режимі MANUAL — в інших режимах він масштабує кермо сам.',
+                steer_reason_active: 'Масштабування діє — хід керма зменшено до наведеного значення.',
+                steer_scale_hint: 'Чутливість керма зменшується зі швидкістю за формулою scale = база / швидкість, лише для команд автопілота в режимі MANUAL — вебкерування ніколи не масштабується. Будь-яка несправність (немає бази, недостовірна швидкість, інший режим польоту) повертає повний хід. Потребує MANUAL_OPTIONS = 0 в автопілоті, інакше кермо масштабується двічі.',
+                steer_test_speed_hint: 'Тестова швидкість тимчасова: вона впливає лише на масштабування керма — не на одометрію, обмежувач швидкості чи блокування передач — і скидається сама через 60 с. Надішліть 0, щоб скинути негайно.',
+                steer_sca_saving: 'Збереження базової швидкості...',
+                steer_test_sending: 'Надсилання тестової швидкості...',
+                invalid_steer_sca_base: 'Базова швидкість має бути 0-10 м/с',
+                invalid_steer_test_speed: 'Тестова швидкість має бути 0-30 м/с',
 
                 // ECU probe
                 btn_probe_ecu: '🔍 Опитати ЕБК',
@@ -2126,6 +2218,8 @@
                 }
             }
 
+            updateSteerScaleDisplay(data);
+
             // Distance counters. Deliberately NOT gated on speed_valid: a stale or unhealthy
             // sensor does not invalidate distance already driven. A missing field shows "--"
             // rather than a misleading 0.000.
@@ -2158,6 +2252,95 @@
             }
             sendCommand('speed_cal_circ', val);
             speedStatusMsg(t('speed_saving'), 'var(--muted-foreground)');
+        }
+
+        // ── Steering speed scaling ──────────────────────────────────────────
+        // The firmware reports the applied scale, the base in use and its source. The REASON
+        // the scaling is inactive is derived here rather than shipped as a fifth field: the
+        // three fault cases are distinguishable from data the portal already has (no base,
+        // speed_valid, and speed vs base), and "the autopilot is not in MANUAL" is what is left
+        // when a valid speed above the base still produces no reduction.
+        function updateSteerScaleDisplay(data) {
+            const scale = (typeof data.steer_scale === 'number') ? data.steer_scale : 1;
+            const base = (typeof data.steer_sca_base === 'number') ? data.steer_sca_base : 0;
+            const src = (typeof data.steer_sca_src === 'number') ? data.steer_sca_src : 0;
+            const testMs = (typeof data.steer_test_speed === 'number') ? data.steer_test_speed : 0;
+            const speedValid = data.speed_valid === true;
+            // The speed the scale is actually computed from: the bench override while it is
+            // live, the measured road speed otherwise (the JSON carries that one in km/h).
+            const measuredMs = (typeof data.vehicle_speed === 'number') ? data.vehicle_speed / 3.6 : 0;
+            const effectiveMs = (testMs > 0) ? testMs : measuredMs;
+            const scaling = scale < 0.995;
+
+            const scaleEl = document.getElementById('steer-scale-value');
+            if (scaleEl) {
+                scaleEl.textContent = scaling
+                    ? (scale * 100).toFixed(0) + ' % (×' + scale.toFixed(2) + ')'
+                    : t('steer_scale_full') + ' (×1.00)';
+                scaleEl.style.color = scaling ? 'var(--warning)' : 'var(--success)';
+            }
+
+            const baseEl = document.getElementById('steer-sca-base-value');
+            if (baseEl) {
+                const srcName = (src === 1) ? t('steer_sca_src_local')
+                              : (src === 2) ? t('steer_sca_src_autopilot')
+                              : t('steer_sca_src_none');
+                baseEl.textContent = (base > 0)
+                    ? base.toFixed(2) + ' m/s (' + srcName + ')'
+                    : t('steer_sca_src_none');
+                baseEl.style.color = (base > 0) ? 'var(--foreground)' : 'var(--muted-foreground)';
+            }
+
+            const reasonEl = document.getElementById('steer-scale-reason');
+            if (reasonEl) {
+                let key;
+                if (scaling)                      key = 'steer_reason_active';
+                else if (base <= 0)               key = 'steer_reason_no_base';
+                else if (!speedValid)             key = 'steer_reason_speed_invalid';
+                else if (effectiveMs <= base)     key = 'steer_reason_below_base';
+                else                              key = 'steer_reason_not_manual';
+                reasonEl.textContent = t(key);
+                reasonEl.style.color = (key === 'steer_reason_speed_invalid')
+                    ? 'var(--danger)' : 'var(--muted-foreground)';
+            }
+
+            // A live bench override is shown prominently, as a temporary state rather than a
+            // reading — it is the one thing here that must never be mistaken for normal.
+            const testRow = document.getElementById('steer-test-speed-row');
+            if (testRow) {
+                if (testMs > 0) {
+                    testRow.style.display = 'block';
+                    const tv = document.getElementById('steer-test-speed-value');
+                    if (tv) tv.textContent = testMs.toFixed(2) + ' m/s';
+                } else {
+                    testRow.style.display = 'none';
+                }
+            }
+
+            // The input holds the LOCAL base, which is the in-use base only when the source IS
+            // local — an autopilot-sourced value must never be typed back into the local field,
+            // or saving it would silently pin a copy that stops tracking MOT_SPD_SCA_BASE.
+            syncSpeedInput('steer-sca-base-input', (src === 1) ? base.toFixed(2) : '0.00');
+        }
+
+        function saveSteerScaBase() {
+            const val = parseFloat(document.getElementById('steer-sca-base-input').value);
+            if (isNaN(val) || val < 0 || val > 10) {
+                speedStatusMsg(t('invalid_steer_sca_base'), 'var(--danger)');
+                return;
+            }
+            sendCommand('set_steer_sca_base', val);
+            speedStatusMsg(t('steer_sca_saving'), 'var(--muted-foreground)');
+        }
+
+        function sendSteerTestSpeed() {
+            const val = parseFloat(document.getElementById('steer-test-speed-input').value);
+            if (isNaN(val) || val < 0 || val > 30) {
+                speedStatusMsg(t('invalid_steer_test_speed'), 'var(--danger)');
+                return;
+            }
+            sendCommand('set_test_speed', val);
+            speedStatusMsg(t('steer_test_sending'), 'var(--muted-foreground)');
         }
 
         function setIgnition(state) {
