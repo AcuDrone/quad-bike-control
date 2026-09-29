@@ -98,9 +98,12 @@ bool SpeedSensor::begin() {
     if (err == ESP_OK) err = pcnt_unit_add_watch_point(unit_, SPEED_PCNT_LOW_LIMIT);
     if (err == ESP_OK) err = pcnt_unit_set_glitch_filter(unit_, &filterConfig);
     if (err == ESP_OK) err = pcnt_new_channel(unit_, &chanConfig, &channel_);
-    // ONE edge only. The hall sensor drives this pin directly on this board (no opto
-    // isolation), so the polarity is the sensor's own — and the pulse RATE is identical
-    // on either edge, so which edge is counted is a documentation matter, not a fix.
+    // ONE edge only. The input stage is a PC817 opto (12V pickup → 1 kΩ → LED, collector on
+    // this pin, emitter to GND), so it INVERTS: the signal is active LOW here and the falling
+    // edge counted below is the start of the active phase. The pulse RATE is identical on
+    // either edge, so the choice is a documentation matter, not a fix. pcnt_new_channel()
+    // enables the internal pull-up (~45 kΩ) on the edge GPIO; the external 1 kΩ pull-up to
+    // 3.3V required by the wiring dominates it — see PIN_SPEED_SENSOR in Constants.h.
     if (err == ESP_OK) err = pcnt_channel_set_edge_action(channel_,
                                  PCNT_CHANNEL_EDGE_ACTION_HOLD,      // rising
                                  PCNT_CHANNEL_EDGE_ACTION_INCREASE); // falling
@@ -124,7 +127,7 @@ bool SpeedSensor::begin() {
     lastPulseMs_  = lastSampleMs_;
 
     Debug::printfFeature(DebugFeature::VEHICLE,
-        "[SPEED] PCNT on GPIO%d (direct input, falling edge), filter %d ns, %u pulses/rev, %.0f mm circumference\n",
+        "[SPEED] PCNT on GPIO%d (PC817, active-low, falling edge), filter %d ns, %u pulses/rev, %.0f mm circumference\n",
         (int)PIN_SPEED_SENSOR, (int)SPEED_GLITCH_FILTER_NS,
         (unsigned)pulsesPerRev_, wheelCircumferenceMm_);
     return true;

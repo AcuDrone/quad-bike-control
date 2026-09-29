@@ -77,8 +77,15 @@
 
 // Driveline speed sensor (hall) pulse input, PCNT counted.
 // Freed when the BTS7960 steering driver was removed (was PIN_STEER_RPWM).
-// ⚠ Hall speed sensor, direct input (no opto isolation on the DevKit) — wiring to
-// be confirmed on the bench. A 12V sensor needs level shifting before this pin.
+// Wiring CONFIRMED on the bench 2026-09-29: 12V toothed-ring hall pickup → 1 kΩ series
+// resistor → PC817 opto LED; PC817 phototransistor collector → this pin, emitter → GND.
+// The PC817 stage INVERTS and does the level shifting, so nothing 12V reaches the pin and the
+// signal here is ACTIVE LOW (LED conducting ⇒ pin pulled low). The counted edge is the falling
+// one, i.e. the start of the active phase.
+// ⚠ An external 1 kΩ pull-up from this pin to 3.3V is MANDATORY. The first build had none and
+// relied on the ESP32-S3 internal pull-up (~45 kΩ) alone; that leaves a high-impedance node
+// between pulses, which picked up ignition-coil interference as phantom pulses and tripped the
+// gear interlock. With the 1 kΩ fitted the noise counters read 0 with the engine idling.
 #define PIN_SPEED_SENSOR    GPIO_NUM_17
 // GPIO18 (former PIN_STEER_LPWM) stays RESERVED/FREE.
 

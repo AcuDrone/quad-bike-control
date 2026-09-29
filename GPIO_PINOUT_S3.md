@@ -30,7 +30,7 @@ Every `PIN_*` define in `include/Constants.h`, in GPIO order, plus the two conso
 | **13** | `PIN_CAN_MISO` | in | SPI MISO | MCP2515 SO |
 | **14** | `PIN_BRAKE_SENSOR` | in | plain GPIO (`INPUT`) | Brake "fully released" limit switch — **HIGH = released** |
 | **15** | `PIN_MAVLINK_TX` | out | UART1 TX, 115200 | Pixhawk TELEM2 **RX** (non-inverted) |
-| **17** | `PIN_SPEED_SENSOR` | in | PCNT unit, 1 µs glitch filter | Hall driveline speed pickup — **NEW**, ⚠ wiring TBD on the bench |
+| **17** | `PIN_SPEED_SENSOR` | in | PCNT unit, 12.5 µs glitch filter | Hall driveline speed pickup through a PC817 — **active LOW**, needs an external 1 kΩ pull-up |
 | **18** | — | — | — | **FREE / RESERVED** (former `PIN_STEER_LPWM`) |
 | **19** | `PIN_GEAR_REVERSE` | in | plain GPIO (floating, external pull-up) | Gear switch **R** — active LOW |
 | **20** | `PIN_GEAR_NEUTRAL` | in | plain GPIO (floating, external pull-up) | Gear switch **N** — active LOW |
@@ -51,10 +51,15 @@ GPIO 17 and GPIO 18 were freed when the BTS7960 steering driver was replaced by 
 `PIN_STEER_RPWM` / `PIN_STEER_LPWM`, LEDC channels 6/7). **GPIO 17 now carries the hall driveline
 speed sensor**, counted in hardware by a PCNT unit.
 
-⚠ There is **no opto isolation on the DevKit** — the sensor drives the pin directly, so the wiring is
-still to be confirmed on the bench. A 12V-output sensor **must** be level-shifted to 3.3V before this
-pin is connected; GPIO 17 is not 12V tolerant. The firmware counts one edge only; the pulse rate is
-the same on either edge, so polarity is a documentation matter, not a correctness one.
+Wiring **confirmed on the bench 2026-09-29**: 12V toothed-ring pickup → 1 kΩ series resistor → PC817
+LED; the PC817 phototransistor collector goes to GPIO 17 and its emitter to GND. The opto isolates
+and level-shifts, so nothing 12V reaches the pin, and it **inverts** — the signal is **active LOW**
+here and the firmware counts the falling edge (the pulse rate is the same on either edge, so the
+choice is a documentation matter, not a correctness one).
+
+⚠ An **external 1 kΩ pull-up from GPIO 17 to 3.3V is mandatory.** Without it the node floats on the
+internal pull-up (~45 kΩ) alone and picks up ignition-coil interference as phantom pulses, which
+trips the gear interlock. With the 1 kΩ fitted the noise counters read 0 with the engine idling.
 
 GPIO 18 stays **free/reserved** and LEDC channels 6 and 7 stay unallocated.
 
@@ -66,6 +71,8 @@ GPIO 18 stays **free/reserved** and LEDC channels 6 and 7 stay unallocated.
   `TRANS_GEAR_READ_RETRY_COUNT` times while the servo is idle. Zero or more than one active reads as
   `GEAR_UNKNOWN`, which caps throttle at `TRANS_UNKNOWN_GEAR_THROTTLE_MAX`.
 - **Brake limit sensor (14):** `pinMode(INPUT)`, no internal pull-up. **HIGH = brake released.**
+- **Speed sensor (17):** PC817 open-collector output, so **active LOW**; an **external 1 kΩ pull-up
+  to 3.3V** is required — the internal pull-up the PCNT driver enables is too weak on its own.
 - **Relays (36/37/38/39):** `pinMode(OUTPUT)`, driven LOW at `begin()`; **HIGH energizes**.
 
 ---
@@ -157,7 +164,7 @@ erase megabytes in one stretch, which is slow and fragile, and 1.5 MB is ample f
 |------------|------|---------|
 | I2C `Wire` | SDA 41 / SCL 42 | 100 kHz (`I2C_BUS_FREQ_HZ`). AS5600 `0x36` is the **only** device. Opened once in `main.cpp`; no driver re-opens it |
 | SPI (CAN) | MOSI 11 / MISO 13 / SCK 12 / CS 10 | MCP2515 + transceiver, 8 MHz crystal → `MCP_8MHZ` |
-| PCNT | 17 | Hall speed sensor, single edge, 1 µs hardware glitch filter, hardware overflow accumulation |
+| PCNT | 17 | Hall speed sensor, single falling edge, 12.5 µs hardware glitch filter, hardware overflow accumulation |
 
 ---
 
