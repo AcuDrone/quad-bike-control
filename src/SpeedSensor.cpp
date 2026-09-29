@@ -21,6 +21,12 @@ SpeedSensor::SpeedSensor()
       tripMm_(0),
       lastOdoWriteMm_(0),
       distanceDirty_(false),
+      rawPulsesLastWindow_(0),
+      rejectedWindows_(0),
+      rejectedPulses_(0),
+      strayPulses_(0),
+      lastNoiseLogMs_(0),
+      rejectedSinceLog_(false),
       everPulsed_(false),
       suspicious_(false),
       staleHandled_(true) {
@@ -149,7 +155,23 @@ void SpeedSensor::update() {
     lastTotal_  = total;
     pulseTotal_ = total;
 
+    // Diagnostics: the delta exactly as the hardware reported it, before any guard or
+    // interpretation. This is the number the bench needs — a non-zero value on a stationary
+    // vehicle IS the interference, measured.
+    rawPulsesLastWindow_ = delta;
+
+    processWindow(now, dtMs, delta);
+    maybeLogWindow(now);
+}
+
+void SpeedSensor::processWindow(uint32_t now, uint32_t dtMs, uint32_t delta) {
     if (delta > SPEED_MAX_PULSES_PER_SAMPLE) {
+        // Above the physical ceiling this cannot be the wheel turning, so the window is
+        // discarded exactly as before — only now it is also counted, so "how often and how
+        // big" is answerable from the bench log instead of being invisible.
+        rejectedWindows_++;
+        rejectedPulses_  += delta;
+        rejectedSinceLog_ = true;
         return;
     }
 
@@ -178,6 +200,15 @@ void SpeedSensor::update() {
         // mm/ms IS metres per second by definition — no conversion, and none wanted:
         // m/s is the firmware's internal speed unit everywhere.
         speedMs_ = (delta * distancePerPulseMm_) / (float)windowMs;
+
+        // Diagnostics: the phantom-pulse fingerprint. A turning wheel produces a continuous
+        // train, so a window holding one or two edges AND resolving below the gear-change
+        // interlock threshold is almost certainly stray coupling, not motion. Counting only —
+        // the pulses above have already been integrated, exactly as before.
+        if (delta < 3 && speedMs_ < TRANS_SPEED_INTERLOCK_THRESHOLD_MS) {
+            strayPulses_ += delta;
+        }
+
         lastPulseMs_       = now;
         lastMovingSpeedMs_ = speedMs_;
         staleHandled_       = false;
@@ -214,6 +245,24 @@ void SpeedSensor::update() {
         speedMs_           = 0.0f;
         lastMovingSpeedMs_ = 0.0f;
     }
+}
+
+void SpeedSensor::maybeLogWindow(uint32_t now) {
+    // Silence is the normal state of a parked vehicle: say nothing unless edges arrived in
+    // this window, or a burst was rejected and has not been reported yet.
+    if (rawPulsesLastWindow_ == 0 && !rejectedSinceLog_) {
+        return;
+    }
+    if ((uint32_t)(now - lastNoiseLogMs_) < SPEED_NOISE_LOG_INTERVAL_MS) {
+        return;                      // rate limit; rejectedSinceLog_ keeps the event pending
+    }
+    lastNoiseLogMs_   = now;
+    rejectedSinceLog_ = false;
+    Debug::printfFeature(DebugFeature::VEHICLE,
+        "[SPEED] window: raw=%u speed=%.2f m/s stray=%lu rejWin=%lu rejPulses=%lu\n",
+        (unsigned)rawPulsesLastWindow_, speedMs_,
+        (unsigned long)strayPulses_, (unsigned long)rejectedWindows_,
+        (unsigned long)rejectedPulses_);
 }
 
 void SpeedSensor::persistDistance() {

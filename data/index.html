@@ -395,6 +395,12 @@
                     <div class="telemetry-item">
                         <div class="telemetry-label" data-i18n="lbl_speed">Speed</div>
                         <div class="telemetry-value" id="telemetry-speed">-- km/h</div>
+                        <!-- Pulse-noise diagnostics: on a stationary vehicle these must read 0.
+                             Anything else is ignition-coil interference reaching the PCNT input.
+                             No data-i18n here — the whole line is rebuilt by updateSpeedDisplay()
+                             from t(), which also re-runs on a language switch. -->
+                        <div class="telemetry-label" id="telemetry-speed-noise"
+                             style="margin-top: 6px; margin-bottom: 0; font-size: 0.75em;">--</div>
                     </div>
                     <div class="telemetry-item">
                         <div class="telemetry-label" data-i18n="lbl_mav_link">MAVLink Link</div>
@@ -1041,6 +1047,10 @@
                 lbl_speed_status: 'Sensor',
                 speed_ok: 'OK',
                 speed_no_signal: 'No signal',
+                // Pulse-noise diagnostics line under the Speed telemetry value
+                lbl_speed_pulses: 'pulses/win',
+                lbl_speed_stray: 'stray',
+                lbl_speed_rej: 'rej',
                 lbl_speed_ppr: 'Pulses per revolution',
                 lbl_speed_circ: 'Wheel circumference (mm)',
                 lbl_speed_limit: 'Speed limit',
@@ -1289,6 +1299,10 @@
                 lbl_speed_status: 'Датчик',
                 speed_ok: 'Справний',
                 speed_no_signal: 'Немає сигналу',
+                // Pulse-noise diagnostics line under the Speed telemetry value
+                lbl_speed_pulses: 'імп./вікно',
+                lbl_speed_stray: 'хибні',
+                lbl_speed_rej: 'відкин.',
                 lbl_speed_ppr: 'Імпульсів на оберт',
                 lbl_speed_circ: 'Довжина кола колеса (мм)',
                 lbl_speed_limit: 'Обмеження швидкості',
@@ -2187,6 +2201,21 @@
             if (statusEl) {
                 statusEl.textContent = valid ? t('speed_ok') : t('speed_no_signal');
                 statusEl.style.color = valid ? 'var(--success)' : 'var(--danger)';
+            }
+
+            // Pulse-noise diagnostics. Raw counts, deliberately NOT converted to km/h: they are
+            // the interference measurement itself. Parked with the engine running, every number
+            // should be 0 — a non-zero raw/stray count is ignition pickup reaching the PCNT pin.
+            const noiseEl = document.getElementById('telemetry-speed-noise');
+            if (noiseEl) {
+                const raw = (typeof data.speed_raw_pulses === 'number') ? data.speed_raw_pulses : 0;
+                const stray = (typeof data.speed_stray_pulses === 'number') ? data.speed_stray_pulses : 0;
+                const rej = (typeof data.speed_rej_windows === 'number') ? data.speed_rej_windows : 0;
+                noiseEl.textContent = t('lbl_speed_pulses') + ': ' + raw
+                                    + ' · ' + t('lbl_speed_stray') + ': ' + stray
+                                    + ' · ' + t('lbl_speed_rej') + ': ' + rej;
+                // Quiet while clean, warning-coloured the moment noise is being counted.
+                noiseEl.style.color = (stray > 0 || rej > 0) ? 'var(--warning)' : 'var(--muted-foreground)';
             }
 
             syncSpeedInput('speed-ppr-input', data.speed_ppr);

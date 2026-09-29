@@ -541,9 +541,9 @@ bool WebPortal::parseWebCommand(uint8_t* data, size_t len) {
 // ============================================================================
 
 String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
-    // Capacity headroom: 60 top-level fields (incl. 4 steering-VESC fields, the
-    // 5 rail / board-I/O fields, the 12 hall-speed / limiter / distance fields and the
-    // 4 steering speed-scaling fields) + a 16-element array + the nested probe / po / bm / dtc /
+    // Capacity headroom: 63 top-level fields (incl. 4 steering-VESC fields, the
+    // 5 rail / board-I/O fields, the 15 hall-speed / limiter / distance / noise-diagnostic
+    // fields and the 4 steering speed-scaling fields) + a 16-element array + the nested probe / po / bm / dtc /
     // gearDefaults objects, plus copied String values. Sized to 4096 to leave room for the
     // transient `probe` object (only present while probe results are fresh).
     StaticJsonDocument<4096> doc;
@@ -580,6 +580,10 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["speed_valid"] = telemetry.speed_valid;
     doc["speed_ppr"] = telemetry.speed_ppr;
     doc["speed_circ_mm"] = serialized(String(telemetry.speed_circ_mm, 0));
+    // Noise diagnostics — raw counts, no unit conversion: these are pulses, not a road speed.
+    doc["speed_raw_pulses"] = telemetry.speed_raw_pulses;
+    doc["speed_stray_pulses"] = telemetry.speed_stray_pulses;
+    doc["speed_rej_windows"] = telemetry.speed_rej_windows;
     // The enforced ceiling, from the autopilot's SPEED_MAX alone. 0 = no limit.
     doc["speed_limit_kmh"] = serialized(String(telemetry.speed_limit_ms * MS_TO_KMH, 1));
     doc["speed_limit_ceil"] = serialized(String(telemetry.speed_limit_ceil, 0));

@@ -346,15 +346,30 @@ struct ServoChannelConfig {
 // 2 s keeps a wide margin: it only trips on a genuinely stopped or disconnected sensor,
 // never on a crawling vehicle.
 #define SPEED_STALE_TIMEOUT_MS        2000   // ms
-// PCNT hardware glitch filter. Highest expected pulse rate with the measured calibration
-// is ≈960 Hz at 100 km/h (period ~1.04 ms), so a 1 µs filter rejects harness noise while
-// consuming <0.2% of the shortest half-period. Hardware ceiling is ~12.7 µs (1023 APB cycles).
-#define SPEED_GLITCH_FILTER_NS        1000   // ns
+// PCNT hardware glitch filter, set to the hardware maximum against ignition-coil pickup.
+// The filter threshold is programmed in APB clock cycles: thres = 80 MHz * ns / 1e9, and
+// PCNT_LL_MAX_GLITCH_WIDTH is 1023 cycles on the ESP32-S3 (≈12787 ns), so 12500 ns is the
+// largest round value that still programs cleanly — 80 * 12500 / 1000 = 1000 cycles, inside
+// the limit, and pcnt_unit_set_glitch_filter() therefore returns ESP_OK (a rejection would
+// abort SpeedSensor::begin() with a logged error, so the boot line proves the applied value).
+// It rejects every pulse narrower than 12.5 µs, which is where the coil ringing lives, and
+// leaves the real signal untouched: at the vehicle's 80 km/h maximum the pulse train is
+// ≈782 Hz — a ~1.28 ms period, ~639 µs half-period, 50x wider than the filter.
+#define SPEED_GLITCH_FILTER_NS        12500  // ns (= 1000 APB cycles, hardware max is 1023)
 // PCNT counter limits. The hardware zeroes the counter at these watch points and the
 // unit accumulates the overflow itself (accum_count), so update() polls a running total.
 #define SPEED_PCNT_HIGH_LIMIT         10000
 #define SPEED_PCNT_LOW_LIMIT          (-1)
-#define SPEED_MAX_PULSES_PER_SAMPLE   20000  // pulses per sample above which the reading is a counter glitch, not motion
+// Physical ceiling on one 200 ms sample window. Derived from the measured calibration
+// (70 pulses/rev, 1990 mm circumference => 28.4 mm/pulse) at the vehicle's 80 km/h maximum:
+// 22.2 m/s / 0.0284 m = ≈782 pulses/s => ≈156 pulses per 200 ms window. A 1.5x margin covers
+// calibration error and a downhill overrun, giving 240 (≈120 km/h). Anything above that is
+// not motion — it is a noise burst (or a counter glitch), so the window is discarded whole
+// by update() and counted in rejectedWindows_ / rejectedPulses_ for the bench to see.
+#define SPEED_MAX_PULSES_PER_SAMPLE   240    // pulses per 200 ms sample window (80 km/h x1.5)
+// Rate limit for the [SPEED] noise-diagnostics line. Sampling is 5 Hz, so an unfiltered line
+// would be 5 lines/s of console; once per 2 s is enough to watch interference on the bench.
+#define SPEED_NOISE_LOG_INTERVAL_MS   2000   // ms
 
 // Odometer / trip persistence interval (NVS namespace "speed", keys "odo_mm" / "trip_mm").
 // The counters are flushed every kilometre of odometer growth, plus once on every ignition-OFF

@@ -183,6 +183,16 @@ public:
     float getSpeedWheelCircumferenceMm() const { return speedSensor_.getWheelCircumferenceMm(); }
 
     /**
+     * @brief Speed-sensor noise diagnostics (telemetry / web UI). READ-ONLY, no control path.
+     * They exist so ignition-coil interference is measurable from the portal: raw pulses in
+     * the last window, isolated strays, and windows thrown away as noise bursts.
+     */
+    uint32_t getSpeedRawPulses() const { return speedSensor_.getRawPulsesLastWindow(); }
+    uint32_t getSpeedStrayPulses() const { return speedSensor_.getStrayPulses(); }
+    uint32_t getSpeedRejectedWindows() const { return speedSensor_.getRejectedWindows(); }
+    uint32_t getSpeedRejectedPulses() const { return speedSensor_.getRejectedPulses(); }
+
+    /**
      * @brief Distance counters in km (telemetry / MAVLink). READ-ONLY.
      * Always valid — distance already driven depends on neither CAN health nor the current
      * speed reading's validity. The odometer is a vehicle-lifetime counter with no reset path;

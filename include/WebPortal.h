@@ -77,6 +77,11 @@ public:
         bool speed_valid;         // Sensor health: false = reading unknown, NOT "stopped"
         uint16_t speed_ppr;       // Calibration: pulses per revolution
         float speed_circ_mm;      // Calibration: wheel circumference (mm)
+        // Noise diagnostics — how much ignition interference the PCNT filter still lets past.
+        // Display only: nothing downstream reads these.
+        uint32_t speed_raw_pulses;   // Raw PCNT pulses in the latest 200 ms window
+        uint32_t speed_stray_pulses; // Running total of isolated stray pulses since boot
+        uint32_t speed_rej_windows;  // Running count of windows discarded as noise bursts
         float speed_limit_ms;     // Enforced ceiling (m/s) from SPEED_MAX, 0 = no limit — km/h in JSON
         float speed_limit_ceil;   // Throttle ceiling the taper is applying (%, 100 = inactive)
         // Steering speed scaling — so "the steering feels weak" is diagnosable from the portal.

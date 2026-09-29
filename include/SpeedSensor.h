@@ -69,6 +69,23 @@ public:
     /** @brief Running pulse total since boot (diagnostics / bench calibration) */
     uint32_t getPulseTotal() const { return pulseTotal_; }
 
+    // ---- Noise diagnostics -------------------------------------------------
+    // Pure instrumentation for the ignition-interference hunt: nothing here feeds speed,
+    // distance or validity. They quantify what the glitch filter and the burst guard are
+    // still letting through, so the next layer can be sized from measurements.
+
+    /** @brief Pulses read from PCNT in the MOST RECENT sample window (0 when the wheel is still) */
+    uint32_t getRawPulsesLastWindow() const { return rawPulsesLastWindow_; }
+
+    /** @brief Windows discarded since boot by the SPEED_MAX_PULSES_PER_SAMPLE burst guard */
+    uint32_t getRejectedWindows() const { return rejectedWindows_; }
+
+    /** @brief Sum of the pulses in those discarded windows (how big the bursts were) */
+    uint32_t getRejectedPulses() const { return rejectedPulses_; }
+
+    /** @brief Pulses in windows that look like isolated strays: <3 pulses AND below the gear interlock speed */
+    uint32_t getStrayPulses() const { return strayPulses_; }
+
     // ---- Distance counters (NVS "speed", keys "odo_mm" / "trip_mm") ---------
 
     /** @brief Exact total odometer in millimetres — the authoritative counter */
@@ -107,6 +124,20 @@ private:
     /** @brief distance_per_pulse = circumference / pulses_per_rev, recomputed on calibration change */
     void recomputeDistancePerPulse();
 
+    /**
+     * @brief All the speed/distance/health work for one sample window.
+     * Split out of update() purely so the diagnostics log below runs on EVERY exit path
+     * (burst rejection, counted pulses, silence) instead of being duplicated at each return.
+     */
+    void processWindow(uint32_t now, uint32_t dtMs, uint32_t delta);
+
+    /**
+     * @brief Emit the noise line at most once per 2 s, and only when there is something to say:
+     * edges were counted in the latest window, or a window was rejected since the last line.
+     * Diagnostics only — it changes no state a consumer can see.
+     */
+    void maybeLogWindow(uint32_t now);
+
     pcnt_unit_handle_t    unit_;
     pcnt_channel_handle_t channel_;
     bool     initialized_;
@@ -133,6 +164,14 @@ private:
                                  // fail-safe on every boot, a link flap, or a servo channel
                                  // jittering at an ignition band edge would each rewrite
                                  // unchanged values (the last case at the 25 Hz frame rate).
+
+    // Noise diagnostics — counters only, never consumed by the speed/distance maths.
+    uint32_t rawPulsesLastWindow_; // PCNT delta of the latest window, before any guard
+    uint32_t rejectedWindows_;     // windows thrown away by the burst guard
+    uint32_t rejectedPulses_;      // pulses contained in those thrown-away windows
+    uint32_t strayPulses_;         // pulses in "isolated stray" windows (see getStrayPulses())
+    uint32_t lastNoiseLogMs_;      // millis() of the last [SPEED] window line (2 s rate limit)
+    bool     rejectedSinceLog_;    // a rejection happened since the last log — force one line
 
     // Health
     bool     everPulsed_;

@@ -75,6 +75,11 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.speed_valid = vehicleController_.isVehicleSpeedValid();
     telemetry.speed_ppr = vehicleController_.getSpeedPulsesPerRev();
     telemetry.speed_circ_mm = vehicleController_.getSpeedWheelCircumferenceMm();
+    // Noise diagnostics, for the bench: on a stationary vehicle with the engine running these
+    // should all read 0 — anything else is ignition-coil pickup, quantified.
+    telemetry.speed_raw_pulses = vehicleController_.getSpeedRawPulses();
+    telemetry.speed_stray_pulses = vehicleController_.getSpeedStrayPulses();
+    telemetry.speed_rej_windows = vehicleController_.getSpeedRejectedWindows();
     // Distance counters — the exact millimetre counters scaled to km at this point, not a
     // separately maintained total. Never gated: distance already driven stays true.
     telemetry.odo_km = vehicleController_.getOdoKm();
