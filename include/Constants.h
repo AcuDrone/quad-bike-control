@@ -417,8 +417,8 @@ struct ServoChannelConfig {
 // and does both exactly where it hurts most — mid-corner.
 #define SPEED_LIMIT_TAPER_BAND_MS      1.4f   // m/s (≈5 km/h) - the ceiling starts falling this far BELOW
                                               // the limit
-#define SPEED_LIMIT_FLOOR_PCT          10.0f  // % - throttle ceiling at/above the limit; never a hard cut
-#define SPEED_LIMIT_CEILING_SLEW_PCT_S 200.0f // %/s - max ceiling movement (both directions) — no servo snap.
+#define SPEED_LIMIT_FLOOR_PCT          7.5f  // % - throttle ceiling at/above the limit; never a hard cut
+#define SPEED_LIMIT_CEILING_SLEW_PCT_S 80.0f // %/s - max ceiling movement (both directions) — no servo snap.
                                               // Applied to the CEILING, not the demand: the driver's own
                                               // stick moves are never slowed by the limiter.
 #define SPEED_LIMIT_LOG_MIN_MS         1000   // ms hold-off between "speed limit" logs
