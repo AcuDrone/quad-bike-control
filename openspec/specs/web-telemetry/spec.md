@@ -97,34 +97,32 @@ The system SHALL ensure telemetry broadcasting does not degrade control loop per
 - **AND** control loop timing remains <10ms average
 
 ### Requirement: Firmware Version Display
-The system SHALL display the firmware version in the web portal interface.
+The system SHALL display the firmware version and the target board name in the web portal interface.
 
 #### Scenario: Include firmware version in telemetry broadcast
 - **WHEN** telemetry data is collected for broadcast
 - **THEN** the firmware version string is included from the `FIRMWARE_VERSION` constant defined in Constants.h
-- **AND** the version is added to the telemetry struct as `firmware_version` field
-- **AND** the version is serialized to JSON as `"firmware_version": "<version>"`
+- **AND** the board name is included from the `BOARD_NAME` constant defined in Constants.h
+- **AND** both are serialized to JSON as `"firmware_version": "<semver>"` and `"board": "<name>"`
 
 #### Scenario: Display firmware version in web UI
 - **WHEN** the web portal receives telemetry data via WebSocket
 - **AND** the telemetry message contains a `firmware_version` field
-- **THEN** the firmware version is displayed in the status bar
-- **AND** the version display uses the existing `.status-item` CSS pattern
-- **AND** the version display has the format: "Firmware: X.X.X"
+- **THEN** the status bar shows `Firmware: <version> · <board>` using the existing `.status-item` pattern
+- **AND** when `board` is absent only the version is shown
 - **AND** the version is visible without scrolling (always in status bar)
 
 #### Scenario: Handle missing firmware version gracefully
 - **WHEN** the web portal connects but version data is not yet received
 - **THEN** the firmware version display shows "Loading..." as placeholder text
 - **WHEN** the firmware version field is missing from telemetry
-- **THEN** the display shows "N/A" or retains "Loading..." state
+- **THEN** the display retains its previous state
 - **AND** no JavaScript errors are thrown
 
 #### Scenario: Firmware version constant is centrally defined
-- **WHEN** developers need to update the firmware version
-- **THEN** the version is defined as `FIRMWARE_VERSION` constant in `include/Constants.h`
-- **AND** the constant uses semantic versioning format (e.g., "1.0.0")
-- **AND** updating the constant automatically propagates to web portal display
+- **WHEN** developers release new firmware
+- **THEN** `FIRMWARE_VERSION` and `BOARD_NAME` are defined in `include/Constants.h`
+- **AND** each hardware branch defines its own `BOARD_NAME` value
 
 ### Requirement: Gear Default Positions in Telemetry
 The telemetry broadcast SHALL include the current effective default positions for all four gears so the web UI can populate the defaults editor without a separate request.
@@ -403,4 +401,25 @@ serial console.
 - **AND** a live test-speed override SHALL be shown as a temporary bench state, not as a normal
   reading
 - **AND** every label SHALL be present in both the English and the Ukrainian dictionary
+
+### Requirement: Firmware Changelog
+The system SHALL ship a user-facing changelog inside the firmware binary and expose it to the web portal.
+
+#### Scenario: Changelog is served by the firmware
+- **WHEN** a client requests `GET /api/changelog`
+- **THEN** the portal responds `200 application/json` with the document from `include/Changelog.h`
+- **AND** the document is an object with a `releases` array ordered newest first
+- **AND** each release has `version`, `date`, and `uk` / `en` arrays of plain-language strings
+
+#### Scenario: Changelog is viewable from the web UI
+- **WHEN** the user activates the firmware status item or the "What's new" button
+- **THEN** a modal opens and fetches `/api/changelog` (at most once per page load)
+- **AND** every release is listed with its version and date and the bullets of the active language
+- **AND** the release matching the running `firmware_version` is marked as current
+- **AND** switching the UI language re-renders the open modal in the other language
+
+#### Scenario: Changelog fetch fails
+- **WHEN** `/api/changelog` is unreachable or returns invalid JSON
+- **THEN** the modal shows a localized error message instead of an empty list
+- **AND** no JavaScript errors are thrown
 
