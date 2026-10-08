@@ -144,6 +144,7 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.wheel_lock_on = vehicleController_.getWheelLock();
 
     telemetry.firmware_version = FIRMWARE_VERSION;
+    telemetry.board = BOARD_NAME;
 
     const TransmissionController& trans = vehicleController_.getTransmission();
     telemetry.gear_default_r = trans.getGearPosition(TransmissionController::Gear::GEAR_REVERSE);

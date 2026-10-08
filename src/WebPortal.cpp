@@ -1,4 +1,5 @@
 #include "WebPortal.h"
+#include "Changelog.h"
 #include "Debug.h"
 
 WebPortal::WebPortal()
@@ -179,6 +180,14 @@ void WebPortal::setupWebServer() {
     // Canonical captive portal check
     server.on("/canonical.html", HTTP_GET, [](AsyncWebServerRequest* request) {
         request->redirect("/");
+    });
+
+    // Firmware changelog - static JSON compiled into the firmware (include/Changelog.h)
+    server.on("/api/changelog", HTTP_GET, [](AsyncWebServerRequest* request) {
+        AsyncWebServerResponse* response = request->beginResponse(200, "application/json",
+            reinterpret_cast<const uint8_t*>(CHANGELOG_JSON), strlen(CHANGELOG_JSON));
+        response->addHeader("Cache-Control", "no-cache");
+        request->send(response);
     });
 
     // Debug control API - GET current debug state
@@ -641,8 +650,9 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["front_light_on"] = telemetry.front_light_on;
     doc["wheel_lock_on"] = telemetry.wheel_lock_on;
 
-    // Firmware version
+    // Firmware version and target board
     doc["firmware_version"] = telemetry.firmware_version;
+    doc["board"] = telemetry.board;
 
     // Gear default positions
     JsonObject gearDefaults = doc.createNestedObject("gear_defaults");
