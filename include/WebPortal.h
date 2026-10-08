@@ -128,6 +128,7 @@ public:
 
         // Firmware information
         String firmware_version;  // Firmware version string (e.g., "1.0.0")
+        String board;             // Target board name (BOARD_NAME, e.g. "Control_v0")
 
         // Gear default positions (user-configurable NVS values, 0.0–100.0 %)
         float gear_default_r;     // Default servo % for REVERSE

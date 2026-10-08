@@ -147,6 +147,7 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.io_relay_fault = vehicleController_.isRelayFault();
 
     telemetry.firmware_version = FIRMWARE_VERSION;
+    telemetry.board = BOARD_NAME;
 
     const TransmissionController& trans = vehicleController_.getTransmission();
     telemetry.gear_default_r = trans.getGearPosition(TransmissionController::Gear::GEAR_REVERSE);

@@ -120,6 +120,125 @@
             border-color: var(--warning);
         }
 
+        .status-item.clickable {
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .status-item.clickable:hover {
+            border-color: var(--primary);
+        }
+
+        /* Changelog ("What's new") modal */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.6);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            z-index: 1000;
+        }
+
+        .modal-overlay.open {
+            display: flex;
+        }
+
+        .modal {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            width: 100%;
+            max-width: 640px;
+            max-height: 85vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+        }
+
+        .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 15px 20px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .modal-header h2 {
+            margin: 0;
+            font-size: 1.2em;
+        }
+
+        .modal-close {
+            background: transparent;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--foreground);
+            font-size: 1.1em;
+            padding: 4px 10px;
+            cursor: pointer;
+        }
+
+        .modal-close:hover {
+            border-color: var(--primary);
+        }
+
+        .modal-body {
+            overflow-y: auto;
+            padding: 15px 20px 20px;
+        }
+
+        .release {
+            margin-bottom: 20px;
+        }
+
+        .release:last-child {
+            margin-bottom: 0;
+        }
+
+        .release-title {
+            display: flex;
+            align-items: baseline;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 8px;
+        }
+
+        .release-version {
+            font-weight: bold;
+            font-size: 1.1em;
+        }
+
+        .release-date {
+            color: var(--muted-foreground);
+            font-size: 0.9em;
+        }
+
+        .release-current {
+            font-size: 0.8em;
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: color-mix(in srgb, var(--success) 25%, var(--card));
+            border: 1px solid var(--success);
+        }
+
+        .release ul {
+            margin: 0;
+            padding-left: 20px;
+        }
+
+        .release li {
+            margin-bottom: 6px;
+            line-height: 1.4;
+        }
+
+        .modal-muted {
+            color: var(--muted-foreground);
+            text-align: center;
+            padding: 20px 0;
+        }
+
         .main-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
@@ -361,8 +480,10 @@
             <div class="status-item" id="ws-status">
                 <strong data-i18n="ws_label">WebSocket:</strong> <span id="ws-status-text" data-i18n="ws_connecting">Connecting...</span>
             </div>
-            <div class="status-item" id="fw-version">
-                <strong data-i18n="fw_label">Firmware:</strong> <span id="fw-version-text" data-i18n="fw_loading">Loading...</span>
+            <div class="status-item clickable" id="fw-version" role="button" tabindex="0" onclick="openChangelog()"
+                 onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openChangelog(); }"
+                 data-i18n-title="changelog_hint">
+                <strong data-i18n="fw_label">Firmware:</strong> <span id="fw-version-text" data-i18n="fw_loading">Loading...</span> 📋
             </div>
         </div>
 
@@ -897,6 +1018,24 @@
                         ⚠️ Vehicle will enter safe state during update and reboot automatically.
                     </div>
                 </div>
+                <div class="slider-container" style="margin-top: 15px;">
+                    <button class="upload-btn" onclick="openChangelog()" style="background: var(--secondary);">
+                        📋 <span data-i18n="btn_changelog">What's new in this firmware</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Changelog modal -->
+    <div class="modal-overlay" id="changelog-modal" onclick="if (event.target === this) closeChangelog()">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="changelog-title">
+            <div class="modal-header">
+                <h2 id="changelog-title" data-i18n="changelog_title">📋 What's new</h2>
+                <button class="modal-close" onclick="closeChangelog()" data-i18n-title="btn_close" aria-label="Close">✕</button>
+            </div>
+            <div class="modal-body" id="changelog-body">
+                <div class="modal-muted" data-i18n="changelog_loading">Loading...</div>
             </div>
         </div>
     </div>
@@ -917,6 +1056,16 @@
                 ws_disconnected: 'Disconnected',
                 fw_label: 'Firmware:',
                 fw_loading: 'Loading...',
+                changelog_hint: 'Show what changed in this firmware',
+
+                // Changelog modal
+                changelog_title: '📋 What\'s new',
+                changelog_loading: 'Loading...',
+                changelog_error: 'Could not load the changelog from the device.',
+                changelog_empty: 'No changelog entries.',
+                changelog_current: 'installed',
+                btn_changelog: 'What\'s new in this firmware',
+                btn_close: 'Close',
 
                 // Telemetry card
                 card_telemetry: '📊 Telemetry',
@@ -1174,6 +1323,16 @@
                 ws_disconnected: 'Відключено',
                 fw_label: 'Прошивка:',
                 fw_loading: 'Завантаження...',
+                changelog_hint: 'Показати, що змінилось у цій прошивці',
+
+                // Changelog modal
+                changelog_title: '📋 Що нового',
+                changelog_loading: 'Завантаження...',
+                changelog_error: 'Не вдалося завантажити список змін із пристрою.',
+                changelog_empty: 'Записів немає.',
+                changelog_current: 'встановлено',
+                btn_changelog: 'Що нового в цій прошивці',
+                btn_close: 'Закрити',
 
                 // Telemetry card
                 card_telemetry: '📊 Телеметрія',
@@ -1467,6 +1626,7 @@
                 updateDebugButton(dbgBtn.dataset.state === 'true');
             }
             if (lastTelemetry) updateTelemetry(lastTelemetry);
+            if (changelogOpen) renderChangelog();
         }
 
         function updateLangToggle() {
@@ -1756,10 +1916,13 @@
                 switchingIndicator.style.display = 'none';
             }
 
-            // Update firmware version
+            // Update firmware version (+ target board, when the firmware reports it)
             const fwVersionElem = document.getElementById('fw-version-text');
             if (fwVersionElem && data.firmware_version) {
-                fwVersionElem.textContent = data.firmware_version;
+                currentFwVersion = data.firmware_version;
+                fwVersionElem.textContent = data.board
+                    ? data.firmware_version + ' \u00b7 ' + data.board
+                    : data.firmware_version;
             }
 
             // Update input source
@@ -2707,6 +2870,78 @@
             text.textContent = enabled ? t('debug_on') : t('debug_off');
             btn.style.background = enabled ? 'color-mix(in srgb, var(--success) 45%, black)' : 'var(--secondary)';
         }
+
+        // ===================================================================
+        // Changelog ("What's new") — served by the firmware at /api/changelog
+        // so it always matches the running FIRMWARE_VERSION.
+        // ===================================================================
+        let currentFwVersion = null;
+        let changelogData = null;      // parsed /api/changelog, fetched once per page load
+        let changelogError = false;
+        let changelogOpen = false;
+
+        function escapeHtml(str) {
+            return String(str)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        function renderChangelog() {
+            const body = document.getElementById('changelog-body');
+            if (!body) return;
+            if (changelogError) {
+                body.innerHTML = '<div class="modal-muted">' + escapeHtml(t('changelog_error')) + '</div>';
+                return;
+            }
+            if (!changelogData) {
+                body.innerHTML = '<div class="modal-muted">' + escapeHtml(t('changelog_loading')) + '</div>';
+                return;
+            }
+            const releases = Array.isArray(changelogData.releases) ? changelogData.releases : [];
+            if (!releases.length) {
+                body.innerHTML = '<div class="modal-muted">' + escapeHtml(t('changelog_empty')) + '</div>';
+                return;
+            }
+            let html = '';
+            for (const rel of releases) {
+                const items = Array.isArray(rel[currentLang]) ? rel[currentLang]
+                            : (Array.isArray(rel.en) ? rel.en : []);
+                const isCurrent = currentFwVersion && rel.version === currentFwVersion;
+                html += '<div class="release">';
+                html += '<div class="release-title">';
+                html += '<span class="release-version">' + escapeHtml(rel.version || '?') + '</span>';
+                if (rel.date) html += '<span class="release-date">' + escapeHtml(rel.date) + '</span>';
+                if (isCurrent) html += '<span class="release-current">' + escapeHtml(t('changelog_current')) + '</span>';
+                html += '</div>';
+                html += '<ul>' + items.map(i => '<li>' + escapeHtml(i) + '</li>').join('') + '</ul>';
+                html += '</div>';
+            }
+            body.innerHTML = html;
+        }
+
+        function openChangelog() {
+            const modal = document.getElementById('changelog-modal');
+            if (!modal) return;
+            changelogOpen = true;
+            modal.classList.add('open');
+            renderChangelog();
+            if (changelogData || changelogError) return;
+            fetch('/api/changelog', { cache: 'no-store' })
+                .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                .then(data => { changelogData = data; changelogError = false; renderChangelog(); })
+                .catch(err => { console.error('Changelog fetch failed:', err); changelogError = true; renderChangelog(); });
+        }
+
+        function closeChangelog() {
+            const modal = document.getElementById('changelog-modal');
+            if (!modal) return;
+            changelogOpen = false;
+            modal.classList.remove('open');
+        }
+
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && changelogOpen) closeChangelog();
+        });
 
         // Initialize WebSocket connection on page load
         window.addEventListener('load', function() {
