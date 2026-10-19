@@ -14,6 +14,17 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.2.0","date":"2026-10-19","uk":[
+"Кермо баггі: два датчики AS5600, положення на кілька обертів керма",
+"Положення керма відновлюється після ввімкнення без пошуку нуля",
+"Будь-яка помилка датчиків керма зупиняє кермо",
+"Фіксація центру скидає обидві межі; після оновлення потрібне повторне калібрування керма"
+],"en":[
+"Buggy steering: two AS5600 sensors, multi-turn steering position",
+"Steering position is recovered at power-up without homing",
+"Any steering sensor fault stops the steering",
+"Capturing center clears both limits; steering must be recalibrated after this update"
+]},
 {"version":"1.1.0","date":"2026-10-08","uk":[
 "Нова плата керування Control_v0",
 "Керування по MAVLink замість SBUS",

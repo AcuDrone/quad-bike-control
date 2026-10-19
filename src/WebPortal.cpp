@@ -550,7 +550,8 @@ bool WebPortal::parseWebCommand(uint8_t* data, size_t len) {
 // ============================================================================
 
 String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
-    // Capacity headroom: 60 top-level fields (incl. 4 steering-VESC fields, the
+    // Capacity headroom: 66 top-level fields (incl. 4 steering-VESC fields, 6 dual-AS5600
+    // steering diagnostics, the
     // 5 rail / board-I/O fields, the 12 hall-speed / limiter / distance fields and the
     // 4 steering speed-scaling fields) + a 16-element array + the nested probe / po / bm / dtc /
     // gearDefaults objects, plus copied String values. Sized to 4096 to leave room for the
@@ -566,10 +567,26 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["throttle_full_us"] = telemetry.throttle_full_us;
     doc["throttle_calibrating"] = telemetry.throttle_calibrating;
     doc["steering_pct"] = telemetry.steering_pct;
-    doc["steer_center"] = telemetry.steer_center;
-    doc["steer_left"] = telemetry.steer_left;
-    doc["steer_right"] = telemetry.steer_right;
+    // Steering position frame: fine counts from the captured center (may be negative),
+    // so "unset" / "unreadable" is JSON null — never -1, never NaN.
+    // ((const char*)nullptr is ArduinoJson 6's way to store a null.)
     doc["steer_position"] = telemetry.steer_position;
+    if (telemetry.steer_center_set) doc["steer_center"] = 0;
+    else                            doc["steer_center"] = (const char*)nullptr;
+    if (telemetry.steer_left_set)   doc["steer_left"] = telemetry.steer_left;
+    else                            doc["steer_left"] = (const char*)nullptr;
+    if (telemetry.steer_right_set)  doc["steer_right"] = telemetry.steer_right;
+    else                            doc["steer_right"] = (const char*)nullptr;
+    if (telemetry.steer_fine_raw >= 0)   doc["steer_fine_raw"] = telemetry.steer_fine_raw;
+    else                                 doc["steer_fine_raw"] = (const char*)nullptr;
+    if (telemetry.steer_coarse_raw >= 0) doc["steer_coarse_raw"] = telemetry.steer_coarse_raw;
+    else                                 doc["steer_coarse_raw"] = (const char*)nullptr;
+    doc["steer_turn"] = telemetry.steer_turn;
+    if (!isnan(telemetry.steer_ratio)) doc["steer_ratio"] = serialized(String(telemetry.steer_ratio, 1));
+    else                               doc["steer_ratio"] = (const char*)nullptr;
+    if (telemetry.steer_residual_valid) doc["steer_residual"] = telemetry.steer_residual;
+    else                                doc["steer_residual"] = (const char*)nullptr;
+    doc["steer_sensor_fault"] = telemetry.steer_sensor_fault;   // static token, stored by pointer
     doc["steer_sensor_ok"] = telemetry.steer_sensor_ok;
     doc["steer_calibrated"] = telemetry.steer_calibrated;
     doc["steer_motor_current"] = telemetry.steer_motor_current;

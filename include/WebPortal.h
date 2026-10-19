@@ -55,11 +55,23 @@ public:
         uint16_t throttle_full_us;    // Calibrated full-throttle endpoint (µs)
         bool throttle_calibrating;    // True while a throttle calibration session is active
         int steering_pct;         // Steering percentage (-100 to +100)
-        int32_t steer_center;     // Calibrated steering center (AS5600 raw counts, -1 if unset)
-        int32_t steer_left;       // Calibrated left limit (AS5600 raw counts, -1 if unset)
-        int32_t steer_right;      // Calibrated right limit (AS5600 raw counts, -1 if unset)
-        int32_t steer_position;   // Current AS5600 raw angle (0-4095)
-        bool steer_sensor_ok;     // True if the AS5600 reads OK and the magnet is detected
+        // Steering position — ONE frame: unwrapped fine-AS5600 counts relative to the
+        // captured center, sensor direction (relative to the boot fine sample when no
+        // center is captured). Positions may be negative, so "unset" is JSON null.
+        int32_t steer_position;   // Current unwrapped fine position
+        bool steer_center_set;    // Center captured -> steer_center = 0, else null
+        int32_t steer_left;       // Left limit position, valid only if steer_left_set
+        bool steer_left_set;
+        int32_t steer_right;      // Right limit position, valid only if steer_right_set
+        bool steer_right_set;
+        int32_t steer_fine_raw;   // Fine AS5600 raw angle 0-4095, -1 = not readable (null)
+        int32_t steer_coarse_raw; // Coarse AS5600 raw angle 0-4095, -1 = not readable (null)
+        int32_t steer_turn;       // Fine-sensor turn index relative to the center turn
+        float steer_ratio;        // Derived coarse counts per fine-shaft turn, NAN = not calibrated (null)
+        int32_t steer_residual;   // Fine-vs-coarse disagreement (fine counts), valid only if steer_residual_valid
+        bool steer_residual_valid;
+        const char* steer_sensor_fault; // none | fine_i2c | fine_magnet | coarse_i2c | coarse_magnet | mismatch | recovering
+        bool steer_sensor_ok;     // Both sensors healthy and, when calibrated, turn recovered without mismatch
         bool steer_calibrated;    // True when center + both limits are valid
 
         // Steering VESC driver telemetry

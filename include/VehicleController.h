@@ -127,11 +127,6 @@ public:
     SteeringController& getSteering() { return steering_; }
 
     /**
-     * @brief Get the calibrated steering center (AS5600 raw counts, -1 if unset)
-     */
-    int32_t getSteerCenter() const { return steering_.getCenter(); }
-
-    /**
      * @brief Steering controller (const access for telemetry)
      */
     const SteeringController& getSteering() const { return steering_; }
@@ -528,7 +523,8 @@ private:
 
     /**
      * @brief Steering calibration commands (web-only).
-     * Capture commands persist the current AS5600 angle as center/left/right;
+     * Capture commands persist the current fine position + coarse raw angle (both
+     * AS5600s) as center/left/right; capturing center clears both limits;
      * jog drives the actuator open-loop (momentary, sign = direction, |value| = duty);
      * nudge fires one short slow pulse for precise positioning.
      */

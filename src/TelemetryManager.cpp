@@ -46,10 +46,20 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.gear = vehicleController_.getCurrentGearString();
     telemetry.steering_pct = (int)vehicleController_.getSteeringPercent();
     const SteeringController& steering = vehicleController_.getSteering();
-    telemetry.steer_center = steering.getCenter();
+    // One frame: unwrapped fine counts from the captured center, sensor direction
+    telemetry.steer_position = steering.getPosition();
+    telemetry.steer_center_set = steering.hasCenter();
     telemetry.steer_left = steering.getLeftLimit();
+    telemetry.steer_left_set = (telemetry.steer_left != SteeringController::POS_UNSET);
     telemetry.steer_right = steering.getRightLimit();
-    telemetry.steer_position = steering.getRawAngle();
+    telemetry.steer_right_set = (telemetry.steer_right != SteeringController::POS_UNSET);
+    telemetry.steer_fine_raw = steering.getFineRaw();
+    telemetry.steer_coarse_raw = steering.getCoarseRaw();
+    telemetry.steer_turn = steering.getTurn();
+    telemetry.steer_ratio = steering.getRatio();
+    telemetry.steer_residual = steering.getResidual();
+    telemetry.steer_residual_valid = steering.hasResidual();
+    telemetry.steer_sensor_fault = SteeringController::faultToken(steering.getSensorFault());
     telemetry.steer_sensor_ok = steering.isSensorOk();
     telemetry.steer_calibrated = steering.isCalibrated();
     telemetry.steer_motor_current = steering.getMotorCurrent();

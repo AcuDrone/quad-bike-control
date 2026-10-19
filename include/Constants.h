@@ -45,8 +45,9 @@
 #define VESC_UART_NUM       2             // UART_NUM_2
 #define VESC_UART_BAUD      115200        // VESC app default baud
 
-// I2C1 ("Wire") — the EXTERNAL header bus: AS5600 steering angle sensor @ 0x36
-// on X14 is the only device on it (see the bus map below).
+// I2C1 ("Wire") — the EXTERNAL header bus: the FINE AS5600 steering angle sensor
+// @ 0x36 (on the steering shaft) on X14 is the only device on it (see the bus map
+// below). The COARSE AS5600 (geared-down shaft) is on I2C2 / X15.
 // The bus is opened once in main.cpp; no driver on this bus may re-open it with
 // different parameters.
 #define PIN_STEER_SDA       GPIO_NUM_1    // I2C1 SDA
@@ -101,17 +102,23 @@
 // port names, which suggested U10 was on I2C1:
 //
 //   I2C1 "Wire"  (GPIO1/2)   : external headers only —
-//                              AS5600 0x36 (X14, reserved for it)
+//                              FINE AS5600 0x36 (X14, steering shaft, reserved for it)
 //   I2C2 "Wire1" (GPIO48/47) : BOTH on-board PCA9557s —
 //                              opto-input U10 0x1A, CD4051 mux U2 0x1C
 //                              + external relay board 0x1F on header X15
+//                              + COARSE AS5600 0x36 on header X15 (geared-down shaft)
+//
+// The two AS5600s share the fixed address 0x36, hence the two buses; 0x36 collides
+// with no I2C2 expander. Expected boot scan: I2C1 = 0x36; I2C2 = 0x1A 0x1C 0x1F 0x36.
+// Only the fine AS5600 may restart its own bus (I2C1). I2C2 is restarted only by the
+// coordinator in main.cpp (see I2C2_BUS_RECOVER_MS).
 //
 // ⚠ The I2C2 level shifter low side is jumper-selected: R16 populated (3V3),
 //   R18 not (pinout §8.6).
 
-#define PIN_RELAY_SDA       GPIO_NUM_48  // I2C2 SDA (on-board U10/U2 + X15, BSS138 level shifted)
-#define PIN_RELAY_SCL       GPIO_NUM_47  // I2C2 SCL (on-board U10/U2 + X15, BSS138 level shifted)
-// Both buses run at 100 kHz. The AS5600 (X14) sits at the end of a long cable run to the
+#define PIN_RELAY_SDA       GPIO_NUM_48  // I2C2 SDA (on-board U10/U2 + X15 relay board + coarse AS5600, BSS138 level shifted)
+#define PIN_RELAY_SCL       GPIO_NUM_47  // I2C2 SCL (on-board U10/U2 + X15 relay board + coarse AS5600, BSS138 level shifted)
+// Both buses run at 100 kHz. Both AS5600s (X14 and X15) sit at the end of cable runs to the
 // steering column, so signal integrity wins over speed — user decision. 400 kHz was tried and
 // rejected: not enough margin on that cable. Raising it again would need a stronger pull-up.
 #define I2C_BUS_FREQ_HZ     100000       // Both buses run at 100 kHz (see note above)
@@ -121,6 +128,12 @@
 // The strap is kept: 0x1F collides with neither on-board expander (0x1A / 0x1C).
 #define PCA9557_ADDR_RELAYS        0x1F  // External relay board
 #define PCA9557_ADDR_MUX_RESERVED  0x1C  // On-board CD4051 mux control U2 (I2C2) — NEVER addressed
+
+// AS5600 bus fault handling
+#define AS5600_RECOVER_AFTER_FAILS 5     // consecutive failed AS5600 transactions: fine sensor restarts I2C1;
+                                         // coarse sensor only makes main.cpp CONSIDER an I2C2 restart
+#define I2C2_BUS_RECOVER_MS        2000  // ms — min interval between coordinated Wire1 restarts (main.cpp).
+                                         // Only when the coarse AS5600 AND the opto-input expander fail together
 
 // Opto-isolated input bit indices on PCA9557 U10.
 //
@@ -335,19 +348,37 @@ struct ServoChannelConfig {
 #define SERVO_PWM_FREQ        50     // Hz (20ms period)
 
 // Steering Actuator Parameters
-// Position feedback is an AS5600 absolute angle sensor: all positions are raw
-// 12-bit counts (0-4095, ~0.088°/LSB). Center and left/right travel limits are
-// calibrated via the web UI (capture current angle) and stored in NVS
-// ("steering"/"c_ang","l_ang","r_ang"). Uncalibrated => percent commands rejected.
-#define STEER_POSITION_TOLERANCE  10    // +/- AS5600 counts for position match (~0.9°)
-#define STEER_MOVE_TIMEOUT        7500 // ms - maximum time for any movement
-#define STEER_STALL_THRESHOLD     5     // AS5600 counts - stall detection threshold
+// Position feedback is two AS5600 sensors (aztec buggy, ±1.7 steering-shaft turns):
+//  - FINE   AS5600 on the steering shaft (I2C1, X14): 12-bit counts, ~0.088°/LSB, one turn
+//  - COARSE AS5600 on a geared-down shaft (I2C2, X15): < 360° over the whole travel
+// All positions are UNWRAPPED fine counts relative to the calibrated center (int32,
+// about ±6963 counts for ±1.7 turns): fineRaw + 4096·turn − fineCenterRaw. The turn is
+// tracked incrementally and recovered from the coarse sensor at boot / after a fault.
+// Center and left/right limits are captured via the web UI (each capture records both
+// sensors; the coarse-to-fine ratio is derived, never stored) and kept in NVS namespace
+// "steering": cal_ver (=2), fc_raw, cc_raw (center pair), fl_pos, cl_raw (left pair),
+// fr_pos, cr_raw (right pair). The old single-sensor keys c_ang/l_ang/r_ang are removed.
+// Uncalibrated => percent commands rejected.
+#define STEER_POSITION_TOLERANCE  10    // +/- fine counts for position match (~0.9° of shaft) — bench-tune
+#define STEER_MOVE_TIMEOUT        7500  // ms - maximum time for any movement. Reviewed for 3.4-turn lock-to-lock: ~2 s at full
+                                        // speed (half a turn ≈ 0.3 s), so 7.5 s keeps >3x margin for the P-taper near target — bench-check
+#define STEER_STALL_THRESHOLD     5     // fine counts - stall detection threshold — bench-tune
 #define STEER_STALL_TIMEOUT       500   // ms - time without position change = stall
-#define STEER_CAL_MIN_SPAN        50    // AS5600 counts - min |limit - center| accepted at calibration (~4.4°)
-#define STEER_SENSOR_FAULT_DEBOUNCE 5   // consecutive bad samples before declaring a sensor fault (EMI glitch filter)
+#define STEER_CAL_MIN_SPAN        50    // fine counts - min |limit - center| accepted at calibration (~4.4°) — bench-tune
+#define STEER_SENSOR_FAULT_DEBOUNCE 5   // consecutive bad samples (per sensor; mismatch: coarse samples) before declaring a fault
+
+// Dual-sensor (fine + coarse AS5600) multi-turn tracking
+#define STEER_COARSE_POLL_MS          10    // ms - coarse sensor poll period (turn recovery + consistency check; keeps I2C2 traffic low)
+#define STEER_SENSOR_MISMATCH_COUNTS  1024  // fine counts (quarter turn) - max fine-vs-coarse residual; beyond = mismatch fault. Must stay < 2048
+#define STEER_COARSE_MIN_PER_TURN     150   // coarse counts per steering-shaft turn - min derived ratio accepted at calibration
+#define STEER_COARSE_MIN_GAP          256   // coarse counts (~22.5°) - min unused coarse arc accepted at calibration (seam lives mid-gap)
+#define STEER_CAL_LINEARITY_COUNTS    512   // fine counts - max distance of the center capture from the line through the two limits
+#define STEER_SENSOR_REPROBE_MS       1000  // ms - re-probe period for an AS5600 that did not answer at boot
+#define STEER_TURN_RECOVER_SAMPLES    5     // consecutive agreeing coarse polls (same turn, residual < MISMATCH_COUNTS) to accept a turn recovery
+#define STEER_BOOT_CENTER_TIMEOUT_MS  5000  // ms - a pending boot centering (waits for sensors + VESC link) is dropped after this
 
 // Proportional PWM control: duty = clamp(|error| * STEER_KP + boost, MIN, MAX)
-#define STEER_KP                  1.0f  // PWM duty (0-255) per AS5600 count of error
+#define STEER_KP                  1.0f  // PWM duty (0-255) per fine count of error — bench-tune
 #define STEER_PWM_MIN_DUTY        140   // enough to overcome static friction (bench: no movement at 70)
 #define STEER_PWM_MAX_DUTY        255   // full speed for large errors
 
@@ -355,7 +386,7 @@ struct ServoChannelConfig {
 // makes no progress, duty escalates above the P term until movement resumes.
 // (Bench: closed-loop stalled ~72 counts short of the left lock at MIN duty.)
 #define STEER_BOOST_CHECK_MS      100   // ms - progress check period
-#define STEER_BOOST_MIN_PROGRESS  3     // counts per check period considered "moving"
+#define STEER_BOOST_MIN_PROGRESS  3     // fine counts per check period considered "moving" — bench-tune
 #define STEER_BOOST_STEP          30    // duty added (stalled) or removed (moving) per check
 
 // Calibration jog (momentary open-loop drive from the web UI)
@@ -366,13 +397,13 @@ struct ServoChannelConfig {
 
 // Re-command guard + stall latch (MAVLink streams steering at ~25 Hz; without
 // these the stall/move timers never elapse — the fixed re-command bug).
-#define STEER_RETARGET_TOLERANCE  10    // AS5600 counts — re-command within this of the current target is a no-op (timers keep running)
+#define STEER_RETARGET_TOLERANCE  70    // fine counts (~1% of half-travel) — re-command within this of the current target is a no-op (timers keep running)
 #define STEER_STALL_COOLDOWN_MS   700   // ms — same-direction moves refused after a stall; opposite direction always allowed
 
 // VESC steering driver telemetry monitor + failsafe
 // (Over-current is left to the VESC itself: Motor Current Max clamp, Absolute Max
 //  Current fault — surfaced here as a fault code — and MOSFET temperature limiting.
-//  Mechanical jams are caught by the AS5600 stall detector, STEER_STALL_TIMEOUT.)
+//  Mechanical jams are caught by the fine-AS5600 stall detector, STEER_STALL_TIMEOUT.)
 #define STEER_VESC_TELEM_MS         300   // ms — COMM_GET_VALUES poll period (~3 Hz)
 #define STEER_VESC_COMM_TIMEOUT_MS  1000  // ms — no valid GET_VALUES reply for this long -> driver fault (stop, reject moves)
 
@@ -529,7 +560,8 @@ struct ServoChannelConfig {
                                              // the ONLY mode in which the ESP32 scales steering
 
 // NVS key for the locally stored speed-scaling base (m/s). It lives in the EXISTING "steering"
-// namespace alongside the steering calibration (c_ang / l_ang / r_ang), because it is a property
+// namespace alongside the steering calibration (cal_ver / fc_raw / cc_raw / fl_pos / cl_raw /
+// fr_pos / cr_raw — never clear() the namespace), because it is a property
 // of the steering axis, not of the speed sensor. 0 or absent = "not set" → fall back to the
 // autopilot's MOT_SPD_SCA_BASE, and to no scaling at all when that is unavailable too.
 #define STEER_SCALE_BASE_NVS_KEY      "steer_sca_base"
@@ -657,7 +689,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.1.0"
+#define FIRMWARE_VERSION "1.2.0"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

@@ -1151,11 +1151,21 @@ void VehicleController::processSteerCalCommand(const String& which, WebPortal& w
     }
 
     if (!ok) {
-        webPortal.sendResponse(false, "Capture " + what + " failed (sensor fault, no center, or too close to center)");
+        const char* reason = steering_.getCaptureError();
+        webPortal.sendResponse(false, "Capture " + what + " failed: " + String(reason ? reason : "unknown"));
         return;
     }
-    webPortal.sendResponse(true, "Steering " + what + " saved: " + String(steering_.getRawAngle()) +
-                                 (steering_.isCalibrated() ? "" : " (calibration incomplete)"));
+    // Both sensors are recorded at every capture: fine position (counts from center,
+    // unwrapped) + coarse raw angle.
+    String saved = "Steering " + what + " saved: pos=" + String(steering_.getLastCapturePos()) +
+                   ", coarse=" + String(steering_.getLastCaptureCoarse());
+    const char* calError = steering_.getCalError();
+    if (calError) {
+        // The capture is persisted, but the geometry/ratio check rejected the calibration.
+        webPortal.sendResponse(false, saved + " — calibration rejected: " + String(calError));
+        return;
+    }
+    webPortal.sendResponse(true, saved + (steering_.isCalibrated() ? "" : " (calibration incomplete)"));
 }
 
 void VehicleController::processSteerJogCommand(float value, WebPortal& webPortal) {

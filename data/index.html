@@ -636,12 +636,12 @@
                 <div id="gear-default-status" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
             </div>
 
-            <!-- Steering Calibration (AS5600 absolute angle sensor) -->
+            <!-- Steering Calibration (fine + coarse AS5600 multi-turn sensor pair) -->
             <div class="card">
                 <h2 data-i18n="card_steer_cal">🎯 Steering Calibration</h2>
                 <p data-i18n-html="steer_cal_help" style="font-size: 0.8em; color: var(--muted-foreground); margin-bottom: 12px;">
-                    Absolute AS5600 angle (0–4095 counts). Hold <b>◀ / ▶</b> to jog the wheel,
-                    then capture <b>Center</b> first, followed by <b>Left</b> and <b>Right</b> at the travel limits.
+                    Two AS5600 sensors (fine on the steering shaft, coarse on the geared shaft). Position is in fine counts from center.
+                    Hold <b>◀ / ▶</b> to jog the wheel, capture <b>Center</b> first (this clears both limits), then <b>Left</b> and <b>Right</b> at the travel limits.
                 </p>
                 <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 16px;">
                     <button id="steer-jog-left" data-i18n="btn_jog_left" style="flex:1; padding:16px 10px; border-radius:6px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer; font-size:1em;">◀ Jog Left</button>
@@ -663,13 +663,21 @@
                     <button onclick="steerCapture('steer_cal_right')" data-i18n="btn_set_right" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Set Right</button>
                 </div>
                 <div style="margin-top: 8px; font-size: 0.8em; color: var(--muted-foreground);">
-                    <span data-i18n="lbl_angle">Angle:</span> <span id="steer-pos">--</span> &nbsp;|&nbsp;
+                    <span data-i18n="lbl_position">Position:</span> <span id="steer-pos">--</span> &nbsp;|&nbsp;
                     <span data-i18n="lbl_pos_left">L:</span> <span id="steer-left-cur">--</span> &nbsp;
                     <span data-i18n="lbl_pos_center">C:</span> <span id="steer-center-cur">--</span> &nbsp;
                     <span data-i18n="lbl_pos_right">R:</span> <span id="steer-right-cur">--</span>
                 </div>
                 <div style="margin-top: 4px; font-size: 0.8em; color: var(--muted-foreground);">
-                    <span data-i18n="lbl_sensor">Sensor:</span> <span id="steer-sensor-status">--</span> &nbsp;|&nbsp;
+                    <span data-i18n="lbl_fine_raw">Fine:</span> <span id="steer-fine-raw">--</span> &nbsp;
+                    <span data-i18n="lbl_coarse_raw">Coarse:</span> <span id="steer-coarse-raw">--</span> &nbsp;
+                    <span data-i18n="lbl_turn">Turn:</span> <span id="steer-turn">--</span> &nbsp;|&nbsp;
+                    <span data-i18n="lbl_ratio">Ratio:</span> <span id="steer-ratio">--</span> &nbsp;
+                    <span data-i18n="lbl_residual">Residual:</span> <span id="steer-residual">--</span>
+                </div>
+                <div style="margin-top: 4px; font-size: 0.8em; color: var(--muted-foreground);">
+                    <span data-i18n="lbl_sensor">Sensor:</span> <span id="steer-sensor-status">--</span>
+                    <span id="steer-sensor-fault"></span> &nbsp;|&nbsp;
                     <span data-i18n="lbl_calibration">Calibration:</span> <span id="steer-cal-status">--</span>
                 </div>
                 <div style="margin-top: 4px; font-size: 0.8em; color: var(--muted-foreground);">
@@ -1114,7 +1122,7 @@
 
                 // Steering calibration card
                 card_steer_cal: '🎯 Steering Calibration',
-                steer_cal_help: 'Absolute AS5600 angle (0–4095 counts). Hold <b>◀ / ▶</b> to jog the wheel, then capture <b>Center</b> first, followed by <b>Left</b> and <b>Right</b> at the travel limits.',
+                steer_cal_help: 'Two AS5600 sensors (fine on the steering shaft, coarse on the geared shaft). Position is in fine counts from center. Hold <b>◀ / ▶</b> to jog the wheel, capture <b>Center</b> first (this clears both limits), then <b>Left</b> and <b>Right</b> at the travel limits.',
                 btn_jog_left: '◀ Jog Left',
                 btn_jog_right: 'Jog Right ▶',
                 btn_nudge_left: '◂ Nudge',
@@ -1123,7 +1131,18 @@
                 btn_set_left: 'Set Left',
                 btn_set_center: 'Set Center',
                 btn_set_right: 'Set Right',
-                lbl_angle: 'Angle:',
+                lbl_position: 'Position:',
+                lbl_fine_raw: 'Fine:',
+                lbl_coarse_raw: 'Coarse:',
+                lbl_turn: 'Turn:',
+                lbl_ratio: 'Ratio:',
+                lbl_residual: 'Residual:',
+                steer_fault_fine_i2c: 'fine sensor: no I2C',
+                steer_fault_fine_magnet: 'fine sensor: no magnet',
+                steer_fault_coarse_i2c: 'coarse sensor: no I2C',
+                steer_fault_coarse_magnet: 'coarse sensor: no magnet',
+                steer_fault_mismatch: 'sensors disagree',
+                steer_fault_recovering: 'recovering turn',
                 lbl_pos_left: 'L:',
                 lbl_pos_center: 'C:',
                 lbl_pos_right: 'R:',
@@ -1381,7 +1400,7 @@
 
                 // Steering calibration card
                 card_steer_cal: '🎯 Калібрування керма',
-                steer_cal_help: 'Абсолютний кут AS5600 (0–4095 відліків). Утримуйте <b>◀ / ▶</b>, щоб провертати кермо, спершу зафіксуйте <b>Центр</b>, потім <b>Ліво</b> та <b>Право</b> на межах ходу.',
+                steer_cal_help: 'Два датчики AS5600 (точний на валу керма, грубий на редукторі). Положення — у відліках точного датчика від центру. Утримуйте <b>◀ / ▶</b>, щоб провертати кермо, спершу зафіксуйте <b>Центр</b> (це скидає обидві межі), потім <b>Ліво</b> та <b>Право</b> на межах ходу.',
                 btn_jog_left: '◀ Проворот вліво',
                 btn_jog_right: 'Проворот вправо ▶',
                 btn_nudge_left: '◂ Підштовхнути',
@@ -1390,7 +1409,18 @@
                 btn_set_left: 'Задати ліво',
                 btn_set_center: 'Задати центр',
                 btn_set_right: 'Задати право',
-                lbl_angle: 'Кут:',
+                lbl_position: 'Положення:',
+                lbl_fine_raw: 'Точний:',
+                lbl_coarse_raw: 'Грубий:',
+                lbl_turn: 'Оберт:',
+                lbl_ratio: 'Передавання:',
+                lbl_residual: 'Розбіжність:',
+                steer_fault_fine_i2c: 'точний датчик: немає I2C',
+                steer_fault_fine_magnet: 'точний датчик: немає магніту',
+                steer_fault_coarse_i2c: 'грубий датчик: немає I2C',
+                steer_fault_coarse_magnet: 'грубий датчик: немає магніту',
+                steer_fault_mismatch: 'датчики не узгоджуються',
+                steer_fault_recovering: 'відновлення оберту',
                 lbl_pos_left: 'Л:',
                 lbl_pos_center: 'Ц:',
                 lbl_pos_right: 'П:',
@@ -2011,17 +2041,40 @@
                     ioEl.style.color = faults.length ? 'var(--danger)' : 'var(--success)';
                 }
             }
+            // Steering position frame: fine counts from center (may be negative); null = unset / unreadable
+            const steerVal = (v) => (v === null || v === undefined) ? '--' : v;
             if (data.steer_position !== undefined) {
-                document.getElementById('steer-pos').textContent = data.steer_position;
+                document.getElementById('steer-pos').textContent = steerVal(data.steer_position);
             }
             if (data.steer_center !== undefined) {
-                document.getElementById('steer-center-cur').textContent = data.steer_center >= 0 ? data.steer_center : '--';
+                document.getElementById('steer-center-cur').textContent = steerVal(data.steer_center);
             }
             if (data.steer_left !== undefined) {
-                document.getElementById('steer-left-cur').textContent = data.steer_left >= 0 ? data.steer_left : '--';
+                document.getElementById('steer-left-cur').textContent = steerVal(data.steer_left);
             }
             if (data.steer_right !== undefined) {
-                document.getElementById('steer-right-cur').textContent = data.steer_right >= 0 ? data.steer_right : '--';
+                document.getElementById('steer-right-cur').textContent = steerVal(data.steer_right);
+            }
+            if (data.steer_fine_raw !== undefined) {
+                document.getElementById('steer-fine-raw').textContent = steerVal(data.steer_fine_raw);
+            }
+            if (data.steer_coarse_raw !== undefined) {
+                document.getElementById('steer-coarse-raw').textContent = steerVal(data.steer_coarse_raw);
+            }
+            if (data.steer_turn !== undefined) {
+                document.getElementById('steer-turn').textContent = steerVal(data.steer_turn);
+            }
+            if (data.steer_ratio !== undefined) {
+                document.getElementById('steer-ratio').textContent = steerVal(data.steer_ratio);
+            }
+            if (data.steer_residual !== undefined) {
+                document.getElementById('steer-residual').textContent = steerVal(data.steer_residual);
+            }
+            if (data.steer_sensor_fault !== undefined) {
+                const el = document.getElementById('steer-sensor-fault');
+                const tok = data.steer_sensor_fault;
+                el.textContent = (tok && tok !== 'none') ? '(' + t('steer_fault_' + tok) + ')' : '';
+                el.style.color = 'var(--danger)';
             }
             if (data.steer_sensor_ok !== undefined) {
                 const el = document.getElementById('steer-sensor-status');
