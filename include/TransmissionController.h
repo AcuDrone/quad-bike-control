@@ -21,9 +21,10 @@ struct TransmissionVehicleData {
 /**
  * @brief Transmission controller — PWM servo-based gear selector
  *
- * Controls a PWM servo (HappyModel Super400 Plus, 800–2200 µs) to select gears.
+ * Controls a PWM servo (GXservo HS-1005SGT 150KG on aztec, 800–2200 µs) to select gears.
  * Gear positions are stored and exposed as float percentages (0.0–100.0).
- * Physical hall-effect switches confirm gear arrival.
+ * The physical gear is sensed as a 3-bit code on three opto inputs (aztec; see
+ * `decodeGearCode()`) and confirms gear arrival.
  * Overshoot-and-return motion profile ensures mechanical detent engagement.
  */
 class TransmissionController {
@@ -56,7 +57,7 @@ public:
     bool setGear(Gear gear);
 
     /**
-     * @brief Get current gear from physical switches
+     * @brief Get current gear from the physical gear code inputs
      */
     Gear getCurrentGear() const;
 
@@ -86,11 +87,11 @@ public:
     bool isGearChangeActive() const { return gearChangePhase_ != GearChangePhase::NONE; }
 
     /**
-     * @brief Attach the opto-input reader that supplies the gear switches.
+     * @brief Attach the opto-input reader that supplies the gear code.
      *
-     * The four gear switches are no longer on ESP32 GPIO: they are In1-In4 of the
-     * board's PCA9557 input expander, so there is nothing to configure here beyond
-     * binding the snapshot source. Without it `getPhysicalGear()` reports UNKNOWN.
+     * The three gear code lines are on the board's PCA9557 input expander (port
+     * bits 0/1/6), so there is nothing to configure here beyond binding the
+     * snapshot source. Without it `getPhysicalGear()` reports UNKNOWN.
      *
      * @param inputs Board input reader (must outlive this controller)
      */
@@ -99,12 +100,70 @@ public:
     /**
      * @brief Read the physical gear from the opto-input snapshot.
      *
-     * Cached for `TRANS_GEAR_READ_INTERVAL_MS`. An ambiguous reading (none or more
-     * than one switch asserted) while the servo is idle defers to the next expander
-     * poll instead of issuing back-to-back reads; an invalid (stale) snapshot
-     * reports `GEAR_UNKNOWN`, which is the intended degraded mode.
+     * Cached for `TRANS_GEAR_READ_INTERVAL_MS`. A code that decodes to UNKNOWN
+     * (000, 100, 110, 111) while the servo is idle defers to the next expander poll
+     * (at most `TRANS_GEAR_READ_RETRY_COUNT` times) instead of issuing back-to-back
+     * reads; an invalid (stale) snapshot reports `GEAR_UNKNOWN`, which is the
+     * intended degraded mode.
      */
     Gear getPhysicalGear() const;
+
+    /**
+     * @brief Decode a 3-bit gear code [bit0 bit1 bit6] into a gear.
+     *
+     * The ONE place codes are mapped to gears, through the runtime table
+     * `gearCodes_` (defaults `GEAR_CODE_LOW/HIGH/NEUTRAL/REVERSE` from Constants.h,
+     * overridden by the web calibration stored in NVS). Assigned codes are always
+     * distinct and never 000 or 111; an UNSET gear never matches. Every other code — including 000
+     * (mid-shift, all lines open) and 111 (opto feed lost, all float HIGH) — is
+     * `GEAR_UNKNOWN`.
+     */
+    Gear decodeGearCode(uint8_t code) const;
+
+    /** Runtime-table sentinel: gear has no code (lost it to a take-over); it never decodes. */
+    static constexpr uint8_t GEAR_CODE_UNSET = 0xFF;
+
+    /** @brief Active gear code for a gear (0..7), or GEAR_CODE_UNSET (also for GEAR_UNKNOWN) */
+    uint8_t getGearCodeFor(Gear gear) const;
+
+    /** @brief true if the active code for `gear` equals its Constants.h default */
+    bool isGearCodeDefault(Gear gear) const;
+
+    /**
+     * @brief Load the gear code table from NVS ("transmission" code_r/n/h/l).
+     *
+     * A missing key keeps that gear's default; a stored GEAR_CODE_UNSET keeps the gear
+     * unset. If the resulting table is invalid (an assigned code of 000/111/out of range,
+     * or two gears sharing a code) the whole table falls back to the Constants.h
+     * defaults and an error is logged.
+     */
+    void loadGearCodes();
+
+    /**
+     * @brief Capture the CURRENT live gear code as the code for `gear` (web calibration).
+     *
+     * Rejected (returns false, `msg` says why) when: `gear` is UNKNOWN, a gear change is
+     * in progress, the opto-input snapshot is missing/stale, or the code is 000 or 111
+     * (reserved for UNKNOWN). If the code is assigned to a different gear, this gear
+     * takes it over and the other gear becomes GEAR_CODE_UNSET (reported in `msg`).
+     * On success the change is persisted to NVS and takes effect immediately.
+     */
+    bool captureGearCode(Gear gear, String& msg);
+
+    /**
+     * @brief Restore the Constants.h default gear codes (NVS keys removed), effective immediately.
+     * @return false if NVS could not be opened (RAM table is still reset)
+     */
+    bool resetGearCodes();
+
+    /**
+     * @brief Raw gear code from the current input snapshot (telemetry `gear_code`).
+     * @return 0..7, or -1 when there is no input source or the snapshot is stale
+     */
+    int8_t getGearCode() const;
+
+    /** @brief One-letter gear name: "R", "N", "H", "L", or "?" for UNKNOWN */
+    static const char* getGearLetter(Gear gear);
 
     /**
      * @brief Update gear change phase transitions — call every loop iteration
@@ -201,12 +260,15 @@ private:
     Gear queuedGear_;               // GEAR_UNKNOWN = no sequence pending, else = final destination
     uint32_t sequenceStepDwellStart_;  // millis() when step-dwell armed, 0 = not armed
 
-    BoardInputs*     boardInputs_;         // gear switches In1-In4 (not owned)
+    BoardInputs*     boardInputs_;         // gear code inputs, port bits 0/1/6 (not owned)
 
     mutable Gear     cachedPhysicalGear_;
     mutable uint32_t lastGearReadTime_;
     mutable uint32_t lastGearRetryTime_;   // last time an ambiguous read deferred to a newer snapshot
     mutable uint8_t  gearReadRetries_;     // deferrals used in the current read window
+    mutable uint8_t  lastLoggedGearCode_;  // 0xFF until the first code is logged (never a valid code)
+
+    uint8_t gearCodes_[4];                 // runtime code table, indexed by (int)Gear; GEAR_CODE_UNSET = none
 
     float gearPositions_[4];
     float overshootPcts_[4];
@@ -217,6 +279,9 @@ private:
     void saveDefaultPosition(Gear gear, float positionPct);
     void startGearChange(Gear gear);
     static Gear nextGearToward(Gear from, Gear to);
+    static uint8_t defaultGearCode(Gear gear);
+    static bool isGearCodeTableValid(const uint8_t codes[4]);
+    void invalidateGearCache();
 };
 
 #endif // TRANSMISSION_CONTROLLER_H

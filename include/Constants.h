@@ -30,7 +30,7 @@
 #define MAVLINK_UART_NUM    UART_NUM_1   // UART1 for MAVLink
 #define MAVLINK_BAUD_RATE   115200       // Pixhawk TELEM baud
 
-// Transmission Servo (HappyModel Super400 Plus) — X8 pin 3
+// Transmission Servo (GXservo HS-1005SGT 150KG, aztec) — X8 pin 3
 #define PIN_TRANS_SERVO     GPIO_NUM_16  // LEDC Channel 2
 
 // Steering Actuator — driven by a Flipsky 75200 VESC over UART2 (brushed-DC mode).
@@ -139,19 +139,46 @@
 //
 // ⚠ The In1..In8 = bits 0..7 assumption taken from the schematic is WRONG for the
 //   gear channels — the routing is not 1:1, same story as the relay board above.
-//   Bench-verified 2026-08-21 by sweeping the gear lever with a live raw dump:
-//     NEUTRAL = bit 0   REVERSE = bit 1   LOW = bit 6   HIGH = bit 7
-//   Observed port bytes: between positions 0x1C, R 0x1E, N 0x1D, L 0x5C, H 0x9C.
-//   Bits 2, 3 and 4 sat HIGH and bit 5 LOW throughout — none of them ever moved.
+//   Bench-verified 2026-08-21 (quad-bike lever sweep, live raw dump): the X16 gear
+//   lines land on port bits 0, 1, 6 and 7. Bits 2, 3 and 4 sat HIGH and bit 5 LOW
+//   throughout — none of them ever moved.
 //
-// ⚠ The gear channels are engaged-HIGH: every wired gear opto CONDUCTS at rest
-//   (pin LOW) and selecting a position OPENS exactly that one channel, so its pin
-//   goes HIGH. BOARD_INPUT_ACTIVE_LOW below therefore describes the brake input
-//   only — do NOT apply it to the four gear bits.
-#define BOARD_IN_BIT_GEAR_NEUTRAL  0     // X16 — engaged = HIGH
-#define BOARD_IN_BIT_GEAR_REVERSE  1     // X16 — engaged = HIGH
-#define BOARD_IN_BIT_GEAR_LOW      6     // X16 — engaged = HIGH
-#define BOARD_IN_BIT_GEAR_HIGH     7     // X16 — engaged = HIGH
+// AZTEC GEAR SENSING — 3-bit CODE, not one-hot. The aztec buggy's gear selector
+// drives three of those lines as a binary code (the quad bike's one-hot four-line
+// assignment — NEUTRAL=0 REVERSE=1 LOW=6 HIGH=7 — lives on `master`). Bit 7 (the
+// quad bike's HIGH line) is NOT wired on aztec and is ignored completely: it may
+// float HIGH.
+//
+// Same opto polarity as before: a line reads HIGH ("1") when it is engaged (the
+// opto conducts at rest → pin LOW; engaging the line opens it → pin HIGH).
+// BOARD_INPUT_ACTIVE_LOW below therefore describes the brake input only — do NOT
+// apply it to the gear code bits.
+//
+// Code bit order, written left to right as [A B C] = [bit 0, bit 1, bit 6]:
+//   code = (A << 2) | (B << 1) | C, so the literal 0b101 reads A=1 B=0 C=1.
+#define BOARD_IN_BIT_GEAR_CODE_A   0     // X16 — code MSB (quad-bike NEUTRAL line), engaged = HIGH
+#define BOARD_IN_BIT_GEAR_CODE_B   1     // X16 — code middle (quad-bike REVERSE line), engaged = HIGH
+#define BOARD_IN_BIT_GEAR_CODE_C   6     // X16 — code LSB (quad-bike LOW line), engaged = HIGH
+
+// DEFAULT gear codes ([bit0 bit1 bit6]); the web gear code calibration may override them at
+// runtime (NVS "transmission" code_r/n/h/l). Every other code — 000, 100, 110, 111 — decodes to
+// GEAR_UNKNOWN: 000 (all lines open, e.g. mid-shift) and 111 (opto feed lost, all
+// float HIGH) both land there, keeping the fail-safe of the old one-hot decode.
+#define GEAR_CODE_LOW              0b101
+#define GEAR_CODE_HIGH             0b001
+#define GEAR_CODE_NEUTRAL          0b011
+#define GEAR_CODE_REVERSE          0b010
+static_assert(GEAR_CODE_LOW != GEAR_CODE_HIGH && GEAR_CODE_LOW != GEAR_CODE_NEUTRAL &&
+              GEAR_CODE_LOW != GEAR_CODE_REVERSE && GEAR_CODE_HIGH != GEAR_CODE_NEUTRAL &&
+              GEAR_CODE_HIGH != GEAR_CODE_REVERSE && GEAR_CODE_NEUTRAL != GEAR_CODE_REVERSE,
+              "gear codes must be distinct");
+static_assert(GEAR_CODE_LOW <= 0b111 && GEAR_CODE_HIGH <= 0b111 &&
+              GEAR_CODE_NEUTRAL <= 0b111 && GEAR_CODE_REVERSE <= 0b111,
+              "gear codes are 3-bit");
+static_assert(GEAR_CODE_LOW != 0b000 && GEAR_CODE_HIGH != 0b000 && GEAR_CODE_NEUTRAL != 0b000 &&
+              GEAR_CODE_REVERSE != 0b000 && GEAR_CODE_LOW != 0b111 && GEAR_CODE_HIGH != 0b111 &&
+              GEAR_CODE_NEUTRAL != 0b111 && GEAR_CODE_REVERSE != 0b111,
+              "000 (mid-shift) and 111 (lost opto feed) must stay UNKNOWN");
 #define BOARD_IN_BIT_BRAKE_LIMIT   4     // In5 (X17) — brake "released" endstop
 
 // Brake input bit polarity. A PC817 that is conducting pulls its PCA9557 input
@@ -452,11 +479,13 @@ struct ServoChannelConfig {
 // TRANSMISSION SYSTEM CONFIGURATION
 // ============================================================================
 
-// Transmission Servo Parameters (HappyModel Super400 Plus @ 24V, 180° range)
+// Transmission Servo Parameters (GXservo HS-1005SGT 150KG, 180° range, 500–2500 µs capable).
+// 800–2200 µs below is the verified working range on this servo — do not widen it.
+// ⚠ Supply limit 16.8 V — the servo must never be fed from the 24V boost rail.
 #define LEDC_CH_TRANS_SERVO                 2
 #define TRANS_SERVO_MIN_US                  800
 #define TRANS_SERVO_MAX_US                  2200
-#define TRANS_SERVO_MS_PER_PCT              35      // ms per 1% travel (180° @ 24V: 1110ms/100%)
+#define TRANS_SERVO_MS_PER_PCT              35      // ms per 1% travel — conservative for the HS-1005SGT, bench-tunable
 #define TRANS_SERVO_SETTLE_MIN_MS           300     // minimum settle time for short moves
 #define TRANS_GEAR_OVERSHOOT_R_PCT          4.5f
 #define TRANS_GEAR_OVERSHOOT_N_PCT          1.0f
@@ -476,7 +505,7 @@ struct ServoChannelConfig {
 #define TRANS_UNKNOWN_GEAR_THROTTLE_MAX     (float)8.5   // % - max throttle when physical gear UNKNOWN
 #define TRANS_GEAR_CHECK_INTERVAL           500        // ms - physical gear verification period
 #define TRANS_GEAR_READ_INTERVAL_MS         100        // ms - GPIO debounce cache for getPhysicalGear()
-#define TRANS_GEAR_READ_RETRY_COUNT         3          // extra reads when all switches read inactive while servo is idle
+#define TRANS_GEAR_READ_RETRY_COUNT         3          // extra snapshot reads while the gear code is UNKNOWN and the servo is idle
 
 // ============================================================================
 // BRAKE SYSTEM CONFIGURATION

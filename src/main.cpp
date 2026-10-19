@@ -52,7 +52,7 @@ MavlinkInterface mavlinkInterface;
 // Fallback if X15 ever goes silent: the relay board also works on X14 → I2C1
 // (change the RelayController argument below from Wire1 to Wire).
 
-// Opto-isolated board inputs (gear switches In1-In4, brake endstop In5) on I2C2
+// Opto-isolated board inputs (3-bit gear code on port bits 0/1/6, brake endstop bit 4) on I2C2
 BoardInputs boardInputs(Wire1);
 
 // Relay Controller for ignition, starter and front light (aztec; wheel lock not fitted) — I2C2 @0x1F via X15
@@ -198,7 +198,7 @@ void setup() {
         scanI2CBus(Wire1, "I2C2 (Wire1)");
     }
 
-    // Opto-isolated inputs (gear switches + brake limit sensor)
+    // Opto-isolated inputs (gear code lines + brake limit sensor)
     if (!boardInputs.begin()) {
         Debug::println("[INIT] ERROR: Board input expander failed — gear will report UNKNOWN");
     }

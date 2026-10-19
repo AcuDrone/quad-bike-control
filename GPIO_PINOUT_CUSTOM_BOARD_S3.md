@@ -1,6 +1,7 @@
 # ESP32-S3 GPIO Pinout — Custom Control Board "Control_v0"
 
 **Hardware:** custom control PCB `Control_v0` — ESP32-S3-WROOM-1U (external antenna), `qio_qspi` mode
+**Vehicle (branch `aztec`):** ODES JUNGLECROSS 800 EFI/EPS buggy — the quad bike on the same board is documented on `master`
 **Schematic:** `Control_v0.PrjPcb` (7 sheets, Altium) — Alexandr Tulusha, 14.06.2026
 **Companion boards:** `Buck Boost.PrjPcb` (→ X10), `Relay.PrjPcb` (→ **X15 / I2C2**, bench-verified)
 **Pin Definitions:** `include/Constants.h`
@@ -103,7 +104,7 @@ document is the wiring / pin reference only.
 | **X5** | Hall 3 — spare | 1=5V, 2=Hall A (GPIO10), 3=Hall B (GPIO11), 4=GND |
 | **X6** | VESC steering (UART) | 1=5V(fused), 2=L_PWM → **VESC RX** (GPIO4 TX), 3=R_PWM → **VESC TX** (GPIO5 RX), 4/5=IS n/c, 6=GND |
 | **X7** | Brake BTS7960 | 1=5V(fused), 2=L_PWM (GPIO6), 3=R_PWM (GPIO7), 4=L_IS, 5=R_IS, 6=GND |
-| **X8** | Servos | 1=5V(fused, servo supply), 2=throttle PWM (GPIO15), 3=transmission PWM (GPIO16), 4/5=IS, 6=GND |
+| **X8** | Servos | 1=5V(fused, servo supply), 2=throttle PWM (GPIO15), 3=transmission PWM (GPIO16 — GXservo HS-1005SGT 150KG on aztec), 4/5=IS, 6=GND |
 | **X9** | MAVLink → Pixhawk TELEM | 2 → Pixhawk RX (GPIO17 TX), 3 ← Pixhawk TX (GPIO18 RX), 6=GND. ⚠ **Do NOT connect pin 1 (5V)**; leave 4/5 unconnected |
 | **X10** | Buck Boost board | 1 = Boost On/Off (GPIO46), 2 = GND, 3 = +24V measure → divider → GPIO9 |
 | **X11** | Power in | 3× +12V, 3× GND (main 12V input) |
@@ -115,6 +116,10 @@ document is the wiring / pin reference only.
 | **X17** | Opto inputs | In5..In8 (In_Plus / In_Minus pairs) + GND |
 | **X18** | Ethernet | RJ45 (CH9121T) |
 | **USB-C** | Flashing + console | Native USB (GPIO19/20), USB-CDC |
+
+⚠ **Transmission servo supply (aztec):** the GXservo HS-1005SGT 150KG (180°, 500–2500 µs capable;
+firmware uses the verified 800–2200 µs range) is rated for **16.8 V max**. It must **not** be
+powered from the 24V boost rail.
 
 **Hall input conditioning (X3/X4/X5):** ferrite bead (1 kΩ @ 100 MHz) → 1.2K / 2.2K divider (×0.65)
 → PESD3V3L1UA TVS + 100n. Designed for **5V** sensors. All three channels are **spare** — the
@@ -243,24 +248,42 @@ All inputs are 5V, PC817-isolated, each an `In_Plus` / `In_Minus` pair. They are
 schematic port names implied I2C1, the copper says I2C2 — see §4.)
 
 ⚠ The schematic's `In1..In8 = bits 0..7` numbering does **not** hold for the gear channels — the
-routing is not 1:1, exactly like the relay board in §6. The table below is **bench-verified
-2026-08-21** by sweeping the gear lever against a live raw port dump.
+routing is not 1:1, exactly like the relay board in §6. The X16 gear lines land on port bits 0, 1, 6
+and 7 (**bench-verified 2026-08-21** on the quad bike by sweeping the lever against a live raw dump).
 
-| Port bit | Connector | Function | Asserted level |
+**This is the aztec buggy assignment** (branch `aztec`). The quad bike reads the gear one-hot on four
+lines (bit 0 NEUTRAL, bit 1 REVERSE, bit 6 LOW, bit 7 HIGH — observed bytes between `0x1C`, R `0x1E`,
+N `0x1D`, L `0x5C`, H `0x9C`); that assignment is documented on `master`. The aztec gear selector
+instead drives a **3-bit code** on three of the same lines, and bit 7 is **not wired** — firmware
+ignores it completely (it may float HIGH).
+
+| Port bit | Connector | Function (aztec) | Asserted level |
 |----------|-----------|----------|----------------|
-| 0 | X16 | Gear NEUTRAL | **HIGH** |
-| 1 | X16 | Gear REVERSE | **HIGH** |
-| 6 | X16 | Gear LOW | **HIGH** |
-| 7 | X16 | Gear HIGH | **HIGH** |
+| 0 | X16 | Gear code bit A — left/MSB (quad-bike NEUTRAL line) | **HIGH** |
+| 1 | X16 | Gear code bit B — middle (quad-bike REVERSE line) | **HIGH** |
+| 6 | X16 | Gear code bit C — right/LSB (quad-bike LOW line) | **HIGH** |
+| 7 | X16 | Not wired on aztec — ignored | — |
 | 4 | X17 | Brake limit sensor ("released" endstop — 1000 ms overrun logic, I2C latency acceptable) | LOW (`BOARD_INPUT_ACTIVE_LOW`, **not** bench-verified) |
 | 2, 3, 5 | X17 | Spare — never moved during the sweep | — |
 
-The gear channels are **engaged-HIGH**: every wired gear opto conducts at rest (pin LOW) and
-selecting a position *opens* exactly that one channel, driving its pin HIGH. Observed port bytes:
-between positions `0x1C`, R `0x1E`, N `0x1D`, L `0x5C`, H `0x9C`.
+Gear code, written `[bit0 bit1 bit6]` (`GEAR_CODE_*` in `Constants.h`, decoded only in
+`TransmissionController::decodeGearCode()`):
 
-This fails safe in both directions: losing the opto feed floats all four gear bits HIGH →
-multiple-active → `GEAR_UNKNOWN`; mid-shift all four read LOW → none-active → `GEAR_UNKNOWN`.
+| Gear | Code | bit 0 | bit 1 | bit 6 |
+|------|------|-------|-------|-------|
+| L (LOW) | `101` | 1 | 0 | 1 |
+| H (HIGH) | `001` | 0 | 0 | 1 |
+| N (NEUTRAL) | `011` | 0 | 1 | 1 |
+| R (REVERSE) | `010` | 0 | 1 | 0 |
+| — | `000`, `100`, `110`, `111` | | | → `GEAR_UNKNOWN` |
+
+The code lines keep the same **engaged-HIGH** opto polarity as the quad bike: an opto conducts at
+rest (pin LOW) and an engaged line opens it, driving its pin HIGH ("1").
+
+This still fails safe in both directions: losing the opto feed floats all three code bits HIGH →
+`111` → `GEAR_UNKNOWN`; with all lines open (e.g. mid-shift) the code reads `000` → `GEAR_UNKNOWN`.
+Telemetry publishes the raw code as `gear_code` (0..7, -1 when the inputs are stale) and its instant
+decode as `gear_sensed`, so the wiring can be checked on the bench.
 
 ---
 

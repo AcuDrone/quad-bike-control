@@ -495,6 +495,7 @@
                     <div class="telemetry-item">
                         <div class="telemetry-label" data-i18n="lbl_current_gear">Current Gear</div>
                         <div class="telemetry-value gear-display" id="telemetry-gear">N</div>
+                        <div id="telemetry-gear-code" style="font-size: 0.6em; color: var(--muted-foreground); margin-top: 3px;"></div>
                         <div id="gear-switching-indicator" data-i18n="switching_static" style="display: none; font-size: 0.6em; color: var(--warning); margin-top: 5px;">⚙️ Switching...</div>
                     </div>
                     <div class="telemetry-item">
@@ -634,6 +635,29 @@
                     </div>
                 </div>
                 <div id="gear-default-status" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
+            </div>
+
+            <!-- Gear Sensor Codes (aztec 3-bit gear code calibration) -->
+            <div class="card">
+                <h2 data-i18n="card_gear_codes">🔢 Gear Sensor Codes</h2>
+                <p data-i18n-html="gear_codes_help" style="font-size: 0.8em; color: var(--muted-foreground); margin-bottom: 12px;">
+                    Put the lever in a known gear, check the bits below, then press <b>Save as</b> that gear. If the code belonged to another gear, that gear becomes <b>not set</b> — capture it too. Engine must be off.
+                </p>
+                <div style="display: flex; gap: 6px; margin-bottom: 8px;">
+                    <div id="gear-bit-a" style="flex:1; text-align:center; padding:8px 4px; border-radius:6px; border:1px solid var(--border); background:var(--secondary); color:var(--muted-foreground); font-weight:bold;">A (0)</div>
+                    <div id="gear-bit-b" style="flex:1; text-align:center; padding:8px 4px; border-radius:6px; border:1px solid var(--border); background:var(--secondary); color:var(--muted-foreground); font-weight:bold;">B (1)</div>
+                    <div id="gear-bit-c" style="flex:1; text-align:center; padding:8px 4px; border-radius:6px; border:1px solid var(--border); background:var(--secondary); color:var(--muted-foreground); font-weight:bold;">C (6)</div>
+                </div>
+                <div id="gear-code-live" style="font-size: 0.9em; margin-bottom: 12px; font-family: monospace;">—</div>
+                <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px;">
+                    <button onclick="captureGearCode('R')" data-i18n="btn_save_as_r" style="padding:8px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save as R</button>
+                    <button onclick="captureGearCode('N')" data-i18n="btn_save_as_n" style="padding:8px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save as N</button>
+                    <button onclick="captureGearCode('L')" data-i18n="btn_save_as_l" style="padding:8px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save as L</button>
+                    <button onclick="captureGearCode('H')" data-i18n="btn_save_as_h" style="padding:8px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save as H</button>
+                </div>
+                <div id="gear-codes-table" style="margin-top: 12px; font-size: 0.85em; font-family: monospace; line-height: 1.6;"></div>
+                <button onclick="resetGearCodes()" data-i18n="btn_reset_gear_codes" style="margin-top: 10px; width: 100%; padding:8px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer;">Reset to defaults</button>
+                <div id="gear-codes-status" style="margin-top: 10px; font-size: 0.8em; color: var(--muted-foreground); min-height: 1.2em;"></div>
             </div>
 
             <!-- Steering Calibration (fine + coarse AS5600 multi-turn sensor pair) -->
@@ -1089,6 +1113,8 @@
                 // Telemetry card
                 card_telemetry: '📊 Telemetry',
                 lbl_current_gear: 'Current Gear',
+                gear_code_line: 'sensor code %s → %s',
+                gear_code_stale: 'sensor code: no data',
                 lbl_servo_position: 'Servo Position',
                 lbl_brake: 'Brake',
                 lbl_throttle: 'Throttle',
@@ -1112,6 +1138,19 @@
                 steer_test_right: 'Right ⟹',
 
                 // Gear position defaults card
+                card_gear_codes: '🔢 Gear Sensor Codes',
+                gear_codes_help: 'Put the lever in a known gear, check the bits below, then press <b>Save as</b> that gear. Codes 000 and 111 cannot be saved. If the code belonged to another gear, that gear becomes <b>not set</b> — put the lever there and capture it too. Engine must be off.',
+                btn_save_as_r: 'Save as R',
+                btn_save_as_n: 'Save as N',
+                btn_save_as_l: 'Save as L',
+                btn_save_as_h: 'Save as H',
+                btn_reset_gear_codes: 'Reset to defaults',
+                gear_codes_live: 'code %s → %s',
+                gear_codes_entry_default: 'default',
+                gear_codes_entry_custom: 'saved',
+                gear_codes_entry_unset: 'not set — capture it',
+                gear_codes_confirm_reset: 'Restore the default gear codes?',
+                gear_codes_saving: 'Saving current code as %s…',
                 card_gear_defaults: '⚙️ Gear Position Defaults',
                 gear_defaults_help: 'Press <b>📍</b> to capture the current servo position (0.0–100.0%), then <b>Save</b>. <b>Move</b> drives the servo to the entered value.',
                 gear_reverse: 'REVERSE (R)',
@@ -1382,6 +1421,8 @@
                 // Telemetry card
                 card_telemetry: '📊 Телеметрія',
                 lbl_current_gear: 'Поточна передача',
+                gear_code_line: 'код датчика %s → %s',
+                gear_code_stale: 'код датчика: немає даних',
                 lbl_servo_position: 'Положення серво',
                 lbl_brake: 'Гальмо',
                 lbl_throttle: 'Дросель',
@@ -1405,6 +1446,19 @@
                 steer_test_right: 'Вправо ⟹',
 
                 // Gear position defaults card
+                card_gear_codes: '🔢 Коди датчика передач',
+                gear_codes_help: 'Поставте важіль у відому передачу, перевірте біти нижче й натисніть <b>Зберегти як</b> цю передачу. Коди 000 і 111 зберегти не можна. Якщо код належав іншій передачі, вона стає <b>не задано</b> — поставте важіль у неї й зафіксуйте її теж. Двигун має бути вимкнений.',
+                btn_save_as_r: 'Зберегти як R',
+                btn_save_as_n: 'Зберегти як N',
+                btn_save_as_l: 'Зберегти як L',
+                btn_save_as_h: 'Зберегти як H',
+                btn_reset_gear_codes: 'Скинути до типових',
+                gear_codes_live: 'код %s → %s',
+                gear_codes_entry_default: 'типовий',
+                gear_codes_entry_custom: 'збережений',
+                gear_codes_entry_unset: 'не задано — зафіксуйте',
+                gear_codes_confirm_reset: 'Відновити типові коди передач?',
+                gear_codes_saving: 'Збереження поточного коду як %s…',
                 card_gear_defaults: '⚙️ Типові положення передач',
                 gear_defaults_help: 'Натисніть <b>📍</b>, щоб зафіксувати поточне положення серво (0.0–100.0%), потім <b>Зберегти</b>. <b>Перемістити</b> переводить серво в задане значення.',
                 gear_reverse: 'ЗАДНЯ (R)',
@@ -1831,6 +1885,11 @@
                     steerCenterStatus(data.success ? data.message : t('error_prefix') + data.message,
                                       data.success ? 'var(--success)' : 'var(--danger)');
                 }
+                // Gear code calibration status
+                if (data.message && (data.message.startsWith('Gear code') || data.message.startsWith('Gear codes'))) {
+                    gearCodesStatus(data.success ? data.message : t('error_prefix') + data.message,
+                                    data.success ? 'var(--success)' : 'var(--danger)');
+                }
                 // Relay test status
                 if (data.message && data.message.startsWith('Relay test')) {
                     relayTestStatus(data.success ? data.message : t('error_prefix') + data.message,
@@ -1851,6 +1910,18 @@
 
             // Update gear display
             document.getElementById('telemetry-gear').textContent = data.gear || 'N';
+
+            // Raw 3-bit gear code [bit0 bit1 bit6] and its decode — bench wiring check
+            const gearCodeEl = document.getElementById('telemetry-gear-code');
+            if (data.gear_code === undefined) {
+                gearCodeEl.textContent = '';
+            } else if (data.gear_code < 0) {
+                gearCodeEl.textContent = t('gear_code_stale');
+            } else {
+                const bits = data.gear_code.toString(2).padStart(3, '0');
+                const sensed = (!data.gear_sensed || data.gear_sensed === '?') ? t('gear_unknown') : data.gear_sensed;
+                gearCodeEl.textContent = t('gear_code_line', bits, sensed);
+            }
 
             // Update servo position
             document.getElementById('telemetry-hall').textContent = (data.hall_position || 0).toFixed(1) + '%';
@@ -2011,6 +2082,8 @@
                 webControlState = data.web_control;
                 updateWebControlButton(data.web_control);
             }
+
+            updateGearCodes(data);
 
             // Update servo position near gear buttons
             document.getElementById('gear-encoder-pos').textContent = (data.hall_position || 0).toFixed(1) + '%';
@@ -2435,6 +2508,79 @@
                 ws.send(JSON.stringify({ cmd: 'set_gear_default', value: val, strValue: gear }));
                 document.getElementById('gear-default-status').textContent = t('saving_gear', gear);
                 document.getElementById('gear-default-status').style.color = 'var(--muted-foreground)';
+            }
+        }
+
+        // ---- Gear sensor code calibration ----
+        // Live bits come from telemetry `gear_code` (raw snapshot, no retry cache);
+        // the stored table from `gear_codes` + `gear_codes_custom` (bit0 R, bit1 N, bit2 H, bit3 L).
+        function gearCodeBits(code) {
+            return code.toString(2).padStart(3, '0');
+        }
+
+        function updateGearCodes(data) {
+            if (data.gear_code !== undefined) {
+                const live = data.gear_code;
+                const ids = ['gear-bit-a', 'gear-bit-b', 'gear-bit-c'];
+                ids.forEach((id, i) => {
+                    const el = document.getElementById(id);
+                    if (!el) return;
+                    const on = live >= 0 && ((live >> (2 - i)) & 1) === 1;
+                    el.style.background = live < 0 ? 'var(--secondary)'
+                        : (on ? 'color-mix(in srgb, var(--success) 70%, black)' : 'var(--secondary)');
+                    el.style.color = on ? 'var(--foreground)' : 'var(--muted-foreground)';
+                    el.style.opacity = live < 0 ? '0.5' : '1';
+                });
+                const liveEl = document.getElementById('gear-code-live');
+                if (liveEl) {
+                    if (live < 0) {
+                        liveEl.textContent = t('gear_code_stale');
+                    } else {
+                        const sensed = (!data.gear_sensed || data.gear_sensed === '?') ? t('gear_unknown') : data.gear_sensed;
+                        liveEl.textContent = t('gear_codes_live', '0b' + gearCodeBits(live), sensed);
+                    }
+                }
+            }
+            if (data.gear_codes) {
+                const tbl = document.getElementById('gear-codes-table');
+                if (tbl) {
+                    const mask = data.gear_codes_custom || 0;
+                    const bitFor = { R: 1, N: 2, H: 4, L: 8 };
+                    tbl.innerHTML = '';
+                    ['R', 'N', 'H', 'L'].forEach(g => {
+                        const row = document.createElement('div');
+                        const code = data.gear_codes[g];
+                        const unset = code === undefined || code === null || code < 0;   // -1 = unset
+                        const custom = (mask & bitFor[g]) !== 0;
+                        const isLive = !unset && data.gear_code === code;
+                        const state = unset ? 'gear_codes_entry_unset'
+                            : (custom ? 'gear_codes_entry_custom' : 'gear_codes_entry_default');
+                        row.textContent = g + ' = ' + (unset ? '—' : gearCodeBits(code)) + '  (' + t(state) + ')' +
+                            (isLive ? '  ◀' : '');
+                        row.style.color = unset ? 'var(--warning)' : (custom ? 'var(--info)' : 'var(--muted-foreground)');
+                        if (isLive) row.style.fontWeight = 'bold';
+                        tbl.appendChild(row);
+                    });
+                }
+            }
+        }
+
+        function gearCodesStatus(msg, color) {
+            const el = document.getElementById('gear-codes-status');
+            if (el) { el.textContent = msg; el.style.color = color || 'var(--muted-foreground)'; }
+        }
+
+        function captureGearCode(gear) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ cmd: 'set_gear_code', value: gear }));
+                gearCodesStatus(t('gear_codes_saving', gear));
+            }
+        }
+
+        function resetGearCodes() {
+            if (!confirm(t('gear_codes_confirm_reset'))) return;
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ cmd: 'reset_gear_codes' }));
             }
         }
 

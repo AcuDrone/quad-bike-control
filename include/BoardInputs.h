@@ -17,9 +17,12 @@
  * read the published snapshot and never issue I2C themselves, so a control-loop
  * read can never turn into a burst of blocking transactions.
  *
- * Input map (bench-verified 2026-08-21, see Constants.h): port bits 0/1/6/7 =
- * gear NEUTRAL/REVERSE/LOW/HIGH, engaged-HIGH; bit 4 = brake "released" endstop,
- * polarity from `BOARD_INPUT_ACTIVE_LOW`. The remaining bits are spare.
+ * Input map (aztec, see Constants.h): port bits 0/1/6 carry the 3-bit gear CODE
+ * [bit0 bit1 bit6] (engaged-HIGH), published raw as `Snapshot::gearCode`; it is
+ * decoded to a gear in exactly one place, `TransmissionController::decodeGearCode()`.
+ * Bit 7 (the quad bike's one-hot HIGH line, see `master`) is not wired on aztec and
+ * is ignored. Bit 4 = brake "released" endstop, polarity from
+ * `BOARD_INPUT_ACTIVE_LOW`. The remaining bits are spare.
  *
  * Fault policy (see the change's design.md, Decision 2):
  *  - a single failed read keeps the last-known snapshot and retries next poll;
@@ -32,10 +35,7 @@ class BoardInputs {
 public:
     /** @brief Immutable view of the input state published to consumers */
     struct Snapshot {
-        bool gearReverse;    // bit 1 HIGH
-        bool gearNeutral;    // bit 0 HIGH
-        bool gearLow;        // bit 6 HIGH
-        bool gearHigh;       // bit 7 HIGH
+        uint8_t gearCode;    // 3-bit gear code [bit0 bit1 bit6] = (b0<<2)|(b1<<1)|b6
         bool brakeReleased;  // bit 4 asserted — brake at its retracted endstop
         bool valid;          // false once the data is stale (do not trust the bools)
         uint32_t ageMs;      // ms since the last successful read
@@ -74,6 +74,15 @@ public:
     /** @brief Raw input port byte of the last successful read (diagnostics) */
     uint8_t getRawInputs() const { return rawInputs_; }
 
+    /**
+     * @brief Extract the 3-bit gear code from a raw port byte.
+     *
+     * Bits are taken as raw levels (engaged = HIGH) in the order
+     * [`BOARD_IN_BIT_GEAR_CODE_A` `_B` `_C`] = [bit 0, bit 1, bit 6], so the result
+     * reads like the `GEAR_CODE_*` literals. Bit 7 is never looked at.
+     */
+    static uint8_t extractGearCode(uint8_t raw);
+
 private:
     /** @brief Decode the raw port byte into the snapshot bools */
     void applyRaw(uint8_t raw);
@@ -81,7 +90,7 @@ private:
     /** @brief True when the given bit index is asserted in `raw` (active-low inputs) */
     static bool bitAsserted(uint8_t raw, uint8_t bit);
 
-    /** @brief Raw level of the given bit index in `raw` (engaged-HIGH gear inputs) */
+    /** @brief Raw level of the given bit index in `raw` (engaged-HIGH gear code bits) */
     static bool bitHigh(uint8_t raw, uint8_t bit);
 
     /** @brief (Re)configure the device as all-inputs; used by begin() and recovery */

@@ -15,21 +15,25 @@
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
 {"version":"1.2.0","date":"2026-10-19","uk":[
-"Кермо баггі: два датчики AS5600, положення на кілька обертів керма",
+"Кермо баггі (ODES Junglecross 800): два датчики AS5600, положення на кілька обертів керма",
 "Положення керма відновлюється після ввімкнення без пошуку нуля",
 "Будь-яка помилка датчиків керма зупиняє кермо",
 "Фіксація центру скидає обидві межі; після оновлення потрібне повторне калібрування керма",
 "Реле баггі: 1 — запалювання, 2 — стартер, 3 — фара; реле 4–8 вимкнені (крім перевірки реле)",
 "Блокування переднього колеса на баггі не встановлене — кнопка вимкнена",
-"Перевірка всіх 8 реле у веб-інтерфейсі, лише при вимкненому запалюванні"
+"Перевірка всіх 8 реле у веб-інтерфейсі, лише при вимкненому запалюванні",
+"Передача баггі визначається 3-бітним кодом на трьох входах; код видно в телеметрії",
+"Коди датчика передач калібруються у веб-інтерфейсі: важіль у передачу → «Зберегти як»"
 ],"en":[
-"Buggy steering: two AS5600 sensors, multi-turn steering position",
+"Buggy (ODES Junglecross 800) steering: two AS5600 sensors, multi-turn steering position",
 "Steering position is recovered at power-up without homing",
 "Any steering sensor fault stops the steering",
 "Capturing center clears both limits; steering must be recalibrated after this update",
 "Buggy relays: 1 ignition, 2 starter, 3 front light; relays 4-8 off except in the relay test",
 "Front wheel lock is not fitted on the buggy; its button is disabled",
-"Relay test toggles for all 8 relays in the web UI, ignition OFF only"
+"Relay test toggles for all 8 relays in the web UI, ignition OFF only",
+"Buggy gear is read as a 3-bit code on three inputs; the code is shown in telemetry",
+"Gear sensor codes are calibrated in the web UI: lever in gear, then \"Save as\""
 ]},
 {"version":"1.1.0","date":"2026-10-08","uk":[
 "Нова плата керування Control_v0",

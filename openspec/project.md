@@ -1,7 +1,11 @@
 # Project Context
 
 ## Purpose
-Electronic control system for a quad bike, receiving commands via MAVLink from an ArduPilot (Pixhawk) autopilot and controlling steering, throttle, transmission, and braking systems via an ESP32-S3 microcontroller on the custom `Control_v0` control board.
+Electronic control system for an off-road vehicle, receiving commands via MAVLink from an ArduPilot (Pixhawk) autopilot and controlling steering, throttle, transmission, and braking systems via an ESP32-S3 microcontroller on the custom `Control_v0` control board.
+
+Vehicles: the `aztec` branch targets the **ODES JUNGLECROSS 800 EFI/EPS** buggy on the same
+`Control_v0` board; `master` targets the quad bike. On aztec the transmission servo is a GXservo
+HS-1005SGT 150KG (16.8 V max supply — never on the 24V boost rail).
 
 ## Tech Stack
 - **Platform**: ESP32-S3-WROOM-1U on the custom `Control_v0` control board (see `GPIO_PINOUT_CUSTOM_BOARD_S3.md`)

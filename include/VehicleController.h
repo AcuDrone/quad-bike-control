@@ -357,7 +357,7 @@ private:
     // Input and output references
     MavlinkInterface& mavlink_;
     RelayController& relayController_;
-    BoardInputs& boardInputs_;     // opto inputs (gear switches + brake endstop)
+    BoardInputs& boardInputs_;     // opto inputs (gear code lines + brake endstop)
     SpeedSensor& speedSensor_;     // hall speed sensor (updated from main.cpp)
     EngineHourMeter engineHours_;  // OWNED by value: a counter, not a shared device
     CANController canController_;  // CAN bus controller (owned, not reference)
@@ -565,6 +565,14 @@ private:
      */
     void processSetGearDefaultCommand(const String& gear, float positionPct, WebPortal& webPortal);
     void processMoveToPositionCommand(float positionPct, WebPortal& webPortal);
+
+    /**
+     * @brief Gear code calibration commands (web-only, bench).
+     * `set_gear_code` (value "R"/"N"/"L"/"H") stores the CURRENT live gear code as that
+     * gear's code; `reset_gear_codes` restores the Constants.h defaults. Both are refused
+     * while the engine is running; capture validation lives in TransmissionController.
+     */
+    void processGearCodeCommand(const String& which, const String& gear, WebPortal& webPortal);
     void processBoostTestCommand(bool enable, WebPortal& webPortal);
     void processSetBoostRpmCommand(int32_t rpm, WebPortal& webPortal);
 
