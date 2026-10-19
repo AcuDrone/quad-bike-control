@@ -636,6 +636,7 @@ void MavlinkInterface::report(const StateReport& state) {
         float thrOutVal = (float)state.throttleCmdPct;
         // Digital output states packed as a bitmask (see EFI_DIGITAL_FLAG_* in Constants.h):
         // bit0 = wheel lock, bit1 = front light. Always valid (relay ground-truth), never NaN.
+        // On aztec the wheel lock is not fitted, so bit0 is always 0 (the layout is unchanged).
         float flagsVal = (float)state.digitalFlags;
 
         // One argument per line: 18 same-typed positional floats plus the uint8_t health, so a

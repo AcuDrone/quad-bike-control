@@ -147,6 +147,8 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.is_cranking = (ignitionState == RelayController::IgnitionState::CRANKING);
     telemetry.front_light_on = vehicleController_.getFrontLight();
     telemetry.wheel_lock_on = vehicleController_.getWheelLock();
+    telemetry.wheel_lock_fitted = vehicleController_.isWheelLockFitted();
+    telemetry.relay_test = vehicleController_.getRelayTestBits();
 
     // 24V boost rail and board I/O expander health
     telemetry.rail_24v = vehicleController_.getRail24V();

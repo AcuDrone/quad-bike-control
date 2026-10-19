@@ -318,8 +318,13 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
         processLightCommand(cmd.boolValue, webPortal);
         return;
     } else if (cmd.cmd == "set_wheel_lock") {
-        // Front-wheel lock always available (not restricted by input source)
+        // Front-wheel lock: not restricted by input source; rejected on aztec (not fitted)
         processWheelLockCommand(cmd.boolValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_relay_test") {
+        // Relay wiring test: not restricted by input source; RelayController only
+        // accepts an ON while the ignition is OFF and no function relay is energized
+        processRelayTestCommand(cmd.relay, cmd.boolValue, webPortal);
         return;
     } else if (cmd.cmd == "set_boost") {
         // 24V boost rail always available (guarded: disable needs ignition OFF)
@@ -540,7 +545,7 @@ void VehicleController::processMavlinkCommands() {
     bool frontLightOn = mavlink_.getFrontLight();
     relayController_.setFrontLight(frontLightOn);
 
-    // Apply front-wheel lock (channel 7)
+    // Front-wheel lock (channel 7) — not fitted on aztec; RelayController rejects a LOCK
     relayController_.setWheelLock(mavlink_.getWheelLock());
 }
 
@@ -1097,14 +1102,37 @@ void VehicleController::setFrontLight(bool on) {
     Debug::printfFeature(DebugFeature::VEHICLE, "[LIGHT] Front light: %s\n", on ? "ON" : "OFF");
 }
 
-void VehicleController::setWheelLock(bool locked) {
-    relayController_.setWheelLock(locked);
-    Debug::printfFeature(DebugFeature::VEHICLE, "[WHEEL_LOCK] Front wheels: %s\n", locked ? "LOCKED" : "UNLOCKED");
+bool VehicleController::setWheelLock(bool locked) {
+    bool ok = relayController_.setWheelLock(locked);
+    if (ok) {
+        Debug::printfFeature(DebugFeature::VEHICLE, "[WHEEL_LOCK] Front wheels: %s\n", locked ? "LOCKED" : "UNLOCKED");
+    }
+    return ok;
 }
 
 void VehicleController::processWheelLockCommand(bool locked, WebPortal& webPortal) {
-    setWheelLock(locked);
-    webPortal.sendResponse(true, String("Front wheels ") + (locked ? "LOCKED" : "UNLOCKED"));
+    if (!isWheelLockFitted()) {
+        // Aztec: no relay behind the function — never report a lock as applied.
+        relayController_.setWheelLock(locked);   // logs the rejection once
+        webPortal.sendResponse(false, "Front-wheel lock not fitted on this vehicle");
+        return;
+    }
+    bool ok = setWheelLock(locked);
+    webPortal.sendResponse(ok, ok ? String("Front wheels ") + (locked ? "LOCKED" : "UNLOCKED")
+                                  : String("Wheel lock command rejected"));
+}
+
+void VehicleController::processRelayTestCommand(int32_t relayNumber, bool on, WebPortal& webPortal) {
+    // Out-of-range numbers are folded to 0, which RelayController rejects with the
+    // "must be 1-8" text (a uint8_t cast alone would wrap e.g. 257 onto Relay_1).
+    uint8_t n = (relayNumber >= 1 && relayNumber <= 8) ? (uint8_t)relayNumber : 0;
+    const char* reason = nullptr;
+    bool ok = relayController_.setRelayTest(n, on, reason);
+    if (!ok) {
+        webPortal.sendResponse(false, String("Relay test: ") + (reason ? reason : "rejected"));
+        return;
+    }
+    webPortal.sendResponse(true, String("Relay test: Relay_") + String(n) + (on ? " ON" : " OFF"));
 }
 
 void VehicleController::processBoostCommand(bool on, WebPortal& webPortal) {

@@ -272,16 +272,21 @@ intended home **X15 / I2C2** and answers at 0x1F; every relay function below has
 the bench. **X4..X11 below are the RELAY BOARD's own connectors** — not the main board's X4/X5 Hall
 headers in §3.
 
-| Relay | PCA9557 IO | Port bit | Connector | Function |
+**This is the aztec buggy assignment** (branch `aztec`). The same relay PCB is wired differently on
+the quad bike — ignition on the paired Relay_1 + Relay_2 and a front-wheel lock on the paired
+Relay_5 + Relay_6; that assignment is documented on `master`. The PCB's IO routing below is identical
+on both vehicles.
+
+| Relay | PCA9557 IO | Port bit | Connector | Function (aztec) |
 |-------|-----------|----------|-----------|----------|
-| Relay_1 | **IO4** | `0b00010000` | X4 | Ignition / ECU line — **pair with Relay_2** |
-| Relay_2 | **IO5** | `0b00100000` | X5 | Ignition / ECU line — **pair with Relay_1** |
-| Relay_3 | **IO6** | `0b01000000` | X6 | Starter solenoid |
-| Relay_4 | **IO7** | `0b10000000` | X7 | Front light |
-| Relay_5 | **IO3** | `0b00001000` | X8 | Front-wheel lock — **pair with Relay_6** |
-| Relay_6 | **IO2** | `0b00000100` | X9 | Front-wheel lock — **pair with Relay_5** |
-| Relay_7 | **IO0** | `0b00000001` | X10 | Spare — always driven off |
-| Relay_8 | **IO1** | `0b00000010` | X11 | Spare — always driven off |
+| Relay_1 | **IO4** | `0b00010000` | X4 | Ignition / ECU line (single relay) |
+| Relay_2 | **IO5** | `0b00100000` | X5 | Starter solenoid |
+| Relay_3 | **IO6** | `0b01000000` | X6 | Front light |
+| Relay_4 | **IO7** | `0b10000000` | X7 | Lock A — reserved, off except in the web relay test (function specified in a later change) |
+| Relay_5 | **IO3** | `0b00001000` | X8 | Lock B — reserved, off except in the web relay test (function specified in a later change) |
+| Relay_6 | **IO2** | `0b00000100` | X9 | Lock C — reserved, off except in the web relay test (function specified in a later change) |
+| Relay_7 | **IO0** | `0b00000001` | X10 | Spare — off except in the web relay test |
+| Relay_8 | **IO1** | `0b00000010` | X11 | Spare — off except in the web relay test |
 
 > ⚠ **The PCA9557 IO routing is NOT 1:1 with the relay numbers.** Verified from the `Relay.PrjPcb`
 > schematic netlist: `Relay_1=IO4, Relay_2=IO5, Relay_3=IO6, Relay_4=IO7, Relay_5=IO3, Relay_6=IO2,
@@ -289,21 +294,34 @@ headers in §3.
 > wrong and would fire the starter when the front light is commanded. The firmware encodes this in
 > `RELAY_MASK_*` in `include/Constants.h`, never in per-relay bit indices.
 
-**Duplicate (paralleled) relays are intentional.** Two functions are split across two relay contacts
-that always energize together:
+Each function is still addressed as a whole-port mask (no relay is paired on aztec):
 
 | Function | Mask (`include/Constants.h`) | Value | Relays / IO |
 |----------|------------------------------|-------|-------------|
-| Ignition / ECU line | `RELAY_MASK_IGNITION` | `0b00110000` | Relay_1 (IO4) + Relay_2 (IO5) |
-| Starter | `RELAY_MASK_STARTER` | `0b01000000` | Relay_3 (IO6) |
-| Front light | `RELAY_MASK_FRONT_LIGHT` | `0b10000000` | Relay_4 (IO7) |
-| Front-wheel lock | `RELAY_MASK_WHEEL_LOCK` | `0b00001100` | Relay_5 (IO3) + Relay_6 (IO2) |
-| Spare | — | `0b00000011` | Relay_7 (IO0) + Relay_8 (IO1), always 0 |
+| Ignition / ECU line | `RELAY_MASK_IGNITION` | `0b00010000` | Relay_1 (IO4) |
+| Starter | `RELAY_MASK_STARTER` | `0b00100000` | Relay_2 (IO5) |
+| Front light | `RELAY_MASK_FRONT_LIGHT` | `0b01000000` | Relay_3 (IO6) |
+| Reserved (3 locks + 2 spares) | `RELAY_MASK_RESERVED` | `0b10001111` | Relay_4 (IO7), Relay_5 (IO3), Relay_6 (IO2), Relay_7 (IO0), Relay_8 (IO1) — 0 except in the web relay test |
 
-**Harness wiring note.** The ignition/ECU load is wired to **X4 + X5**, the front-wheel lock to
-**X8 + X9**, the starter solenoid to **X6**, and the front light to **X7**. Nothing is landed on X10
-or X11. The whole 8-bit port is written from a single shadow byte and read back for verification,
-so a paired relay can never be left half-energized by firmware.
+The quad bike's front-wheel lock is **not fitted** on aztec: there is no `RELAY_MASK_WHEEL_LOCK`
+(`RELAY_WHEEL_LOCK_FITTED = 0`). The MAVLink servo channel 7, the web `set_wheel_lock` command and
+telemetry bit0 are kept, but lock requests are rejected and the lock is always reported released /
+not fitted.
+
+**Harness wiring note (aztec).** The ignition/ECU line is wired to **X4**, the starter solenoid to
+**X5**, and the front light to **X6**. **X7, X8 and X9** carry three separate locks whose functions
+are defined in a later change — the firmware drives them off until then. Nothing is landed on X10 or
+X11. The whole 8-bit port is written from a single shadow byte and read back for verification.
+
+**Web relay test (wiring check).** The web UI's *Relay Test* card has an on/off toggle for each of
+the eight relays (`set_relay_test`), so the harness — in particular the three lock relays Relay_4/5/6
+on X7/X8/X9, which have no function yet — can be checked with a multimeter. A relay can be switched
+ON only while the ignition is **OFF** and no function relay (ignition, starter, light) is energized.
+Each test relay switches off by itself after 30 s (`RELAY_TEST_TIMEOUT_MS`); the starter relay
+(Relay_2) after 2 s (`RELAY_TEST_STARTER_MAX_MS`). Any ignition / crank / light-on command, the
+fail-safe all-off and a relay-board fault switch every test relay off immediately. The test bits go
+through the same shadow byte and read-back as the functions; telemetry `relay_test` reports them
+(bit0 = Relay_1 … bit7 = Relay_8).
 
 ---
 
@@ -363,10 +381,11 @@ A separate 7s LiFePO4 battery also exists in the vehicle power system.
      Relay_4=IO7, Relay_5=IO3, Relay_6=IO2, Relay_7=IO0, Relay_8=IO1`, verified from the
      `Relay.PrjPcb` netlist. Never "simplify" the firmware back to `Relay_N = bit N` — that would
      command the starter when the front light is requested. Firmware uses `RELAY_MASK_*`.
-   - Two loads are deliberately split across **paired** relays that switch together: the
-     ignition/ECU line on **X4 + X5** (Relay_1 + Relay_2) and the front-wheel lock on **X8 + X9**
-     (Relay_5 + Relay_6). Starter is **X6** (Relay_3), front light **X7** (Relay_4). X10/X11
-     (Relay_7/Relay_8) stay unconnected and are always written off.
+   - Aztec assignment (the quad bike's paired assignment lives on `master`): ignition/ECU line on
+     **X4** (Relay_1), starter on **X5** (Relay_2), front light on **X6** (Relay_3). X7/X8/X9
+     (Relay_4/5/6) are three separate locks, reserved and written off until a later change;
+     X10/X11 (Relay_7/Relay_8) stay unconnected and are written off. No front-wheel lock. The only
+     exception is the web relay test (§6), ignition OFF only and auto-off after 30 s.
 9. **Driveline speed sensor is on GPIO8 — the X2 6N137 opto input, not a Hall channel.** The fitted
    sensor outputs **12V**; the Hall channels are scaled for 5V (warning 5), while the opto input is
    current-driven and galvanically isolated, so it takes 12V with a single external series resistor.
@@ -422,10 +441,10 @@ A separate 7s LiFePO4 battery also exists in the vehicle power system.
 | `PIN_GEAR_NEUTRAL` | 20 | Opto input **bit 0** (see §5) |
 | `PIN_GEAR_LOW` | 21 | Opto input **bit 6** (see §5) |
 | `PIN_GEAR_HIGH` | 47 | Opto input **bit 7** (see §5) |
-| `PIN_RELAY1` | 36 | Relay board ignition/ECU line — **Relay_1 + Relay_2** (IO4+IO5, `RELAY_MASK_IGNITION`) |
-| `PIN_RELAY2` | 37 | Relay board starter — **Relay_3** (IO6, `RELAY_MASK_STARTER`) |
-| `PIN_RELAY3` | 38 | Relay board front light — **Relay_4** (IO7, `RELAY_MASK_FRONT_LIGHT`) |
-| `PIN_WHEEL_LOCK` | 39 | Relay board front-wheel lock — **Relay_5 + Relay_6** (IO3+IO2, `RELAY_MASK_WHEEL_LOCK`) |
+| `PIN_RELAY1` | 36 | Relay board ignition/ECU line — **Relay_1** (IO4, `RELAY_MASK_IGNITION`; aztec) |
+| `PIN_RELAY2` | 37 | Relay board starter — **Relay_2** (IO5, `RELAY_MASK_STARTER`; aztec) |
+| `PIN_RELAY3` | 38 | Relay board front light — **Relay_3** (IO6, `RELAY_MASK_FRONT_LIGHT`; aztec) |
+| `PIN_WHEEL_LOCK` | 39 | No replacement on aztec — front-wheel lock not fitted (`RELAY_WHEEL_LOCK_FITTED = 0`) |
 | `PIN_STEER_RPWM` / `PIN_STEER_LPWM` | 17 / 18 | Fully released — GPIO17/18 are now MAVLink UART1. The "RESERVED/FREED" placeholders (and `LEDC_CH_STEER_RPWM`/`LEDC_CH_STEER_LPWM`) must be deleted, not kept reserved |
 
 ### New / reworked drivers

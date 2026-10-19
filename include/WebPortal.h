@@ -39,6 +39,7 @@ public:
         String strValue;   // String value (for gear: "R", "N", "L", "H"; ignition: "OFF", "ACC", "IGNITION", "START")
         float floatValue;  // Float value (for steering: -100 to +100, throttle: 0 to 100, brake: 0 to 100)
         bool boolValue;    // Bool value (for light: true/false)
+        int32_t relay;     // Relay number for set_relay_test (JSON "relay", 1..8); 0 if absent
         bool hasCommand;   // True if valid command received
     };
 
@@ -126,7 +127,9 @@ public:
         String ignition_state;    // Ignition state: "OFF", "ACC", "IGNITION", "CRANKING"
         bool is_cranking;         // True if starter motor is cranking
         bool front_light_on;      // True if front light is on
-        bool wheel_lock_on;       // True if front-wheel lock is engaged
+        bool wheel_lock_on;       // True if front-wheel lock is engaged (always false when not fitted)
+        bool wheel_lock_fitted;   // False on aztec: no relay behind the wheel-lock function
+        uint8_t relay_test;       // Web relay test bits, bit0 = Relay_1 … bit7 = Relay_8
 
         // 24V boost rail (Control_v0)
         float rail_24v;           // Measured rail voltage (V, 200K/24K divider)

@@ -527,6 +527,7 @@ bool WebPortal::parseWebCommand(uint8_t* data, size_t len) {
     currentCommand.strValue = "";
     currentCommand.floatValue = 0.0f;
     currentCommand.boolValue = false;
+    currentCommand.relay = doc["relay"] | 0;   // set_relay_test relay number; 0 if absent
     if (doc.containsKey("value")) {
         if (doc["value"].is<bool>()) {
             currentCommand.boolValue = doc["value"].as<bool>();
@@ -550,8 +551,8 @@ bool WebPortal::parseWebCommand(uint8_t* data, size_t len) {
 // ============================================================================
 
 String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
-    // Capacity headroom: 66 top-level fields (incl. 4 steering-VESC fields, 6 dual-AS5600
-    // steering diagnostics, the
+    // Capacity headroom: 68 top-level fields (incl. 4 steering-VESC fields, 6 dual-AS5600
+    // steering diagnostics, wheel_lock_fitted, the relay_test bitfield, the
     // 5 rail / board-I/O fields, the 12 hall-speed / limiter / distance fields and the
     // 4 steering speed-scaling fields) + a 16-element array + the nested probe / po / bm / dtc /
     // gearDefaults objects, plus copied String values. Sized to 4096 to leave room for the
@@ -662,6 +663,8 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["is_cranking"] = telemetry.is_cranking;
     doc["front_light_on"] = telemetry.front_light_on;
     doc["wheel_lock_on"] = telemetry.wheel_lock_on;
+    doc["wheel_lock_fitted"] = telemetry.wheel_lock_fitted;   // false on aztec → UI shows "not fitted"
+    doc["relay_test"] = telemetry.relay_test;   // web relay test, bit0 = Relay_1 … bit7 = Relay_8
 
     // 24V boost rail + board I/O health — emitted unconditionally (independent of
     // CAN / MAVLink status) so a failing expander is always visible.

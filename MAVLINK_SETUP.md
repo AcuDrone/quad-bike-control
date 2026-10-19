@@ -149,7 +149,7 @@ outputs must align with these indices (see `ServoChannelConfig` in `include/Cons
 | `servo3_raw` | Transmission | R <1200, N 1201–1520, L >1520 |
 | `servo4_raw` | Ignition | OFF <1200, ACC 1201–1520, IGNITION >1520 |
 | `servo6_raw` | Front light | >1520 = ON |
-| `servo7_raw` | Front-wheel lock | >1520 = LOCKED |
+| `servo7_raw` | Front-wheel lock — **not fitted on aztec**: decoded but ignored | >1520 = LOCKED (rejected) |
 
 (Channel 5 is intentionally unused.)
 
@@ -299,11 +299,11 @@ which switches on the first character of the gear name):
 
 #### `pt_compensation` bitmask
 
-`EFI_DIGITAL_FLAG_*` in `include/Constants.h:288-289`, assembled in `src/main.cpp`, cast to float:
+`EFI_DIGITAL_FLAG_*` in `include/Constants.h:351-352`, assembled in `src/main.cpp`, cast to float:
 
 | Bit | Mask | Meaning |
 |-----|------|---------|
-| 0 | `0x01` | `EFI_DIGITAL_FLAG_WHEEL_LOCK` — front-wheel lock engaged |
+| 0 | `0x01` | `EFI_DIGITAL_FLAG_WHEEL_LOCK` — front-wheel lock engaged (always 0 on aztec: not fitted) |
 | 1 | `0x02` | `EFI_DIGITAL_FLAG_FRONT_LIGHT` — front light on |
 | 2–7 | — | unassigned, always 0 |
 

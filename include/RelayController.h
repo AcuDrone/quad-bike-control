@@ -7,23 +7,34 @@
 #include "PCA9557Expander.h"
 
 /**
- * @brief Relay controller for ignition, starter, lighting and wheel lock.
+ * @brief Relay controller for ignition, starter and lighting (aztec buggy).
  *
- * Manages relay outputs for vehicle ignition states (OFF/ACC/IGNITION/CRANKING),
- * front light and front-wheel lock. The relays live on the external relay board's
+ * Manages relay outputs for vehicle ignition states (OFF/ACC/IGNITION/CRANKING)
+ * and the front light. The relays live on the external relay board's
  * PCA9557 @ `PCA9557_ADDR_RELAYS` (0x1F, as-shipped strap A2A1A0=111), not on
  * ESP32 GPIO. The bus is chosen by the owner at construction: the board sits on
  * its intended home X15 → I2C2 (`Wire1`), bench-verified. X14 → I2C1 (`Wire`)
  * works too and is the contingency if that header is ever damaged.
  *
- * The board's IO routing is NOT 1:1 (Relay_1=IO4 … Relay_8=IO1), and two functions
- * drive a paralleled PAIR of relays, so each function is a whole-port MASK from
- * `Constants.h` rather than a single bit:
- *   ignition/ECU line = Relay_1 + Relay_2 (RELAY_MASK_IGNITION, two paralleled relays),
- *   starter           = Relay_3           (RELAY_MASK_STARTER),
- *   front light       = Relay_4           (RELAY_MASK_FRONT_LIGHT),
- *   front-wheel lock  = Relay_5 + Relay_6 (RELAY_MASK_WHEEL_LOCK, two paralleled relays),
- *   Relay_7 / Relay_8 = spare (always written off).
+ * The board's IO routing is NOT 1:1 (Relay_1=IO4 … Relay_8=IO1), so each function
+ * is a whole-port MASK from `Constants.h` rather than a relay number. Aztec buggy
+ * assignment (the quad bike's paired assignment lives on master):
+ *   ignition/ECU line = Relay_1 (RELAY_MASK_IGNITION, single relay),
+ *   starter           = Relay_2 (RELAY_MASK_STARTER),
+ *   front light       = Relay_3 (RELAY_MASK_FRONT_LIGHT),
+ *   Relay_4/5/6       = three separate locks, reserved until a later change (always off),
+ *   Relay_7 / Relay_8 = spare (always off)        — together RELAY_MASK_RESERVED.
+ *
+ * Web relay test: any single relay (1..8) can be toggled for a wiring check, but only
+ * while the ignition is OFF and no function relay is energized. Test bits go through
+ * the same shadow byte and verified writePort() as the functions, auto-release after
+ * RELAY_TEST_TIMEOUT_MS (Relay_2 / starter: RELAY_TEST_STARTER_MAX_MS), and are all
+ * cleared immediately by any real ignition/crank/light-on command, allOff(), a
+ * relay-write fault and the starter escalation.
+ *
+ * The quad bike's front-wheel lock is NOT fitted on aztec (RELAY_WHEEL_LOCK_FITTED
+ * = 0): setWheelLock() is kept so the MAVLink/web plumbing compiles, but it rejects
+ * the command (logged once), and getWheelLock() always reports released.
  *
  * The whole 8-bit port is written from a single shadow byte and verified by
  * reading the output register back, because over I2C a write can fail silently
@@ -95,13 +106,53 @@ public:
     void setFrontLight(bool on);
 
     /**
-     * @brief Set front-wheel lock relay state
-     * @param locked true to engage the lock (relay HIGH), false to release
+     * @brief Front-wheel lock request — NOT fitted on the aztec buggy.
+     * @param locked requested lock state
      *
-     * Independent of the ignition relays and deliberately NOT cleared by allOff(),
-     * so the lock holds its last state through a MAVLink failsafe / link drop.
+     * There is no relay behind this function (RELAY_WHEEL_LOCK_FITTED = 0), so the
+     * request is rejected: nothing is written to the port, the reported state stays
+     * "released", and the first LOCK request after boot is logged once.
+     * @return false whenever the request cannot be honoured (always, on this build,
+     *         for a LOCK request); true for a release request (already released)
      */
-    void setWheelLock(bool locked);
+    bool setWheelLock(bool locked);
+
+    /**
+     * @brief Web relay test: energize or release one relay by its board number.
+     * @param relayNumber 1..8 (Relay_N, mapped to its IO bit through relayIoMask())
+     * @param on          true to energize, false to release
+     * @param reason      set to a human-readable error when the request is refused
+     * @return true if applied (or already in the requested state)
+     *
+     * Turning a relay ON is refused unless the expander is available, the ignition is
+     * OFF, no crank is armed and the front light is off. Turning OFF is always accepted
+     * while the expander is available.
+     */
+    bool setRelayTest(uint8_t relayNumber, bool on, const char*& reason);
+
+    /**
+     * @brief Relays currently energized by the web relay test, in relay-number order
+     * (bit0 = Relay_1 … bit7 = Relay_8), derived from the output shadow byte through
+     * the IO routing. 0 while the expander is unavailable.
+     */
+    uint8_t getRelayTestBits() const;
+
+    /** @brief Port mask (IO bit) of relay `relayNumber` (1..8); 0 for any other number */
+    static constexpr uint8_t relayIoMask(uint8_t relayNumber) {
+        // Relay.PrjPcb routing: Relay_1=IO4 Relay_2=IO5 Relay_3=IO6 Relay_4=IO7
+        //                       Relay_5=IO3 Relay_6=IO2 Relay_7=IO0 Relay_8=IO1
+        return relayNumber == 1 ? (uint8_t)(1u << 4) :
+               relayNumber == 2 ? (uint8_t)(1u << 5) :
+               relayNumber == 3 ? (uint8_t)(1u << 6) :
+               relayNumber == 4 ? (uint8_t)(1u << 7) :
+               relayNumber == 5 ? (uint8_t)(1u << 3) :
+               relayNumber == 6 ? (uint8_t)(1u << 2) :
+               relayNumber == 7 ? (uint8_t)(1u << 0) :
+               relayNumber == 8 ? (uint8_t)(1u << 1) : (uint8_t)0;
+    }
+
+    /** @brief True if a relay is wired behind the wheel-lock function (false on aztec) */
+    static constexpr bool isWheelLockFitted() { return RELAY_WHEEL_LOCK_FITTED != 0; }
 
     /**
      * @brief Update cranking state based on engine RPM
@@ -134,9 +185,9 @@ public:
 
     /**
      * @brief Get current front-wheel lock state
-     * @return true if locked
+     * @return always false on aztec (not fitted — see isWheelLockFitted())
      */
-    bool getWheelLock() const { return wheelLockOn_; }
+    bool getWheelLock() const { return false; }
 
     /**
      * @brief True when the relay expander failed to initialize or a port write
@@ -148,8 +199,8 @@ public:
     bool isAvailable() const { return initialized_ && !faulted_; }
 
     /**
-     * @brief Fail-safe: turn ignition and front light OFF.
-     * The front-wheel lock is intentionally left untouched (holds last state).
+     * @brief Fail-safe: turn ignition, starter and front light OFF and release every
+     * web test relay, so all eight relays end up off.
      */
     void allOff();
 
@@ -165,18 +216,38 @@ private:
     // State tracking
     IgnitionState currentIgnitionState_;
     bool frontLightOn_;
-    bool wheelLockOn_;
+    bool wheelLockRejectLogged_;   // the "wheel lock not fitted" message is logged once per boot
 
     // Cranking state tracking
     uint32_t crankingStartTime_;   // Time when cranking started (milliseconds)
     bool isCranking_;              // True if currently in cranking state
 
+    // Web relay test
+    uint8_t testMask_;                 // port bits (IO) energized by the relay test
+    uint32_t testOnSince_[8];          // millis() each test relay (index = relay number - 1) went on
+
     // Pre-crank dwell tracking
-    uint32_t ignitionHighSince_;   // millis() when the ignition/ECU line (Relay_1+Relay_2) went LOW->HIGH; 0 while OFF
+    uint32_t ignitionHighSince_;   // millis() when the ignition/ECU line (Relay_1) went LOW->HIGH; 0 while OFF
     bool crankArmed_;              // True if a dwell-gated crank is pending
 
     /** @brief Recompute the shadow byte from the tracked state and write the port */
     void updateRelays();
+
+    /** @brief Shadow byte for the tracked functions plus the active test bits */
+    uint8_t computeShadow() const;
+
+    /**
+     * @brief Drop every web test bit (no port write — the caller writes next).
+     * @param why logged when any test bit was actually set
+     * @return true if any test bit was set
+     */
+    bool clearRelayTests(const char* why);
+
+    /** @brief Release test relays whose auto-off time has elapsed */
+    void expireRelayTests();
+
+    /** @brief Port bits -> relay-number bitfield (bit0 = Relay_1 … bit7 = Relay_8) */
+    static uint8_t getRelayTestBitsFromMask(uint8_t portBits);
 
     /**
      * @brief Write the whole port and verify it by reading the output register back.
@@ -197,8 +268,8 @@ private:
     /**
      * @brief Set or clear a whole function mask in the shadow byte.
      *
-     * A mask can cover more than one relay (ignition and wheel lock each drive two
-     * paralleled relays), so every bit of the mask moves together.
+     * A mask may cover more than one relay (none do on aztec today, but the quad
+     * bike pairs relays), so every bit of the mask moves together.
      */
     static uint8_t withMask(uint8_t value, uint8_t mask, bool on) {
         return on ? (uint8_t)(value | mask) : (uint8_t)(value & (uint8_t)~mask);

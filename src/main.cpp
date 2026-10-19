@@ -55,7 +55,7 @@ MavlinkInterface mavlinkInterface;
 // Opto-isolated board inputs (gear switches In1-In4, brake endstop In5) on I2C2
 BoardInputs boardInputs(Wire1);
 
-// Relay Controller for ignition, starter, lights and wheel lock — I2C2 @0x1F via X15
+// Relay Controller for ignition, starter and front light (aztec; wheel lock not fitted) — I2C2 @0x1F via X15
 RelayController relayController(Wire1);
 
 // Driveline speed sensor (12V hall via the X2 opto input, PCNT on GPIO8)
@@ -336,6 +336,7 @@ void loop() {
     report.gearMoving   = vehicleController.getTransmission().isGearChangeActive();
     report.ignition     = getRelayIgnitionStateName(vehicleController.getIgnitionState());
     report.failsafe     = (vehicleController.getInputSource() == InputSource::FAILSAFE);
+    // bit0 (wheel lock) is always 0 on aztec: not fitted, getWheelLock() is always false.
     report.digitalFlags = (vehicleController.getWheelLock()  ? EFI_DIGITAL_FLAG_WHEEL_LOCK  : 0)
                         | (vehicleController.getFrontLight() ? EFI_DIGITAL_FLAG_FRONT_LIGHT : 0);
     report.speedValid   = vehicleController.isVehicleSpeedValid();

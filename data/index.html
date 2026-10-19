@@ -713,6 +713,17 @@
                 <div id="throttle-cal-status" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
             </div>
 
+            <!-- Relay Test (wiring check, ignition OFF only) -->
+            <div class="card">
+                <h2 data-i18n="card_relay_test">🧪 Relay Test</h2>
+                <p data-i18n-html="relay_test_help" style="font-size: 0.8em; color: var(--muted-foreground); margin-bottom: 12px;">
+                    Wiring check: toggle one relay at a time. <b>Ignition must be OFF</b> and the light off.
+                    Each relay switches off by itself after 30 s (starter: 2 s); any ignition / light command switches all test relays off.
+                </p>
+                <div id="relay-test-grid" style="display:grid; grid-template-columns: repeat(2, 1fr); gap:6px;"></div>
+                <div id="relay-test-status" style="margin-top: 10px; font-size: 0.8em; color: var(--muted-foreground); min-height: 1.2em;"></div>
+            </div>
+
             <!-- Ignition & Lighting Control -->
             <div class="card">
                 <h2 data-i18n="card_ignition">🔑 Vehicle Ignition & Lighting</h2>
@@ -1160,6 +1171,20 @@
                 driver_fault: 'FAULT',
                 driver_down: 'NO LINK',
 
+                // Relay test card
+                card_relay_test: '🧪 Relay Test',
+                relay_test_help: 'Wiring check: toggle one relay at a time. <b>Ignition must be OFF</b> and the light off. Each relay switches off by itself after 30 s (starter: 2 s); any ignition / light command switches all test relays off.',
+                relay_test_relay: 'Relay %s',
+                relay_fn_1: 'ignition',
+                relay_fn_2: 'starter (max 2 s)',
+                relay_fn_3: 'light',
+                relay_fn_4: 'lock (unassigned)',
+                relay_fn_5: 'lock (unassigned)',
+                relay_fn_6: 'lock (unassigned)',
+                relay_fn_7: 'spare',
+                relay_fn_8: 'spare',
+                relay_test_blocked: 'Available only with ignition OFF, light off and the relay board healthy.',
+
                 // Throttle calibration card
                 card_throttle_cal: '🎚️ Throttle Calibration',
                 throttle_cal_help: 'Sets the idle / full throttle servo endpoints (µs). <b>Engine must be OFF.</b> Press <b>Start</b>, drag a slider — the throttle servo follows live — then <b>Save</b>.',
@@ -1181,6 +1206,7 @@
                 lbl_wheel_lock: 'Wheel Lock:',
                 lock_locked: 'LOCKED',
                 lock_unlocked: 'UNLOCKED',
+                lock_not_fitted: '— not fitted',
                 h_boost_rail: '24V Boost Rail',
                 lbl_boost_rail: '24V Rail:',
                 boost_rail_hint: 'Powers the steering driver - can only be switched off with ignition OFF.',
@@ -1439,6 +1465,19 @@
                 driver_down: 'НЕДОСТУПНИЙ',
 
                 // Throttle calibration card
+                card_relay_test: '🧪 Перевірка реле',
+                relay_test_help: 'Перевірка проводки: вмикайте по одному реле. <b>Запалювання має бути ВИМК</b>, світло вимкнене. Кожне реле вимикається само через 30 с (стартер: 2 с); будь-яка команда запалювання / світла вимикає всі тестові реле.',
+                relay_test_relay: 'Реле %s',
+                relay_fn_1: 'запалювання',
+                relay_fn_2: 'стартер (макс. 2 с)',
+                relay_fn_3: 'світло',
+                relay_fn_4: 'замок (не призначено)',
+                relay_fn_5: 'замок (не призначено)',
+                relay_fn_6: 'замок (не призначено)',
+                relay_fn_7: 'резерв',
+                relay_fn_8: 'резерв',
+                relay_test_blocked: 'Доступно лише при ВИМК запалюванні, вимкненому світлі та справній платі реле.',
+
                 card_throttle_cal: '🎚️ Калібрування дроселя',
                 throttle_cal_help: 'Задає крайні точки серво дроселя: холостий хід / повний газ (µs). <b>Двигун має бути вимкнено.</b> Натисніть <b>Почати</b>, потягніть повзунок — серво дроселя рухається наживо — потім <b>Зберегти</b>.',
                 btn_start_calibration: 'Почати калібрування',
@@ -1459,6 +1498,7 @@
                 lbl_wheel_lock: 'Блок. колеса:',
                 lock_locked: 'ЗАБЛОКОВАНО',
                 lock_unlocked: 'РОЗБЛОКОВАНО',
+                lock_not_fitted: '— не встановлено',
                 h_boost_rail: 'Шина 24В',
                 lbl_boost_rail: 'Шина 24В:',
                 boost_rail_hint: 'Живить драйвер керма - вимикається лише коли запалювання ВИМК.',
@@ -1648,6 +1688,7 @@
             updateWebControlButton(webControlState);
             updateLightButton(lightState);
             updateWheelLockButton(wheelLockState);
+            renderRelayTest();
             updateBoostRailButton(boostRailState);
             const boostStatus = document.getElementById('boost-test-status');
             if (boostStatus) boostStatus.textContent = boostTestActive ? t('on') : t('off');
@@ -1723,6 +1764,7 @@
                 console.log('WebSocket disconnected');
                 wsConnected = false;
                 updateConnectionStatus(false);
+                renderRelayTest();   // no link → relay test toggles disabled
                 // Reconnect after 3 seconds
                 setTimeout(connectWebSocket, 3000);
             };
@@ -1788,6 +1830,11 @@
                     data.message.includes('Capture ') || data.message.startsWith('Jog'))) {
                     steerCenterStatus(data.success ? data.message : t('error_prefix') + data.message,
                                       data.success ? 'var(--success)' : 'var(--danger)');
+                }
+                // Relay test status
+                if (data.message && data.message.startsWith('Relay test')) {
+                    relayTestStatus(data.success ? data.message : t('error_prefix') + data.message,
+                                    data.success ? 'var(--success)' : 'var(--danger)');
                 }
                 // Speed sensor calibration / limiter status
                 if (data.message && (data.message.includes('Pulses/rev') ||
@@ -2005,9 +2052,23 @@
                 lightState = data.front_light_on;
                 updateLightButton(data.front_light_on);
             }
+            // `wheel_lock_fitted: false` (aztec) → the toggle is disabled and shows "not fitted".
+            // Older firmware without the field is treated as fitted.
+            if (data.wheel_lock_fitted !== undefined) {
+                wheelLockFitted = data.wheel_lock_fitted !== false;
+            }
             if (data.wheel_lock_on !== undefined) {
                 wheelLockState = data.wheel_lock_on;
                 updateWheelLockButton(data.wheel_lock_on);
+            }
+
+            // Relay test — the toggles show the firmware's `relay_test` bits (from the relay
+            // shadow byte), never a local guess; ON is offered only with ignition OFF, light
+            // off and a healthy relay board (the firmware enforces the same gate).
+            if (data.relay_test !== undefined) {
+                relayTestBits = data.relay_test;
+                relayTestAllowed = data.ignition_state === 'OFF' && !data.front_light_on && !data.io_relay_fault;
+                renderRelayTest();
             }
 
             // 24V boost rail — the button reflects the commanded state from telemetry,
@@ -2179,7 +2240,13 @@
             const btn = document.getElementById('wheel-lock-btn');
             const status = document.getElementById('wheel-lock-status');
             if (!btn || !status) return;
-            if (locked) {
+            btn.disabled = !wheelLockFitted;
+            btn.style.opacity = wheelLockFitted ? '' : '0.5';
+            btn.style.cursor = wheelLockFitted ? '' : 'not-allowed';
+            if (!wheelLockFitted) {
+                btn.style.background = 'var(--secondary)';
+                status.textContent = t('lock_not_fitted');
+            } else if (locked) {
                 btn.style.background = 'color-mix(in srgb, var(--danger) 65%, black)';  // Red when locked
                 status.textContent = t('lock_locked');
             } else {
@@ -2638,9 +2705,63 @@
         }
 
         let wheelLockState = false;
+        let wheelLockFitted = true;   // from telemetry `wheel_lock_fitted` (false on aztec)
         function toggleWheelLock() {
+            if (!wheelLockFitted) return;   // no relay behind the function on this vehicle
             wheelLockState = !wheelLockState;
             sendCommand('set_wheel_lock', wheelLockState);
+        }
+
+        // ---- Relay test (wiring check; firmware gate: ignition OFF, no function relay on) ----
+        let relayTestBits = 0;          // telemetry `relay_test`: bit0 = Relay_1 … bit7 = Relay_8
+        let relayTestAllowed = false;
+        function renderRelayTest() {
+            const grid = document.getElementById('relay-test-grid');
+            if (!grid) return;
+            if (!grid.children.length) {
+                for (let n = 1; n <= 8; n++) {
+                    const btn = document.createElement('button');
+                    btn.className = 'upload-btn';
+                    btn.id = 'relay-test-' + n;
+                    btn.style.margin = '0';
+                    btn.style.fontSize = '0.85em';
+                    btn.onclick = () => toggleRelayTest(n);
+                    grid.appendChild(btn);
+                }
+            }
+            for (let n = 1; n <= 8; n++) {
+                const btn = document.getElementById('relay-test-' + n);
+                const on = (relayTestBits & (1 << (n - 1))) !== 0;
+                // An energized test relay can always be switched off; ON needs the gate.
+                const enabled = wsConnected && (on || relayTestAllowed);
+                btn.disabled = !enabled;
+                btn.style.opacity = enabled ? '' : '0.5';
+                btn.style.background = on ? 'color-mix(in srgb, var(--warning) 60%, black)' : 'var(--secondary)';
+                btn.textContent = t('relay_test_relay', n) + ' — ' + t('relay_fn_' + n) + ': ' + (on ? t('on') : t('off'));
+            }
+            const status = document.getElementById('relay-test-status');
+            if (status && !status.dataset.msg) {
+                status.textContent = relayTestAllowed ? '' : t('relay_test_blocked');
+            }
+        }
+        function toggleRelayTest(n) {
+            if (!wsConnected) return;
+            const on = (relayTestBits & (1 << (n - 1))) === 0;
+            // No optimistic update: telemetry `relay_test` is the source of truth.
+            ws.send(JSON.stringify({ cmd: 'set_relay_test', relay: n, value: on }));
+        }
+        function relayTestStatus(msg, color) {
+            const status = document.getElementById('relay-test-status');
+            if (!status) return;
+            status.textContent = msg;
+            status.style.color = color;
+            status.dataset.msg = '1';
+            clearTimeout(relayTestStatus._t);
+            relayTestStatus._t = setTimeout(() => {
+                delete status.dataset.msg;
+                status.style.color = 'var(--muted-foreground)';
+                renderRelayTest();
+            }, 5000);
         }
 
         // ---- 24V boost rail (guarded: disable refused unless ignition is OFF) ----

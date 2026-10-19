@@ -312,16 +312,26 @@ public:
     bool getFrontLight() const { return relayController_.getFrontLight(); }
 
     /**
-     * @brief Set front-wheel lock state
+     * @brief Set front-wheel lock state (NOT fitted on aztec — a LOCK is rejected)
      * @param locked true to engage the lock, false to release
+     * @return false if the request could not be honoured
      */
-    void setWheelLock(bool locked);
+    bool setWheelLock(bool locked);
 
     /**
      * @brief Get current front-wheel lock state
-     * @return true if locked
+     * @return true if locked (always false on aztec)
      */
     bool getWheelLock() const { return relayController_.getWheelLock(); }
+
+    /** @brief True if the front-wheel lock is fitted (false on aztec) */
+    bool isWheelLockFitted() const { return RelayController::isWheelLockFitted(); }
+
+    /**
+     * @brief Web relay test state, relay-number order (bit0 = Relay_1 … bit7 = Relay_8),
+     * from the relay output shadow. Published in telemetry as `relay_test`.
+     */
+    uint8_t getRelayTestBits() const { return relayController_.getRelayTestBits(); }
 
     /**
      * @brief Get current boost RPM target (NVS-backed, runtime-editable)
@@ -508,6 +518,16 @@ private:
      * @param webPortal Reference to web portal for sending responses
      */
     void processWheelLockCommand(bool locked, WebPortal& webPortal);
+
+    /**
+     * @brief Process the web relay test command (`set_relay_test`).
+     * Toggles one relay (1..8) for a wiring check. Not gated by input source — the
+     * gate is in RelayController: ON only with ignition OFF and no function relay on.
+     * @param relayNumber relay 1..8 (anything else is rejected)
+     * @param on true to energize, false to release
+     * @param webPortal Reference to web portal for sending responses
+     */
+    void processRelayTestCommand(int32_t relayNumber, bool on, WebPortal& webPortal);
 
     /**
      * @brief Process the 24V boost rail command (`set_boost`).

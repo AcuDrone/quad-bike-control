@@ -18,12 +18,18 @@ static const char CHANGELOG_JSON[] = R"JSON({"releases":[
 "Кермо баггі: два датчики AS5600, положення на кілька обертів керма",
 "Положення керма відновлюється після ввімкнення без пошуку нуля",
 "Будь-яка помилка датчиків керма зупиняє кермо",
-"Фіксація центру скидає обидві межі; після оновлення потрібне повторне калібрування керма"
+"Фіксація центру скидає обидві межі; після оновлення потрібне повторне калібрування керма",
+"Реле баггі: 1 — запалювання, 2 — стартер, 3 — фара; реле 4–8 вимкнені (крім перевірки реле)",
+"Блокування переднього колеса на баггі не встановлене — кнопка вимкнена",
+"Перевірка всіх 8 реле у веб-інтерфейсі, лише при вимкненому запалюванні"
 ],"en":[
 "Buggy steering: two AS5600 sensors, multi-turn steering position",
 "Steering position is recovered at power-up without homing",
 "Any steering sensor fault stops the steering",
-"Capturing center clears both limits; steering must be recalibrated after this update"
+"Capturing center clears both limits; steering must be recalibrated after this update",
+"Buggy relays: 1 ignition, 2 starter, 3 front light; relays 4-8 off except in the relay test",
+"Front wheel lock is not fitted on the buggy; its button is disabled",
+"Relay test toggles for all 8 relays in the web UI, ignition OFF only"
 ]},
 {"version":"1.1.0","date":"2026-10-08","uk":[
 "Нова плата керування Control_v0",

@@ -166,16 +166,36 @@
 //     Relay_1=IO4  Relay_2=IO5  Relay_3=IO6  Relay_4=IO7
 //     Relay_5=IO3  Relay_6=IO2  Relay_7=IO0  Relay_8=IO1
 //
-// Two functions drive a PAIR of relays that always energize together (the load is
-// split across two contacts in the harness), so each function is a whole-port MASK,
-// not a single bit.
-#define RELAY_MASK_IGNITION     0b00110000  // Relay_1 (IO4, X4) + Relay_2 (IO5, X5) — ignition/ECU line, paralleled pair
-#define RELAY_MASK_STARTER      0b01000000  // Relay_3 (IO6, X6) — starter solenoid
-#define RELAY_MASK_FRONT_LIGHT  0b10000000  // Relay_4 (IO7, X7) — front light
-#define RELAY_MASK_WHEEL_LOCK   0b00001100  // Relay_5 (IO3, X8) + Relay_6 (IO2, X9) — front-wheel lock, paralleled pair
-// Relay_7 (IO0, X10) and Relay_8 (IO1, X11) are spare: mask 0b00000011 is always
-// written 0. Connectors X4..X11 above are the RELAY BOARD's connectors, not the
+// AZTEC BUGGY assignment (this branch). The quad bike's assignment — ignition on the
+// paralleled pair Relay_1+Relay_2 and the front-wheel lock on Relay_5+Relay_6 — lives
+// on master; the aztec harness is wired differently. Every function is still a
+// whole-port MASK (not a bare bit) so a future paired load needs no driver change.
+#define RELAY_MASK_IGNITION     0b00010000  // Relay_1 (IO4, X4) — ignition/ECU line (single relay)
+#define RELAY_MASK_STARTER      0b00100000  // Relay_2 (IO5, X5) — starter solenoid
+#define RELAY_MASK_FRONT_LIGHT  0b01000000  // Relay_3 (IO6, X6) — front light
+// Relay_4 (IO7, X7), Relay_5 (IO3, X8) and Relay_6 (IO2, X9) are wired to three
+// SEPARATE locks whose functions are specified in a later change; until then they
+// are reserved and always driven OFF. Relay_7 (IO0, X10) and Relay_8 (IO1, X11) are
+// spare. Outside the web relay test (below) RELAY_MASK_RESERVED is never set by the
+// driver — every port write leaves these bits 0. Connectors X4..X11 here are the RELAY BOARD's connectors, not the
 // main board's X4/X5 Hall headers.
+#define RELAY_MASK_RESERVED     0b10001111  // Relay_4 (IO7) | Relay_5 (IO3) | Relay_6 (IO2) | Relay_7 (IO0) | Relay_8 (IO1)
+
+// Web relay test (bench wiring check). Any of the eight relays can be toggled from the
+// web UI, but ONLY while the ignition is OFF and no real function relay is energized;
+// the per-relay number -> IO bit lookup lives in RelayController (relayIoMask()). A
+// test relay is the only way a RELAY_MASK_RESERVED bit is ever written 1. Every test
+// bit auto-releases after RELAY_TEST_TIMEOUT_MS; the starter relay (Relay_2) is capped
+// much shorter so a test cannot crank the engine for long.
+#define RELAY_TEST_TIMEOUT_MS      30000UL  // ms a test relay stays on before auto-off
+#define RELAY_TEST_STARTER_MAX_MS  2000UL   // ms cap for a Relay_2 (starter) test
+
+// The quad bike's front-wheel lock is NOT fitted on the aztec buggy, so there is
+// deliberately no RELAY_MASK_WHEEL_LOCK. The MAVLink servo channel
+// (ServoChannelConfig::WHEEL_LOCK), the web `set_wheel_lock` command and the
+// EFI_DIGITAL_FLAG_WHEEL_LOCK telemetry bit stay in place, but RelayController
+// rejects lock commands and reports the lock as released + not fitted.
+#define RELAY_WHEEL_LOCK_FITTED 0           // 0 = no relay behind the wheel-lock function
 
 // Expander timing / fault policy
 #define BOARD_INPUT_POLL_MS        25    // ms between opto-input polls
@@ -244,7 +264,7 @@ struct ServoChannelConfig {
     static constexpr uint8_t TRANSMISSION = 3;  // Gear selector (3 positions: R/N/L)
     static constexpr uint8_t IGNITION = 4;      // Ignition state (OFF/ACC/IGNITION)
     static constexpr uint8_t FRONT_LIGHT = 6;   // Front light (on/off)
-    static constexpr uint8_t WHEEL_LOCK  = 7;   // Front-wheel lock (on/off)
+    static constexpr uint8_t WHEEL_LOCK  = 7;   // Front-wheel lock (on/off) — decoded but NOT fitted on aztec (RELAY_WHEEL_LOCK_FITTED)
 };
 
 // MAVLink transport / link parameters
@@ -337,7 +357,7 @@ struct ServoChannelConfig {
 // Digital output states reported back to the GCS as a bitmask carried in
 // EFI_STATUS.pt_compensation (float). MUST stay in sync with the MP plugin decode.
 // bit2+ reserved for future digital outputs.
-#define EFI_DIGITAL_FLAG_WHEEL_LOCK  0x01  // bit0 — front-wheel lock engaged
+#define EFI_DIGITAL_FLAG_WHEEL_LOCK  0x01  // bit0 — front-wheel lock engaged (always 0 on aztec: not fitted)
 #define EFI_DIGITAL_FLAG_FRONT_LIGHT 0x02  // bit1 — front light on
 
 // ============================================================================
