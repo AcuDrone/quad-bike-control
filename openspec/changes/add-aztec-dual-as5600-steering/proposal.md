@@ -23,7 +23,7 @@ longer give an absolute steering position. Today's firmware assumes less than 36
   agree. If the two sensors disagree by more than a quarter turn, the firmware treats it as a sensor
   fault (a mismatch).
 - **Continuous consistency check** between the two sensors while running. A mismatch that persists
-  is a sensor fault that latches until the centre is re-captured or the system reboots.
+  is a sensor fault that latches until the calibration is completed again or the system reboots.
 - **Boot centering fixed**: the move to centre is deferred until the VESC link is up (it was always
   rejected in `setup()` before), and dropped if that takes longer than a few seconds.
 - **Fault policy (unchanged in spirit)**: any fault on either sensor stops the motor and rejects
@@ -34,9 +34,11 @@ longer give an absolute steering position. Today's firmware assumes less than 36
   captures and checks it: the limits must be on opposite sides of centre, both sensors must move
   together in one direction, the ratio must give enough resolution, the coarse sensor must have an
   unused gap, and the centre capture must fall on the line through the two limits.
-- **Calibration flow, BREAKING**: capturing the centre now clears both limits and starts a
-  calibration session. A limit can be captured only while that session is still running, or when
-  the steering is already fully calibrated.
+- **Calibration flow, BREAKING**: the centre, left and right points can be captured in any order;
+  each button records only its own point and clears nothing else. The calibration is checked and
+  saved automatically once all three points are set. All three must be captured within one
+  power-on: a reboot or a sensor fault discards unfinished points. On a vehicle whose stored
+  calibration and absolute turn are trusted, a single point can be re-captured.
 - **`AS5600Sensor` becomes bus-agnostic** (it takes a `TwoWire&`). Only the fine sensor's driver
   may tear down and restart its own bus (`Wire`), which it has to itself. The coarse sensor never
   restarts `Wire1`. A **coordinated I2C2 recovery** owned by `main.cpp` restarts `Wire1` only when
@@ -49,8 +51,11 @@ longer give an absolute steering position. Today's firmware assumes less than 36
   - These fields change meaning: `steer_position`, `steer_left` and `steer_right` are now
     fine-sensor counts measured from the centre (unwrapped), and `steer_center` is `0` or `null`.
     "Unset" is now `null` instead of `-1`, because positions can now be negative.
+    While calibration points are pending they show the captured points (relative to the centre
+    point, or to the first point captured when there is no centre yet).
   - New diagnostic fields: `steer_fine_raw`, `steer_coarse_raw`, `steer_turn`, `steer_ratio`,
-    `steer_residual` and `steer_sensor_fault`.
+    `steer_residual` and `steer_sensor_fault`; calibration progress fields `steer_cal_points`,
+    `steer_cal_error` and `steer_cal_lost`.
   - MAVLink `STEER_POS` keeps its meaning (percent of calibrated travel). It is now valid only while
     both sensors are healthy and agree.
 - **Docs and version**:

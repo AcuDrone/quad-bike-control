@@ -29,10 +29,10 @@ The system SHALL provide steering control through the steering motor driver (`IM
 
 #### Scenario: Calibrate steering positions
 - **WHEN** steering calibration is triggered via web portal
-- **THEN** the system SHALL allow jogging and nudging the actuator left/right and capturing center, left limit and right limit with the existing three capture commands
+- **THEN** the system SHALL allow jogging and nudging the actuator left/right and capturing center, left limit and right limit with the existing three capture commands, in any order
 - **AND** each capture SHALL record both the fine-sensor position and the coarse-sensor raw angle
 - **AND** captured values SHALL be validated (left and right on opposite sides of center, minimum span, and the derived coarse-to-fine ratio checks)
-- **AND** calibration values SHALL be saved to NVS
+- **AND** calibration values SHALL be saved to NVS once all three points are set and accepted
 - **AND** calibration SHALL persist across reboots
 
 #### Scenario: Steering position wrap handling
@@ -85,7 +85,8 @@ The steering controller SHALL derive the steering position from a fine AS5600 on
 - **THEN** the residual between the tracked fine position and the coarse-derived expected position SHALL be computed
 - **AND** a residual beyond `STEER_SENSOR_MISMATCH_COUNTS` on `STEER_SENSOR_FAULT_DEBOUNCE` consecutive coarse samples SHALL raise a mismatch fault (motor stopped, commands rejected)
 - **AND** the mismatch fault SHALL be latched: the combined sensor state SHALL stay invalid and the fault reason SHALL stay `mismatch` even if later samples agree
-- **AND** the latch SHALL be cleared only by a successful center capture or a reboot
+- **AND** the latch SHALL be cleared only by a completed calibration (all three points captured in the current power-on and accepted) or a reboot
+- **AND** a single capture SHALL NOT clear the latch, because points are not pre-filled from the stored calibration while a mismatch is latched
 
 #### Scenario: Per-sensor fault debounce
 - **WHEN** a sample from either sensor has a failed I2C read or a cleared magnet-detect bit
@@ -102,25 +103,37 @@ The steering controller SHALL derive the steering position from a fine AS5600 on
 ### Requirement: Dual-Sensor Steering Calibration
 The steering controller SHALL capture both sensors at each calibration point, derive the coarse-to-fine ratio itself, validate the geometry, and persist the calibration in NVS namespace `"steering"` under keys distinct from the single-sensor layout.
 
-#### Scenario: Capture center starts a calibration session
-- **WHEN** the center is captured while both sensors are healthy
-- **THEN** the turn counter SHALL be set to zero
-- **AND** the fine raw angle and the coarse raw angle SHALL be stored as the center pair
-- **AND** both limits SHALL be cleared, leaving the steering not calibrated
-- **AND** a latched mismatch fault SHALL be cleared
-- **AND** a calibration session SHALL be opened
+#### Scenario: Capture a calibration point in any order
+- **WHEN** the center, the left limit or the right limit is captured while both sensors are individually healthy and the fine sample is fresh
+- **THEN** the current session position (fine raw + 4096 × fine-sensor wraps counted since boot) and the coarse raw angle SHALL be recorded as that point only
+- **AND** no other recorded point SHALL be cleared, and capturing the same point again SHALL replace it
+- **AND** the steering motor SHALL be stopped
+- **AND** a limit closer than `STEER_CAL_MIN_SPAN` to a recorded center, or a center that close to a recorded limit, SHALL be refused with a "too close" reason
+- **AND** a capture SHALL be refused with "sensor fault" while either sensor is faulted or the fine sample is stale
+- **AND** a fine/coarse mismatch or an unrecovered turn SHALL NOT block a capture
 
-#### Scenario: Capture a limit
-- **WHEN** a left or right limit is captured while both sensors are healthy
-- **AND** a calibration session is open or the steering is already fully calibrated
-- **THEN** the current unwrapped fine position (relative to center) and the coarse raw angle SHALL be stored as that limit pair
-- **AND** the calibration SHALL be re-validated and persisted
-- **AND** the capture SHALL be refused when neither condition holds, because the absolute turn is unknown
+#### Scenario: Calibration completes when all three points are set
+- **WHEN** a capture leaves the center, left and right points all recorded
+- **THEN** the calibration SHALL be derived from them (center raw = center session position mod 4096, limits = point − center, coarse values as recorded) and validated
+- **AND** if accepted it SHALL become the active calibration, the turn counter SHALL be set so that the position equals the session position minus the center point, the turn SHALL count as recovered, any mismatch (latched or not) SHALL be cleared, and the calibration SHALL be persisted
+- **AND** if rejected, nothing SHALL be persisted, the previously active calibration SHALL stay in force, the recorded points SHALL be kept so the wrong one can be re-captured, and the failed check SHALL be reported
 
-#### Scenario: Calibration session ends on fault or reboot
-- **WHEN** a sensor fault is declared or the system reboots during an incomplete calibration
-- **THEN** the calibration session SHALL end
-- **AND** a later limit capture SHALL be refused until the center is captured again
+#### Scenario: Re-capture one point on a calibrated vehicle
+- **WHEN** the stored calibration is complete and valid, the absolute turn is recovered and no mismatch is present or latched
+- **AND** a single point is captured
+- **THEN** the other points SHALL be taken from the stored calibration, expressed in the session frame
+- **AND** the calibration SHALL be re-validated and, if accepted, persisted with only that point changed
+
+#### Scenario: All points required when the turn is not trusted
+- **WHEN** the steering is not calibrated, the turn is not yet recovered, or a mismatch is latched
+- **THEN** no point SHALL be taken from the stored calibration
+- **AND** the calibration SHALL change only after all three points are captured in the current power-on
+
+#### Scenario: Unfinished points discarded on fault or reboot
+- **WHEN** the system reboots, or a fine or coarse sensor fault is declared, or a runtime mismatch latches, before a calibration is completed
+- **THEN** all recorded but unfinished points SHALL be discarded
+- **AND** only complete calibrations SHALL be persisted and loaded
+- **AND** a discard caused by a sensor fault SHALL be reported in telemetry until the next capture
 
 #### Scenario: Derived ratio and geometry validation
 - **WHEN** center, left and right pairs are all present
@@ -132,7 +145,7 @@ The steering controller SHALL capture both sensors at each calibration point, de
   - the unused coarse gap is at least `STEER_COARSE_MIN_GAP`
   - the center pair lies within `STEER_CAL_LINEARITY_COUNTS` of the line through the two limit pairs
 - **AND** the ratio, seam and direction SHALL be derived values recomputed on load and SHALL NOT be stored
-- **AND** a rejected calibration SHALL leave the steering not calibrated and SHALL report the failed check
+- **AND** a rejected stored calibration SHALL leave the steering not calibrated, and a rejected set of captured points SHALL report the failed check
 
 #### Scenario: New NVS layout replaces the single-sensor keys
 - **WHEN** calibration is saved

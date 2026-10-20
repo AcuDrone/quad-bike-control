@@ -1220,17 +1220,28 @@ void VehicleController::processSteerCalCommand(const String& which, WebPortal& w
         webPortal.sendResponse(false, "Capture " + what + " failed: " + String(reason ? reason : "unknown"));
         return;
     }
-    // Both sensors are recorded at every capture: fine position (counts from center,
-    // unwrapped) + coarse raw angle.
-    String saved = "Steering " + what + " saved: pos=" + String(steering_.getLastCapturePos()) +
+    // Both sensors are recorded at every capture: fine position (display frame:
+    // counts from the center point, or from the first point while no center is
+    // recorded) + coarse raw angle. Points may be captured in any order.
+    String saved = "Steering " + what + " recorded: pos=" + String(steering_.getLastCapturePos()) +
                    ", coarse=" + String(steering_.getLastCaptureCoarse());
     const char* calError = steering_.getCalError();
     if (calError) {
-        // The capture is persisted, but the geometry/ratio check rejected the calibration.
-        webPortal.sendResponse(false, saved + " — calibration rejected: " + String(calError));
+        // All three points are set but the geometry/ratio check rejected them:
+        // nothing is saved, the points are kept so the bad one can be re-captured.
+        webPortal.sendResponse(false, saved + " — calibration rejected: " + String(calError) +
+                                      " (re-capture the wrong point)");
         return;
     }
-    webPortal.sendResponse(true, saved + (steering_.isCalibrated() ? "" : " (calibration incomplete)"));
+    if (!steering_.isCalPending()) {
+        webPortal.sendResponse(true, saved + " — calibration complete and saved");
+        return;
+    }
+    String missing;
+    if (!steering_.hasCalPoint(SteeringController::CAL_LEFT))   missing += " left";
+    if (!steering_.hasCalPoint(SteeringController::CAL_CENTER)) missing += " center";
+    if (!steering_.hasCalPoint(SteeringController::CAL_RIGHT))  missing += " right";
+    webPortal.sendResponse(true, saved + " (calibration incomplete, still needed:" + missing + ")");
 }
 
 void VehicleController::processSteerJogCommand(float value, WebPortal& webPortal) {

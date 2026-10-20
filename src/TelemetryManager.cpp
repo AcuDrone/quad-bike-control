@@ -70,12 +70,20 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.steering_pct = (int)vehicleController_.getSteeringPercent();
     const SteeringController& steering = vehicleController_.getSteering();
     // One frame: unwrapped fine counts from the captured center, sensor direction
-    telemetry.steer_position = steering.getPosition();
-    telemetry.steer_center_set = steering.hasCenter();
-    telemetry.steer_left = steering.getLeftLimit();
-    telemetry.steer_left_set = (telemetry.steer_left != SteeringController::POS_UNSET);
-    telemetry.steer_right = steering.getRightLimit();
-    telemetry.steer_right_set = (telemetry.steer_right != SteeringController::POS_UNSET);
+    // Display frame: while calibration points are pending, the session points
+    // relative to the center point (or the first point captured when no center
+    // is recorded yet); otherwise the stored calibration (see getDisplayPoint()).
+    telemetry.steer_position = steering.getDisplayPosition();
+    telemetry.steer_center = 0;
+    telemetry.steer_center_set = steering.getDisplayPoint(SteeringController::CAL_CENTER, telemetry.steer_center);
+    telemetry.steer_left_set = steering.getDisplayPoint(SteeringController::CAL_LEFT, telemetry.steer_left);
+    telemetry.steer_right_set = steering.getDisplayPoint(SteeringController::CAL_RIGHT, telemetry.steer_right);
+    telemetry.steer_cal_points = "";
+    if (steering.hasCalPoint(SteeringController::CAL_LEFT))   telemetry.steer_cal_points += 'L';
+    if (steering.hasCalPoint(SteeringController::CAL_CENTER)) telemetry.steer_cal_points += 'C';
+    if (steering.hasCalPoint(SteeringController::CAL_RIGHT))  telemetry.steer_cal_points += 'R';
+    telemetry.steer_cal_error = steering.getCalError();
+    telemetry.steer_cal_lost = steering.isCalSessionLost();
     telemetry.steer_fine_raw = steering.getFineRaw();
     telemetry.steer_coarse_raw = steering.getCoarseRaw();
     telemetry.steer_turn = steering.getTurn();

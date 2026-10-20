@@ -63,11 +63,14 @@ public:
         uint16_t throttle_full_us;    // Calibrated full-throttle endpoint (µs)
         bool throttle_calibrating;    // True while a throttle calibration session is active
         int steering_pct;         // Steering percentage (-100 to +100)
-        // Steering position — ONE frame: unwrapped fine-AS5600 counts relative to the
-        // captured center, sensor direction (relative to the boot fine sample when no
-        // center is captured). Positions may be negative, so "unset" is JSON null.
+        // Steering position — ONE display frame: unwrapped fine-AS5600 counts in
+        // sensor direction, relative to the calibrated center; while calibration
+        // points are pending, relative to the center point (or to the first point
+        // captured when no center is recorded yet); relative to the boot fine sample
+        // when nothing is set. Positions may be negative, so "unset" is JSON null.
         int32_t steer_position;   // Current unwrapped fine position
-        bool steer_center_set;    // Center captured -> steer_center = 0, else null
+        int32_t steer_center;     // Center point: always 0 (the frame is relative to it whenever it is set)
+        bool steer_center_set;    // Center set -> steer_center, else null
         int32_t steer_left;       // Left limit position, valid only if steer_left_set
         bool steer_left_set;
         int32_t steer_right;      // Right limit position, valid only if steer_right_set
@@ -81,6 +84,9 @@ public:
         const char* steer_sensor_fault; // none | fine_i2c | fine_magnet | coarse_i2c | coarse_magnet | mismatch | recovering
         bool steer_sensor_ok;     // Both sensors healthy and, when calibrated, turn recovered without mismatch
         bool steer_calibrated;    // True when center + both limits are valid
+        String steer_cal_points;  // Pending calibration points this power cycle: subset of "LCR" ("" = none pending)
+        const char* steer_cal_error; // Last finalization rejected (all 3 points set): failed check, nullptr = none
+        bool steer_cal_lost;      // Unfinished points were discarded by a sensor fault (until the next capture)
 
         // Steering VESC driver telemetry
         float steer_motor_current; // Steering motor current (A) from the VESC

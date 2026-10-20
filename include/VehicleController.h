@@ -543,8 +543,9 @@ private:
 
     /**
      * @brief Steering calibration commands (web-only).
-     * Capture commands persist the current fine position + coarse raw angle (both
-     * AS5600s) as center/left/right; capturing center clears both limits;
+     * Capture commands record the current fine position + coarse raw angle (both
+     * AS5600s) as the center/left/right point, in any order; the calibration is
+     * validated and persisted once all three points are set;
      * jog drives the actuator open-loop (momentary, sign = direction, |value| = duty);
      * nudge fires one short slow pulse for precise positioning.
      */

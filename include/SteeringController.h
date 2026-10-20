@@ -26,14 +26,21 @@
  * from the coarse sensor, accepted only after STEER_TURN_RECOVER_SAMPLES
  * consecutive coarse polls agree on it. While calibrated the two sensors are
  * cross-checked on every coarse sample; a persistent disagreement LATCHES a
- * mismatch fault that only a center capture or a reboot clears. Any fault on
+ * mismatch fault that only a completed calibration or a reboot clears. Any fault on
  * either sensor (I2C failure, magnet lost, or fine/coarse mismatch) stops the
  * motor and rejects commands; there is no single-sensor degraded mode.
  *
  * Calibration (NVS namespace "steering", keys cal_ver/fc_raw/cc_raw/fl_pos/
- * cl_raw/fr_pos/cr_raw): capturing the center zeroes the turn, clears both limits
- * and opens a calibration session; limits may be captured only while that
- * session is open or while the steering is already fully calibrated.
+ * cl_raw/fr_pos/cr_raw): the center, left and right captures may be made in ANY
+ * order. Each capture records only its own point (unwrapped fine position in a
+ * session frame counted from boot + coarse raw) into a session slot; nothing is
+ * cleared by another capture. Once all three slots are set the calibration is
+ * validated and, if accepted, becomes active and is persisted (only complete
+ * calibrations are stored). The session frame needs fine-sensor continuity, so a
+ * reboot or a sensor fault (fine/coarse fault, latched mismatch) discards the
+ * slots of an unfinished calibration. When the stored calibration is complete
+ * and its absolute turn is trusted, empty slots are pre-filled from it, so a
+ * single point can be re-captured on an already calibrated vehicle.
  */
 class SteeringController {
 public:
@@ -113,21 +120,25 @@ public:
      */
     void nudge(int8_t direction);
 
+    /** @brief Calibration point / session slot index */
+    enum CalPoint : uint8_t { CAL_LEFT = 0, CAL_CENTER = 1, CAL_RIGHT = 2, CAL_POINTS = 3 };
+
     /**
-     * @brief Capture the center pair (fine raw + coarse raw). Requires both
-     * sensors healthy. Zeroes the turn counter, CLEARS both limits, clears a
-     * latched mismatch, opens a calibration session and persists to NVS.
-     * @return true if captured and saved (else see getCaptureError())
+     * @brief Record the center point (session fine position + coarse raw) into
+     * its session slot. Requires both sensors healthy and a fresh fine sample (a
+     * mismatch does not block: completing a calibration is the way out of it).
+     * Must be at least STEER_CAL_MIN_SPAN away from an already recorded limit.
+     * Clears nothing else. When all three slots are set the calibration is
+     * finalized (validated, activated, persisted); a rejected finalization keeps
+     * the slots and getCalError() names the failed check.
+     * @return true if the point was recorded (else see getCaptureError())
      */
     bool captureCenter();
 
     /**
-     * @brief Capture a limit pair (unwrapped fine position + coarse raw). Requires
-     * both sensors healthy and an open calibration session or a complete
-     * calibration; must be at least STEER_CAL_MIN_SPAN from center. The capture
-     * is persisted even if the calibration is still incomplete or is rejected by
-     * the geometry checks (then getCalError() names the failed check).
-     * @return true if captured and saved (else see getCaptureError())
+     * @brief Record a limit point into its session slot; same rules as
+     * captureCenter(), and at least STEER_CAL_MIN_SPAN away from a recorded center.
+     * @return true if the point was recorded (else see getCaptureError())
      */
     bool captureLeftLimit();
     bool captureRightLimit();
@@ -135,10 +146,40 @@ public:
     /** @brief Why the last capture was refused (nullptr if it was accepted) */
     const char* getCaptureError() const { return captureError_; }
 
-    /** @brief Failed calibration check, or nullptr when valid or still incomplete */
-    const char* getCalError() const { return calError_; }
+    /**
+     * @brief Failed check of the last finalization attempt (all three points set
+     * but rejected), or nullptr. Cleared by the next capture and when the
+     * session is discarded.
+     */
+    const char* getCalError() const { return sessionError_; }
 
-    /** @brief Fine position / coarse raw recorded by the last successful capture */
+    /** @brief True while at least one session point is recorded (unfinished or rejected calibration) */
+    bool isCalPending() const { return calSlot_[CAL_LEFT].valid || calSlot_[CAL_CENTER].valid || calSlot_[CAL_RIGHT].valid; }
+
+    /** @brief True if session point p is recorded */
+    bool hasCalPoint(CalPoint p) const { return p < CAL_POINTS && calSlot_[p].valid; }
+
+    /** @brief True if unfinished session points were discarded by a sensor fault (cleared by the next capture) */
+    bool isCalSessionLost() const { return calLost_; }
+
+    /**
+     * @brief Position shown to the operator: while session points are pending,
+     * in the session display frame (see getDisplayPoint()); otherwise getPosition().
+     */
+    int32_t getDisplayPosition() const;
+
+    /**
+     * @brief Calibration point shown to the operator, in the same frame as
+     * getDisplayPosition(). While session points are pending these are the
+     * session points relative to the center point when it is recorded, otherwise
+     * relative to the FIRST recorded point (so the first capture reads 0 and the
+     * others read their distance from it). Without a pending session these are
+     * the stored calibration (center = 0, limits from center).
+     * @return false if that point is not set
+     */
+    bool getDisplayPoint(CalPoint p, int32_t& pos) const;
+
+    /** @brief Fine position (display frame) / coarse raw recorded by the last successful capture */
     int32_t getLastCapturePos() const { return lastCapturePos_; }
     int32_t getLastCaptureCoarse() const { return lastCaptureCoarse_; }
 
@@ -160,11 +201,8 @@ public:
     /** @brief True once the absolute turn has been recovered from the coarse sensor */
     bool isTurnRecovered() const { return turnRecovered_; }
 
-    /** @brief True while a runtime mismatch is latched (cleared by captureCenter() or reboot) */
+    /** @brief True while a runtime mismatch is latched (cleared by a completed calibration or reboot) */
     bool isMismatchLatched() const { return mismatchLatched_; }
-
-    /** @brief True while a calibration session (opened by captureCenter) is open */
-    bool isCalSessionOpen() const { return calSession_; }
 
     /**
      * @brief Current unwrapped fine position in counts, SENSOR direction,
@@ -233,6 +271,7 @@ private:
     int32_t prevFineRaw_;       // previous good fine sample (wrap carry)
     int32_t originRaw_;         // boot-time fine sample: position origin while no center is captured
     int32_t turn_;              // signed turn counter relative to the center turn
+    int32_t sessionTurn_;       // fine wraps counted since boot (session frame, never recovered/reset by calibration)
 
     // Coarse sensor state
     int32_t coarseRaw_;         // last good coarse raw angle (0-4095)
@@ -246,7 +285,7 @@ private:
     uint8_t recoverCount_;      // consecutive agreeing recovery samples (STEER_TURN_RECOVER_SAMPLES)
     int32_t recoverOffset_;     // candidate turn correction (k − turn_) shared by those samples
     bool mismatch_;             // recovery samples keep disagreeing (transient: clears when they agree)
-    bool mismatchLatched_;      // runtime mismatch: cleared only by captureCenter() or reboot
+    bool mismatchLatched_;      // runtime mismatch: cleared only by a completed calibration or reboot
     uint8_t mismatchCount_;     // consecutive mismatching coarse samples (debounce)
     int32_t residual_;          // last pos − expected(coarse), fine counts
     bool residualValid_;
@@ -262,7 +301,18 @@ private:
     int32_t coarseLeft_;        // 0-4095, -1 = unset
     int32_t fineRight_;
     int32_t coarseRight_;
-    bool calSession_;           // limits may be captured (center captured this boot, no fault since)
+
+    // Calibration session slots (RAM only): points recorded this power cycle, in
+    // the session frame sessionPos = fineRaw + 4096·sessionTurn.
+    struct CalSlot {
+        bool valid;
+        int32_t sessionPos;
+        int32_t coarseRaw;
+    };
+    CalSlot calSlot_[CAL_POINTS];
+    int8_t calFirst_;           // first recorded slot (display reference without a center), -1 = none
+    bool calLost_;              // unfinished points were discarded by a sensor fault
+    const char* sessionError_;  // failed check of the last finalization attempt (nullptr = none)
 
     // Calibration (derived by revalidateCalibration, never stored)
     bool calibrated_;
@@ -272,7 +322,7 @@ private:
     int32_t seam_;              // coarse raw value in the middle of the unused arc
     float ratio_;               // coarse counts per fine count (signed)
     int32_t linLeft_;           // seam-linearised coarse value at the left limit
-    const char* calError_;      // failed calibration check (nullptr = valid/incomplete)
+    const char* calError_;      // failed check of the ACTIVE calibration (nullptr = valid/incomplete)
 
     // Capture bookkeeping (for the web response)
     const char* captureError_;
@@ -349,7 +399,7 @@ private:
     /** @brief Issue the pending boot centering once possible, or drop it on timeout */
     void serviceBootCenter(uint32_t now, bool ready);
 
-    /** @brief Recompute sensorOk_ / fault_; ends the calibration session on a fault */
+    /** @brief Recompute sensorOk_ / fault_ */
     void updateCombinedState();
 
     /** @brief Seam-linearised coarse value: (c − seam) mod 4096 */
@@ -358,8 +408,23 @@ private:
     /** @brief Expected fine position (sensor dir, from center) for a coarse raw value */
     float expectedFine(int32_t coarseRaw) const;
 
-    /** @brief Shared limit-capture path */
-    bool captureLimit(bool left);
+    /** @brief Shared capture path for the three calibration points */
+    bool capturePoint(CalPoint p);
+
+    /** @brief Current position in the session frame: fineRaw + 4096·sessionTurn */
+    int32_t sessionPos() const { return fineRaw_ + 4096 * sessionTurn_; }
+
+    /** @brief Session-frame reference for display: center slot, else first slot */
+    int32_t displayRef() const;
+
+    /** @brief Fill empty slots from the stored calibration when its absolute turn is trusted */
+    void prefillFromCalibration();
+
+    /** @brief Try to turn three valid slots into the active calibration; false + sessionError_ if rejected */
+    bool finalizeCalibration();
+
+    /** @brief Drop all session slots; byFault marks the loss for the UI (only if any slot existed) */
+    void discardCalSession(const char* why, bool byFault);
 
     /** @brief Recompute calibrated_/invert_/relLeft_/relRight_/seam_/ratio_ and calError_ */
     void revalidateCalibration();

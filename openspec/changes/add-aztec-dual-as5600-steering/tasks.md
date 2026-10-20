@@ -7,9 +7,9 @@
 - [x] 2.1 Hold two sensors (fine on `Wire`, coarse on `Wire1`); change `begin()` to take both buses/pins; always load calibration
 - [x] 2.2 Incremental turn tracking on every good fine sample; unwrapped position `fineRaw + 4096·turn − fineCenterRaw`
 - [x] 2.3 Per-sensor debounce and fault reason (`fine_i2c`, `fine_magnet`, `coarse_i2c`, `coarse_magnet`, `mismatch`, `recovering`); combined `sensorOk_`; token never `none` while `sensorOk_` is false; stop/reject on fault as today
-- [x] 2.4 Coarse poll every `STEER_COARSE_POLL_MS`; seam-linearised coarse value; runtime residual check with debounce; runtime mismatch latches until center capture or reboot
+- [x] 2.4 Coarse poll every `STEER_COARSE_POLL_MS`; seam-linearised coarse value; runtime residual check with debounce; runtime mismatch latches until a completed calibration or reboot
 - [x] 2.5 Turn recovery from the coarse sensor at boot and on every faulted→good transition, accepted only after `STEER_TURN_RECOVER_SAMPLES` consecutive agreeing coarse polls (same turn, residual ≤ `STEER_SENSOR_MISMATCH_COUNTS`)
-- [x] 2.6 Calibration session: capture center (zero turn, store pair, clear limits, open session); capture left/right (session open or calibrated); session ends on fault
+- [x] 2.6 Calibration points in any order: session frame (fine wraps since boot); center/left/right slots, each button writes only its own slot; "too close" early check; pre-fill empty slots from a trusted stored calibration; finalize when all three are set (validate, set turn, clear mismatch, persist; keep slots on rejection); discard unfinished slots on reboot, fine/coarse fault or latched mismatch; load only complete calibrations
 - [x] 2.7 `revalidateCalibration()`: arc/gap/seam, ratio, invert, ordering, min per-turn, min gap, center-on-line check; report failed check reason
 - [x] 2.8 NVS v2 keys (`cal_ver`, `fc_raw`, `cc_raw`, `fl_pos`, `cl_raw`, `fr_pos`, `cr_raw`); remove `c_ang`/`l_ang`/`r_ang` individually; never `clear()` the namespace (`steer_sca_base` lives there)
 - [x] 2.9 New accessors for telemetry: position, limits (optional), fine raw, coarse raw, turn, ratio, residual, fault reason; remove `getRawAngle()` callers
@@ -30,6 +30,7 @@
 - [x] 5.2 `WebPortal.cpp`: serialize unset/unreadable values as JSON `null` (not `-1`, not NaN)
 - [x] 5.3 `VehicleController::processSteerCalCommand`: response with fine position + coarse raw; failure reason text
 - [x] 5.4 `data/index.html`: calibration card readout (position, L/C/R, fine/coarse raw, turn, ratio, residual, fault label), `null` → `--`, updated en/uk help text and fault-token labels
+- [x] 5.6 Calibration progress telemetry (`steer_cal_points`, `steer_cal_error`, `steer_cal_lost`) and display frame for pending points; UI ✓ marks, missing points, rejection reason, discard notice; any-order en/uk help text; capture response says complete/still needed
 - [x] 5.5 Confirm MAVLink `STEER_POS` is unchanged in code (percent, gated by `isSensorOk()` + `isCalibrated()`)
 
 ## 6. Docs, version, changelog
@@ -42,7 +43,12 @@
 - [ ] 7.2 Boot scan shows both AS5600s (I2C1: 0x36; I2C2: 0x1A, 0x1C, 0x1F, 0x36)
 - [ ] 7.3 Calibrate on the buggy; verify `steer_ratio` plausible and `steer_residual` near 0 across full travel
 - [ ] 7.4 Power-cycle at several wheel positions (incl. > 1 turn from center each side): position recovered without homing
-- [ ] 7.5 Fault injection: unplug fine sensor, unplug coarse sensor, remove each magnet, slip coarse gear (mismatch) — motor stops, commands rejected, correct fault token (`recovering` while the turn is re-acquired), auto-resume after restore for I2C/magnet faults; mismatch stays latched until center re-capture or reboot
+- [ ] 7.5 Fault injection: unplug fine sensor, unplug coarse sensor, remove each magnet, slip coarse gear (mismatch) — motor stops, commands rejected, correct fault token (`recovering` while the turn is re-acquired), auto-resume after restore for I2C/magnet faults; mismatch stays latched until all three points are re-captured or reboot
 - [ ] 7.6 Unplug the coarse sensor while relays and gear inputs keep working (no `Wire1` reset); verify relays/gear inputs unaffected during a coordinated recovery
 - [ ] 7.7 MAVLink stream at 25 Hz: re-command guard holds (no timer reset from jitter), stall detection and move timeout still fire
 - [ ] 7.8 Measure loop period with X15 unplugged mid-move (Wire timeout 50 ms × failing I2C2 users); fine-sensor turn tracking needs loop < ~300 ms
+- [ ] 7.9 Any-order calibration from uncalibrated: Left → Center → Right, Center → Left → Right and Right → Left → Center each finish CALIBRATED with the same limits (±a few counts); ✓ marks and "still needed" follow each press; no point clears another
+- [ ] 7.10 Calibrated vehicle: re-capture only Left at a new lock — calibration re-saved at once, center and right unchanged; a Left too close to center is refused
+- [ ] 7.11 Latched mismatch: pressing Center alone keeps the mismatch latched and shows "still needed: Left, Right"; capturing all three clears it
+- [ ] 7.12 Reboot after two points: both discarded, all three needed; unplug the fine (then the coarse) sensor between points: points discarded and the card shows the discard notice
+- [ ] 7.13 Rejected set (e.g. left and right on the same side): failure response names the check, the card shows it, previous calibration still active; re-capturing the wrong point completes the calibration

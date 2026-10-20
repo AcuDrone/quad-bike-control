@@ -665,7 +665,8 @@
                 <h2 data-i18n="card_steer_cal">🎯 Steering Calibration</h2>
                 <p data-i18n-html="steer_cal_help" style="font-size: 0.8em; color: var(--muted-foreground); margin-bottom: 12px;">
                     Two AS5600 sensors (fine on the steering shaft, coarse on the geared shaft). Position is in fine counts from center.
-                    Hold <b>◀ / ▶</b> to jog the wheel, capture <b>Center</b> first (this clears both limits), then <b>Left</b> and <b>Right</b> at the travel limits.
+                    Hold <b>◀ / ▶</b> to jog the wheel and press <b>Left</b>, <b>Center</b> and <b>Right</b> in any order: each button records only its own point.
+                    The calibration completes and is saved once all three points are set. Capture all three in one power-on: a reboot or a sensor fault discards unfinished points.
                 </p>
                 <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 16px;">
                     <button id="steer-jog-left" data-i18n="btn_jog_left" style="flex:1; padding:16px 10px; border-radius:6px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer; font-size:1em;">◀ Jog Left</button>
@@ -688,10 +689,11 @@
                 </div>
                 <div style="margin-top: 8px; font-size: 0.8em; color: var(--muted-foreground);">
                     <span data-i18n="lbl_position">Position:</span> <span id="steer-pos">--</span> &nbsp;|&nbsp;
-                    <span data-i18n="lbl_pos_left">L:</span> <span id="steer-left-cur">--</span> &nbsp;
-                    <span data-i18n="lbl_pos_center">C:</span> <span id="steer-center-cur">--</span> &nbsp;
-                    <span data-i18n="lbl_pos_right">R:</span> <span id="steer-right-cur">--</span>
+                    <span data-i18n="lbl_pos_left">L:</span> <span id="steer-left-cur">--</span><span id="steer-left-mark" style="color: var(--success);"></span> &nbsp;
+                    <span data-i18n="lbl_pos_center">C:</span> <span id="steer-center-cur">--</span><span id="steer-center-mark" style="color: var(--success);"></span> &nbsp;
+                    <span data-i18n="lbl_pos_right">R:</span> <span id="steer-right-cur">--</span><span id="steer-right-mark" style="color: var(--success);"></span>
                 </div>
+                <div id="steer-cal-session" style="margin-top: 4px; font-size: 0.8em; color: var(--warning); min-height: 1.2em;"></div>
                 <div style="margin-top: 4px; font-size: 0.8em; color: var(--muted-foreground);">
                     <span data-i18n="lbl_fine_raw">Fine:</span> <span id="steer-fine-raw">--</span> &nbsp;
                     <span data-i18n="lbl_coarse_raw">Coarse:</span> <span id="steer-coarse-raw">--</span> &nbsp;
@@ -1173,7 +1175,7 @@
 
                 // Steering calibration card
                 card_steer_cal: '🎯 Steering Calibration',
-                steer_cal_help: 'Two AS5600 sensors (fine on the steering shaft, coarse on the geared shaft). Position is in fine counts from center. Hold <b>◀ / ▶</b> to jog the wheel, capture <b>Center</b> first (this clears both limits), then <b>Left</b> and <b>Right</b> at the travel limits.',
+                steer_cal_help: 'Two AS5600 sensors (fine on the steering shaft, coarse on the geared shaft). Position is in fine counts from center. Hold <b>◀ / ▶</b> to jog the wheel and press <b>Left</b>, <b>Center</b> and <b>Right</b> in any order: each button records only its own point (pressing it again re-records it). The calibration completes and is saved once all three points are set. Capture all three in one power-on: a reboot or a sensor fault discards unfinished points.',
                 btn_jog_left: '◀ Jog Left',
                 btn_jog_right: 'Jog Right ▶',
                 btn_nudge_left: '◂ Nudge',
@@ -1204,6 +1206,14 @@
                 sensor_fault: 'FAULT',
                 cal_calibrated: 'CALIBRATED',
                 cal_not_calibrated: 'NOT CALIBRATED',
+                steer_cal_points_set: 'Points set this power-on:',
+                steer_cal_points_missing: 'still needed:',
+                steer_cal_pt_L: 'Left',
+                steer_cal_pt_C: 'Center',
+                steer_cal_pt_R: 'Right',
+                steer_cal_rejected: 'Calibration rejected:',
+                steer_cal_recapture: 're-capture the wrong point.',
+                steer_cal_lost: 'Unfinished calibration points were discarded (sensor fault) — capture all three again.',
                 lbl_steer_motor_current: 'Motor:',
                 lbl_steer_fet_temp: 'FET:',
                 lbl_steer_driver: 'Driver:',
@@ -1481,7 +1491,7 @@
 
                 // Steering calibration card
                 card_steer_cal: '🎯 Калібрування керма',
-                steer_cal_help: 'Два датчики AS5600 (точний на валу керма, грубий на редукторі). Положення — у відліках точного датчика від центру. Утримуйте <b>◀ / ▶</b>, щоб провертати кермо, спершу зафіксуйте <b>Центр</b> (це скидає обидві межі), потім <b>Ліво</b> та <b>Право</b> на межах ходу.',
+                steer_cal_help: 'Два датчики AS5600 (точний на валу керма, грубий на редукторі). Положення — у відліках точного датчика від центру. Утримуйте <b>◀ / ▶</b>, щоб провертати кермо, і натискайте <b>Ліво</b>, <b>Центр</b> та <b>Право</b> у будь-якому порядку: кожна кнопка фіксує лише свою точку (повторне натискання перезаписує її). Калібрування завершується й зберігається, щойно задано всі три точки. Зафіксуйте всі три за одне ввімкнення: перезавантаження або збій датчика скидає незавершені точки.',
                 btn_jog_left: '◀ Проворот вліво',
                 btn_jog_right: 'Проворот вправо ▶',
                 btn_nudge_left: '◂ Підштовхнути',
@@ -1512,6 +1522,14 @@
                 sensor_fault: 'ПОМИЛКА',
                 cal_calibrated: 'ВІДКАЛІБРОВАНО',
                 cal_not_calibrated: 'НЕ ВІДКАЛІБРОВАНО',
+                steer_cal_points_set: 'Задано точок за це ввімкнення:',
+                steer_cal_points_missing: 'ще потрібно:',
+                steer_cal_pt_L: 'Ліво',
+                steer_cal_pt_C: 'Центр',
+                steer_cal_pt_R: 'Право',
+                steer_cal_rejected: 'Калібрування відхилено:',
+                steer_cal_recapture: 'перезафіксуйте хибну точку.',
+                steer_cal_lost: 'Незавершені точки калібрування скинуто (збій датчика) — зафіксуйте всі три знову.',
                 lbl_steer_motor_current: 'Двигун:',
                 lbl_steer_fet_temp: 'FET:',
                 lbl_steer_driver: 'Драйвер:',
@@ -2189,6 +2207,36 @@
             }
             if (data.steer_right !== undefined) {
                 document.getElementById('steer-right-cur').textContent = steerVal(data.steer_right);
+            }
+            // Calibration points recorded this power-on (any order; "" = none pending).
+            // While points are pending, L/C/R are relative to the center point, or to
+            // the first point captured when no center is recorded yet.
+            if (data.steer_cal_points !== undefined) {
+                const pts = data.steer_cal_points || '';
+                const marks = { L: 'steer-left-mark', C: 'steer-center-mark', R: 'steer-right-mark' };
+                for (const k in marks) {
+                    const m = document.getElementById(marks[k]);
+                    if (m) m.textContent = pts.includes(k) ? ' ✓' : '';
+                }
+                const el = document.getElementById('steer-cal-session');
+                if (el) {
+                    const nm = (k) => t('steer_cal_pt_' + k);
+                    let msg = '';
+                    let color = 'var(--warning)';
+                    if (data.steer_cal_error) {
+                        msg = t('steer_cal_rejected') + ' ' + data.steer_cal_error + ' — ' + t('steer_cal_recapture');
+                        color = 'var(--danger)';
+                    } else if (pts) {
+                        const missing = ['L', 'C', 'R'].filter(k => !pts.includes(k)).map(nm);
+                        msg = t('steer_cal_points_set') + ' ' + pts.split('').map(nm).join(', ') +
+                              (missing.length ? '; ' + t('steer_cal_points_missing') + ' ' + missing.join(', ') : '');
+                    } else if (data.steer_cal_lost) {
+                        msg = t('steer_cal_lost');
+                        color = 'var(--danger)';
+                    }
+                    el.textContent = msg;
+                    el.style.color = color;
+                }
             }
             if (data.steer_fine_raw !== undefined) {
                 document.getElementById('steer-fine-raw').textContent = steerVal(data.steer_fine_raw);

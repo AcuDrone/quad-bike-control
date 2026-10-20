@@ -18,6 +18,7 @@ SteeringController::SteeringController(IMotorDriver& motor, TwoWire& fineBus, Tw
       prevFineRaw_(0),
       originRaw_(0),
       turn_(0),
+      sessionTurn_(0),
       coarseRaw_(0),
       coarseOk_(false),
       coarseBad_(STEER_SENSOR_FAULT_DEBOUNCE),
@@ -39,7 +40,10 @@ SteeringController::SteeringController(IMotorDriver& motor, TwoWire& fineBus, Tw
       coarseLeft_(-1),
       fineRight_(POS_UNSET),
       coarseRight_(-1),
-      calSession_(false),
+      calSlot_{},
+      calFirst_(-1),
+      calLost_(false),
+      sessionError_(nullptr),
       calibrated_(false),
       invert_(false),
       relLeft_(0),
@@ -152,11 +156,14 @@ void SteeringController::sampleFine() {
         } else {
             // Incremental turn tracking: the shaft cannot move half a turn between
             // two loop samples, so a raw jump of more than 2048 counts is a wrap.
+            // The session turn follows the same wraps but is never re-derived.
             int32_t d = r - prevFineRaw_;
             if (d > 2048) {
                 turn_--;
+                sessionTurn_--;
             } else if (d < -2048) {
                 turn_++;
+                sessionTurn_++;
             }
         }
         prevFineRaw_ = r;
@@ -180,6 +187,8 @@ void SteeringController::sampleFine() {
             resetRecovery();
             Debug::printfFeature(DebugFeature::SERVO, "[STEER] Fine sensor fault (%s)\n",
                                  faultToken(fineReason_));
+            // Fine continuity is lost: the session frame of unfinished points is gone.
+            discardCalSession("fine sensor fault", true);
         }
     }
 }
@@ -215,6 +224,7 @@ void SteeringController::sampleCoarse() {
             resetRecovery();
             Debug::printfFeature(DebugFeature::SERVO, "[STEER] Coarse sensor fault (%s)\n",
                                  faultToken(coarseReason_));
+            discardCalSession("coarse sensor fault", true);
         }
     }
 }
@@ -271,7 +281,7 @@ void SteeringController::crossCheck() {
 
     // Runtime consistency check: a persistent disagreement means a slipped gear or
     // a lost turn. Re-deriving the turn from one side cannot tell which side is
-    // wrong, so the mismatch LATCHES (cleared only by captureCenter() or a reboot).
+    // wrong, so the mismatch LATCHES (cleared only by a completed calibration or a reboot).
     // The residual keeps being reported while latched, for diagnosis.
     residual_ = getPosition() - expectedCounts;
     residualValid_ = true;
@@ -282,8 +292,11 @@ void SteeringController::crossCheck() {
             mismatchLatched_ = true;
             mismatchCount_ = 0;
             Debug::printfFeature(DebugFeature::SERVO,
-                                 "[STEER] Sensor MISMATCH (latched until center capture or reboot): pos=%ld turn=%ld coarse=%ld resid=%ld\n",
+                                 "[STEER] Sensor MISMATCH (latched until a completed calibration or reboot): pos=%ld turn=%ld coarse=%ld resid=%ld\n",
                                  (long)getPosition(), (long)turn_, (long)coarseRaw_, (long)residual_);
+            // Points pre-filled from (or recorded against) a now-suspect geometry
+            // must not complete a calibration that would clear this latch.
+            discardCalSession("sensor mismatch", true);
         }
     } else {
         mismatchCount_ = 0;
@@ -312,10 +325,6 @@ void SteeringController::updateCombinedState() {
     if (!ok) {
         Debug::printfFeature(DebugFeature::SERVO, "[STEER] SENSOR FAULT (%s) — motor stopped\n",
                              faultToken(f));
-        if (calSession_) {
-            calSession_ = false;   // the turn may now be lost: limits need a fresh center
-            Debug::printlnFeature(DebugFeature::SERVO, "[STEER] Calibration session ended by sensor fault");
-        }
     } else {
         Debug::printfFeature(DebugFeature::SERVO, "[STEER] Sensors OK: pos=%ld turn=%ld coarse=%ld\n",
                              (long)getPosition(), (long)turn_, (long)coarseRaw_);
@@ -649,109 +658,186 @@ float SteeringController::getSteeringPercent() const {
 // === Calibration ===
 
 bool SteeringController::captureCenter() {
+    return capturePoint(CAL_CENTER);
+}
+
+bool SteeringController::captureLeftLimit() {
+    return capturePoint(CAL_LEFT);
+}
+
+bool SteeringController::captureRightLimit() {
+    return capturePoint(CAL_RIGHT);
+}
+
+int32_t SteeringController::displayRef() const {
+    if (calSlot_[CAL_CENTER].valid) return calSlot_[CAL_CENTER].sessionPos;
+    if (calFirst_ >= 0 && calSlot_[calFirst_].valid) return calSlot_[calFirst_].sessionPos;
+    return 0;
+}
+
+int32_t SteeringController::getDisplayPosition() const {
+    return isCalPending() ? sessionPos() - displayRef() : getPosition();
+}
+
+bool SteeringController::getDisplayPoint(CalPoint p, int32_t& pos) const {
+    if (p >= CAL_POINTS) return false;
+    if (isCalPending()) {
+        if (!calSlot_[p].valid) return false;
+        pos = calSlot_[p].sessionPos - displayRef();
+        return true;
+    }
+    switch (p) {
+        case CAL_CENTER:
+            if (!hasCenter()) return false;
+            pos = 0;
+            return true;
+        case CAL_LEFT:
+            if (fineLeft_ == POS_UNSET) return false;
+            pos = fineLeft_;
+            return true;
+        case CAL_RIGHT:
+            if (fineRight_ == POS_UNSET) return false;
+            pos = fineRight_;
+            return true;
+        default:
+            return false;
+    }
+}
+
+void SteeringController::discardCalSession(const char* why, bool byFault) {
+    bool had = isCalPending();
+    for (uint8_t i = 0; i < CAL_POINTS; i++) calSlot_[i] = CalSlot{};
+    calFirst_ = -1;
+    sessionError_ = nullptr;
+    if (had && byFault) {
+        calLost_ = true;
+        Debug::printfFeature(DebugFeature::SERVO,
+                             "[STEER] Unfinished calibration points discarded (%s)\n", why);
+    }
+}
+
+void SteeringController::prefillFromCalibration() {
+    // Only a complete, valid calibration whose absolute turn is currently trusted
+    // can be re-expressed in the session frame (sensorOk_ implies recovered turn
+    // and no mismatch while calibrated).
+    if (!calibrated_ || !sensorOk_ || !turnRecovered_ || mismatch_ || mismatchLatched_) return;
+
+    const int32_t center = sessionPos() - getPosition();
+    const CalSlot stored[CAL_POINTS] = {
+        { true, center + fineLeft_,  coarseLeft_ },
+        { true, center,              coarseCenterRaw_ },
+        { true, center + fineRight_, coarseRight_ },
+    };
+    for (uint8_t i = 0; i < CAL_POINTS; i++) {
+        if (!calSlot_[i].valid) calSlot_[i] = stored[i];
+    }
+    if (calFirst_ < 0) calFirst_ = CAL_CENTER;
+}
+
+bool SteeringController::finalizeCalibration() {
+    const int32_t center = calSlot_[CAL_CENTER].sessionPos;
+    const int32_t newCenterRaw = center & 4095;   // two's complement: mod 4096 for negatives too
+
+    // Validate the candidate with the shared checks; on rejection the previously
+    // active calibration is restored unchanged (nothing is persisted).
+    const int32_t oFc = fineCenterRaw_, oCc = coarseCenterRaw_;
+    const int32_t oFl = fineLeft_, oCl = coarseLeft_, oFr = fineRight_, oCr = coarseRight_;
+
+    fineCenterRaw_ = newCenterRaw;
+    coarseCenterRaw_ = calSlot_[CAL_CENTER].coarseRaw;
+    fineLeft_ = calSlot_[CAL_LEFT].sessionPos - center;
+    coarseLeft_ = calSlot_[CAL_LEFT].coarseRaw;
+    fineRight_ = calSlot_[CAL_RIGHT].sessionPos - center;
+    coarseRight_ = calSlot_[CAL_RIGHT].coarseRaw;
+    revalidateCalibration();
+
+    if (!calibrated_) {
+        sessionError_ = calError_ ? calError_ : "calibration rejected";
+        fineCenterRaw_ = oFc; coarseCenterRaw_ = oCc;
+        fineLeft_ = oFl; coarseLeft_ = oCl; fineRight_ = oFr; coarseRight_ = oCr;
+        revalidateCalibration();
+        return false;
+    }
+
+    // The session frame defines the absolute turn: choose turn_ so that
+    // getPosition() == sessionPos() − center. center − newCenterRaw is an exact
+    // multiple of 4096.
+    turn_ = sessionTurn_ - (center - newCenterRaw) / 4096;
+    turnRecovered_ = true;
+    mismatch_ = false;
+    mismatchLatched_ = false;   // a complete new calibration resolves a latched mismatch
+    mismatchCount_ = 0;
+    resetRecovery();
+    residualValid_ = false;
+    saveCalibration();
+    updateCombinedState();
+    // The points now live in the active calibration; keeping them would let a
+    // later single capture re-finalize against a geometry that may have gone stale.
+    discardCalSession("finalized", false);
+    return true;
+}
+
+bool SteeringController::capturePoint(CalPoint p) {
+    static const char* const kName[CAL_POINTS] = { "Left limit", "Center", "Right limit" };
     captureError_ = nullptr;
-    // Both sensors must be individually healthy. A mismatch does not block the
-    // center capture: it clears the limits, so it is the way out of a stale calibration.
+
+    // Both sensors must be individually healthy with a fresh fine sample. A
+    // mismatch / recovering state does not block: completing all three points
+    // is the way out of a stale calibration.
     if (!fineOk_ || !coarseOk_ || !fineFresh_) {
         captureError_ = "sensor fault";
         return false;
     }
 
-    stop();   // the control frame changes: never keep driving on the old one
-    turn_ = 0;
-    fineCenterRaw_ = fineRaw_;
-    coarseCenterRaw_ = coarseRaw_;
-    // Limits stored against an old center cannot be re-expressed against a new one
-    // unless the absolute turn is known, so they are cleared.
-    fineLeft_ = POS_UNSET;
-    coarseLeft_ = -1;
-    fineRight_ = POS_UNSET;
-    coarseRight_ = -1;
-    mismatch_ = false;
-    mismatchLatched_ = false; // the new center defines the frame: a latched mismatch is resolved
-    mismatchCount_ = 0;
-    resetRecovery();
-    residualValid_ = false;
-    turnRecovered_ = true;    // the turn is defined by this capture
-    calSession_ = true;
-    bootCenterPending_ = false;
+    // Pre-fill is provisional until the capture is accepted: a refused capture
+    // leaves the session exactly as it was.
+    CalSlot saved[CAL_POINTS];
+    for (uint8_t i = 0; i < CAL_POINTS; i++) saved[i] = calSlot_[i];
+    const int8_t savedFirst = calFirst_;
+    prefillFromCalibration();
 
-    revalidateCalibration();
-    saveCalibration();
-    updateCombinedState();
-
-    lastCapturePos_ = 0;
-    lastCaptureCoarse_ = coarseCenterRaw_;
-    Debug::printfFeature(DebugFeature::SERVO,
-                         "[STEER] Center captured: fine=%ld coarse=%ld — limits cleared, calibration session open\n",
-                         (long)fineCenterRaw_, (long)coarseCenterRaw_);
-    return true;
-}
-
-bool SteeringController::captureLeftLimit() {
-    return captureLimit(true);
-}
-
-bool SteeringController::captureRightLimit() {
-    return captureLimit(false);
-}
-
-bool SteeringController::captureLimit(bool left) {
-    const char* name = left ? "Left" : "Right";
-    captureError_ = nullptr;
-
-    if (!sensorOk_ || !fineFresh_) {
-        captureError_ = "sensor fault";
-        return false;
-    }
-    if (fineCenterRaw_ < 0) {
-        captureError_ = "no center captured";
-        return false;
-    }
-    // While uncalibrated the turn counter is only meaningful inside the session
-    // opened by the center capture (after a reboot it is arbitrary).
-    if (!calSession_ && !calibrated_) {
-        captureError_ = "no calibration session (capture center first)";
-        return false;
-    }
-
-    int32_t pos = getPosition();
-    if (abs(pos) < STEER_CAL_MIN_SPAN) {
+    const int32_t pos = sessionPos();
+    // Early feedback: a limit must be clear of the center point (either order).
+    if (p == CAL_CENTER) {
+        if (calSlot_[CAL_LEFT].valid && abs(calSlot_[CAL_LEFT].sessionPos - pos) < STEER_CAL_MIN_SPAN) {
+            captureError_ = "too close to left limit";
+        } else if (calSlot_[CAL_RIGHT].valid && abs(calSlot_[CAL_RIGHT].sessionPos - pos) < STEER_CAL_MIN_SPAN) {
+            captureError_ = "too close to right limit";
+        }
+    } else if (calSlot_[CAL_CENTER].valid &&
+               abs(pos - calSlot_[CAL_CENTER].sessionPos) < STEER_CAL_MIN_SPAN) {
         captureError_ = "too close to center";
-        Debug::printfFeature(DebugFeature::SERVO, "[STEER] %s limit too close to center — rejected\n", name);
+    }
+    if (captureError_) {
+        for (uint8_t i = 0; i < CAL_POINTS; i++) calSlot_[i] = saved[i];
+        calFirst_ = savedFirst;
+        Debug::printfFeature(DebugFeature::SERVO, "[STEER] %s %s — rejected\n", kName[p], captureError_);
         return false;
     }
 
-    stop();   // invert/limits may change: never keep driving on the old frame
+    stop();   // the control frame may change: never keep driving on the old one
     bootCenterPending_ = false;
-    if (left) {
-        fineLeft_ = pos;
-        coarseLeft_ = coarseRaw_;
-    } else {
-        fineRight_ = pos;
-        coarseRight_ = coarseRaw_;
-    }
-    // The absolute turn is known here (open session or complete calibration), so
-    // keep the session open: the other limit may be (re)captured too.
-    calSession_ = true;
+    calLost_ = false;
+    sessionError_ = nullptr;
+    calSlot_[p] = { true, pos, coarseRaw_ };
+    if (calFirst_ < 0) calFirst_ = (int8_t)p;
 
-    revalidateCalibration();
-    if (calibrated_) {
-        // The turn is already absolute; no recovery needed for the new calibration.
-        turnRecovered_ = true;
-        mismatch_ = false;
-        mismatchCount_ = 0;
-        resetRecovery();
-    }
-    saveCalibration();
-    updateCombinedState();
-
-    lastCapturePos_ = pos;
+    lastCapturePos_ = pos - displayRef();
     lastCaptureCoarse_ = coarseRaw_;
+
+    bool done = calSlot_[CAL_LEFT].valid && calSlot_[CAL_CENTER].valid && calSlot_[CAL_RIGHT].valid;
+    bool finalized = done && finalizeCalibration();
     Debug::printfFeature(DebugFeature::SERVO,
-                         "[STEER] %s limit captured: pos=%ld coarse=%ld (calibrated=%d%s%s)\n",
-                         name, (long)pos, (long)coarseRaw_, calibrated_,
-                         calError_ ? ", rejected: " : "", calError_ ? calError_ : "");
+                         "[STEER] %s captured: pos=%ld coarse=%ld (points %c%c%c)%s\n",
+                         kName[p], (long)lastCapturePos_, (long)lastCaptureCoarse_,
+                         calSlot_[CAL_LEFT].valid || finalized ? 'L' : '-',
+                         calSlot_[CAL_CENTER].valid || finalized ? 'C' : '-',
+                         calSlot_[CAL_RIGHT].valid || finalized ? 'R' : '-',
+                         finalized ? " — calibration complete and saved" : "");
+    if (sessionError_) {
+        Debug::printfFeature(DebugFeature::SERVO, "[STEER] Calibration rejected: %s (re-capture the bad point)\n",
+                             sessionError_);
+    }
     return true;
 }
 
@@ -867,8 +953,17 @@ void SteeringController::loadCalibration() {
     if (!rawOk(coarseLeft_)) { fineLeft_ = POS_UNSET; coarseLeft_ = -1; }
     if (!rawOk(coarseRight_)) { fineRight_ = POS_UNSET; coarseRight_ = -1; }
 
-    // A reboot ends any calibration session; the absolute turn must be recovered.
-    calSession_ = false;
+    // Only complete calibrations are used (older firmware could persist a partial
+    // one): an incomplete set is treated as no calibration at all.
+    if (fineCenterRaw_ < 0 || fineLeft_ == POS_UNSET || fineRight_ == POS_UNSET) {
+        fineCenterRaw_ = -1; coarseCenterRaw_ = -1;
+        fineLeft_ = POS_UNSET; coarseLeft_ = -1;
+        fineRight_ = POS_UNSET; coarseRight_ = -1;
+    }
+
+    // A reboot discards any unfinished calibration points; the absolute turn must be recovered.
+    discardCalSession("reboot", false);
+    calLost_ = false;
     turnRecovered_ = false;
     resetRecovery();
     mismatch_ = false;

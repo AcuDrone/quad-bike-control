@@ -107,9 +107,11 @@ does not apply. Instead:
   `mismatch` even if later coarse samples agree again. A persistent disagreement means a slipped
   gear or a lost turn; re-deriving the turn from one side cannot tell which side is wrong, so the
   operator must see it.
-- The latch clears only on a successful centre capture (D7, which already requires both sensors to
-  be individually healthy and redefines the frame) or a reboot (followed by D4 recovery). The
-  residual keeps being reported while latched, for diagnosis.
+- The latch clears only when a calibration is completed (D7: all three points captured in the
+  current power-on, which requires both sensors to be individually healthy and redefines the
+  frame) or on a reboot (followed by D4 recovery). Points are never pre-filled from the stored
+  calibration while a mismatch is latched, so a single capture cannot clear it. The residual keeps
+  being reported while latched, for diagnosis.
 - The coarse sensor is polled every `STEER_COARSE_POLL_MS` (10 ms) rather than on every loop. It is
   used only for turn recovery and the consistency check, and the slower poll keeps I2C2 traffic
   down for the expanders. The worst-case time to detect a coarse fault is about 50 ms.
@@ -127,25 +129,41 @@ does not apply. Instead:
 - While uncalibrated, there is no ratio, so there is no mismatch check. Jogging is allowed when both
   sensors are healthy, because the stall detector still runs on the fine position.
 
-### D7. Calibration session (same three buttons)
-- **Capture centre**:
-  - Requires both sensors healthy.
-  - Sets `turn = 0`, stores `(fineCenterRaw, coarseCenterRaw)`, **clears both limits**, and opens a
-    *calibration session*.
-  - Clearing is necessary: limits stored as fine counts from an old centre, after a reboot, cannot
-    be expressed against a new centre unless the absolute turn is known.
-  - The UI already tells the operator to capture the centre first.
-- **Capture left or right**:
-  - Requires both sensors healthy, and either an open session or an already-complete calibration
-    (in which case the absolute position is known from D4).
-  - Stores `(pos, coarseRaw)`, then re-runs the D3 checks. The capture is persisted even if the
-    calibration is still incomplete.
-  - The response says which check failed, for example "ratio too small", "no coarse gap" or
-    "centre not on line".
-- **The session ends** on any sensor fault or on a reboot. After that, a limit capture is refused
-  until the centre is captured again.
-- **Why limits only re-capture while calibrated**: while uncalibrated, the turn counter after a
-  reboot is arbitrary.
+### D7. Calibration points in any order (same three buttons)
+- **Session frame**: the firmware tracks `sessionPos = fineRaw + 4096·sessionTurn`, where
+  `sessionTurn` counts fine-sensor wraps since boot. It is never re-derived by turn recovery or
+  changed by a calibration, so it stays continuous for the whole power-on as long as the fine
+  sensor is.
+- **Three session slots** (RAM only): centre, left and right, each `{valid, sessionPos, coarseRaw}`.
+  - Each capture button requires both sensors individually healthy and a fresh fine sample. A
+    mismatch or a not-yet-recovered turn does not block a capture: completing a calibration is the
+    way out of a stale one.
+  - A button writes **only its own slot**; pressing it again re-records that point. No capture
+    clears another point. The motor is stopped on every capture.
+  - Early feedback: a limit closer than `STEER_CAL_MIN_SPAN` to a recorded centre (or a centre that
+    close to a recorded limit) is refused immediately ("too close to center", "too close to left
+    limit", "too close to right limit").
+- **Pre-fill**: when the stored calibration is complete and valid and its absolute turn is trusted
+  (calibrated, turn recovered, no mismatch, no latched mismatch), the empty slots are filled from it
+  at capture time (`centre = sessionPos − pos`, `left = centre + fineLeft`, `right = centre +
+  fineRight`, coarse values from storage). A calibrated vehicle can therefore re-capture a single
+  point. When the turn is not trusted the slots start empty and all three points are required.
+- **Finalization**: as soon as all three slots are valid, the candidate `fineCenterRaw = centre
+  mod 4096`, `fineLeft/Right = slot − centre` and the coarse values are checked with D3.
+  - Accepted: it becomes the active calibration, `turn` is set so that `pos = sessionPos − centre`,
+    the turn counts as recovered, any mismatch (also a latched one) is cleared, the calibration is
+    persisted, and the slots are emptied (they can be re-derived by pre-fill while trusted).
+  - Rejected: nothing is saved, the previously active calibration stays in force, the slots are
+    kept so the wrong point can be re-captured, and the response and telemetry name the failed
+    check, for example "ratio too small", "no coarse gap" or "center not on line".
+- **Unfinished points are discarded** on a reboot (slots start empty; only complete calibrations are
+  persisted and loaded) and on any sensor fault that may break the session frame: a fine or coarse
+  sensor fault, or a runtime mismatch latching. Telemetry reports the discard until the next
+  capture. All three points therefore have to be captured within one power-on without a sensor
+  fault in between.
+- **Why a session frame**: limits are stored as fine counts from the centre. Without a known
+  absolute turn (uncalibrated, or after a reboot) only the incremental count since boot relates the
+  three captures to each other, and it is valid only while the fine sensor is continuously tracked.
 
 ### D8. Bus-agnostic `AS5600Sensor` and I2C2 recovery
 - `AS5600Sensor(TwoWire& bus, const char* label, bool mayRecoverBus)`. `begin(sda, scl)` keeps the
@@ -216,9 +234,14 @@ the new design:
   frame the operator sees during calibration, before `invert` is known.
 - When no centre has been captured, `steer_position` is counted from the boot sample of the fine
   sensor, so jogging still shows movement.
+- While calibration points are pending (D7), `steer_position`, `steer_left`, `steer_center` and
+  `steer_right` show the session points instead of the stored calibration: relative to the centre
+  point when it is recorded, otherwise relative to the first point captured (which then reads 0).
+  This keeps the readouts meaningful whatever the capture order.
 - Fields:
   - `steer_position`: int
-  - `steer_center`: `0` when set, `null` when unset
+  - `steer_center`: `0` when set, `null` when unset (the display frame is relative to the centre
+    whenever one is recorded)
   - `steer_left`, `steer_right`: int, or `null` when unset
   - `steer_fine_raw`: 0..4095, or `null` if the fine sensor is not readable
   - `steer_coarse_raw`: 0..4095, or `null` if the coarse sensor is not readable
@@ -227,6 +250,11 @@ the new design:
   - `steer_residual`: int fine counts, `null` when uncalibrated or a sensor is faulted
   - `steer_sensor_fault`: the D6 token
   - `steer_sensor_ok`, `steer_calibrated`: unchanged
+  - `steer_cal_points`: string of the points recorded this power-on, a subset of `"LCR"`
+    (`""` when none are pending)
+  - `steer_cal_error`: the failed check of the last rejected finalization, `null` otherwise
+  - `steer_cal_lost`: `true` after unfinished points were discarded by a sensor fault, until the
+    next capture
 - The sentinel for "unset" changes from `-1` to `null`, because positions can now be negative.
 - `steering_pct` and MAVLink `STEER_POS` keep percent semantics.
 
@@ -249,7 +277,7 @@ the new design:
 - **Gear backlash between the steering shaft and the coarse shaft** shows up as residual noise.
   - Mitigation: the 1024-count mismatch threshold is generous (90° of shaft), and the linearity
     check rejects bad gearing at calibration.
-- **A latched mismatch needs operator action** (centre re-capture, then both limits, or a reboot).
+- **A latched mismatch needs operator action** (capturing all three points again, or a reboot).
   This is deliberate: an automatic re-derivation could silently pick the wrong side.
 - **Turn tracking needs a short loop period.** The incremental counter assumes less than half a turn
   between fine samples (about 0.3 s at full speed). An unplugged X15 makes every I2C2 user hit the
@@ -258,17 +286,18 @@ the new design:
   a stall of more than about 0.3 s at full steering speed.
   - While calibrated, the consistency check turns it into a mismatch fault (motor stop), never a
     silent offset.
-  - While uncalibrated, only an open session is affected, and the line-fit check rejects the
-    result.
-- **Behaviour change for operators**: capturing the centre now clears both limits, and every
-  vehicle must be recalibrated after flashing.
+  - While uncalibrated, only unfinished calibration points are affected, and the line-fit check
+    rejects the result.
+- **Behaviour change for operators**: the three points can be captured in any order but must all be
+  captured in one power-on; a reboot or a sensor fault discards unfinished points. Every vehicle
+  must be recalibrated after flashing.
 
 ## Migration Plan
 1. Flash the 1.2.0 firmware and the LittleFS image.
 2. On first boot the old keys are ignored, and the steering reports "not calibrated" with commands
    rejected (fail-safe).
-3. Jog to straight-ahead and capture the centre, then jog to each lock and capture the left and
-   right limits.
+3. Jog to straight-ahead and capture the centre, and jog to each lock and capture the left and
+   right limits, in any order, without rebooting in between.
 4. Check that `steer_ratio` and a `steer_residual` close to 0 appear in the calibration card, then
    power-cycle and confirm the position is recovered.
 5. Rollback: re-flash 1.1.0. The old keys are gone, so the quad-bike firmware also needs a

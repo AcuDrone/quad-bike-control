@@ -584,7 +584,7 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // so "unset" / "unreadable" is JSON null — never -1, never NaN.
     // ((const char*)nullptr is ArduinoJson 6's way to store a null.)
     doc["steer_position"] = telemetry.steer_position;
-    if (telemetry.steer_center_set) doc["steer_center"] = 0;
+    if (telemetry.steer_center_set) doc["steer_center"] = telemetry.steer_center;
     else                            doc["steer_center"] = (const char*)nullptr;
     if (telemetry.steer_left_set)   doc["steer_left"] = telemetry.steer_left;
     else                            doc["steer_left"] = (const char*)nullptr;
@@ -602,6 +602,10 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["steer_sensor_fault"] = telemetry.steer_sensor_fault;   // static token, stored by pointer
     doc["steer_sensor_ok"] = telemetry.steer_sensor_ok;
     doc["steer_calibrated"] = telemetry.steer_calibrated;
+    doc["steer_cal_points"] = telemetry.steer_cal_points;      // "" / subset of "LCR"
+    if (telemetry.steer_cal_error) doc["steer_cal_error"] = telemetry.steer_cal_error;   // static string
+    else                           doc["steer_cal_error"] = (const char*)nullptr;
+    doc["steer_cal_lost"] = telemetry.steer_cal_lost;
     doc["steer_motor_current"] = telemetry.steer_motor_current;
     doc["steer_fet_temp"] = telemetry.steer_fet_temp;
     doc["steer_vesc_fault"] = telemetry.steer_vesc_fault;
