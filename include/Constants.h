@@ -457,12 +457,13 @@ struct ServoChannelConfig {
 // Throttle Servo Parameters
 #define THROTTLE_SERVO_MIN_US    800   // Minimum servo pulse width (µs) — mechanical range floor / slider bound
 #define THROTTLE_SERVO_MAX_US    2200  // Maximum servo pulse width (µs) — mechanical range ceiling / slider bound
-// Throttle calibration: 0..100% maps onto [idle_us, full_us]. These endpoints are runtime-editable
+// Throttle calibration: 0..100% maps linearly from idle_us to full_us (either order: full_us < idle_us
+// on a mirrored servo mount, e.g. the aztec buggy 2200 -> 800). These endpoints are runtime-editable
 // via the web calibration flow and persisted in NVS ("throttle" namespace); the values below are
 // only the defaults used on first boot / when stored values are missing or invalid.
 #define THROTTLE_DEFAULT_IDLE_US 901   // idle pulse width (previously 13° over the 800–2200µs range)
 #define THROTTLE_DEFAULT_FULL_US 1344  // full-throttle pulse width (previously 70° over the 800–2200µs range)
-#define THROTTLE_MIN_SPAN_US     100   // minimum accepted full_us - idle_us separation during calibration
+#define THROTTLE_MIN_SPAN_US     100   // minimum accepted |full_us - idle_us| separation (full may be below idle on a mirrored servo)
 
 // ============================================================================
 // BTS7960 MOTOR DRIVER CONFIGURATION

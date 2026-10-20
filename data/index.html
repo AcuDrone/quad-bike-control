@@ -718,6 +718,7 @@
                 <p data-i18n-html="throttle_cal_help" style="font-size: 0.8em; color: var(--muted-foreground); margin-bottom: 12px;">
                     Sets the idle / full throttle servo endpoints (µs). <b>Engine must be OFF.</b>
                     Press <b>Start</b>, drag a slider — the throttle servo follows live — then <b>Save</b>.
+                    Inverted (mirrored) servo mounting is supported: set idle and full in whichever order the servo needs (full may be below idle).
                 </p>
                 <button id="throttle-cal-start" onclick="throttleCalStart()" data-i18n="btn_start_calibration" style="padding:8px 12px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer; width:100%;">Start Calibration</button>
                 <div id="throttle-cal-controls" style="display:none; margin-top:12px; flex-direction:column; gap:12px;">
@@ -1226,7 +1227,7 @@
 
                 // Throttle calibration card
                 card_throttle_cal: '🎚️ Throttle Calibration',
-                throttle_cal_help: 'Sets the idle / full throttle servo endpoints (µs). <b>Engine must be OFF.</b> Press <b>Start</b>, drag a slider — the throttle servo follows live — then <b>Save</b>.',
+                throttle_cal_help: 'Sets the idle / full throttle servo endpoints (µs). <b>Engine must be OFF.</b> Press <b>Start</b>, drag a slider — the throttle servo follows live — then <b>Save</b>. Inverted (mirrored) servo mounting is supported: set idle and full in whichever order the servo needs (full may be below idle).',
                 btn_start_calibration: 'Start Calibration',
                 lbl_idle_endpoint: 'Idle endpoint:',
                 lbl_full_endpoint: 'Full endpoint:',
@@ -1533,7 +1534,7 @@
                 relay_test_blocked: 'Доступно лише при ВИМК запалюванні, вимкненому світлі та справній платі реле.',
 
                 card_throttle_cal: '🎚️ Калібрування дроселя',
-                throttle_cal_help: 'Задає крайні точки серво дроселя: холостий хід / повний газ (µs). <b>Двигун має бути вимкнено.</b> Натисніть <b>Почати</b>, потягніть повзунок — серво дроселя рухається наживо — потім <b>Зберегти</b>.',
+                throttle_cal_help: 'Задає крайні точки серво дроселя: холостий хід / повний газ (µs). <b>Двигун має бути вимкнено.</b> Натисніть <b>Почати</b>, потягніть повзунок — серво дроселя рухається наживо — потім <b>Зберегти</b>. Підтримується дзеркальне (інвертоване) встановлення серво: задайте холостий хід і повний газ у тому порядку, який потрібен серво (повний газ може бути меншим за холостий хід).',
                 btn_start_calibration: 'Почати калібрування',
                 lbl_idle_endpoint: 'Точка холостого ходу:',
                 lbl_full_endpoint: 'Точка повного газу:',

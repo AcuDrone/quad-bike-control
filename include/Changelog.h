@@ -23,7 +23,8 @@ static const char CHANGELOG_JSON[] = R"JSON({"releases":[
 "Блокування переднього колеса на баггі не встановлене — кнопка вимкнена",
 "Перевірка всіх 8 реле у веб-інтерфейсі, лише при вимкненому запалюванні",
 "Передача баггі визначається 3-бітним кодом на трьох входах; код видно в телеметрії",
-"Коди датчика передач калібруються у веб-інтерфейсі: важіль у передачу → «Зберегти як»"
+"Коди датчика передач калібруються у веб-інтерфейсі: важіль у передачу → «Зберегти як»",
+"Калібрування дроселя підтримує дзеркально встановлене серво: повний газ може бути меншим за холостий хід (µs)"
 ],"en":[
 "Buggy (ODES Junglecross 800) steering: two AS5600 sensors, multi-turn steering position",
 "Steering position is recovered at power-up without homing",
@@ -33,7 +34,8 @@ static const char CHANGELOG_JSON[] = R"JSON({"releases":[
 "Front wheel lock is not fitted on the buggy; its button is disabled",
 "Relay test toggles for all 8 relays in the web UI, ignition OFF only",
 "Buggy gear is read as a 3-bit code on three inputs; the code is shown in telemetry",
-"Gear sensor codes are calibrated in the web UI: lever in gear, then \"Save as\""
+"Gear sensor codes are calibrated in the web UI: lever in gear, then \"Save as\"",
+"Throttle calibration accepts a mirrored servo: full may be below idle (µs)"
 ]},
 {"version":"1.1.0","date":"2026-10-08","uk":[
 "Нова плата керування Control_v0",

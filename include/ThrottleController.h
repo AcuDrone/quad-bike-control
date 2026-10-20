@@ -9,7 +9,9 @@
  * @brief Throttle servo controller with runtime microsecond calibration.
  *
  * Owns the throttle ServoController and maps 0..100% throttle onto a calibrated
- * [idleUs, fullUs] pulse-width window. The idle/full endpoints are persisted in
+ * idleUs..fullUs pulse-width window. Either order is valid: a mirrored servo mount
+ * has fullUs < idleUs (e.g. idle=2200, full=800); only |fullUs - idleUs| >=
+ * THROTTLE_MIN_SPAN_US is required. The idle/full endpoints are persisted in
  * NVS ("throttle" namespace) and are editable at runtime via the web calibration
  * flow; the compile-time THROTTLE_DEFAULT_*_US values are only fallbacks.
  *
@@ -30,7 +32,7 @@ public:
     bool begin(gpio_num_t pin, uint8_t channel);
 
     // ---- Normal control (no-ops while a calibration session is active) ----
-    void setThrottlePercent(float pct);   // 0..100% -> [idleUs_, fullUs_]
+    void setThrottlePercent(float pct);   // 0..100% -> idleUs_..fullUs_ (either direction)
     void setThrottleUs(uint16_t us);       // direct µs (clamped to servo range) — used by the gear-boost PID
     void idle();                           // move to idleUs_
 
@@ -59,6 +61,7 @@ private:
 
     void loadCalibration();
     static uint16_t clampToServoRange(int32_t us);
+    static bool isValidCalibration(uint16_t idleUs, uint16_t fullUs);  // both in servo range, |full-idle| >= min span
 };
 
 #endif // THROTTLE_CONTROLLER_H

@@ -12,14 +12,25 @@ ThrottleController::ThrottleController()
 
 bool ThrottleController::begin(gpio_num_t pin, uint8_t channel) {
     loadCalibration();
-    // Servo spans the full mechanical range; calibration lives within [idleUs_, fullUs_].
+    // Servo spans the full mechanical range; calibration lives between idleUs_ and fullUs_
+    // (either order — an inverted/mirrored servo has fullUs_ < idleUs_).
     // Start at the calibrated idle position.
     if (!servo_.begin(pin, channel, THROTTLE_SERVO_MIN_US, THROTTLE_SERVO_MAX_US, idleUs_)) {
         return false;
     }
     Debug::printfFeature(DebugFeature::VEHICLE,
-        "[THROTTLE] Calibration idle=%uus full=%uus\n", idleUs_, fullUs_);
+        "[THROTTLE] Calibration idle=%uus full=%uus%s\n", idleUs_, fullUs_,
+        fullUs_ < idleUs_ ? " (inverted)" : "");
     return true;
+}
+
+bool ThrottleController::isValidCalibration(uint16_t idleUs, uint16_t fullUs) {
+    // Direction-agnostic: idle may be above full (mirrored servo mount).
+    if (idleUs < THROTTLE_SERVO_MIN_US || idleUs > THROTTLE_SERVO_MAX_US) return false;
+    if (fullUs < THROTTLE_SERVO_MIN_US || fullUs > THROTTLE_SERVO_MAX_US) return false;
+    int32_t span = (int32_t)fullUs - (int32_t)idleUs;
+    if (span < 0) span = -span;
+    return span >= THROTTLE_MIN_SPAN_US;
 }
 
 uint16_t ThrottleController::clampToServoRange(int32_t us) {
@@ -38,9 +49,13 @@ uint8_t ThrottleController::usToPercent(uint16_t us) const {
     // Degenerate window (never produced by saveCalibration()/loadCalibration(), both of
     // which enforce THROTTLE_MIN_SPAN_US) — report 0 rather than divide by zero.
     if (fullUs_ == idleUs_) return 0;
-    int32_t pct = ((int32_t)us - (int32_t)idleUs_) * 100 /
-                  ((int32_t)fullUs_ - (int32_t)idleUs_);
-    if (pct < 0) pct = 0;       // servo below the calibrated idle endpoint
+    // Normalise to a positive denominator so an inverted window (fullUs_ < idleUs_) maps
+    // the same way: distance travelled from idle towards full, over the span.
+    int32_t offset = (int32_t)us - (int32_t)idleUs_;
+    int32_t span = (int32_t)fullUs_ - (int32_t)idleUs_;
+    if (span < 0) { span = -span; offset = -offset; }
+    if (offset <= 0) return 0;  // at or beyond the idle endpoint
+    int32_t pct = offset * 100 / span;
     if (pct > 100) pct = 100;
     return (uint8_t)pct;
 }
@@ -89,12 +104,13 @@ bool ThrottleController::saveCalibration(String& err) {
 
     uint16_t idle = pendingIdleUs_;
     uint16_t full = pendingFullUs_;
-    if (idle < THROTTLE_SERVO_MIN_US || full > THROTTLE_SERVO_MAX_US) {
+    if (idle < THROTTLE_SERVO_MIN_US || idle > THROTTLE_SERVO_MAX_US ||
+        full < THROTTLE_SERVO_MIN_US || full > THROTTLE_SERVO_MAX_US) {
         err = "Out of servo range";
         return false;
     }
-    if ((int32_t)full - (int32_t)idle < THROTTLE_MIN_SPAN_US) {
-        err = "Full must exceed idle by >= " + String(THROTTLE_MIN_SPAN_US) + "us";
+    if (!isValidCalibration(idle, full)) {
+        err = "Idle and full must differ by >= " + String(THROTTLE_MIN_SPAN_US) + "us";
         return false;
     }
 
@@ -111,7 +127,8 @@ bool ThrottleController::saveCalibration(String& err) {
     calibrating_ = false;
     servo_.setMicroseconds(idleUs_);
     Debug::printfFeature(DebugFeature::VEHICLE,
-        "[THROTTLE] Calibration saved idle=%uus full=%uus\n", idleUs_, fullUs_);
+        "[THROTTLE] Calibration saved idle=%uus full=%uus%s\n", idleUs_, fullUs_,
+        fullUs_ < idleUs_ ? " (inverted)" : "");
     return true;
 }
 
@@ -129,9 +146,8 @@ void ThrottleController::loadCalibration() {
         fullUs_ = prefs.getUShort("full_us", THROTTLE_DEFAULT_FULL_US);
         prefs.end();
     }
-    // Guard against corrupt/incompatible stored values.
-    if (idleUs_ < THROTTLE_SERVO_MIN_US || fullUs_ > THROTTLE_SERVO_MAX_US ||
-        (int32_t)fullUs_ - (int32_t)idleUs_ < THROTTLE_MIN_SPAN_US) {
+    // Guard against corrupt/incompatible stored values (an inverted but valid pair is kept).
+    if (!isValidCalibration(idleUs_, fullUs_)) {
         idleUs_ = THROTTLE_DEFAULT_IDLE_US;
         fullUs_ = THROTTLE_DEFAULT_FULL_US;
     }
