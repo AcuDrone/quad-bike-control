@@ -36,7 +36,7 @@
 | Relays | off-board `Relay` PCB — 8× SRD-12VDC + PCA9557 @ 0x1F on **X15 / I2C2** (scan-verified, all relay functions bench-tested) |
 | 24V rail | off-board `Buck Boost` PCB — TL494 two-phase 12V→24V, 0-26V / 0-15A, INA180 current sense (X10) |
 | CAN | MCP2515 + TJA1051T/3, **8 MHz** crystal |
-| Wired LAN (future) | CH9121T + RJ45 (X18) on UART0 |
+| Wired LAN | CH9121T + RJ45 (X18) — **disconnected on the aztec board** (R63/R64 removed; UART0 now drives the steering VESC on X1) |
 
 **Firmware strategy — HARD SWITCH.** `include/Constants.h` will be rewritten to this map; DevKit wiring
 is no longer supported on this branch. The implementation lands as a separate OpenSpec change — this
@@ -52,8 +52,8 @@ document is the wiring / pin reference only.
 | **1** | I2C1 SDA — X14 header (fine steering AS5600 0x36 only) | `PIN_STEER_SDA` | FREE | MOVED (was 41) |
 | **2** | I2C1 SCL — same bus | `PIN_STEER_SCL` | FREE | MOVED (was 42) |
 | **3** | CD4051 8:1 mux common out (Analog_1..8 = BTS7960 IS) | `PIN_ADC_IS_MUX` — ADC1 | `PIN_THROTTLE_PWM` | NEW (input only) |
-| **4** | PWM_1 → X6 pin 2 (L_PWM) | `PIN_VESC_TX` — UART2 TX | same | UNCHANGED |
-| **5** | PWM_2 → X6 pin 3 (R_PWM) | `PIN_VESC_RX` — UART2 RX | same | UNCHANGED |
+| **4** | PWM_1 → X6 pin 2 (L_PWM) | FREE — reserved for a 4th BTS7960 on X6 | `PIN_VESC_TX` | FREED (VESC moved to UART0 / X1) |
+| **5** | PWM_2 → X6 pin 3 (R_PWM) | FREE — reserved for a 4th BTS7960 on X6 | `PIN_VESC_RX` | FREED (VESC moved to UART0 / X1) |
 | **6** | PWM_3 → X7 pin 2 (L_PWM) | `PIN_BRAKE_LPWM` — LEDC ch5 | same | UNCHANGED |
 | **7** | PWM_4 → X7 pin 3 (R_PWM) | `PIN_BRAKE_RPWM` — LEDC ch4 | same | UNCHANGED |
 | **8** | Opto-isolated input via 6N137 (X2, ex-"S-BUS") | `PIN_SPEED_SENSOR` — driveline speed (PCNT) ⚠ inverted, see §3/§8.9 | `PIN_MAVLINK_RX` | RE-PINNED |
@@ -78,9 +78,9 @@ document is the wiring / pin reference only.
 | **40** | MCP2515 SPI CLK | `PIN_CAN_SCK` | FREE | MOVED (was 12) |
 | **41** | MCP2515 SPI MISO | `PIN_CAN_MISO` | `PIN_STEER_SDA` | MOVED (was 13) |
 | **42** | MCP2515 SPI MOSI | `PIN_CAN_MOSI` | `PIN_STEER_SCL` | MOVED (was 11) |
-| **43** | UART0 TX → Prog X1 (510Ω R13) **and** CH9121T RXD1 (100Ω R63) | RESERVED — future wired LAN | console TX | RESERVED ⚠ shared |
-| **44** | UART0 RX ← Prog X1 (510Ω R14) **and** CH9121T TXD1 (100Ω R64) | RESERVED — future wired LAN | console RX | RESERVED ⚠ shared |
-| **45** | `CFG_CH9121T` via BSS138 | LAN config-mode toggle — unused until LAN enabled | FREE | RESERVED ⚠ strapping |
+| **43** | UART0 TX → Prog X1 TxD (510Ω R13); R63 → CH9121T **removed** on aztec | `PIN_VESC_TX` — VESC UART0 TX (X1) → VESC RX | console TX | NEW (aztec, needs R63/R64 removed) |
+| **44** | UART0 RX ← Prog X1 RxD (510Ω R14); R64 → CH9121T **removed** on aztec | `PIN_VESC_RX` — VESC UART0 RX (X1) ← VESC TX | console RX | NEW (aztec, needs R63/R64 removed) |
+| **45** | `CFG_CH9121T` via BSS138 | LAN config-mode toggle — unused (CH9121T disconnected on aztec) | FREE | RESERVED ⚠ strapping |
 | **46** | `Bust_On/OFF` → X10 pin 1 | `PIN_BOOST_EN` — boost enable output | FREE | NEW ⚠ strapping |
 | **47** | I2C2 SCL (BSS138 level shift) | On-board U10/U2 + X15 bus SCL (relay board + coarse steering AS5600) | `PIN_GEAR_HIGH` | NEW |
 | **48** | I2C2 SDA (BSS138 level shift) | On-board U10/U2 + X15 bus SDA (relay board + coarse steering AS5600) | FREE | NEW |
@@ -97,12 +97,12 @@ document is the wiring / pin reference only.
 
 | Connector | Purpose | Pinout |
 |-----------|---------|--------|
-| **X1** | Prog / programming header | 3V3, RESET, GND, TxD (GPIO43), RxD (GPIO44), BOOT |
+| **X1** | Prog header — **steering VESC UART0** (aztec) | 1=3V3, 2=RESET, 3=GND, 4=TxD (GPIO43) → **VESC RX**, 5=RxD (GPIO44) ← **VESC TX**, 6=BOOT. 3.3V logic, direct through 510Ω R13/R14 (no level shifter); wire TxD/RxD/GND only, **not** 3V3. ⚠ No longer usable for UART flashing — flash over USB-C (RESET/BOOT still work) |
 | **X2** | Driveline speed sensor (12V), opto-isolated | 1 = In+, 2 = In− → 470Ω `R22` → 6N137 LED → open-collector output + pull-up → **GPIO8**. ⚠ **Inverted** (LED on → GPIO8 low) and ⚠ **needs an extra series resistor** — see below |
 | **X3** | Hall 1 — spare | 1=5V, 2=Hall A (GPIO14), 3=Hall B (GPIO21), 4=GND |
 | **X4** | Hall 2 — spare | 1=5V, 2=Hall A (GPIO12), 3=Hall B (GPIO13), 4=GND |
 | **X5** | Hall 3 — spare | 1=5V, 2=Hall A (GPIO10), 3=Hall B (GPIO11), 4=GND |
-| **X6** | VESC steering (UART) | 1=5V(fused), 2=L_PWM → **VESC RX** (GPIO4 TX), 3=R_PWM → **VESC TX** (GPIO5 RX), 4/5=IS n/c, 6=GND |
+| **X6** | FREE — reserved for a 4th BTS7960 | 1=5V(fused), 2=L_PWM (GPIO4), 3=R_PWM (GPIO5), 4/5=L_IS/R_IS (mux CH3/CH0), 6=GND. *History:* carried the steering VESC UART2 until it moved to X1 / UART0 |
 | **X7** | Brake BTS7960 | 1=5V(fused), 2=L_PWM (GPIO6), 3=R_PWM (GPIO7), 4=L_IS, 5=R_IS, 6=GND |
 | **X8** | Servos | 1=5V(fused, servo supply), 2=throttle PWM (GPIO15), 3=transmission PWM (GPIO16 — GXservo HS-1005SGT 150KG on aztec), 4/5=IS, 6=GND |
 | **X9** | MAVLink → Pixhawk TELEM | 2 → Pixhawk RX (GPIO17 TX), 3 ← Pixhawk TX (GPIO18 RX), 6=GND. ⚠ **Do NOT connect pin 1 (5V)**; leave 4/5 unconnected |
@@ -160,9 +160,9 @@ BAV199 clamp + 100n, into the CD4051 mux.
 
 | UART | RX | TX | Baud | Purpose |
 |------|----|----|------|---------|
-| UART0 | 44 | 43 | — | **RESERVED** for CH9121T wired LAN (future). Console moved to USB-CDC |
+| UART0 | 44 | 43 | 115200 | VESC steering driver (Flipsky 75200) via Prog header X1 (aztec: R63/R64 removed). Console is USB-CDC |
 | UART1 | 18 | 17 | 115200 | MAVLink 2 ↔ Pixhawk TELEM (via X9) |
-| UART2 | 5 | 4 | 115200 | VESC steering driver (Flipsky 75200) via X6 — unchanged |
+| UART2 | — | — | — | Unused (GPIO4/5 / X6 freed for a 4th BTS7960) |
 | — | — | — | — | No UART is free for S-BUS; **S-BUS is dropped for good** and GPIO8 (X2 opto) is now the speed-sensor pulse input |
 
 ### I2C Allocation
@@ -366,15 +366,18 @@ A separate 7s LiFePO4 battery also exists in the vehicle power system.
 
 ## 8. ⚠ Warnings & Bring-Up Checklist
 
-1. **GPIO43/44 are shared copper** between the Prog connector and the CH9121T. A device on the Prog
-   connector and an active LAN chip are mutually exclusive — CH9121T TXD1 through 100Ω wins over the
-   Prog header through 510Ω. Keep the LAN section unpopulated / held silent until UART0 is truly free.
+1. **GPIO43/44 (UART0) carry the steering VESC on X1.** *History:* they were shared copper between the
+   Prog connector and the CH9121T (CH9121T TXD1 through 100Ω wins over X1 through 510Ω). On the aztec
+   board **R63/R64 are removed**, so UART0 reaches only X1 — any board copy used with this firmware
+   needs the same rework. Consequences: the ROM bootloader still prints its banner on GPIO43 at reset
+   (the VESC ignores unframed bytes; runtime core/IDF logs are kept off UART0 by the firmware), and X1
+   can no longer be used for UART flashing — flash over USB-C (X1 RESET/BOOT still work).
 2. **Strapping pins:** GPIO0 (boot / LED), GPIO45 (`CFG_CH9121T`), GPIO46 (boost enable — 100K pulldown
    keeps the boost off through reset; verify there is no enable glitch at boot), GPIO3 (JTAG source
    select strap — used as an ADC **input only**, which is fine).
-3. **PWM-header UART links (X6 VESC, X9 MAVLink)** run through BSS138 bidirectional level shifters with
+3. **PWM-header UART link (X9 MAVLink)** runs through BSS138 bidirectional level shifters with
    10K pull-ups to 5V, 1K series and 100pF. Verified workable at 115200: a logic low arrives at ~0.5V at
-   the ESP, highs reach ~5V through ~11K into the peripheral (Pixhawk TELEM and VESC STM32 pins are
+   the ESP, highs reach ~5V through ~11K into the peripheral (Pixhawk TELEM pins are
    5V-tolerant). **Do not raise the baud rate** (rise time ~1 µs) and keep cables short.
 4. **X9 pin 1 (5V) must NOT be wired to Pixhawk TELEM 5V** — both ends are supply outputs.
 5. **Hall inputs (X3/X4/X5) are scaled for 5V sensors** (×0.65 divider) and are all **spare**. A 12V
@@ -442,7 +445,7 @@ A separate 7s LiFePO4 battery also exists in the vehicle power system.
 | `PIN_CAN_MOSI` | GPIO 11 | **GPIO 42** |
 | `PIN_STEER_SDA` | GPIO 41 | **GPIO 1** |
 | `PIN_STEER_SCL` | GPIO 42 | **GPIO 2** |
-| `PIN_VESC_TX` / `PIN_VESC_RX` | GPIO 4 / 5 | unchanged |
+| `PIN_VESC_TX` / `PIN_VESC_RX` | GPIO 4 / 5 | **GPIO 43 / 44** (UART0, X1 — aztec) |
 | `PIN_BRAKE_LPWM` / `PIN_BRAKE_RPWM` | GPIO 6 / 7 | unchanged |
 
 ### New constants

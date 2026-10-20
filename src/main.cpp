@@ -15,13 +15,15 @@
 #include "BoardInputs.h"
 #include "SpeedSensor.h"
 #include "nvs_flash.h"
+#include "esp_log.h"
+#include "esp32-hal-uart.h"
 #include <Wire.h>
 
 // ============================================================================
 // ACTUATOR INSTANCES
 // ============================================================================
 
-// Steering Actuator (Flipsky 75200 VESC over UART2 + two AS5600 angle sensors:
+// Steering Actuator (Flipsky 75200 VESC over UART0 / X1 + two AS5600 angle sensors:
 // FINE on the steering shaft via I2C1 `Wire` / X14, COARSE on a geared-down shaft
 // via I2C2 `Wire1` / X15 — together an absolute multi-turn position).
 // The VESC driver MUST be constructed before the steering controller that
@@ -128,6 +130,20 @@ static void recoverI2C2IfWedged() {
 // SETUP
 // ============================================================================
 
+// ESP-IDF log sink while UART0 carries the steering VESC: the IDF console is UART0
+// (primary) + USB-Serial-JTAG (secondary) in the prebuilt sdkconfig, so component
+// ESP_LOGx output (wifi, nvs, ...) would otherwise be interleaved into VESC frames.
+// Route it to the USB-CDC console only.
+static int usbOnlyLogVprintf(const char* fmt, va_list args) {
+    char buf[256];
+    int n = vsnprintf(buf, sizeof(buf), fmt, args);
+    if (n > 0) {
+        Serial.write(reinterpret_cast<const uint8_t*>(buf),
+                     (size_t)(n < (int)sizeof(buf) ? n : (int)sizeof(buf) - 1));
+    }
+    return n;
+}
+
 void setup() {
     // 24V boost rail FIRST: it feeds the steering VESC, the Jetson, Starlink and
     // the cameras, so it must be up before any subsystem that depends on it.
@@ -138,6 +154,14 @@ void setup() {
     // Console is USB-CDC (ARDUINO_USB_CDC_ON_BOOT=1). Never wait for a host —
     // the vehicle must boot with no laptop attached; early output may be lost.
     Serial.begin(SERIAL_BAUD_RATE);
+
+    // UART0 (GPIO43/44, X1) is the steering VESC link: keep every runtime log path
+    // off it before anything can log. ets_printf / ROM putc -> nowhere; ESP-IDF
+    // esp_log -> USB-CDC only. (The ROM bootloader still prints at reset; the VESC
+    // ignores unframed bytes.)
+    uartSetDebug(NULL);
+    esp_log_set_vprintf(usbOnlyLogVprintf);
+
     Serial.println("[INIT] 24V boost rail enabled (GPIO46)");
 
     // Initialize NVS first (required by Debug utility)

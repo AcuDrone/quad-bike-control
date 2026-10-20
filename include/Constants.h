@@ -17,11 +17,12 @@
 //
 // Pins that deliberately have NO firmware function:
 //   GPIO19/20 — native USB D-/D+ (USB-CDC console, flashing). Never assign.
-//   GPIO43/44 — UART0, shared copper between the Prog header and the future
-//               CH9121T wired-LAN chip. RESERVED: no console, no UART is opened
-//               on them (the console is USB-CDC, ARDUINO_USB_CDC_ON_BOOT=1).
-//   GPIO45    — CFG_CH9121T (LAN config strap), untouched until LAN is enabled.
+//   GPIO45    — CFG_CH9121T (LAN config strap), untouched (the CH9121T is cut off
+//               from UART0 on the aztec board, see PIN_VESC_TX below).
+//   GPIO4/5   — FREE: X6 is reserved for a 4th BTS7960 driver (IS mux CH3/CH0).
 //   GPIO0/21, GPIO10-13 — spare (system LED, Hall_1 B, Hall_2/3).
+// GPIO43/44 (UART0) carry the steering VESC on the Prog header X1. The console is
+// USB-CDC (ARDUINO_USB_CDC_ON_BOOT=1), never UART0.
 
 // MAVLink telemetry link (UART1 to Pixhawk TELEM, connector X9 via BSS138 shifters)
 // ⚠ Verified at 115200 only — do NOT raise the baud rate (pinout §8.3).
@@ -33,16 +34,21 @@
 // Transmission Servo (GXservo HS-1005SGT 150KG, aztec) — X8 pin 3
 #define PIN_TRANS_SERVO     GPIO_NUM_16  // LEDC Channel 2
 
-// Steering Actuator — driven by a Flipsky 75200 VESC over UART2 (brushed-DC mode).
+// Steering Actuator — driven by a Flipsky 75200 VESC over UART0 (brushed-DC mode).
 // See "VESC STEERING DRIVER CONFIGURATION" below. The former BTS7960 steering PWM
 // pins (GPIO17/18) and their LEDC channels (6/7) are fully released: GPIO17/18 are
 // now the MAVLink UART and LEDC 6/7 are free for future use.
 
-// VESC steering driver UART (UART_NUM_2; UART0 reserved for LAN, UART1 = MAVLink)
-// Connector X6 via BSS138 shifters — 115200 only (pinout §8.3).
-#define PIN_VESC_TX         GPIO_NUM_4    // ESP TX -> VESC RX (X6 pin 2)
-#define PIN_VESC_RX         GPIO_NUM_5    // ESP RX <- VESC TX (X6 pin 3)
-#define VESC_UART_NUM       2             // UART_NUM_2
+// VESC steering driver UART (UART_NUM_0; UART1 = MAVLink, UART2 unused).
+// Prog header X1 (TxD/RxD, 3.3V direct through 510R R13/R14, no level shifters).
+// HARDWARE PRECONDITION (aztec board): R63/R64 (100R links GPIO43/44 -> CH9121T)
+// are REMOVED, so UART0 reaches only X1. With them fitted the LAN chip would fight
+// the VESC on GPIO44. X6 (GPIO4/5) is freed for a 4th BTS7960.
+// The ROM bootloader still prints on GPIO43 at reset (the VESC ignores unframed
+// bytes); runtime core/IDF logging is kept off UART0 in setup() (main.cpp).
+#define PIN_VESC_TX         GPIO_NUM_43   // UART0 TX -> VESC RX (X1 TxD)
+#define PIN_VESC_RX         GPIO_NUM_44   // UART0 RX <- VESC TX (X1 RxD)
+#define VESC_UART_NUM       0             // UART_NUM_0
 #define VESC_UART_BAUD      115200        // VESC app default baud
 
 // I2C1 ("Wire") — the EXTERNAL header bus: the FINE AS5600 steering angle sensor
@@ -625,8 +631,8 @@ struct ServoChannelConfig {
 // ============================================================================
 
 // The console is the ESP32-S3 native USB CDC device on the board's USB-C connector
-// (build flag ARDUINO_USB_CDC_ON_BOOT=1). UART0 (GPIO43/44) is RESERVED for the
-// future CH9121T wired LAN and must not be reclaimed for a console.
+// (build flag ARDUINO_USB_CDC_ON_BOOT=1). UART0 (GPIO43/44) is the steering VESC
+// link (X1) and must never be reclaimed for a console.
 // Baud is irrelevant for CDC but harmless; the firmware never waits for a host.
 #define SERIAL_BAUD_RATE      115200 // Serial monitor baud rate (ignored by USB-CDC)
 #define DEBUG_ENABLED         true   // Default debug output state (runtime-toggleable via Debug utility or web portal)

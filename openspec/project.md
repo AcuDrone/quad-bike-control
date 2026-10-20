@@ -6,6 +6,9 @@ Electronic control system for an off-road vehicle, receiving commands via MAVLin
 Vehicles: the `aztec` branch targets the **ODES JUNGLECROSS 800 EFI/EPS** buggy on the same
 `Control_v0` board; `master` targets the quad bike. On aztec the transmission servo is a GXservo
 HS-1005SGT 150KG (16.8 V max supply — never on the 24V boost rail).
+The aztec steering VESC (Flipsky 75200) talks UART0 on the Prog header X1 (GPIO43 TX / GPIO44 RX);
+this requires R63/R64 (UART0 → CH9121T LAN chip) removed on the board. X6 (GPIO4/5) is free for a
+fourth BTS7960. MAVLink stays on UART1 (X9); the console is USB-CDC.
 
 ## Tech Stack
 - **Platform**: ESP32-S3-WROOM-1U on the custom `Control_v0` control board (see `GPIO_PINOUT_CUSTOM_BOARD_S3.md`)

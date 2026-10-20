@@ -70,8 +70,8 @@ MavlinkInterface::MavlinkInterface()
 }
 
 bool MavlinkInterface::begin(uint8_t rxPin, uint8_t txPin, uint8_t uartNum, uint32_t baud) {
-    // UART0 (GPIO43/44) is RESERVED for the future CH9121T wired LAN and is never
-    // opened by the firmware; the console is USB-CDC. MAVLink lives on UART1 (X9).
+    // UART0 (GPIO43/44, X1) is the steering VESC link and UART2 is unused; the
+    // console is USB-CDC. MAVLink lives on UART1 (X9).
     if (uartNum == UART_NUM_1) {
         serial_ = &Serial1;
     } else {
