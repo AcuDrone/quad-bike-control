@@ -14,6 +14,19 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.4.0","date":"2026-10-27","uk":[
+"Веб-панель перероблена на сервісну консоль: розділи Діагностика, Калібрування, Тести, Система",
+"Довідка до кожної картки за кнопкою ⓘ",
+"Положення передач задаються одним повзунком і кнопками «Зберегти як»",
+"Блок «Увага» показує низьку напругу VESC (<21.5 В), низьку напругу 12 В (<12.0 В) і втрату зв'язку з ЕБК",
+"Повторне калібрування не потрібне"
+],"en":[
+"Web portal redesigned as a service console: Diagnostics, Calibration, Tests, System sections",
+"Help for every card behind the ⓘ button",
+"Gear positions are set with one slider and \"Save as\" buttons",
+"The \"Attention\" box shows low VESC voltage (<21.5 V), low 12 V voltage (<12.0 V) and lost ECU link",
+"No recalibration required"
+]},
 {"version":"1.3.0","date":"2026-10-27","uk":[
 "Кут керма тепер читається з датчика Bosch на шині CAN; датчики AS5600 прибрано",
 "Нова кнопка «Задати нуль датчика»: поточне положення коліс стає центром керма",

@@ -18,7 +18,7 @@ The web portal provides a WiFi-based interface for monitoring telemetry, manual 
 # Build the project (this will download all libraries)
 pio run
 
-# Upload firmware to ESP32-C6
+# Upload firmware to the ESP32-S3
 pio run -t upload
 
 # Monitor serial output
@@ -27,7 +27,7 @@ pio run -t monitor
 
 ### 2. Upload Filesystem (Web Interface)
 
-The web interface HTML file must be uploaded to the ESP32's SPIFFS filesystem:
+The web interface HTML file must be uploaded to the ESP32's LittleFS filesystem:
 
 ```bash
 # Upload filesystem image containing data/index.html
@@ -51,19 +51,78 @@ After the ESP32 boots:
 
 ### 4. Use the Web Portal
 
-**Telemetry Display** (always active):
-- Current gear (R/N/L/H)
-- Hall sensor position (encoder counts)
-- Brake percentage
-- Throttle angle
-- Steering angle
-- Input source indicator
-- S-bus status
-- Speed and speed limit
-- Odometer and trip distance (km)
-- Engine hours, total and trip (h)
+The portal is a **service console** for the engineer (setup, calibration, diagnostics). The
+operator drives through the autopilot and does not need it.
 
-**Odometer / trip (read-only):** the speed card **displays** the total odometer (`odo_km`) and the
+**Layout.** A sidebar on the left holds the brand "Сервісна консоль" / "Service console", four
+section buttons and, at the bottom, two status items: the WebSocket state (Connected /
+Disconnected) and the firmware version with the board name (e.g. `1.4.0 · aztec`; click it to open
+"What's new"). Exactly one section is shown at a time; the page remembers the last one in the
+browser (`localStorage` key `ui_section`) and opens on **Diagnostics** the first time, or when the
+browser blocks storage (private window). All cards keep updating in the background, so switching
+sections never shows stale values. The language toggle (`УК` / `EN`) sits in the header next to
+the section title.
+
+**Help (ⓘ).** Long instructions are not printed in the cards any more. Cards that have them show a
+small ⓘ button in the title; it opens a help window with that card's instructions. Close it with ✕,
+a click outside, or Escape. One-line hints and warnings that depend on the current state (MAVLink
+control active, steering jog without a sensor, a steering limit beyond ±550°) stay in the cards.
+
+**Phone / narrow screen (≤ 768 px).** The sidebar turns into a top bar with a ☰ button, a round
+connection dot (green = WebSocket connected, red = disconnected) and the current section name.
+☰ opens the section list together with the WebSocket and firmware items; choosing a section closes
+it. Cards are shown in one column.
+
+#### Section by section
+
+**Діагностика / Diagnostics** (read-only; the only button is "Probe ECU"):
+- **Увага / Attention** box, shown only while something is wrong: steering sensor unhealthy (jog
+  without stall protection), steering VESC down or faulted, a steering limit beyond ±550°, MAVLink
+  inactive, board I/O fault, low steering VESC input voltage, low 12 V (ECU) voltage, no ECU link.
+  The voltage thresholds are firmware constants (`STEER_VIN_LOW_V`, `ECU_VOLTAGE_LOW_V` in
+  `include/Constants.h`); the page only shows the flags the firmware sends.
+- **Telemetry**: gear and its sensor code, servo position, brake, throttle (µs), steering, speed,
+  MAVLink link.
+- **Кермо: стан / Steering: state**: tiles for angle, rate, left/right limits, sensor state,
+  calibration, VESC driver, sensor zero, motor current, FET temperature and VESC input voltage, plus
+  one line of raw LWS status bits and error counters.
+- **Vehicle Data (CAN)**: engine data from the ECU, engine hours and trip hours, CAN status, and
+  "Probe ECU" with its results.
+- **MAVLink Command Channels**: link rate/age and channels 1–8.
+- **Швидкість / Speed**: speed and sensor state, speed limit and limiting, steering authority and
+  scaling base, the bench test-speed state, odometer and trip.
+
+**Калібрування / Calibration**:
+- **Steering calibration**: jog / nudge / jog speed, Set Left, Set Right, Set sensor zero, the
+  angle, the limits and one sensor | calibration status line.
+- **Throttle calibration**: the idle and full sliders always show the saved endpoints and are
+  locked; "Start Calibration" unlocks them (engine off), then Save or Cancel.
+- **Gear position defaults**: one servo slider (0–100 %). Press **Start** to unlock it; dragging
+  moves the transmission servo (at most 10 commands per second). **Save as R/N/H/L** stores the
+  slider value for that gear (always available, it does not move the servo); the button of the
+  gear at the current position is highlighted. The ▶ R / N / H / L row moves the servo to a saved
+  position. **Done**, or a lost WebSocket connection, locks the slider again. The RPM boost target
+  is set in the same card.
+- **Gear sensor codes**: live bits A/B/C and the decoded gear; **Save as R/N/H/L** assigns the live
+  code to a gear (each button shows the stored code, "(default)", or "not set"); "Reset to
+  defaults".
+- **Speed sensor**: pulses per revolution, wheel circumference, speed-limit readout, steering
+  scaling base and bench test speed.
+
+**Тести / Tests** (bench checks):
+- **Manual control**: Take / Release control, gear buttons, steering, throttle and brake sliders.
+  Disabled while MAVLink control is active.
+- **Ignition & lighting**: ignition OFF / ACC / START, front light, wheel lock (if fitted), 24 V
+  boost rail, and their telemetry.
+- **Relay test**: eight buttons "Relay 1…8" with the relay function; an energised relay is
+  highlighted. Switching a relay on needs ignition OFF, light off and a healthy relay board.
+
+**Система / System**:
+- **System maintenance**: debug output on/off, RPM boost test, firmware upload (OTA), "What's new".
+- **Мережа / Network**: the access point SSID and IP address as reported by the firmware
+  (read-only; network settings will be added later).
+
+**Odometer / trip (read-only):** the Speed card **displays** the total odometer (`odo_km`) and the
 trip distance (`trip_km`), both in km to 3 decimals and both shown whatever the sensor's health —
 distance already driven is not invalidated by the sensor going quiet. The portal offers **no reset
 control**: clearing the trip is a **ground-station action only** (`MAV_CMD_USER_1`, see
@@ -83,14 +142,9 @@ clears the trip distance.
 portal has no maximum-speed box and no limiter on/off button — there is nothing to set here.
 See `MAVLINK_SETUP.md` → "Autopilot speed limit (`SPEED_MAX`)".
 
-**Manual Control** (only when S-bus inactive):
-- Gear selection buttons (R/N/L/H)
-- Steering slider (-100% to +100%)
-- Throttle slider (0% to 100%)
-
-**OTA Firmware Update:**
+**OTA Firmware Update** (Система → System maintenance):
 1. Build new firmware: `pio run`
-2. Locate firmware binary: `.pio/build/esp32-c6-devkitc-1/firmware.bin`
+2. Locate firmware binary: `.pio/build/esp32-s3-devkitc-1/firmware.bin`
 3. Click "Click to select firmware (.bin)" on web portal
 4. Select the firmware.bin file
 5. Click "Upload Firmware"
@@ -116,7 +170,7 @@ All settings are in [include/Constants.h](include/Constants.h):
 // WiFi Configuration
 #define WIFI_AP_SSID          "QuadBike-Control"
 #define WIFI_AP_PASSWORD      ""  // Open network
-#define WIFI_AP_IP            IPAddress(192, 168, 4, 1)
+#define WIFI_AP_IP            IPAddress(192, 168, 10, 1)
 
 // Telemetry Rate
 #define TELEMETRY_INTERVAL    200  // ms (5 Hz)
@@ -194,7 +248,7 @@ Serial commands still work alongside web portal:
 ## Architecture
 
 ```
-ESP32-C6
+ESP32-S3
 ├── WiFi AP (192.168.10.1)
 ├── AsyncWebServer (port 80)
 │   ├── HTTP: Serves /index.html

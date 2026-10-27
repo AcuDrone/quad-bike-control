@@ -95,6 +95,8 @@ public:
         float steer_fet_temp;      // VESC FET temperature (°C)
         uint8_t steer_vesc_fault;  // VESC fault code (0 = no fault)
         bool steer_driver_ok;      // True if the VESC telemetry link is healthy
+        float steer_vin;           // VESC input voltage (V) — meaningless while !steer_driver_ok
+        bool steer_vin_low;        // steer_driver_ok && steer_vin < STEER_VIN_LOW_V (warning only)
         String input_source;      // Current input source: "MAVLINK", "WEB", "FAILSAFE"
         bool mav_active;          // True if MAVLink command stream is valid
         bool web_control;         // True if latched web-control override is engaged
@@ -127,6 +129,7 @@ public:
         uint16_t module_voltage_mv; // Control module supply voltage, mV
         int8_t intake_temp;       // Intake air temperature °C (-40 to +215)
         uint8_t engine_load;      // Calculated engine load % (0-100)
+        bool ecu_voltage_low;     // module voltage < ECU_VOLTAGE_LOW_V (only meaningful when connected)
         String can_status;        // CAN status: "connected", "disconnected"
 
         // MAVLink command channel + link data
@@ -159,6 +162,8 @@ public:
         // Firmware information
         String firmware_version;  // Firmware version string (e.g., "1.0.0")
         String board;             // Target board name (BOARD_NAME, e.g. "Control_v0")
+        const char* wifi_ssid;    // WIFI_AP_SSID (static string, stored by pointer)
+        char wifi_ip[16];         // WIFI_AP_IP as a dotted string, e.g. "192.168.10.1"
 
         // Gear default positions (user-configurable NVS values, 0.0–100.0 %)
         float gear_default_r;     // Default servo % for REVERSE

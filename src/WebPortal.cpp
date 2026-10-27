@@ -554,7 +554,8 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // Capacity headroom: ~80 top-level fields (incl. 4 steering-VESC fields, 18 steering
     // angle-sensor fields, wheel_lock_fitted, the relay_test bitfield, the
     // 5 rail / board-I/O fields, the 12 hall-speed / limiter / distance fields and the
-    // 4 steering speed-scaling fields, gear_code / gear_sensed / gear_codes_custom) + a 16-element
+    // 4 steering speed-scaling fields, gear_code / gear_sensed / gear_codes_custom, steer_vin /
+    // steer_vin_low / ecu_voltage_low, wifi_ssid / wifi_ip) + a 16-element
     // array + the nested probe / po / bm / dtc / gearDefaults / gear_codes objects, plus copied
     // String values. Sized to 4096 to leave room for the transient `probe` object (only present
     // while probe results are fresh).
@@ -617,6 +618,9 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["steer_fet_temp"] = telemetry.steer_fet_temp;
     doc["steer_vesc_fault"] = telemetry.steer_vesc_fault;
     doc["steer_driver_ok"] = telemetry.steer_driver_ok;
+    // VESC input voltage (V) + low flag; the UI ignores both while steer_driver_ok is false.
+    doc["steer_vin"] = serialized(String(isfinite(telemetry.steer_vin) ? telemetry.steer_vin : 0.0f, 1));
+    doc["steer_vin_low"] = telemetry.steer_vin_low;
     doc["input_source"] = telemetry.input_source;
     doc["mav_active"] = telemetry.mav_active;
     doc["web_control"] = telemetry.web_control;
@@ -664,6 +668,7 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
         doc["fuel_level"] = telemetry.fuel_level;
         doc["map_kpa"] = telemetry.map_kpa;
         doc["ecu_voltage"] = serialized(String(telemetry.module_voltage_mv / 1000.0f, 2));
+        doc["ecu_voltage_low"] = telemetry.ecu_voltage_low;
         doc["intake_temp"] = telemetry.intake_temp;
         doc["engine_load"] = telemetry.engine_load;
     }
@@ -701,6 +706,9 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // Firmware version and target board
     doc["firmware_version"] = telemetry.firmware_version;
     doc["board"] = telemetry.board;
+    // Network identity (static AP constants); both stored by pointer — `telemetry` outlives doc.
+    doc["wifi_ssid"] = telemetry.wifi_ssid;
+    doc["wifi_ip"] = (const char*)telemetry.wifi_ip;
 
     // Gear default positions
     JsonObject gearDefaults = doc.createNestedObject("gear_defaults");

@@ -60,31 +60,12 @@
             background: linear-gradient(135deg, var(--background) 0%, var(--sidebar) 100%);
             color: var(--foreground);
             min-height: 100vh;
-            padding: 20px;
-        }
-
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-
-        header {
-            text-align: center;
-            margin-bottom: 30px;
         }
 
         h1 {
             font-size: 2.5em;
             margin-bottom: 10px;
             text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
-        }
-
-        .status-bar {
-            display: flex;
-            justify-content: center;
-            gap: 20px;
-            flex-wrap: wrap;
-            margin-bottom: 30px;
         }
 
         .status-item {
@@ -466,28 +447,172 @@
                 grid-template-columns: 1fr;
             }
         }
+        /* ===== Service console shell: sidebar + four sections ===== */
+        .app { display: grid; grid-template-columns: 236px minmax(0, 1fr); min-height: 100vh; }
+        .sidebar {
+            background: var(--sidebar); border-right: 1px solid var(--sidebar-border);
+            padding: 18px 12px; position: sticky; top: 0; height: 100vh; overflow-y: auto;
+            display: flex; flex-direction: column; gap: 4px;
+        }
+        .brand { font-weight: bold; font-size: 1.05em; padding: 4px 10px 16px; color: var(--sidebar-foreground); }
+        .brand small { display: block; font-weight: normal; color: var(--muted-foreground); font-size: 0.78em; margin-top: 2px; }
+        .nav-btn {
+            display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+            padding: 11px 12px; border-radius: 8px; border: 1px solid transparent; background: transparent;
+            color: var(--sidebar-foreground); cursor: pointer; font-size: 0.95em; font-family: inherit;
+        }
+        .nav-btn:hover { background: var(--sidebar-accent); }
+        .nav-btn.active { background: color-mix(in srgb, var(--primary) 22%, var(--sidebar)); border-color: var(--primary); }
+        .nav-ico { width: 1.4em; text-align: center; }
+        .sidebar-foot { margin-top: auto; padding-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+        .sidebar-foot .status-item { padding: 8px 10px; font-size: 0.82em; }
+        .content { padding: 22px 24px 40px; min-width: 0; }
+        .content-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+        .content-head h1 { font-size: 1.6em; margin: 0; text-shadow: none; }
+        .lang-btn {
+            padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--card);
+            color: var(--foreground); cursor: pointer; font-weight: bold; font-size: 0.95em; flex: none;
+        }
+        .topbar { display: none; }
+        .conn-dot {
+            width: 12px; height: 12px; border-radius: 50%; flex: none; background: var(--danger);
+            box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 30%, transparent);
+        }
+        .conn-dot.on { background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 30%, transparent); }
+        .section { display: none; }
+        .section.active { display: block; }
+        .main-grid { margin-bottom: 0; }
+        .section-note {
+            margin-bottom: 16px; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border);
+            background: var(--card); color: var(--muted-foreground); font-size: 0.9em;
+        }
+        /* Big two-line buttons (relay test, "Save as" gear buttons): same look as .gear-btn incl. .active.
+           Separate class so updateControlsAvailability() (which disables every .gear-btn) leaves them alone. */
+        .relay-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 1fr; gap: 10px; }
+        .relay-btn {
+            padding: 12px 10px; min-height: 76px; height: 100%; margin: 0;
+            font-weight: bold; background: var(--secondary); border: 2px solid var(--border);
+            border-radius: 8px; color: var(--foreground); cursor: pointer; transition: all 0.3s;
+            display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+            text-align: center; white-space: normal; overflow-wrap: anywhere; font-family: inherit; font-size: 1rem;
+        }
+        .relay-btn:hover:not(:disabled) { background: var(--accent); transform: translateY(-2px); }
+        .relay-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .relay-btn.active { background: color-mix(in srgb, var(--success) 40%, var(--card)); border-color: var(--success); }
+        .relay-btn-name { font-size: 1.25em; line-height: 1.15; }
+        .relay-btn-desc { font-size: 0.8em; font-weight: normal; color: var(--muted-foreground); line-height: 1.3; }
+        .relay-btn.active .relay-btn-desc { color: var(--foreground); }
+        .gd-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 1fr; gap: 10px; margin-top: 14px; }
+        .gd-move-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-top: 8px; }
+        .gd-move {
+            padding: 6px 4px; border-radius: 6px; border: 1px solid var(--border); background: transparent;
+            color: var(--muted-foreground); font: inherit; font-size: 0.85em; cursor: pointer;
+        }
+        .gd-move:hover:not(:disabled) { color: var(--foreground); border-color: var(--foreground); }
+        .gd-move:disabled { opacity: 0.4; cursor: not-allowed; }
+        .act-btn {
+            padding: 8px 12px; border-radius: 4px; border: none; color: var(--foreground); cursor: pointer; width: 100%;
+        }
+        .sd-sub { font-size: 0.75em; margin-top: 4px; }
+        .sd-sub:has(> span:empty) { display: none; }
+        .sd-unit { font-size: 0.6em; font-weight: normal; color: var(--muted-foreground); }
+        .sd-full { grid-column: 1 / -1; }
+        .sd-raw {
+            font-family: var(--font-mono); font-size: 0.78em; color: var(--muted-foreground);
+            background: var(--secondary); border-radius: 8px; padding: 10px 15px; line-height: 1.6;
+            overflow-wrap: anywhere;
+        }
+        .card h2.card-title { display: flex; align-items: center; gap: 10px; }
+        .help-btn {
+            margin-left: auto; flex: none; width: 22px; height: 22px; border-radius: 50%; padding: 0;
+            border: 1.5px solid var(--muted-foreground); background: transparent; color: var(--muted-foreground);
+            font: italic bold 13px/1 Georgia, 'Times New Roman', serif; cursor: pointer;
+            display: inline-flex; align-items: center; justify-content: center;
+        }
+        .help-btn:hover, .help-btn:focus-visible { color: var(--foreground); border-color: var(--foreground); }
+        .help-body p { margin: 0 0 12px; line-height: 1.55; font-size: 0.95em; }
+        .help-body p:last-child { margin-bottom: 0; }
+        .thr-sliders { display: flex; flex-direction: column; gap: 12px; margin-bottom: 14px; }
+        .thr-label { font-size: 0.8em; color: var(--foreground); }
+        .thr-sliders.is-locked .thr-label { color: var(--muted-foreground); opacity: 0.7; }
+        .thr-sliders.is-locked input[type=range] { opacity: 0.4; cursor: not-allowed; }
+        .ro-row {
+            display: flex; justify-content: space-between; gap: 12px; padding: 8px 0;
+            border-bottom: 1px solid var(--border); font-size: 0.9em; color: var(--muted-foreground);
+        }
+        .ro-row .ro-val { color: var(--foreground); font-family: var(--font-mono); overflow-wrap: anywhere; text-align: right; }
+        .attention {
+            margin-bottom: 16px; border: 1px solid var(--warning); border-radius: 8px; padding: 12px 14px;
+            background: color-mix(in srgb, var(--warning) 12%, var(--card));
+        }
+        .attention-title { font-weight: bold; color: var(--warning); margin-bottom: 6px; }
+        .attention ul { margin: 0; padding-left: 18px; font-size: 0.9em; line-height: 1.6; }
+        .attention li.warn { color: var(--warning); }
+        .attention li.bad { color: var(--danger); }
+        .big-angle { font-size: 1.6em; color: var(--foreground); font-weight: bold; }
+
+        @media (max-width: 768px) {
+            .app { grid-template-columns: minmax(0, 1fr); }
+            .main-grid { grid-template-columns: minmax(0, 1fr); }
+            .card { min-width: 0; }
+            .relay-grid { grid-template-columns: minmax(0, 1fr); }
+            .topbar {
+                display: flex; align-items: center; gap: 12px; position: sticky; top: 0; z-index: 50;
+                background: var(--sidebar); border-bottom: 1px solid var(--sidebar-border); padding: 10px 16px;
+                height: 56px;
+            }
+            .hamburger {
+                background: var(--secondary); border: 1px solid var(--border); color: var(--foreground);
+                border-radius: 8px; font-size: 1.2em; padding: 6px 12px; cursor: pointer;
+            }
+            .topbar-title { font-weight: bold; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            .sidebar {
+                display: none; position: fixed; top: 56px; left: 0; right: 0; height: auto; max-height: calc(100vh - 56px);
+                z-index: 40; border-right: none; border-bottom: 1px solid var(--sidebar-border);
+            }
+            .sidebar.open { display: flex; }
+            .brand { display: none; }
+            .content { padding: 16px; }
+            .content-head h1 { font-size: 1.3em; }
+            .modal { max-width: calc(100vw - 24px); }
+        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <header style="position: relative;">
-            <button id="lang-toggle" onclick="toggleLanguage()" aria-label="Switch language"
-                    style="position:absolute; top:0; right:0; padding:8px 14px; border-radius:8px; border:1px solid var(--border); background:var(--card); color:var(--foreground); cursor:pointer; font-weight:bold; font-size:0.95em;">УК</button>
-            <h1>🏍️ <span data-i18n="app_title">QuadBike Control Portal</span></h1>
-        </header>
-
-        <div class="status-bar">
-            <div class="status-item" id="ws-status">
-                <strong data-i18n="ws_label">WebSocket:</strong> <span id="ws-status-text" data-i18n="ws_connecting">Connecting...</span>
+    <div class="topbar">
+        <button type="button" class="hamburger" onclick="toggleNav()" aria-label="Menu" aria-controls="sidebar" data-i18n-title="menu_label">☰</button>
+        <span class="conn-dot" id="conn-dot" role="img" aria-label="WebSocket: Disconnected" data-i18n-title="conn_dot_off"></span>
+        <span class="topbar-title" id="topbar-title">Diagnostics</span>
+    </div>
+    <div class="app">
+        <nav class="sidebar" id="sidebar">
+            <div class="brand">🛠️ <span data-i18n="brand_title">Service console</span><small>QuadBike</small></div>
+            <button type="button" class="nav-btn active" data-target="diag" onclick="showSection('diag')"><span class="nav-ico" aria-hidden="true">🩺</span><span data-i18n="nav_diag">Diagnostics</span></button>
+            <button type="button" class="nav-btn" data-target="calib" onclick="showSection('calib')"><span class="nav-ico" aria-hidden="true">🎯</span><span data-i18n="nav_calib">Calibration</span></button>
+            <button type="button" class="nav-btn" data-target="tests" onclick="showSection('tests')"><span class="nav-ico" aria-hidden="true">🧪</span><span data-i18n="nav_tests">Tests</span></button>
+            <button type="button" class="nav-btn" data-target="system" onclick="showSection('system')"><span class="nav-ico" aria-hidden="true">🔧</span><span data-i18n="nav_system">System</span></button>
+            <div class="sidebar-foot">
+                <div class="status-item" id="ws-status">
+                    <strong data-i18n="ws_label">WebSocket:</strong> <span id="ws-status-text" data-i18n="ws_connecting">Connecting...</span>
+                </div>
+                <div class="status-item clickable" id="fw-version" role="button" tabindex="0" onclick="openChangelog()"
+                     onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openChangelog(); }"
+                     data-i18n-title="changelog_hint">
+                    <strong data-i18n="fw_label">Firmware:</strong> <span id="fw-version-text" data-i18n="fw_loading">Loading...</span> 📋
+                </div>
             </div>
-            <div class="status-item clickable" id="fw-version" role="button" tabindex="0" onclick="openChangelog()"
-                 onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openChangelog(); }"
-                 data-i18n-title="changelog_hint">
-                <strong data-i18n="fw_label">Firmware:</strong> <span id="fw-version-text" data-i18n="fw_loading">Loading...</span> 📋
+        </nav>
+        <main class="content">
+            <div class="content-head">
+                <h1 id="section-title">Diagnostics</h1>
+                <button type="button" id="lang-toggle" class="lang-btn" onclick="toggleLanguage()" aria-label="Switch language">УК</button>
             </div>
-        </div>
-
-        <div class="main-grid">
+            <section class="section active" id="sec-diag" data-section="diag">
+            <div id="attention-box" class="attention" style="display: none;">
+                <div class="attention-title" data-i18n="attention_title">⚠ Attention</div>
+                <ul id="attention-list"></ul>
+            </div>
+            <div class="main-grid">
             <!-- Telemetry Display -->
             <div class="card">
                 <h2 data-i18n="card_telemetry">📊 Telemetry</h2>
@@ -524,352 +649,71 @@
                     </div>
                 </div>
             </div>
-
-            <!-- Manual Control -->
+            <!-- Steering state (read-only diagnostics, tile grid like Telemetry / CAN) -->
             <div class="card">
-                <h2 data-i18n="card_manual_control">🎮 Manual Control</h2>
-                <div id="control-warning" class="warning" data-i18n="warn_mav_active" style="display: none;">
-                    MAVLink control is active. Manual control disabled.
-                </div>
-
-                <div style="margin-bottom: 16px;">
-                    <button class="upload-btn" id="web-control-btn" onclick="toggleWebControl()" style="background: var(--secondary); width: 100%;">
-                        🕹️ <span id="web-control-label" data-i18n="btn_take_control">Take Control</span>
-                    </button>
-                    <div data-i18n="web_control_hint" style="font-size: 0.75em; color: var(--muted-foreground); margin-top: 4px;">
-                        Engages web control — MAVLink is ignored until released or all browsers disconnect.
-                    </div>
-                </div>
-
-                <h3 data-i18n="h_gear_selection" style="margin-top: 20px; margin-bottom: 10px;">Gear Selection</h3>
-                <div class="gear-buttons">
-                    <button class="gear-btn" id="gear-r" onclick="setGear('R')">R</button>
-                    <button class="gear-btn" id="gear-n" onclick="setGear('N')">N</button>
-                    <button class="gear-btn" id="gear-h" onclick="setGear('H')">H</button>
-                    <button class="gear-btn" id="gear-l" onclick="setGear('L')">L</button>
-                </div>
-                <div style="font-size: 0.75em; color: var(--muted-foreground); margin-top: 6px;">
-                    <span data-i18n="lbl_servo">Servo:</span> <span id="gear-encoder-pos" style="color: var(--foreground); font-weight: bold;">0.0%</span>
-                </div>
-
-                <div class="slider-container">
-                    <div class="slider-label">
-                        <span data-i18n="lbl_steering">Steering</span>
-                        <span id="steering-value">0%</span>
-                    </div>
-                    <input type="range" min="-100" max="100" value="0" class="slider" id="steering-slider">
-                    <div style="display: flex; gap: 12px; align-items: center; margin-top: 12px; margin-bottom: 8px;">
-                        <button id="steer-test-left" onclick="steerTest(-100)" data-i18n="steer_test_left" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">⟸ Left</button>
-                        <button id="steer-test-center" onclick="steerTest(0)" data-i18n="steer_test_center" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">Center</button>
-                        <button id="steer-test-right" onclick="steerTest(100)" data-i18n="steer_test_right" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">Right ⟹</button>
-                    </div>
-                </div>
-
-                <div class="slider-container">
-                    <div class="slider-label">
-                        <span data-i18n="lbl_throttle">Throttle</span>
-                        <span id="throttle-value">0%</span>
-                    </div>
-                    <input type="range" min="0" max="100" value="0" class="slider" id="throttle-slider">
-                </div>
-
-                <div class="slider-container">
-                    <div class="slider-label">
-                        <span data-i18n="lbl_brake">Brake</span>
-                        <span id="brake-value">0%</span>
-                    </div>
-                    <input type="range" min="0" max="100" value="0" class="slider" id="brake-slider">
-                </div>
-            </div>
-
-            <!-- Gear Position Defaults -->
-            <div class="card">
-                <h2 data-i18n="card_gear_defaults">⚙️ Gear Position Defaults</h2>
-                <p data-i18n-html="gear_defaults_help" style="font-size: 0.8em; color: var(--muted-foreground); margin-bottom: 12px;">
-                    Press <b>📍</b> to capture the current servo position (0.0–100.0%), then <b>Save</b>.
-                    <b>Move</b> drives the servo to the entered value.
-                </p>
-                <div id="gear-defaults-grid" style="display: flex; flex-direction: column; gap: 10px;">
-                    <div>
-                        <label data-i18n="gear_reverse" style="font-size: 0.8em; color: var(--muted-foreground);">REVERSE (R)</label>
-                        <div style="display: flex; gap: 6px; margin-top: 4px;">
-                            <input type="number" id="default-r" min="0" max="100" step="0.1" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
-                            <button onclick="captureServoPosition('R')" data-i18n-title="title_use_current_servo" title="Use current servo position" style="padding:6px 10px; border-radius:4px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">📍</button>
-                            <button onclick="moveToGearPosition('R')" data-i18n="btn_move" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer;">Move</button>
-                            <button onclick="saveGearDefault('R')" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
-                        </div>
-                    </div>
-                    <div>
-                        <label data-i18n="gear_neutral" style="font-size: 0.8em; color: var(--muted-foreground);">NEUTRAL (N)</label>
-                        <div style="display: flex; gap: 6px; margin-top: 4px;">
-                            <input type="number" id="default-n" min="0" max="100" step="0.1" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
-                            <button onclick="captureServoPosition('N')" data-i18n-title="title_use_current_servo" title="Use current servo position" style="padding:6px 10px; border-radius:4px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">📍</button>
-                            <button onclick="moveToGearPosition('N')" data-i18n="btn_move" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer;">Move</button>
-                            <button onclick="saveGearDefault('N')" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
-                        </div>
-                    </div>
-                    <div>
-                        <label data-i18n="gear_high" style="font-size: 0.8em; color: var(--muted-foreground);">HIGH (H)</label>
-                        <div style="display: flex; gap: 6px; margin-top: 4px;">
-                            <input type="number" id="default-h" min="0" max="100" step="0.1" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
-                            <button onclick="captureServoPosition('H')" data-i18n-title="title_use_current_servo" title="Use current servo position" style="padding:6px 10px; border-radius:4px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">📍</button>
-                            <button onclick="moveToGearPosition('H')" data-i18n="btn_move" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer;">Move</button>
-                            <button onclick="saveGearDefault('H')" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
-                        </div>
-                    </div>
-                    <div>
-                        <label data-i18n="gear_low" style="font-size: 0.8em; color: var(--muted-foreground);">LOW (L)</label>
-                        <div style="display: flex; gap: 6px; margin-top: 4px;">
-                            <input type="number" id="default-l" min="0" max="100" step="0.1" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
-                            <button onclick="captureServoPosition('L')" data-i18n-title="title_use_current_servo" title="Use current servo position" style="padding:6px 10px; border-radius:4px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">📍</button>
-                            <button onclick="moveToGearPosition('L')" data-i18n="btn_move" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer;">Move</button>
-                            <button onclick="saveGearDefault('L')" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
-                        </div>
-                    </div>
-                </div>
-                <div style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px;">
-                    <label data-i18n="lbl_boost_rpm_target" style="font-size: 0.8em; color: var(--muted-foreground);">RPM Boost Target</label>
-                    <div style="display: flex; gap: 6px; margin-top: 4px;">
-                        <input type="number" id="boost-rpm-input" min="500" max="5000" step="50" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
-                        <button onclick="saveBoostRpm()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
-                    </div>
-                </div>
-                <div id="gear-default-status" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
-            </div>
-
-            <!-- Gear Sensor Codes (aztec 3-bit gear code calibration) -->
-            <div class="card">
-                <h2 data-i18n="card_gear_codes">🔢 Gear Sensor Codes</h2>
-                <p data-i18n-html="gear_codes_help" style="font-size: 0.8em; color: var(--muted-foreground); margin-bottom: 12px;">
-                    Put the lever in a known gear, check the bits below, then press <b>Save as</b> that gear. If the code belonged to another gear, that gear becomes <b>not set</b> — capture it too. Engine must be off.
-                </p>
-                <div style="display: flex; gap: 6px; margin-bottom: 8px;">
-                    <div id="gear-bit-a" style="flex:1; text-align:center; padding:8px 4px; border-radius:6px; border:1px solid var(--border); background:var(--secondary); color:var(--muted-foreground); font-weight:bold;">A (0)</div>
-                    <div id="gear-bit-b" style="flex:1; text-align:center; padding:8px 4px; border-radius:6px; border:1px solid var(--border); background:var(--secondary); color:var(--muted-foreground); font-weight:bold;">B (1)</div>
-                    <div id="gear-bit-c" style="flex:1; text-align:center; padding:8px 4px; border-radius:6px; border:1px solid var(--border); background:var(--secondary); color:var(--muted-foreground); font-weight:bold;">C (6)</div>
-                </div>
-                <div id="gear-code-live" style="font-size: 0.9em; margin-bottom: 12px; font-family: monospace;">—</div>
-                <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px;">
-                    <button onclick="captureGearCode('R')" data-i18n="btn_save_as_r" style="padding:8px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save as R</button>
-                    <button onclick="captureGearCode('N')" data-i18n="btn_save_as_n" style="padding:8px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save as N</button>
-                    <button onclick="captureGearCode('L')" data-i18n="btn_save_as_l" style="padding:8px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save as L</button>
-                    <button onclick="captureGearCode('H')" data-i18n="btn_save_as_h" style="padding:8px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save as H</button>
-                </div>
-                <div id="gear-codes-table" style="margin-top: 12px; font-size: 0.85em; font-family: monospace; line-height: 1.6;"></div>
-                <button onclick="resetGearCodes()" data-i18n="btn_reset_gear_codes" style="margin-top: 10px; width: 100%; padding:8px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer;">Reset to defaults</button>
-                <div id="gear-codes-status" style="margin-top: 10px; font-size: 0.8em; color: var(--muted-foreground); min-height: 1.2em;"></div>
-            </div>
-
-            <!-- Steering Calibration (Bosch LWS steering-angle sensor on CAN: center = sensor zero) -->
-            <div class="card">
-                <h2 data-i18n="card_steer_cal">🎯 Steering Calibration</h2>
-                <p data-i18n-html="steer_cal_help" style="font-size: 0.8em; color: var(--muted-foreground); margin-bottom: 12px;">
-                    Bosch steering-angle sensor on CAN. The center is the sensor's own zero.
-                </p>
-                <div id="steer-sensorless-note" data-i18n="steer_sensorless_note" style="display: none; margin-bottom: 8px; font-size: 0.8em; color: var(--warning);">
-                    ⚠ No healthy sensor: jog and nudge run open loop, without stall protection — watch the wheels and release at the lock.
-                </div>
-                <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 16px;">
-                    <button id="steer-jog-left" data-i18n="btn_jog_left" style="flex:1; padding:16px 10px; border-radius:6px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer; font-size:1em;">◀ Jog Left</button>
-                    <button id="steer-jog-right" data-i18n="btn_jog_right" style="flex:1; padding:16px 10px; border-radius:6px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer; font-size:1em;">Jog Right ▶</button>
-                </div>
-                <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 16px;">
-                    <button onclick="steerNudge(-1)" data-i18n="btn_nudge_left" style="flex:1; padding:14px 10px; border-radius:6px; border:none; background:var(--accent); color:var(--foreground); cursor:pointer; font-size:1em;">◂ Nudge</button>
-                    <button onclick="steerNudge(1)" data-i18n="btn_nudge_right" style="flex:1; padding:14px 10px; border-radius:6px; border:none; background:var(--accent); color:var(--foreground); cursor:pointer; font-size:1em;">Nudge ▸</button>
-                </div>
-                <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 16px; font-size: 0.85em; color: var(--muted-foreground);">
-                    <span data-i18n="lbl_jog_speed">Jog&nbsp;speed</span>
-                    <input type="range" min="140" max="255" value="180" id="steer-jog-speed" style="flex:1; height: 28px;"
-                           oninput="document.getElementById('steer-jog-speed-val').textContent = this.value">
-                    <span id="steer-jog-speed-val" style="color:var(--foreground); min-width:2.2em; text-align:right;">180</span>
-                </div>
-                <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 8px;">
-                    <button onclick="steerCapture('steer_cal_left')" data-i18n="btn_set_left" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Set Left</button>
-                    <button onclick="steerCapture('steer_cal_right')" data-i18n="btn_set_right" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Set Right</button>
-                </div>
-                <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 4px;">
-                    <button onclick="steerSensorZero()" data-i18n="btn_steer_zero" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--danger) 55%, black); color:var(--foreground); cursor:pointer;">Set sensor zero</button>
-                </div>
-                <div style="margin-top: 8px; font-size: 0.8em; color: var(--muted-foreground);">
-                    <span data-i18n="lbl_steer_angle">Angle:</span> <span id="steer-angle">--</span>° &nbsp;
-                    <span data-i18n="lbl_steer_rate">Rate:</span> <span id="steer-rate">--</span>&nbsp;°/s
-                </div>
-                <div style="margin-top: 4px; font-size: 0.8em; color: var(--muted-foreground);">
-                    <span data-i18n="lbl_pos_left">L:</span> <span id="steer-left-cur">--</span>°<span id="steer-left-warn" style="color: var(--warning);"></span> &nbsp;|&nbsp;
-                    <span data-i18n="lbl_pos_right">R:</span> <span id="steer-right-cur">--</span>°<span id="steer-right-warn" style="color: var(--warning);"></span>
-                </div>
-                <div id="steer-range-note" data-i18n="steer_range_note" style="display: none; margin-top: 4px; font-size: 0.8em; color: var(--warning);">
-                    ⚠ A limit is beyond ±550°: the sensor latches a fault at about ±600°. Automatic steering stops at 550°.
-                </div>
-                <div style="margin-top: 4px; font-size: 0.8em; color: var(--muted-foreground);">
-                    <span data-i18n="lbl_sensor">Sensor:</span> <span id="steer-sensor-status">--</span>
-                    <span id="steer-sensor-fault"></span> &nbsp;|&nbsp;
-                    <span data-i18n="lbl_calibration">Calibration:</span> <span id="steer-cal-status">--</span>
-                </div>
-                <div style="margin-top: 4px; font-size: 0.8em; color: var(--muted-foreground);">
-                    <span data-i18n="lbl_lws_status">Status:</span>
-                    OK <span id="steer-lws-ok">--</span> &nbsp;cal <span id="steer-lws-cal">--</span> &nbsp;adj <span id="steer-lws-adj">--</span> &nbsp;
-                    <span data-i18n="lbl_lws_fault_code">fault:</span> <span id="steer-lws-fault-code">--</span> &nbsp;|&nbsp;
-                    <span id="steer-lws-fps">--</span>&nbsp;<span data-i18n="lbl_lws_fps">fps</span>
-                </div>
-                <div style="margin-top: 4px; font-size: 0.8em; color: var(--muted-foreground);">
-                    <span data-i18n="lbl_lws_errors">Errors:</span>
-                    <span data-i18n="lbl_lws_crc">checksum</span> <span id="steer-lws-crc">--</span> &nbsp;
-                    <span data-i18n="lbl_lws_cnt">counter</span> <span id="steer-lws-cnt">--</span> &nbsp;
-                    <span data-i18n="lbl_lws_miss">missed</span> <span id="steer-lws-miss">--</span>
-                </div>
-                <div style="margin-top: 4px; font-size: 0.8em; color: var(--muted-foreground);">
-                    <span data-i18n="lbl_steer_zero">Sensor zero:</span> <span id="steer-zero-state">--</span>
-                    <span id="steer-zero-error" style="color: var(--danger);"></span>
-                </div>
-                <div style="margin-top: 4px; font-size: 0.8em; color: var(--muted-foreground);">
-                    <span data-i18n="lbl_steer_motor_current">Motor:</span> <span id="steer-motor-current">--</span>&nbsp;A &nbsp;|&nbsp;
-                    <span data-i18n="lbl_steer_fet_temp">FET:</span> <span id="steer-fet-temp">--</span>&nbsp;°C &nbsp;|&nbsp;
-                    <span data-i18n="lbl_steer_driver">Driver:</span> <span id="steer-driver-status">--</span>
-                </div>
-                <div id="steer-center-status" style="margin-top: 8px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
-            </div>
-
-            <!-- Throttle Calibration -->
-            <div class="card">
-                <h2 data-i18n="card_throttle_cal">🎚️ Throttle Calibration</h2>
-                <p data-i18n-html="throttle_cal_help" style="font-size: 0.8em; color: var(--muted-foreground); margin-bottom: 12px;">
-                    Sets the idle / full throttle servo endpoints (µs). <b>Engine must be OFF.</b>
-                    Press <b>Start</b>, drag a slider — the throttle servo follows live — then <b>Save</b>.
-                    Inverted (mirrored) servo mounting is supported: set idle and full in whichever order the servo needs (full may be below idle).
-                </p>
-                <button id="throttle-cal-start" onclick="throttleCalStart()" data-i18n="btn_start_calibration" style="padding:8px 12px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer; width:100%;">Start Calibration</button>
-                <div id="throttle-cal-controls" style="display:none; margin-top:12px; flex-direction:column; gap:12px;">
-                    <div>
-                        <label style="font-size: 0.8em; color: var(--muted-foreground);"><span data-i18n="lbl_idle_endpoint">Idle endpoint:</span> <span id="throttle-idle-val">901</span> µs</label>
-                        <input type="range" min="800" max="2200" step="1" value="901" class="slider" id="throttle-idle-slider" style="width:100%;">
-                    </div>
-                    <div>
-                        <label style="font-size: 0.8em; color: var(--muted-foreground);"><span data-i18n="lbl_full_endpoint">Full endpoint:</span> <span id="throttle-full-val">1344</span> µs</label>
-                        <input type="range" min="800" max="2200" step="1" value="1344" class="slider" id="throttle-full-slider" style="width:100%;">
-                    </div>
-                    <div style="display:flex; gap:6px;">
-                        <button onclick="throttleCalSave()" data-i18n="btn_save" style="flex:1; padding:8px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
-                        <button onclick="throttleCalCancel()" data-i18n="btn_cancel" style="flex:1; padding:8px; border-radius:4px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">Cancel</button>
-                    </div>
-                </div>
-                <div id="throttle-cal-status" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
-            </div>
-
-            <!-- Relay Test (wiring check, ignition OFF only) -->
-            <div class="card">
-                <h2 data-i18n="card_relay_test">🧪 Relay Test</h2>
-                <p data-i18n-html="relay_test_help" style="font-size: 0.8em; color: var(--muted-foreground); margin-bottom: 12px;">
-                    Wiring check: toggle one relay at a time. <b>Ignition must be OFF</b> and the light off.
-                    Each relay switches off by itself after 30 s (starter: 2 s); any ignition / light command switches all test relays off.
-                </p>
-                <div id="relay-test-grid" style="display:grid; grid-template-columns: repeat(2, 1fr); gap:6px;"></div>
-                <div id="relay-test-status" style="margin-top: 10px; font-size: 0.8em; color: var(--muted-foreground); min-height: 1.2em;"></div>
-            </div>
-
-            <!-- Ignition & Lighting Control -->
-            <div class="card">
-                <h2 data-i18n="card_ignition">🔑 Vehicle Ignition & Lighting</h2>
-
-                <h3 data-i18n="h_ignition_control" style="margin-top: 0; margin-bottom: 10px;">Ignition Control</h3>
-                <div class="gear-buttons" style="margin-bottom: 20px;">
-                    <button class="gear-btn" id="ignition-off" onclick="setIgnition('OFF')" data-i18n="ign_OFF">OFF</button>
-                    <button class="gear-btn" id="ignition-acc" onclick="setIgnition('ACC')" data-i18n="ign_ACC">ACC</button>
-                    <button class="gear-btn" id="ignition-start" onclick="setIgnition('START')" data-i18n="ign_START">START</button>
-                </div>
-
-                <h3 data-i18n="h_front_light" style="margin-bottom: 10px;">Front Light</h3>
-                <div style="margin-bottom: 20px;">
-                    <button class="upload-btn" id="light-toggle-btn" onclick="toggleLight()" style="background: var(--secondary);">
-                        💡 <span data-i18n="lbl_light">Light:</span> <span id="light-status">OFF</span>
-                    </button>
-                </div>
-
-                <h3 data-i18n="h_wheel_lock" style="margin-bottom: 10px;">Front Wheel Lock</h3>
-                <div style="margin-bottom: 20px;">
-                    <button class="upload-btn" id="wheel-lock-btn" onclick="toggleWheelLock()" style="background: var(--secondary);">
-                        🔒 <span data-i18n="lbl_wheel_lock">Wheel Lock:</span> <span id="wheel-lock-status">UNLOCKED</span>
-                    </button>
-                </div>
-
-                <h3 data-i18n="h_boost_rail" style="margin-bottom: 10px;">24V Boost Rail</h3>
-                <div style="margin-bottom: 20px;">
-                    <button class="upload-btn" id="boost-rail-btn" onclick="toggleBoostRail()" style="background: var(--secondary);">
-                        ⚡ <span data-i18n="lbl_boost_rail">24V Rail:</span> <span id="boost-rail-status">--</span>
-                    </button>
-                    <div id="boost-rail-hint" data-i18n="boost_rail_hint" style="margin-top: 6px; font-size: 0.8em; color: var(--muted-foreground);">
-                        Powers the steering driver - can only be switched off with ignition OFF.
-                    </div>
-                </div>
-
-                <h3 data-i18n="h_telemetry" style="margin-bottom: 10px;">Telemetry</h3>
-                <div class="telemetry-grid" style="grid-template-columns: repeat(2, 1fr);">
+                <h2 data-i18n="card_steer_state">🎯 Steering: state</h2>
+                <div class="telemetry-grid">
                     <div class="telemetry-item">
-                        <div class="telemetry-label" data-i18n="lbl_ignition_state">Ignition State</div>
-                        <div class="telemetry-value" id="telemetry-ignition" style="font-size: 1.3em;">OFF</div>
+                        <div class="telemetry-label" data-i18n="sd_angle">Angle</div>
+                        <div class="telemetry-value"><span data-bind="steer-angle">--</span>°</div>
                     </div>
                     <div class="telemetry-item">
-                        <div class="telemetry-label" data-i18n="lbl_cranking">Cranking</div>
-                        <div class="telemetry-value" id="telemetry-cranking" style="font-size: 1.3em;">No</div>
+                        <div class="telemetry-label" data-i18n="sd_rate">Rate</div>
+                        <div class="telemetry-value"><span id="steer-rate">--</span> <span class="sd-unit" data-i18n="sd_rate_unit">°/s</span></div>
                     </div>
                     <div class="telemetry-item">
-                        <div class="telemetry-label" data-i18n="lbl_rail_24v">24V Rail</div>
-                        <div class="telemetry-value" id="telemetry-rail-24v" style="font-size: 1.3em;">--</div>
+                        <div class="telemetry-label" data-i18n="sd_left">Limit L</div>
+                        <div class="telemetry-value"><span data-bind="steer-left-cur">--</span>°</div>
+                        <div class="sd-sub" style="color: var(--warning);"><span data-bind="steer-left-warn"></span></div>
                     </div>
                     <div class="telemetry-item">
-                        <div class="telemetry-label" data-i18n="lbl_io_health">Board I/O</div>
-                        <div class="telemetry-value" id="telemetry-io-health" style="font-size: 1.3em;">--</div>
+                        <div class="telemetry-label" data-i18n="sd_right">Limit R</div>
+                        <div class="telemetry-value"><span data-bind="steer-right-cur">--</span>°</div>
+                        <div class="sd-sub" style="color: var(--warning);"><span data-bind="steer-right-warn"></span></div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="sd_sensor">Sensor</div>
+                        <div class="telemetry-value" style="font-size: 1.3em;"><span data-bind="steer-sensor-status">--</span></div>
+                        <div class="sd-sub" style="color: var(--danger);"><span data-bind="steer-sensor-fault"></span></div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="sd_cal">Calibration</div>
+                        <div class="telemetry-value" style="font-size: 1.3em;"><span data-bind="steer-cal-status">--</span></div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="sd_driver">VESC driver</div>
+                        <div class="telemetry-value" style="font-size: 1.3em;"><span id="steer-driver-status">--</span></div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="sd_zero">Sensor zero</div>
+                        <div class="telemetry-value" style="font-size: 1.3em;"><span id="steer-zero-state">--</span></div>
+                        <div class="sd-sub" style="color: var(--danger);"><span id="steer-zero-error"></span></div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="sd_motor">Motor current</div>
+                        <div class="telemetry-value"><span id="steer-motor-current">--</span> A</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="sd_fet">FET temp</div>
+                        <div class="telemetry-value"><span id="steer-fet-temp">--</span> °C</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="sd_vin">VESC voltage</div>
+                        <div class="telemetry-value"><span id="steer-vin">--</span> <span data-i18n="unit_volt">V</span></div>
+                    </div>
+                    <div data-bind="steer-range-note" data-i18n="steer_range_note" class="sd-full" style="display: none; font-size: 0.8em; color: var(--warning);">
+                        ⚠ A limit is beyond ±550°: the sensor latches a fault at about ±600°. Automatic steering stops at 550°.
+                    </div>
+                    <div class="sd-full sd-raw">
+                        LWS: OK <span id="steer-lws-ok">--</span> · cal <span id="steer-lws-cal">--</span> · adj <span id="steer-lws-adj">--</span> ·
+                        <span data-i18n="sd_code">code</span> <span id="steer-lws-fault-code">--</span> ·
+                        <span id="steer-lws-fps">--</span> <span data-i18n="lbl_lws_fps">fps</span> ·
+                        <span data-i18n="lbl_lws_crc">checksum</span> <span id="steer-lws-crc">--</span> ·
+                        <span data-i18n="lbl_lws_cnt">counter</span> <span id="steer-lws-cnt">--</span> ·
+                        <span data-i18n="lbl_lws_miss">missed</span> <span id="steer-lws-miss">--</span>
                     </div>
                 </div>
             </div>
-
-            <!-- MAVLink Command Channels -->
-            <div class="card">
-                <h2 data-i18n="card_mav_channels">📡 MAVLink Command Channels</h2>
-                <div class="telemetry-grid" style="font-size: 0.85em;">
-                    <div class="telemetry-item" style="grid-column: 1 / -1;">
-                        <div class="telemetry-label" data-i18n="lbl_link_status">Link Status</div>
-                        <div style="font-size: 0.9em;">
-                            <span id="mav-cmd-rate">0</span> Hz |
-                            <span data-i18n="lbl_link_age">Link age:</span> <span id="mav-link-age">0</span>ms |
-                            <span data-i18n="lbl_hb_age">HB age:</span> <span id="mav-hb-age">0</span>ms
-                        </div>
-                    </div>
-                    <div class="telemetry-item">
-                        <div class="telemetry-label" data-i18n="lbl_ch1">Ch1 (Steer)</div>
-                        <div class="telemetry-value" id="mav-ch1">1500</div>
-                    </div>
-                    <div class="telemetry-item">
-                        <div class="telemetry-label" data-i18n="lbl_ch2">Ch2 (Thr)</div>
-                        <div class="telemetry-value" id="mav-ch2">1500</div>
-                    </div>
-                    <div class="telemetry-item">
-                        <div class="telemetry-label" data-i18n="lbl_ch3">Ch3 (Gear)</div>
-                        <div class="telemetry-value" id="mav-ch3">1500</div>
-                    </div>
-                    <div class="telemetry-item">
-                        <div class="telemetry-label" data-i18n="lbl_ch4">Ch4 (Brake)</div>
-                        <div class="telemetry-value" id="mav-ch4">1500</div>
-                    </div>
-                    <div class="telemetry-item">
-                        <div class="telemetry-label" data-i18n="lbl_ch5">Ch5</div>
-                        <div class="telemetry-value" id="mav-ch5">1500</div>
-                    </div>
-                    <div class="telemetry-item">
-                        <div class="telemetry-label" data-i18n="lbl_ch6">Ch6 (Light)</div>
-                        <div class="telemetry-value" id="mav-ch6">1500</div>
-                    </div>
-                    <div class="telemetry-item">
-                        <div class="telemetry-label" data-i18n="lbl_ch7">Ch7 (Lock)</div>
-                        <div class="telemetry-value" id="mav-ch7">1500</div>
-                    </div>
-                    <div class="telemetry-item">
-                        <div class="telemetry-label" data-i18n="lbl_ch8">Ch8</div>
-                        <div class="telemetry-value" id="mav-ch8">1500</div>
-                    </div>
-                </div>
-            </div>
-
             <!-- Vehicle Data (CAN) -->
             <div class="card">
                 <h2 data-i18n="card_can">🚗 Vehicle Data (CAN)</h2>
@@ -938,14 +782,55 @@
                 <div id="probe-status" style="margin-top: 8px; font-size: 0.8em; color: var(--muted-foreground); min-height: 1.2em;"></div>
                 <div id="probe-results" style="display: none; margin-top: 10px; font-size: 0.82em;"></div>
             </div>
-
-            <!-- Speed Sensor (hall pulse input, independent of CAN) -->
+            <!-- MAVLink Command Channels -->
             <div class="card">
-                <h2 data-i18n="card_speed_sensor">🛞 Speed Sensor</h2>
-                <p data-i18n="speed_sensor_help" style="font-size: 0.8em; color: var(--muted-foreground); margin-bottom: 12px;">
-                    Speed is measured by the driveline hall sensor, not the CAN bus. Set pulses per
-                    revolution and the fitted tyre circumference to calibrate it.
-                </p>
+                <h2 data-i18n="card_mav_channels">📡 MAVLink Command Channels</h2>
+                <div class="telemetry-grid" style="font-size: 0.85em;">
+                    <div class="telemetry-item" style="grid-column: 1 / -1;">
+                        <div class="telemetry-label" data-i18n="lbl_link_status">Link Status</div>
+                        <div style="font-size: 0.9em;">
+                            <span id="mav-cmd-rate">0</span> Hz |
+                            <span data-i18n="lbl_link_age">Link age:</span> <span id="mav-link-age">0</span>ms |
+                            <span data-i18n="lbl_hb_age">HB age:</span> <span id="mav-hb-age">0</span>ms
+                        </div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_ch1">Ch1 (Steer)</div>
+                        <div class="telemetry-value" id="mav-ch1">1500</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_ch2">Ch2 (Thr)</div>
+                        <div class="telemetry-value" id="mav-ch2">1500</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_ch3">Ch3 (Gear)</div>
+                        <div class="telemetry-value" id="mav-ch3">1500</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_ch4">Ch4 (Brake)</div>
+                        <div class="telemetry-value" id="mav-ch4">1500</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_ch5">Ch5</div>
+                        <div class="telemetry-value" id="mav-ch5">1500</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_ch6">Ch6 (Light)</div>
+                        <div class="telemetry-value" id="mav-ch6">1500</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_ch7">Ch7 (Lock)</div>
+                        <div class="telemetry-value" id="mav-ch7">1500</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_ch8">Ch8</div>
+                        <div class="telemetry-value" id="mav-ch8">1500</div>
+                    </div>
+                </div>
+            </div>
+            <!-- Speed (read-only state: no input, no command) -->
+            <div class="card">
+                <h2 data-i18n="card_speed_state">🛞 Speed</h2>
                 <div class="telemetry-grid">
                     <div class="telemetry-item">
                         <div class="telemetry-label" data-i18n="lbl_speed">Speed</div>
@@ -956,7 +841,165 @@
                         <div class="telemetry-value" id="speed-status" data-i18n="speed_no_signal">No signal</div>
                     </div>
                 </div>
-
+                <div style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: baseline; font-size: 0.85em;">
+                        <span data-i18n="lbl_speed_limit" style="color: var(--muted-foreground);">Speed limit</span>
+                        <span data-bind="speed-limit-value">--</span>
+                    </div>
+                    <div data-bind="speed-limit-ceil-row" style="display: none; justify-content: space-between; align-items: baseline; margin-top: 4px; font-size: 0.85em; color: var(--warning);">
+                        <span data-i18n="lbl_speed_limit_ceil">Limiting</span>
+                        <span data-bind="speed-limit-ceil">--</span>
+                    </div>
+                </div>
+                <div style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: baseline; font-size: 0.85em;">
+                        <span data-i18n="lbl_steer_scale" style="color: var(--muted-foreground);">Steering authority</span>
+                        <span data-bind="steer-scale-value">--</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 4px; font-size: 0.85em;">
+                        <span data-i18n="lbl_steer_sca_base" style="color: var(--muted-foreground);">Scaling base</span>
+                        <span data-bind="steer-sca-base-value">--</span>
+                    </div>
+                    <div data-bind="steer-scale-reason" style="font-size: 0.78em; color: var(--muted-foreground); margin-top: 4px;"></div>
+                    <div data-bind="steer-test-speed-row" style="display: none; margin-top: 6px; font-size: 0.85em; color: var(--warning);">
+                        <span data-i18n="lbl_steer_test_active">TEST speed active</span>
+                        <span data-bind="steer-test-speed-value">--</span>
+                    </div>
+                </div>
+                <!-- Distance counters. READ-ONLY: the trip reset is a ground-station action
+                     (MAV_CMD_USER_1), so there is deliberately no button or input here. -->
+                <div style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: baseline; font-size: 0.85em;">
+                        <span data-i18n="lbl_odo" style="color: var(--muted-foreground);">Odometer</span>
+                        <span id="odo-value">--</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 4px; font-size: 0.85em;">
+                        <span data-i18n="lbl_trip" style="color: var(--muted-foreground);">Trip</span>
+                        <span id="trip-value">--</span>
+                    </div>
+                </div>
+            </div>
+            </div>
+            </section>
+            <section class="section" id="sec-calib" data-section="calib">
+            <div class="main-grid">
+            <!-- Steering Calibration (Bosch LWS steering-angle sensor on CAN: center = sensor zero) -->
+            <div class="card">
+                <h2 class="card-title"><span data-i18n="card_steer_cal">🎯 Steering Calibration</span><button type="button" class="help-btn" onclick="openHelp('steer_cal_help', 'card_steer_cal')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <div id="steer-sensorless-note" data-i18n="steer_sensorless_note" style="display: none; margin-bottom: 8px; font-size: 0.8em; color: var(--warning);">
+                    ⚠ No healthy sensor: jog and nudge run open loop, without stall protection — watch the wheels and release at the lock.
+                </div>
+                <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 16px;">
+                    <button id="steer-jog-left" data-i18n="btn_jog_left" style="flex:1; padding:16px 10px; border-radius:6px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer; font-size:1em;">◀ Jog Left</button>
+                    <button id="steer-jog-right" data-i18n="btn_jog_right" style="flex:1; padding:16px 10px; border-radius:6px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer; font-size:1em;">Jog Right ▶</button>
+                </div>
+                <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 16px;">
+                    <button onclick="steerNudge(-1)" data-i18n="btn_nudge_left" style="flex:1; padding:14px 10px; border-radius:6px; border:none; background:var(--accent); color:var(--foreground); cursor:pointer; font-size:1em;">◂ Nudge</button>
+                    <button onclick="steerNudge(1)" data-i18n="btn_nudge_right" style="flex:1; padding:14px 10px; border-radius:6px; border:none; background:var(--accent); color:var(--foreground); cursor:pointer; font-size:1em;">Nudge ▸</button>
+                </div>
+                <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 16px; font-size: 0.85em; color: var(--muted-foreground);">
+                    <span data-i18n="lbl_jog_speed">Jog&nbsp;speed</span>
+                    <input type="range" min="140" max="255" value="180" id="steer-jog-speed" style="flex:1; height: 28px;"
+                           oninput="document.getElementById('steer-jog-speed-val').textContent = this.value">
+                    <span id="steer-jog-speed-val" style="color:var(--foreground); min-width:2.2em; text-align:right;">180</span>
+                </div>
+                <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 8px;">
+                    <button onclick="steerCapture('steer_cal_left')" data-i18n="btn_set_left" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Set Left</button>
+                    <button onclick="steerCapture('steer_cal_right')" data-i18n="btn_set_right" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Set Right</button>
+                </div>
+                <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 4px;">
+                    <button onclick="steerSensorZero()" data-i18n="btn_steer_zero" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--danger) 55%, black); color:var(--foreground); cursor:pointer;">Set sensor zero</button>
+                </div>
+                <div style="margin-top: 8px; font-size: 0.8em; color: var(--muted-foreground);">
+                    <span data-i18n="lbl_steer_angle">Angle:</span> <span data-bind="steer-angle" class="big-angle">--</span>°
+                </div>
+                <div style="margin-top: 4px; font-size: 0.8em; color: var(--muted-foreground);">
+                    <span data-i18n="lbl_pos_left">L:</span> <span data-bind="steer-left-cur">--</span>°<span data-bind="steer-left-warn" style="color: var(--warning);"></span> &nbsp;|&nbsp;
+                    <span data-i18n="lbl_pos_right">R:</span> <span data-bind="steer-right-cur">--</span>°<span data-bind="steer-right-warn" style="color: var(--warning);"></span>
+                </div>
+                <div data-bind="steer-range-note" data-i18n="steer_range_note" style="display: none; margin-top: 4px; font-size: 0.8em; color: var(--warning);">
+                    ⚠ A limit is beyond ±550°: the sensor latches a fault at about ±600°. Automatic steering stops at 550°.
+                </div>
+                <div style="margin-top: 4px; font-size: 0.8em; color: var(--muted-foreground);">
+                    <span data-i18n="lbl_sensor">Sensor:</span> <span data-bind="steer-sensor-status">--</span>
+                    <span data-bind="steer-sensor-fault"></span> &nbsp;|&nbsp;
+                    <span data-i18n="lbl_calibration">Calibration:</span> <span data-bind="steer-cal-status">--</span>
+                </div>
+                <div id="steer-center-status" style="margin-top: 8px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
+            </div>
+            <!-- Throttle Calibration -->
+            <div class="card">
+                <h2 class="card-title"><span data-i18n="card_throttle_cal">🎚️ Throttle Calibration</span><button type="button" class="help-btn" onclick="openHelp('throttle_cal_help', 'card_throttle_cal')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <div id="throttle-cal-sliders" class="thr-sliders is-locked">
+                    <div>
+                        <label class="thr-label" for="throttle-idle-slider"><span data-i18n="lbl_idle_endpoint">Idle endpoint:</span> <span id="throttle-idle-val">901</span> µs</label>
+                        <input type="range" min="800" max="2200" step="1" value="901" class="slider" id="throttle-idle-slider" disabled style="width:100%;">
+                    </div>
+                    <div>
+                        <label class="thr-label" for="throttle-full-slider"><span data-i18n="lbl_full_endpoint">Full endpoint:</span> <span id="throttle-full-val">1344</span> µs</label>
+                        <input type="range" min="800" max="2200" step="1" value="1344" class="slider" id="throttle-full-slider" disabled style="width:100%;">
+                    </div>
+                </div>
+                <button id="throttle-cal-start" onclick="throttleCalStart()" data-i18n="btn_start_calibration" style="padding:8px 12px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer; width:100%;">Start Calibration</button>
+                <div id="throttle-cal-controls" style="display:none; gap:6px;">
+                        <button onclick="throttleCalSave()" data-i18n="btn_save" style="flex:1; padding:8px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                        <button onclick="throttleCalCancel()" data-i18n="btn_cancel" style="flex:1; padding:8px; border-radius:4px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">Cancel</button>
+                </div>
+                <div id="throttle-cal-status" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
+            </div>
+            <!-- Gear Position Defaults -->
+            <div class="card">
+                <h2 class="card-title"><span data-i18n="card_gear_defaults">⚙️ Gear Position Defaults</span><button type="button" class="help-btn" onclick="openHelp('gear_defaults_help', 'card_gear_defaults')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <div id="gd-slider-wrap" class="thr-sliders is-locked">
+                    <div>
+                        <label class="thr-label" for="gd-servo-slider"><span data-i18n="lbl_servo_position">Servo Position</span>: <span id="gd-servo-val">--</span> %</label>
+                        <input type="range" min="0" max="100" step="0.1" value="0" class="slider" id="gd-servo-slider" disabled style="width:100%;">
+                    </div>
+                </div>
+                <button id="gd-start" type="button" class="act-btn" onclick="gearDefStart()" data-i18n="gd_start" style="background:color-mix(in srgb, var(--warning) 60%, black);">Start</button>
+                <button id="gd-done" type="button" class="act-btn" onclick="gearDefDone()" data-i18n="gd_done" style="display:none; background:var(--secondary);">Done</button>
+                <div class="gd-grid">
+                    <button type="button" class="relay-btn gd-save" id="gd-save-r" onclick="gearDefSave('R')"><span class="relay-btn-name" data-i18n="btn_save_as_r">Save as R</span><span class="relay-btn-desc" id="gd-saved-r">--</span></button>
+                    <button type="button" class="relay-btn gd-save" id="gd-save-n" onclick="gearDefSave('N')"><span class="relay-btn-name" data-i18n="btn_save_as_n">Save as N</span><span class="relay-btn-desc" id="gd-saved-n">--</span></button>
+                    <button type="button" class="relay-btn gd-save" id="gd-save-h" onclick="gearDefSave('H')"><span class="relay-btn-name" data-i18n="btn_save_as_h">Save as H</span><span class="relay-btn-desc" id="gd-saved-h">--</span></button>
+                    <button type="button" class="relay-btn gd-save" id="gd-save-l" onclick="gearDefSave('L')"><span class="relay-btn-name" data-i18n="btn_save_as_l">Save as L</span><span class="relay-btn-desc" id="gd-saved-l">--</span></button>
+                </div>
+                <div class="gd-move-row">
+                    <button type="button" class="gd-move" id="gd-move-r" onclick="moveToGearPosition('R')" disabled>▶ R</button>
+                    <button type="button" class="gd-move" id="gd-move-n" onclick="moveToGearPosition('N')" disabled>▶ N</button>
+                    <button type="button" class="gd-move" id="gd-move-h" onclick="moveToGearPosition('H')" disabled>▶ H</button>
+                    <button type="button" class="gd-move" id="gd-move-l" onclick="moveToGearPosition('L')" disabled>▶ L</button>
+                </div>
+                <div style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px;">
+                    <label data-i18n="lbl_boost_rpm_target" style="font-size: 0.8em; color: var(--muted-foreground);">RPM Boost Target</label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px;">
+                        <input type="number" id="boost-rpm-input" min="500" max="5000" step="50" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button onclick="saveBoostRpm()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                    </div>
+                </div>
+                <div id="gear-default-status" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
+            </div>
+            <!-- Gear Sensor Codes (aztec 3-bit gear code calibration) -->
+            <div class="card">
+                <h2 class="card-title"><span data-i18n="card_gear_codes">🔢 Gear Sensor Codes</span><button type="button" class="help-btn" onclick="openHelp('gear_codes_help', 'card_gear_codes')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <div style="display: flex; gap: 6px; margin-bottom: 8px;">
+                    <div id="gear-bit-a" style="flex:1; text-align:center; padding:8px 4px; border-radius:6px; border:1px solid var(--border); background:var(--secondary); color:var(--muted-foreground); font-weight:bold;">A (0)</div>
+                    <div id="gear-bit-b" style="flex:1; text-align:center; padding:8px 4px; border-radius:6px; border:1px solid var(--border); background:var(--secondary); color:var(--muted-foreground); font-weight:bold;">B (1)</div>
+                    <div id="gear-bit-c" style="flex:1; text-align:center; padding:8px 4px; border-radius:6px; border:1px solid var(--border); background:var(--secondary); color:var(--muted-foreground); font-weight:bold;">C (6)</div>
+                </div>
+                <div id="gear-code-live" style="font-size: 0.9em; margin-bottom: 12px; font-family: monospace;">—</div>
+                <div class="gd-grid" style="margin-top: 0;">
+                    <button type="button" class="relay-btn gc-save" id="gc-save-r" onclick="captureGearCode('R')"><span class="relay-btn-name" data-i18n="btn_save_as_r">Save as R</span><span class="relay-btn-desc" id="gc-saved-r">--</span></button>
+                    <button type="button" class="relay-btn gc-save" id="gc-save-n" onclick="captureGearCode('N')"><span class="relay-btn-name" data-i18n="btn_save_as_n">Save as N</span><span class="relay-btn-desc" id="gc-saved-n">--</span></button>
+                    <button type="button" class="relay-btn gc-save" id="gc-save-h" onclick="captureGearCode('H')"><span class="relay-btn-name" data-i18n="btn_save_as_h">Save as H</span><span class="relay-btn-desc" id="gc-saved-h">--</span></button>
+                    <button type="button" class="relay-btn gc-save" id="gc-save-l" onclick="captureGearCode('L')"><span class="relay-btn-name" data-i18n="btn_save_as_l">Save as L</span><span class="relay-btn-desc" id="gc-saved-l">--</span></button>
+                </div>
+                <button onclick="resetGearCodes()" data-i18n="btn_reset_gear_codes" style="margin-top: 10px; width: 100%; padding:8px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer;">Reset to defaults</button>
+                <div id="gear-codes-status" style="margin-top: 10px; font-size: 0.8em; color: var(--muted-foreground); min-height: 1.2em;"></div>
+            </div>
+            <!-- Speed sensor settings (hall pulses, wheel, steering scaling base, bench test speed) -->
+            <div class="card">
+                <h2 class="card-title"><span data-i18n="card_speed_sensor">🛞 Speed Sensor</span><button type="button" class="help-btn" onclick="openHelp('speed_sensor_help,speed_limiter_hint,steer_scale_hint,steer_test_speed_hint', 'card_speed_sensor')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
                 <div style="margin-top: 14px;">
                     <label data-i18n="lbl_speed_ppr" style="font-size: 0.8em; color: var(--muted-foreground);">Pulses per revolution</label>
                     <div style="display: flex; gap: 6px; margin-top: 4px;">
@@ -971,40 +1014,29 @@
                         <button onclick="saveSpeedCirc()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
                     </div>
                 </div>
-
                 <div style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px;">
                     <div style="display: flex; justify-content: space-between; align-items: baseline; font-size: 0.85em;">
                         <span data-i18n="lbl_speed_limit" style="color: var(--muted-foreground);">Speed limit</span>
-                        <span id="speed-limit-value">--</span>
+                        <span data-bind="speed-limit-value">--</span>
                     </div>
-                    <div id="speed-limit-ceil-row" style="display: none; justify-content: space-between; align-items: baseline; margin-top: 4px; font-size: 0.85em; color: var(--warning);">
+                    <div data-bind="speed-limit-ceil-row" style="display: none; justify-content: space-between; align-items: baseline; margin-top: 4px; font-size: 0.85em; color: var(--warning);">
                         <span data-i18n="lbl_speed_limit_ceil">Limiting</span>
-                        <span id="speed-limit-ceil">--</span>
-                    </div>
-                    <div data-i18n="speed_limiter_hint" style="font-size: 0.75em; color: var(--muted-foreground); margin-top: 6px;">
-                        The limit comes only from the autopilot's SPEED_MAX parameter; 0 (or no link) means no
-                        limit. Approaching it the throttle ceiling is tapered down smoothly instead of being
-                        stepped. With no valid sensor reading the limiter does not act.
+                        <span data-bind="speed-limit-ceil">--</span>
                     </div>
                 </div>
-
-                <!-- Steering speed scaling. Computed on the ESP32 with ArduPilot's own
-                     min(1, base / speed) formula, applied to AUTOPILOT steering in MANUAL only.
-                     Every fault resolves to 1.00 — full steering authority — so the reason line
-                     explains why it is inactive rather than leaving the operator guessing. -->
                 <div style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px;">
                     <div style="display: flex; justify-content: space-between; align-items: baseline; font-size: 0.85em;">
                         <span data-i18n="lbl_steer_scale" style="color: var(--muted-foreground);">Steering authority</span>
-                        <span id="steer-scale-value">--</span>
+                        <span data-bind="steer-scale-value">--</span>
                     </div>
                     <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 4px; font-size: 0.85em;">
                         <span data-i18n="lbl_steer_sca_base" style="color: var(--muted-foreground);">Scaling base</span>
-                        <span id="steer-sca-base-value">--</span>
+                        <span data-bind="steer-sca-base-value">--</span>
                     </div>
-                    <div id="steer-scale-reason" style="font-size: 0.78em; color: var(--muted-foreground); margin-top: 4px;"></div>
-                    <div id="steer-test-speed-row" style="display: none; margin-top: 6px; font-size: 0.85em; color: var(--warning);">
+                    <div data-bind="steer-scale-reason" style="font-size: 0.78em; color: var(--muted-foreground); margin-top: 4px;"></div>
+                    <div data-bind="steer-test-speed-row" style="display: none; margin-top: 6px; font-size: 0.85em; color: var(--warning);">
                         <span data-i18n="lbl_steer_test_active">TEST speed active</span>
-                        <span id="steer-test-speed-value">--</span>
+                        <span data-bind="steer-test-speed-value">--</span>
                     </div>
 
                     <div style="margin-top: 10px;">
@@ -1021,37 +1053,132 @@
                             <button onclick="sendSteerTestSpeed()" data-i18n="btn_send" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 65%, black); color:var(--foreground); cursor:pointer;">Send</button>
                         </div>
                     </div>
-                    <div data-i18n="steer_scale_hint" style="font-size: 0.75em; color: var(--muted-foreground); margin-top: 6px;">
-                        Steering authority is reduced with road speed as scale = base / speed, on autopilot
-                        commands in MANUAL only — the web steering controls are never scaled. Any fault (no
-                        base, an invalid speed reading, another flight mode) restores full authority. Requires
-                        MANUAL_OPTIONS = 0 on the autopilot, otherwise the steering is scaled twice.
-                    </div>
-                    <div data-i18n="steer_test_speed_hint" style="font-size: 0.75em; color: var(--muted-foreground); margin-top: 4px;">
-                        The test speed is temporary: it feeds the steering scale only — never the odometry,
-                        the speed limiter or the gear interlock — and clears itself after 60 s. Send 0 to clear
-                        it now.
-                    </div>
-                </div>
-
-                <!-- Distance counters. READ-ONLY: the trip reset is a ground-station action
-                     (MAV_CMD_USER_1), so there is deliberately no button or input here. -->
-                <div style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px;">
-                    <div style="display: flex; justify-content: space-between; align-items: baseline; font-size: 0.85em;">
-                        <span data-i18n="lbl_odo" style="color: var(--muted-foreground);">Odometer</span>
-                        <span id="odo-value">--</span>
-                    </div>
-                    <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 4px; font-size: 0.85em;">
-                        <span data-i18n="lbl_trip" style="color: var(--muted-foreground);">Trip</span>
-                        <span id="trip-value">--</span>
-                    </div>
                 </div>
                 <div id="speed-status-msg" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
             </div>
+            </div>
+            </section>
+            <section class="section" id="sec-tests" data-section="tests">
+            <div class="section-note" data-i18n="tests_note">Manual actuator control for bench checks.</div>
+            <div class="main-grid">
+            <!-- Manual Control -->
+            <div class="card">
+                <h2 class="card-title"><span data-i18n="card_manual_control">🎮 Manual Control</span><button type="button" class="help-btn" onclick="openHelp('web_control_hint', 'card_manual_control')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <div id="control-warning" class="warning" data-i18n="warn_mav_active" style="display: none;">
+                    MAVLink control is active. Manual control disabled.
+                </div>
 
+                <div style="margin-bottom: 16px;">
+                    <button class="upload-btn" id="web-control-btn" onclick="toggleWebControl()" style="background: var(--secondary); width: 100%;">
+                        🕹️ <span id="web-control-label" data-i18n="btn_take_control">Take Control</span>
+                    </button>
+                </div>
+
+                <h3 data-i18n="h_gear_selection" style="margin-top: 20px; margin-bottom: 10px;">Gear Selection</h3>
+                <div class="gear-buttons">
+                    <button class="gear-btn" id="gear-r" onclick="setGear('R')">R</button>
+                    <button class="gear-btn" id="gear-n" onclick="setGear('N')">N</button>
+                    <button class="gear-btn" id="gear-h" onclick="setGear('H')">H</button>
+                    <button class="gear-btn" id="gear-l" onclick="setGear('L')">L</button>
+                </div>
+                <div style="font-size: 0.75em; color: var(--muted-foreground); margin-top: 6px;">
+                    <span data-i18n="lbl_servo">Servo:</span> <span id="gear-encoder-pos" style="color: var(--foreground); font-weight: bold;">0.0%</span>
+                </div>
+
+                <div class="slider-container">
+                    <div class="slider-label">
+                        <span data-i18n="lbl_steering">Steering</span>
+                        <span id="steering-value">0%</span>
+                    </div>
+                    <input type="range" min="-100" max="100" value="0" class="slider" id="steering-slider">
+                    <div style="display: flex; gap: 12px; align-items: center; margin-top: 12px; margin-bottom: 8px;">
+                        <button id="steer-test-left" onclick="steerTest(-100)" data-i18n="steer_test_left" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">⟸ Left</button>
+                        <button id="steer-test-center" onclick="steerTest(0)" data-i18n="steer_test_center" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">Center</button>
+                        <button id="steer-test-right" onclick="steerTest(100)" data-i18n="steer_test_right" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">Right ⟹</button>
+                    </div>
+                </div>
+
+                <div class="slider-container">
+                    <div class="slider-label">
+                        <span data-i18n="lbl_throttle">Throttle</span>
+                        <span id="throttle-value">0%</span>
+                    </div>
+                    <input type="range" min="0" max="100" value="0" class="slider" id="throttle-slider">
+                </div>
+
+                <div class="slider-container">
+                    <div class="slider-label">
+                        <span data-i18n="lbl_brake">Brake</span>
+                        <span id="brake-value">0%</span>
+                    </div>
+                    <input type="range" min="0" max="100" value="0" class="slider" id="brake-slider">
+                </div>
+            </div>
+            <!-- Ignition & Lighting Control -->
+            <div class="card">
+                <h2 class="card-title"><span data-i18n="card_ignition">🔑 Vehicle Ignition & Lighting</span><button type="button" class="help-btn" onclick="openHelp('boost_rail_hint', 'card_ignition')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+
+                <h3 data-i18n="h_ignition_control" style="margin-top: 0; margin-bottom: 10px;">Ignition Control</h3>
+                <div class="gear-buttons" style="margin-bottom: 20px;">
+                    <button class="gear-btn" id="ignition-off" onclick="setIgnition('OFF')" data-i18n="ign_OFF">OFF</button>
+                    <button class="gear-btn" id="ignition-acc" onclick="setIgnition('ACC')" data-i18n="ign_ACC">ACC</button>
+                    <button class="gear-btn" id="ignition-start" onclick="setIgnition('START')" data-i18n="ign_START">START</button>
+                </div>
+
+                <h3 data-i18n="h_front_light" style="margin-bottom: 10px;">Front Light</h3>
+                <div style="margin-bottom: 20px;">
+                    <button class="upload-btn" id="light-toggle-btn" onclick="toggleLight()" style="background: var(--secondary);">
+                        💡 <span data-i18n="lbl_light">Light:</span> <span id="light-status">OFF</span>
+                    </button>
+                </div>
+
+                <h3 data-i18n="h_wheel_lock" style="margin-bottom: 10px;">Front Wheel Lock</h3>
+                <div style="margin-bottom: 20px;">
+                    <button class="upload-btn" id="wheel-lock-btn" onclick="toggleWheelLock()" style="background: var(--secondary);">
+                        🔒 <span data-i18n="lbl_wheel_lock">Wheel Lock:</span> <span id="wheel-lock-status">UNLOCKED</span>
+                    </button>
+                </div>
+
+                <h3 data-i18n="h_boost_rail" style="margin-bottom: 10px;">24V Boost Rail</h3>
+                <div style="margin-bottom: 20px;">
+                    <button class="upload-btn" id="boost-rail-btn" onclick="toggleBoostRail()" style="background: var(--secondary);">
+                        ⚡ <span data-i18n="lbl_boost_rail">24V Rail:</span> <span id="boost-rail-status">--</span>
+                    </button>
+                </div>
+
+                <h3 data-i18n="h_telemetry" style="margin-bottom: 10px;">Telemetry</h3>
+                <div class="telemetry-grid" style="grid-template-columns: repeat(2, 1fr);">
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_ignition_state">Ignition State</div>
+                        <div class="telemetry-value" id="telemetry-ignition" style="font-size: 1.3em;">OFF</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_cranking">Cranking</div>
+                        <div class="telemetry-value" id="telemetry-cranking" style="font-size: 1.3em;">No</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_rail_24v">24V Rail</div>
+                        <div class="telemetry-value" id="telemetry-rail-24v" style="font-size: 1.3em;">--</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_io_health">Board I/O</div>
+                        <div class="telemetry-value" id="telemetry-io-health" style="font-size: 1.3em;">--</div>
+                    </div>
+                </div>
+            </div>
+            <!-- Relay Test (wiring check, ignition OFF only) -->
+            <div class="card">
+                <h2 class="card-title"><span data-i18n="card_relay_test">🧪 Relay Test</span><button type="button" class="help-btn" onclick="openHelp('relay_test_help', 'card_relay_test')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <div id="relay-test-grid" class="relay-grid"></div>
+                <div id="relay-test-status" style="margin-top: 10px; font-size: 0.8em; color: var(--muted-foreground); min-height: 1.2em;"></div>
+            </div>
+            </div>
+            </section>
+            <section class="section" id="sec-system" data-section="system">
+            <div class="main-grid">
             <!-- System Maintenance -->
             <div class="card">
-                <h2 data-i18n="card_maintenance">🔧 System Maintenance</h2>
+                <h2 class="card-title"><span data-i18n="card_maintenance">🔧 System Maintenance</span><button type="button" class="help-btn" onclick="openHelp('fw_update_warning', 'card_maintenance')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
                 <div class="slider-container">
                     <button class="upload-btn" id="debug-toggle-btn" onclick="toggleDebug()" style="background: var(--secondary);">
                         🐛 <span id="debug-toggle-text" data-i18n="debug_loading">Debug: Loading...</span>
@@ -1076,9 +1203,6 @@
                     <div class="progress-bar" id="progress-bar" style="display: none;">
                         <div class="progress-fill" id="progress-fill">0%</div>
                     </div>
-                    <div class="warning" data-i18n="fw_update_warning" style="margin-top: 15px;">
-                        ⚠️ Vehicle will enter safe state during update and reboot automatically.
-                    </div>
                 </div>
                 <div class="slider-container" style="margin-top: 15px;">
                     <button class="upload-btn" onclick="openChangelog()" style="background: var(--secondary);">
@@ -1086,7 +1210,16 @@
                     </button>
                 </div>
             </div>
-        </div>
+            <!-- Network (read-only; SSID / IP come from telemetry wifi_ssid / wifi_ip; settings later) -->
+            <div class="card">
+                <h2 data-i18n="card_network">🌐 Network</h2>
+                <div class="ro-row"><span data-i18n="lbl_ssid">SSID</span><span class="ro-val" id="net-ssid">--</span></div>
+                <div class="ro-row"><span data-i18n="lbl_ip">IP address</span><span class="ro-val" id="net-ip">--</span></div>
+                <div data-i18n="network_later" style="margin-top: 10px; font-size: 0.8em; color: var(--muted-foreground);">Settings will appear later.</div>
+            </div>
+            </div>
+            </section>
+        </main>
     </div>
 
     <!-- Changelog modal -->
@@ -1102,6 +1235,16 @@
         </div>
     </div>
 
+    <!-- Shared help modal (opened by the (i) buttons in card titles) -->
+    <div class="modal-overlay" id="help-modal" onclick="if (event.target === this) closeHelp()">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="help-title">
+            <div class="modal-header">
+                <h2 id="help-title"></h2>
+                <button class="modal-close" onclick="closeHelp()" data-i18n-title="btn_close" aria-label="Close">✕</button>
+            </div>
+            <div class="modal-body help-body" id="help-body"></div>
+        </div>
+    </div>
     <script>
         // ===================================================================
         // Localization (i18n) — inline dictionary, no external files/fetches.
@@ -1166,22 +1309,13 @@
                 btn_reset_gear_codes: 'Reset to defaults',
                 gear_codes_live: 'code %s → %s',
                 gear_codes_entry_default: 'default',
-                gear_codes_entry_custom: 'saved',
-                gear_codes_entry_unset: 'not set — capture it',
                 gear_codes_confirm_reset: 'Restore the default gear codes?',
                 gear_codes_saving: 'Saving current code as %s…',
                 card_gear_defaults: '⚙️ Gear Position Defaults',
-                gear_defaults_help: 'Press <b>📍</b> to capture the current servo position (0.0–100.0%), then <b>Save</b>. <b>Move</b> drives the servo to the entered value.',
-                gear_reverse: 'REVERSE (R)',
-                gear_neutral: 'NEUTRAL (N)',
-                gear_high: 'HIGH (H)',
-                gear_low: 'LOW (L)',
-                title_use_current_servo: 'Use current servo position',
-                btn_move: 'Move',
+                gear_defaults_help: 'Transmission servo position for each gear (0.0–100.0 %). Press <b>Start</b>, drag the slider until the lever sits in the wanted gear, then press <b>Save as &lt;gear&gt;</b>. Saving does not move the servo, so it also works without Start. The <b>▶</b> buttons move the servo to a saved position for checking; <b>Done</b> locks the slider again.',
                 btn_save: 'Save',
                 btn_cancel: 'Cancel',
                 lbl_boost_rpm_target: 'RPM Boost Target',
-                captured_for: 'Captured %s% for %s',
                 invalid_position: 'Invalid position (0.0–100.0)',
                 moving_to: 'Moving to %s%...',
                 invalid_value: 'Invalid value (0.0–100.0)',
@@ -1204,12 +1338,7 @@
                 steer_zero_confirm: 'Set the sensor zero HERE?\n\nThe current wheel position becomes the steering center, and the stored Left and Right limits will be erased — capture them again afterwards.\n\nOnly do this with the wheels straight ahead, after restarting the vehicle.',
                 steer_zero_sending: 'Setting sensor zero…',
                 lbl_steer_angle: 'Angle:',
-                lbl_steer_rate: 'Rate:',
-                lbl_steer_zero: 'Sensor zero:',
-                lbl_lws_status: 'Status:',
-                lbl_lws_fault_code: 'fault:',
                 lbl_lws_fps: 'fps',
-                lbl_lws_errors: 'Errors:',
                 lbl_lws_crc: 'checksum',
                 lbl_lws_cnt: 'counter',
                 lbl_lws_miss: 'missed',
@@ -1241,9 +1370,6 @@
                 sensor_fault: 'FAULT',
                 cal_calibrated: 'CALIBRATED',
                 cal_not_calibrated: 'NOT CALIBRATED',
-                lbl_steer_motor_current: 'Motor:',
-                lbl_steer_fet_temp: 'FET:',
-                lbl_steer_driver: 'Driver:',
                 driver_ok: 'OK',
                 driver_fault: 'FAULT',
                 driver_down: 'NO LINK',
@@ -1264,7 +1390,7 @@
 
                 // Throttle calibration card
                 card_throttle_cal: '🎚️ Throttle Calibration',
-                throttle_cal_help: 'Sets the idle / full throttle servo endpoints (µs). <b>Engine must be OFF.</b> Press <b>Start</b>, drag a slider — the throttle servo follows live — then <b>Save</b>. Inverted (mirrored) servo mounting is supported: set idle and full in whichever order the servo needs (full may be below idle).',
+                throttle_cal_help: 'Throttle servo endpoints (µs). <b>Engine must be OFF.</b> Press <b>Start</b>, drag a slider — the servo follows live — then <b>Save</b>. Full may be below idle (mirrored servo).',
                 btn_start_calibration: 'Start Calibration',
                 lbl_idle_endpoint: 'Idle endpoint:',
                 lbl_full_endpoint: 'Full endpoint:',
@@ -1432,6 +1558,58 @@
                 src_web: 'Web',
                 src_failsafe: 'Fail-safe',
 
+
+                // Service console shell
+                brand_title: 'Service console',
+                menu_label: 'Menu',
+                nav_diag: 'Diagnostics',
+                nav_calib: 'Calibration',
+                nav_tests: 'Tests',
+                nav_system: 'System',
+                conn_dot_on: 'WebSocket: connected',
+                conn_dot_off: 'WebSocket: disconnected',
+                help_label: 'Help',
+                tests_note: 'Manual actuator control for bench checks.',
+
+                // Attention box (Diagnostics)
+                attention_title: '⚠ Attention',
+                att_sensorless: 'Steering sensor unhealthy — jog/nudge run open loop, without stall protection.',
+                att_vesc: 'Steering driver: %s',
+                att_range: 'A steering limit is beyond ±550° — the sensor latches a fault near ±600°.',
+                att_mav: 'MAVLink inactive — autopilot commands are not arriving.',
+                att_io: 'Board I/O fault: %s',
+                att_steer_vin: 'VESC voltage low (%s V)',
+                att_can: 'No ECU link',
+                att_ecu_volt: '12 V voltage low (%s V)',
+
+                // Steering: state card (Diagnostics)
+                card_steer_state: '🎯 Steering: state',
+                sd_angle: 'Angle',
+                sd_rate: 'Rate',
+                sd_rate_unit: '°/s',
+                sd_left: 'Limit L',
+                sd_right: 'Limit R',
+                sd_sensor: 'Sensor',
+                sd_cal: 'Calibration',
+                sd_driver: 'VESC driver',
+                sd_zero: 'Sensor zero',
+                sd_motor: 'Motor current',
+                sd_fet: 'FET temp',
+                sd_vin: 'VESC voltage',
+                sd_code: 'code',
+
+                // Speed state card (Diagnostics) / Network card (System)
+                card_speed_state: '🛞 Speed',
+                card_network: '🌐 Network',
+                lbl_ssid: 'SSID',
+                lbl_ip: 'IP address',
+                network_later: 'Network settings will be added later.',
+
+                // Gear position defaults / gear codes
+                gd_start: 'Start',
+                gd_done: 'Done',
+                gc_unset: 'not set',
+
                 // Generic
                 error_prefix: 'Error: '
             },
@@ -1493,22 +1671,13 @@
                 btn_reset_gear_codes: 'Скинути до типових',
                 gear_codes_live: 'код %s → %s',
                 gear_codes_entry_default: 'типовий',
-                gear_codes_entry_custom: 'збережений',
-                gear_codes_entry_unset: 'не задано — зафіксуйте',
                 gear_codes_confirm_reset: 'Відновити типові коди передач?',
                 gear_codes_saving: 'Збереження поточного коду як %s…',
                 card_gear_defaults: '⚙️ Типові положення передач',
-                gear_defaults_help: 'Натисніть <b>📍</b>, щоб зафіксувати поточне положення серво (0.0–100.0%), потім <b>Зберегти</b>. <b>Перемістити</b> переводить серво в задане значення.',
-                gear_reverse: 'ЗАДНЯ (R)',
-                gear_neutral: 'НЕЙТРАЛЬ (N)',
-                gear_high: 'ВИСОКА (H)',
-                gear_low: 'НИЗЬКА (L)',
-                title_use_current_servo: 'Використати поточне положення серво',
-                btn_move: 'Перемістити',
+                gear_defaults_help: 'Положення серво трансмісії для кожної передачі (0.0–100.0 %). Натисніть <b>Почати</b>, повзунком доведіть важіль у потрібну передачу, потім натисніть <b>Зберегти як &lt;передача&gt;</b>. Збереження не рухає серво, тому працює і без «Почати». Кнопки <b>▶</b> переводять серво в збережене положення для перевірки; <b>Готово</b> знову блокує повзунок.',
                 btn_save: 'Зберегти',
                 btn_cancel: 'Скасувати',
                 lbl_boost_rpm_target: 'Цільові оберти буста',
-                captured_for: 'Зафіксовано %s% для %s',
                 invalid_position: 'Неприпустиме положення (0.0–100.0)',
                 moving_to: 'Переміщення до %s%...',
                 invalid_value: 'Неприпустиме значення (0.0–100.0)',
@@ -1531,12 +1700,7 @@
                 steer_zero_confirm: 'Задати нуль датчика ТУТ?\n\nПоточне положення коліс стане центром керма, а збережені межі «ліво» та «право» буде стерто — після цього зафіксуйте їх знову.\n\nРобіть це лише з колесами, виставленими прямо, після перезапуску машини.',
                 steer_zero_sending: 'Встановлення нуля датчика…',
                 lbl_steer_angle: 'Кут:',
-                lbl_steer_rate: 'Швидкість:',
-                lbl_steer_zero: 'Нуль датчика:',
-                lbl_lws_status: 'Стан:',
-                lbl_lws_fault_code: 'код:',
                 lbl_lws_fps: 'кадр/с',
-                lbl_lws_errors: 'Помилки:',
                 lbl_lws_crc: 'контр. сума',
                 lbl_lws_cnt: 'лічильник',
                 lbl_lws_miss: 'пропущено',
@@ -1568,9 +1732,6 @@
                 sensor_fault: 'ПОМИЛКА',
                 cal_calibrated: 'ВІДКАЛІБРОВАНО',
                 cal_not_calibrated: 'НЕ ВІДКАЛІБРОВАНО',
-                lbl_steer_motor_current: 'Двигун:',
-                lbl_steer_fet_temp: 'FET:',
-                lbl_steer_driver: 'Драйвер:',
                 driver_ok: 'OK',
                 driver_fault: 'НЕСПРАВНІСТЬ',
                 driver_down: 'НЕДОСТУПНИЙ',
@@ -1590,7 +1751,7 @@
                 relay_test_blocked: 'Доступно лише при ВИМК запалюванні, вимкненому світлі та справній платі реле.',
 
                 card_throttle_cal: '🎚️ Калібрування дроселя',
-                throttle_cal_help: 'Задає крайні точки серво дроселя: холостий хід / повний газ (µs). <b>Двигун має бути вимкнено.</b> Натисніть <b>Почати</b>, потягніть повзунок — серво дроселя рухається наживо — потім <b>Зберегти</b>. Підтримується дзеркальне (інвертоване) встановлення серво: задайте холостий хід і повний газ у тому порядку, який потрібен серво (повний газ може бути меншим за холостий хід).',
+                throttle_cal_help: 'Крайні точки серво дроселя (µs). <b>Двигун має бути вимкнено.</b> Натисніть <b>Почати</b>, потягніть повзунок — серво рухається наживо — потім <b>Зберегти</b>. Повний газ може бути меншим за холостий (дзеркальне серво).',
                 btn_start_calibration: 'Почати калібрування',
                 lbl_idle_endpoint: 'Точка холостого ходу:',
                 lbl_full_endpoint: 'Точка повного газу:',
@@ -1758,6 +1919,58 @@
                 src_web: 'Веб',
                 src_failsafe: 'Безпечний режим',
 
+
+                // Service console shell
+                brand_title: 'Сервісна консоль',
+                menu_label: 'Меню',
+                nav_diag: 'Діагностика',
+                nav_calib: 'Калібрування',
+                nav_tests: 'Тести',
+                nav_system: 'Система',
+                conn_dot_on: 'WebSocket: підключено',
+                conn_dot_off: 'WebSocket: відключено',
+                help_label: 'Довідка',
+                tests_note: 'Ручне керування виконавчими механізмами для перевірки на стенді.',
+
+                // Attention box (Diagnostics)
+                attention_title: '⚠ Увага',
+                att_sensorless: 'Датчик керма несправний — jog/nudge працюють без зворотного зв’язку та без захисту від упору.',
+                att_vesc: 'Драйвер керма: %s',
+                att_range: 'Межа керма за ±550° — датчик фіксує помилку біля ±600°.',
+                att_mav: 'MAVLink неактивний — команди автопілота не надходять.',
+                att_io: 'Несправність I/O плати: %s',
+                att_steer_vin: 'Напруга VESC низька (%s В)',
+                att_can: 'Немає зв’язку з ЕБК',
+                att_ecu_volt: 'Напруга 12 В низька (%s В)',
+
+                // Steering: state card (Diagnostics)
+                card_steer_state: '🎯 Кермо: стан',
+                sd_angle: 'Кут',
+                sd_rate: 'Швидкість',
+                sd_rate_unit: '°/с',
+                sd_left: 'Межа Л',
+                sd_right: 'Межа П',
+                sd_sensor: 'Датчик',
+                sd_cal: 'Калібрування',
+                sd_driver: 'Драйвер VESC',
+                sd_zero: 'Нуль датчика',
+                sd_motor: 'Струм мотора',
+                sd_fet: 'Темп. FET',
+                sd_vin: 'Напруга VESC',
+                sd_code: 'код',
+
+                // Speed state card (Diagnostics) / Network card (System)
+                card_speed_state: '🛞 Швидкість',
+                card_network: '🌐 Мережа',
+                lbl_ssid: 'SSID',
+                lbl_ip: 'IP-адреса',
+                network_later: 'Налаштування мережі з’являться пізніше.',
+
+                // Gear position defaults / gear codes
+                gd_start: 'Почати',
+                gd_done: 'Готово',
+                gc_unset: 'не задано',
+
                 // Generic
                 error_prefix: 'Помилка: '
             }
@@ -1796,6 +2009,7 @@
         // Re-apply runtime/dynamic labels after a language switch.
         function refreshDynamicLabels() {
             if (wsStatusKnown) updateConnectionStatus(wsConnected);
+            else updateConnDot(false);
             updateWebControlButton(webControlState);
             updateLightButton(lightState);
             updateWheelLockButton(wheelLockState);
@@ -1820,16 +2034,19 @@
 
         function applyLanguage(lang, persist) {
             currentLang = (lang === 'uk') ? 'uk' : 'en';
-            if (persist) localStorage.setItem('lang', currentLang);
+            if (persist) { try { localStorage.setItem('lang', currentLang); } catch (e) { /* storage unavailable */ } }
             document.documentElement.lang = currentLang;
             document.title = t('app_title');
             applyStaticTranslations();
             refreshDynamicLabels();
             updateLangToggle();
+            updateSectionTitle();
+            refreshHelp();
         }
 
         function detectLanguage() {
-            const stored = localStorage.getItem('lang');
+            let stored = null;
+            try { stored = localStorage.getItem('lang'); } catch (e) { stored = null; }
             if (stored === 'en' || stored === 'uk') return stored;
             const langs = navigator.languages || [navigator.language || 'en'];
             for (const l of langs) {
@@ -1876,6 +2093,7 @@
                 wsConnected = false;
                 updateConnectionStatus(false);
                 renderRelayTest();   // no link → relay test toggles disabled
+                gdSetActive(false);  // gear-defaults slider / ▶ row lock until Start is pressed again
                 // Reconnect after 3 seconds
                 setTimeout(connectWebSocket, 3000);
             };
@@ -1899,6 +2117,7 @@
             const statusText = document.getElementById('ws-status-text');
             wsStatusKnown = true;
 
+            updateConnDot(connected);
             if (connected) {
                 statusElem.classList.add('connected');
                 statusElem.classList.remove('disconnected');
@@ -1909,6 +2128,10 @@
                 statusText.textContent = t('ws_disconnected');
             }
         }
+
+        // Legacy hook: its shared status panel is gone (d287082); every response is routed to the
+        // status line of its own card in handleWebSocketMessage().
+        function showCalibrationStatus(success, message) { /* no shared status panel */ }
 
         function handleWebSocketMessage(data) {
             // Handle telemetry updates
@@ -1998,6 +2221,11 @@
                     calControls.style.display = throttleCalActive ? 'flex' : 'none';
                     calStartBtn.style.display = throttleCalActive ? 'none' : 'block';
                 }
+                // Sliders always show the saved endpoints; they are editable only while calibrating
+                const calSliders = document.getElementById('throttle-cal-sliders');
+                if (calSliders) calSliders.classList.toggle('is-locked', !throttleCalActive);
+                document.getElementById('throttle-idle-slider').disabled = !throttleCalActive;
+                document.getElementById('throttle-full-slider').disabled = !throttleCalActive;
                 // When idle (not calibrating and not dragging), reflect the saved endpoints
                 if (!throttleCalActive && !throttleCalDragging) {
                     if (typeof data.throttle_idle_us !== 'undefined') {
@@ -2145,15 +2373,12 @@
             // Update servo position near gear buttons
             document.getElementById('gear-encoder-pos').textContent = (data.hall_position || 0).toFixed(1) + '%';
 
-            // Update gear defaults editor (only for fields not currently focused)
+            // Saved gear default positions (servo %) → "Save as" buttons and ▶ targets
             if (data.gear_defaults) {
-                const fields = { R: 'default-r', N: 'default-n', L: 'default-l', H: 'default-h' };
-                for (const [key, id] of Object.entries(fields)) {
-                    const el = document.getElementById(id);
-                    if (el && document.activeElement !== el) {
-                        el.value = parseFloat(data.gear_defaults[key] || 0).toFixed(1);
-                    }
-                }
+                ['R', 'N', 'H', 'L'].forEach(g => {
+                    const v = parseFloat(data.gear_defaults[g]);
+                    gdSaved[g] = Number.isFinite(v) ? v : null;
+                });
             }
             if (data.boost_target_rpm !== undefined) {
                 const el = document.getElementById('boost-rpm-input');
@@ -2237,7 +2462,7 @@
             const steerDeg = (v) => (typeof v === 'number') ? v.toFixed(1) : '--';
             const steerFlag = (v) => (v === null || v === undefined) ? '--' : (v ? '1' : '0');
             if (data.steer_angle !== undefined) {
-                document.getElementById('steer-angle').textContent = steerDeg(data.steer_angle);
+                setBound('steer-angle', steerDeg(data.steer_angle));
             }
             if (data.steer_rate !== undefined) {
                 document.getElementById('steer-rate').textContent = steerVal(data.steer_rate);
@@ -2247,17 +2472,15 @@
             const beyond = (v) => (typeof v === 'number') && Math.abs(v) > SAFE_DEG;
             const rangeWarn = data.steer_range_warning === true;
             if (data.steer_left !== undefined) {
-                document.getElementById('steer-left-cur').textContent = steerDeg(data.steer_left);
-                document.getElementById('steer-left-warn').textContent =
-                    (rangeWarn && beyond(data.steer_left)) ? t('steer_limit_beyond_safe') : '';
+                setBound('steer-left-cur', steerDeg(data.steer_left));
+                setBound('steer-left-warn', (rangeWarn && beyond(data.steer_left)) ? t('steer_limit_beyond_safe') : '');
             }
             if (data.steer_right !== undefined) {
-                document.getElementById('steer-right-cur').textContent = steerDeg(data.steer_right);
-                document.getElementById('steer-right-warn').textContent =
-                    (rangeWarn && beyond(data.steer_right)) ? t('steer_limit_beyond_safe') : '';
+                setBound('steer-right-cur', steerDeg(data.steer_right));
+                setBound('steer-right-warn', (rangeWarn && beyond(data.steer_right)) ? t('steer_limit_beyond_safe') : '');
             }
             if (data.steer_range_warning !== undefined) {
-                document.getElementById('steer-range-note').style.display = rangeWarn ? 'block' : 'none';
+                setBound('steer-range-note', null, { display: rangeWarn ? 'block' : 'none' });
             }
             if (data.steer_lws_ok !== undefined) {
                 document.getElementById('steer-lws-ok').textContent = steerFlag(data.steer_lws_ok);
@@ -2282,22 +2505,19 @@
                     ? '(' + t('steer_zero_err_' + data.steer_zero_error) + ')' : '';
             }
             if (data.steer_sensor_fault !== undefined) {
-                const el = document.getElementById('steer-sensor-fault');
                 const tok = data.steer_sensor_fault;
-                el.textContent = (tok && tok !== 'none') ? '(' + t('steer_fault_' + tok) + ')' : '';
-                el.style.color = 'var(--danger)';
+                setBound('steer-sensor-fault', (tok && tok !== 'none') ? '(' + t('steer_fault_' + tok) + ')' : '',
+                         { color: 'var(--danger)' });
             }
             if (data.steer_sensor_ok !== undefined) {
-                const el = document.getElementById('steer-sensor-status');
-                el.textContent = data.steer_sensor_ok ? t('sensor_ok') : t('sensor_fault');
-                el.style.color = data.steer_sensor_ok ? 'var(--success)' : 'var(--danger)';
+                setBound('steer-sensor-status', data.steer_sensor_ok ? t('sensor_ok') : t('sensor_fault'),
+                         { color: data.steer_sensor_ok ? 'var(--success)' : 'var(--danger)' });
                 // Jog / nudge are never disabled by the sensor: only warn that they run sensorless
                 document.getElementById('steer-sensorless-note').style.display = data.steer_sensor_ok ? 'none' : 'block';
             }
             if (data.steer_calibrated !== undefined) {
-                const el = document.getElementById('steer-cal-status');
-                el.textContent = data.steer_calibrated ? t('cal_calibrated') : t('cal_not_calibrated');
-                el.style.color = data.steer_calibrated ? 'var(--success)' : 'var(--warning)';
+                setBound('steer-cal-status', data.steer_calibrated ? t('cal_calibrated') : t('cal_not_calibrated'),
+                         { color: data.steer_calibrated ? 'var(--success)' : 'var(--warning)' });
             }
             if (data.steer_motor_current !== undefined) {
                 document.getElementById('steer-motor-current').textContent = data.steer_motor_current.toFixed(1);
@@ -2319,6 +2539,18 @@
                     el.style.color = 'var(--success)';
                 }
             }
+
+            // Steering VESC input voltage: meaningless while the driver is down (D12b)
+            const vinEl = document.getElementById('steer-vin');
+            if (vinEl) {
+                const vinValid = data.steer_driver_ok === true && Number.isFinite(data.steer_vin);
+                vinEl.textContent = vinValid ? data.steer_vin.toFixed(1) : '--';
+                vinEl.style.color = (vinValid && data.steer_vin_low === true) ? 'var(--warning)' : '';
+            }
+
+            updateNetworkCard(data);
+            updateAttention(data);
+            updateGearDefUI(data);
 
             // Update control availability
             updateControlsAvailability();
@@ -2549,46 +2781,113 @@
             sendCommand('set_gear', gear);
         }
 
-        function captureServoPosition(gear) {
-            const idMap = { R: 'default-r', N: 'default-n', L: 'default-l', H: 'default-h' };
-            const raw = document.getElementById('gear-encoder-pos').textContent;
-            const pos = parseFloat(raw);
-            if (!isNaN(pos)) {
-                document.getElementById(idMap[gear]).value = pos.toFixed(1);
-                document.getElementById('gear-default-status').textContent = t('captured_for', pos.toFixed(1), gear);
-                document.getElementById('gear-default-status').style.color = 'var(--muted-foreground)';
-            }
+        // ---- Gear position defaults (servo %): slider + "Save as" + ▶ (D5) ----
+        // gdActive is UI-only (no firmware command): Start unlocks the slider and the ▶ row, Done or a
+        // WebSocket loss locks them. "Save as" is always enabled: saving does not move the servo.
+        const gdSaved = { R: null, N: null, H: null, L: null };   // from telemetry gear_defaults
+        let gdActive = false, gdDragging = false, gdLastSend = 0, gdTrailTimer = null;
+
+        function gearDefStatus(msg, color) {
+            const el = document.getElementById('gear-default-status');
+            if (el) { el.textContent = msg; el.style.color = color; }
         }
 
         function moveToGearPosition(gear) {
-            const idMap = { R: 'default-r', N: 'default-n', L: 'default-l', H: 'default-h' };
-            const val = parseFloat(document.getElementById(idMap[gear]).value);
-            if (isNaN(val) || val < 0 || val > 100) {
-                document.getElementById('gear-default-status').textContent = t('invalid_position');
-                document.getElementById('gear-default-status').style.color = 'var(--danger)';
+            const val = gdSaved[gear];
+            if (!gdActive) return;
+            if (typeof val !== 'number' || val < 0 || val > 100) {
+                gearDefStatus(t('invalid_position'), 'var(--danger)');
                 return;
             }
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ cmd: 'move_to_position', value: val }));
-                document.getElementById('gear-default-status').textContent = t('moving_to', val.toFixed(1));
-                document.getElementById('gear-default-status').style.color = 'var(--warning)';
+                gearDefStatus(t('moving_to', val.toFixed(1)), 'var(--warning)');
             }
         }
 
-        function saveGearDefault(gear) {
-            const idMap = { R: 'default-r', N: 'default-n', L: 'default-l', H: 'default-h' };
-            const val = parseFloat(document.getElementById(idMap[gear]).value);
+        function saveGearDefault(gear, val) {
             if (isNaN(val) || val < 0 || val > 100) {
-                document.getElementById('gear-default-status').textContent = t('invalid_value');
-                document.getElementById('gear-default-status').style.color = 'var(--danger)';
+                gearDefStatus(t('invalid_value'), 'var(--danger)');
                 return;
             }
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ cmd: 'set_gear_default', value: val, strValue: gear }));
-                document.getElementById('gear-default-status').textContent = t('saving_gear', gear);
-                document.getElementById('gear-default-status').style.color = 'var(--muted-foreground)';
+                gearDefStatus(t('saving_gear', gear), 'var(--muted-foreground)');
             }
         }
+
+        function gdSliderValue() {
+            return parseFloat(document.getElementById('gd-servo-slider').value) || 0;
+        }
+        function gearDefSave(gear) {
+            saveGearDefault(gear, Math.round(gdSliderValue() * 10) / 10);
+        }
+
+        function gdSetActive(on) {
+            gdActive = on;
+            if (!on) {
+                gdDragging = false;
+                if (gdTrailTimer) { clearTimeout(gdTrailTimer); gdTrailTimer = null; }
+            }
+            const wrap = document.getElementById('gd-slider-wrap');
+            if (!wrap) return;
+            wrap.classList.toggle('is-locked', !on);
+            document.getElementById('gd-servo-slider').disabled = !on;
+            document.getElementById('gd-start').style.display = on ? 'none' : 'block';
+            document.getElementById('gd-done').style.display = on ? 'block' : 'none';
+            ['r', 'n', 'h', 'l'].forEach(g => { document.getElementById('gd-move-' + g).disabled = !on; });
+        }
+        function gearDefStart() { gdSetActive(true); }
+        function gearDefDone() { gdSetActive(false); }
+
+        // Saved % on each button; the one within ±0.3 % of the slider is highlighted.
+        function updateGearDefUI(data) {
+            const slider = document.getElementById('gd-servo-slider');
+            if (!slider) return;
+            if (!gdDragging && data && typeof data.hall_position === 'number') {
+                slider.value = data.hall_position.toFixed(1);
+            }
+            const cur = gdSliderValue();
+            document.getElementById('gd-servo-val').textContent = cur.toFixed(1);
+            ['R', 'N', 'H', 'L'].forEach(g => {
+                const v = gdSaved[g];
+                const ok = typeof v === 'number';
+                document.getElementById('gd-saved-' + g.toLowerCase()).textContent = ok ? v.toFixed(1) + ' %' : '--';
+                document.getElementById('gd-save-' + g.toLowerCase()).classList.toggle('active', ok && Math.abs(v - cur) <= 0.3);
+            });
+        }
+
+        // move_to_position at most every 100 ms while dragging (10 Hz web-control rule);
+        // the last value is always sent: by a trailing timer and again on release (change).
+        function gdSendMove(v) {
+            if (!gdActive || !(ws && ws.readyState === WebSocket.OPEN)) return;
+            gdLastSend = Date.now();
+            ws.send(JSON.stringify({ cmd: 'move_to_position', value: v }));
+        }
+        (function initGearDefSlider() {
+            const sl = document.getElementById('gd-servo-slider');
+            if (!sl) return;
+            const GD_MIN_INTERVAL_MS = 100;
+            sl.addEventListener('pointerdown', () => { gdDragging = true; });
+            sl.addEventListener('pointercancel', () => { gdDragging = false; });
+            sl.addEventListener('input', () => {
+                gdDragging = true;   // keyboard drags too: telemetry must not move the thumb meanwhile
+                const v = gdSliderValue();
+                updateGearDefUI(null);
+                const wait = GD_MIN_INTERVAL_MS - (Date.now() - gdLastSend);
+                if (gdTrailTimer) { clearTimeout(gdTrailTimer); gdTrailTimer = null; }
+                if (wait <= 0) {
+                    gdSendMove(v);
+                } else {
+                    gdTrailTimer = setTimeout(() => { gdTrailTimer = null; gdSendMove(gdSliderValue()); }, wait);
+                }
+            });
+            sl.addEventListener('change', () => {
+                if (gdTrailTimer) { clearTimeout(gdTrailTimer); gdTrailTimer = null; }
+                gdSendMove(gdSliderValue());   // final value on release
+                gdDragging = false;
+            });
+        })();
 
         // ---- Gear sensor code calibration ----
         // Live bits come from telemetry `gear_code` (raw snapshot, no retry cache);
@@ -2621,26 +2920,21 @@
                 }
             }
             if (data.gear_codes) {
-                const tbl = document.getElementById('gear-codes-table');
-                if (tbl) {
-                    const mask = data.gear_codes_custom || 0;
-                    const bitFor = { R: 1, N: 2, H: 4, L: 8 };
-                    tbl.innerHTML = '';
-                    ['R', 'N', 'H', 'L'].forEach(g => {
-                        const row = document.createElement('div');
-                        const code = data.gear_codes[g];
-                        const unset = code === undefined || code === null || code < 0;   // -1 = unset
-                        const custom = (mask & bitFor[g]) !== 0;
-                        const isLive = !unset && data.gear_code === code;
-                        const state = unset ? 'gear_codes_entry_unset'
-                            : (custom ? 'gear_codes_entry_custom' : 'gear_codes_entry_default');
-                        row.textContent = g + ' = ' + (unset ? '—' : gearCodeBits(code)) + '  (' + t(state) + ')' +
-                            (isLive ? '  ◀' : '');
-                        row.style.color = unset ? 'var(--warning)' : (custom ? 'var(--info)' : 'var(--muted-foreground)');
-                        if (isLive) row.style.fontWeight = 'bold';
-                        tbl.appendChild(row);
-                    });
-                }
+                const mask = data.gear_codes_custom || 0;
+                const bitFor = { R: 1, N: 2, H: 4, L: 8 };
+                ['R', 'N', 'H', 'L'].forEach(g => {
+                    const code = data.gear_codes[g];
+                    const unset = typeof code !== 'number' || code < 0;   // -1 = unset
+                    const custom = (mask & bitFor[g]) !== 0;
+                    const desc = document.getElementById('gc-saved-' + g.toLowerCase());
+                    const btn = document.getElementById('gc-save-' + g.toLowerCase());
+                    if (!desc || !btn) return;
+                    desc.textContent = unset ? t('gc_unset')
+                        : gearCodeBits(code) + (custom ? '' : ' (' + t('gear_codes_entry_default') + ')');
+                    desc.style.color = unset ? 'var(--warning)' : '';
+                    btn.classList.toggle('active', !unset && typeof data.gear_code === 'number'
+                                                   && data.gear_code >= 0 && data.gear_code === code);
+                });
             }
         }
 
@@ -2772,27 +3066,18 @@
             // value at all) means no limiting, so it is shown as "none" rather than as 0 km/h,
             // which would read like "stopped". Both units are shown: the operator sets the
             // parameter in m/s in the ground station but reads the vehicle in km/h.
-            const limEl = document.getElementById('speed-limit-value');
-            if (limEl) {
+            {
                 const lim = (typeof data.speed_limit_kmh === 'number') ? data.speed_limit_kmh : 0;
-                limEl.textContent = (lim > 0)
+                setBound('speed-limit-value', (lim > 0)
                     ? lim.toFixed(1) + ' ' + t('unit_kmh') + ' (' + (lim / 3.6).toFixed(1) + ' m/s)'
-                    : t('lim_none');
-                limEl.style.color = (lim > 0) ? 'var(--foreground)' : 'var(--muted-foreground)';
+                    : t('lim_none'),
+                    { color: (lim > 0) ? 'var(--foreground)' : 'var(--muted-foreground)' });
             }
 
             // The taper ceiling is only interesting while it is actually holding throttle back.
-            const ceilRow = document.getElementById('speed-limit-ceil-row');
-            if (ceilRow) {
-                const ceil = (typeof data.speed_limit_ceil === 'number') ? data.speed_limit_ceil : 100;
-                if (ceil < 100) {
-                    ceilRow.style.display = 'flex';
-                    const ceilEl = document.getElementById('speed-limit-ceil');
-                    if (ceilEl) ceilEl.textContent = ceil.toFixed(0) + ' %';
-                } else {
-                    ceilRow.style.display = 'none';
-                }
-            }
+            const ceil = (typeof data.speed_limit_ceil === 'number') ? data.speed_limit_ceil : 100;
+            setBound('speed-limit-ceil-row', null, { display: (ceil < 100) ? 'flex' : 'none' });
+            if (ceil < 100) setBound('speed-limit-ceil', ceil.toFixed(0) + ' %');
 
             updateSteerScaleDisplay(data);
 
@@ -2848,50 +3133,30 @@
             const effectiveMs = (testMs > 0) ? testMs : measuredMs;
             const scaling = scale < 0.995;
 
-            const scaleEl = document.getElementById('steer-scale-value');
-            if (scaleEl) {
-                scaleEl.textContent = scaling
-                    ? (scale * 100).toFixed(0) + ' % (×' + scale.toFixed(2) + ')'
-                    : t('steer_scale_full') + ' (×1.00)';
-                scaleEl.style.color = scaling ? 'var(--warning)' : 'var(--success)';
-            }
+            setBound('steer-scale-value', scaling
+                ? (scale * 100).toFixed(0) + ' % (×' + scale.toFixed(2) + ')'
+                : t('steer_scale_full') + ' (×1.00)',
+                { color: scaling ? 'var(--warning)' : 'var(--success)' });
 
-            const baseEl = document.getElementById('steer-sca-base-value');
-            if (baseEl) {
-                const srcName = (src === 1) ? t('steer_sca_src_local')
-                              : (src === 2) ? t('steer_sca_src_autopilot')
-                              : t('steer_sca_src_none');
-                baseEl.textContent = (base > 0)
-                    ? base.toFixed(2) + ' m/s (' + srcName + ')'
-                    : t('steer_sca_src_none');
-                baseEl.style.color = (base > 0) ? 'var(--foreground)' : 'var(--muted-foreground)';
-            }
+            const srcName = (src === 1) ? t('steer_sca_src_local')
+                          : (src === 2) ? t('steer_sca_src_autopilot')
+                          : t('steer_sca_src_none');
+            setBound('steer-sca-base-value', (base > 0) ? base.toFixed(2) + ' m/s (' + srcName + ')' : t('steer_sca_src_none'),
+                     { color: (base > 0) ? 'var(--foreground)' : 'var(--muted-foreground)' });
 
-            const reasonEl = document.getElementById('steer-scale-reason');
-            if (reasonEl) {
-                let key;
-                if (scaling)                      key = 'steer_reason_active';
-                else if (base <= 0)               key = 'steer_reason_no_base';
-                else if (!speedValid)             key = 'steer_reason_speed_invalid';
-                else if (effectiveMs <= base)     key = 'steer_reason_below_base';
-                else                              key = 'steer_reason_not_manual';
-                reasonEl.textContent = t(key);
-                reasonEl.style.color = (key === 'steer_reason_speed_invalid')
-                    ? 'var(--danger)' : 'var(--muted-foreground)';
-            }
+            let reasonKey;
+            if (scaling)                      reasonKey = 'steer_reason_active';
+            else if (base <= 0)               reasonKey = 'steer_reason_no_base';
+            else if (!speedValid)             reasonKey = 'steer_reason_speed_invalid';
+            else if (effectiveMs <= base)     reasonKey = 'steer_reason_below_base';
+            else                              reasonKey = 'steer_reason_not_manual';
+            setBound('steer-scale-reason', t(reasonKey),
+                     { color: (reasonKey === 'steer_reason_speed_invalid') ? 'var(--danger)' : 'var(--muted-foreground)' });
 
             // A live bench override is shown prominently, as a temporary state rather than a
             // reading — it is the one thing here that must never be mistaken for normal.
-            const testRow = document.getElementById('steer-test-speed-row');
-            if (testRow) {
-                if (testMs > 0) {
-                    testRow.style.display = 'block';
-                    const tv = document.getElementById('steer-test-speed-value');
-                    if (tv) tv.textContent = testMs.toFixed(2) + ' m/s';
-                } else {
-                    testRow.style.display = 'none';
-                }
-            }
+            setBound('steer-test-speed-row', null, { display: (testMs > 0) ? 'block' : 'none' });
+            if (testMs > 0) setBound('steer-test-speed-value', testMs.toFixed(2) + ' m/s');
 
             // The input holds the LOCAL base, which is the in-use base only when the source IS
             // local — an autopilot-sourced value must never be typed back into the local field,
@@ -2946,10 +3211,9 @@
             if (!grid.children.length) {
                 for (let n = 1; n <= 8; n++) {
                     const btn = document.createElement('button');
-                    btn.className = 'upload-btn';
+                    btn.className = 'relay-btn';
+                    btn.type = 'button';
                     btn.id = 'relay-test-' + n;
-                    btn.style.margin = '0';
-                    btn.style.fontSize = '0.85em';
                     btn.onclick = () => toggleRelayTest(n);
                     grid.appendChild(btn);
                 }
@@ -2960,9 +3224,17 @@
                 // An energized test relay can always be switched off; ON needs the gate.
                 const enabled = wsConnected && (on || relayTestAllowed);
                 btn.disabled = !enabled;
-                btn.style.opacity = enabled ? '' : '0.5';
-                btn.style.background = on ? 'color-mix(in srgb, var(--warning) 60%, black)' : 'var(--secondary)';
-                btn.textContent = t('relay_test_relay', n) + ' — ' + t('relay_fn_' + n) + ': ' + (on ? t('on') : t('off'));
+                btn.classList.toggle('active', on);           // highlight = relay energized
+                btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+                btn.textContent = '';
+                const name = document.createElement('span');
+                name.className = 'relay-btn-name';
+                name.textContent = t('relay_test_relay', n);
+                const desc = document.createElement('span');
+                desc.className = 'relay-btn-desc';
+                desc.textContent = t('relay_fn_' + n);
+                btn.append(name, desc);
+                btn.title = t('relay_test_relay', n) + ' — ' + t('relay_fn_' + n) + ': ' + (on ? t('on') : t('off'));
             }
             const status = document.getElementById('relay-test-status');
             if (status && !status.dataset.msg) {
@@ -3350,8 +3622,147 @@
         });
 
         // Initialize WebSocket connection on page load
+        // ===================================================================
+        // Service console: sections, shared readouts, help modal, attention box
+        // ===================================================================
+        const SECTIONS = ['diag', 'calib', 'tests', 'system'];
+        let currentSection = 'diag';
+
+        function updateSectionTitle() {
+            const title = t('nav_' + currentSection);
+            const h = document.getElementById('section-title');
+            if (h) h.textContent = title;
+            const tb = document.getElementById('topbar-title');
+            if (tb) tb.textContent = title;
+        }
+
+        // Exactly one section is visible; hidden cards keep updating, so switching never shows stale data.
+        function showSection(id) {
+            if (SECTIONS.indexOf(id) < 0) id = 'diag';
+            currentSection = id;
+            document.querySelectorAll('.section').forEach(s => s.classList.toggle('active', s.dataset.section === id));
+            document.querySelectorAll('.nav-btn').forEach(b => {
+                const on = b.dataset.target === id;
+                b.classList.toggle('active', on);
+                if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+            });
+            try { localStorage.setItem('ui_section', id); } catch (e) { /* storage unavailable */ }
+            updateSectionTitle();
+            const sb = document.getElementById('sidebar');
+            if (sb) sb.classList.remove('open');
+            window.scrollTo(0, 0);
+        }
+
+        function toggleNav() {
+            const sb = document.getElementById('sidebar');
+            if (sb) sb.classList.toggle('open');
+        }
+
+        // Mobile top-bar dot; driven by updateConnectionStatus() together with the sidebar item.
+        function updateConnDot(connected) {
+            const dot = document.getElementById('conn-dot');
+            if (!dot) return;
+            dot.classList.toggle('on', !!connected);
+            const label = t(connected ? 'conn_dot_on' : 'conn_dot_off');
+            dot.title = label;
+            dot.setAttribute('aria-label', label);
+        }
+
+        // Readouts shown in more than one section carry data-bind="<name>" and are rendered here
+        // from the same telemetry frame (text / colour / display), so the copies never disagree.
+        const boundEls = {};
+        function setBound(name, text, opts) {
+            const els = boundEls[name] || (boundEls[name] = document.querySelectorAll('[data-bind="' + name + '"]'));
+            els.forEach(el => {
+                if (text !== null && text !== undefined) el.textContent = text;
+                if (opts && opts.color !== undefined) el.style.color = opts.color;
+                if (opts && opts.display !== undefined) el.style.display = opts.display;
+            });
+        }
+
+        // Network card: static AP identity from telemetry; '--' until received, last value kept.
+        function updateNetworkCard(data) {
+            if (typeof data.wifi_ssid === 'string' && data.wifi_ssid) {
+                document.getElementById('net-ssid').textContent = data.wifi_ssid;
+            }
+            if (typeof data.wifi_ip === 'string' && data.wifi_ip) {
+                document.getElementById('net-ip').textContent = data.wifi_ip;
+            }
+        }
+
+        // ---- Shared help modal: body comes from the existing i18n help keys (comma-separated) ----
+        let helpState = null;   // { keys, titleKey } while open
+        function renderHelp() {
+            if (!helpState) return;
+            document.getElementById('help-title').textContent = t(helpState.titleKey);
+            // Dictionary strings are compiled into the page (trusted) and some carry <b>.
+            document.getElementById('help-body').innerHTML =
+                helpState.keys.split(',').map(k => '<p>' + t(k) + '</p>').join('');
+        }
+        function openHelp(keys, titleKey) {
+            helpState = { keys: keys, titleKey: titleKey };
+            renderHelp();
+            document.getElementById('help-modal').classList.add('open');
+        }
+        function closeHelp() {
+            helpState = null;
+            document.getElementById('help-modal').classList.remove('open');
+        }
+        function refreshHelp() {
+            document.querySelectorAll('.help-btn').forEach(b => b.setAttribute('aria-label', t('help_label')));
+            renderHelp();
+        }
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && helpState) closeHelp();
+        });
+
+        // "Увага" / "Attention": active problems of the latest frame only; hidden when empty (D8).
+        function updateAttention(data) {
+            const items = [];   // [text, 'bad' | 'warn']
+            const vescFault = data.steer_vesc_fault || 0;
+            if (data.steer_sensor_ok === false) items.push([t('att_sensorless'), 'bad']);
+            if (data.steer_driver_ok === false) items.push([t('att_vesc', t('driver_down')), 'bad']);
+            else if (vescFault) items.push([t('att_vesc', t('driver_fault') + ' ' + vescFault), 'bad']);
+            if (data.steer_range_warning === true) items.push([t('att_range'), 'warn']);
+            if (!data.mav_active) items.push([t('att_mav'), 'warn']);
+            if (data.io_input_fault || data.io_relay_fault) {
+                const f = [];
+                if (data.io_input_fault) f.push(t('io_fault_inputs'));
+                if (data.io_relay_fault) f.push(t('io_fault_relays'));
+                items.push([t('att_io', f.join(' + ')), 'bad']);
+            }
+            // No valid VESC data while the driver is down → no voltage line then
+            if (data.steer_driver_ok === true && data.steer_vin_low === true) {
+                const v = Number.isFinite(data.steer_vin) ? data.steer_vin.toFixed(1) : '--';
+                items.push([t('att_steer_vin', v), 'warn']);
+            }
+            if (data.can_status === 'connected') {
+                if (data.ecu_voltage_low === true) {
+                    const v = Number.isFinite(data.ecu_voltage) ? data.ecu_voltage.toFixed(1) : '--';
+                    items.push([t('att_ecu_volt', v), 'warn']);
+                }
+            } else {
+                items.push([t('att_can'), 'warn']);
+            }
+            const box = document.getElementById('attention-box');
+            const list = document.getElementById('attention-list');
+            if (!box || !list) return;
+            list.textContent = '';
+            items.forEach(([text, lvl]) => {
+                const li = document.createElement('li');
+                li.textContent = text;
+                li.className = lvl;
+                list.appendChild(li);
+            });
+            box.style.display = items.length ? 'block' : 'none';
+        }
+
+        // Initialize on page load: language → last section → WebSocket (D1)
         window.addEventListener('load', function() {
             applyLanguage(detectLanguage(), false);   // auto-detect on first visit; no persist
+            let saved = null;
+            try { saved = localStorage.getItem('ui_section'); } catch (e) { saved = null; }
+            showSection(saved);   // missing / unknown → Diagnostics
             connectWebSocket();
             loadDebugState();
         });

@@ -98,6 +98,8 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.steer_fet_temp = steering.getFetTemp();
     telemetry.steer_vesc_fault = steering.getVescFault();
     telemetry.steer_driver_ok = steering.isDriverOk();
+    telemetry.steer_vin = steering.getInputVoltage();
+    telemetry.steer_vin_low = telemetry.steer_driver_ok && telemetry.steer_vin < STEER_VIN_LOW_V;
     telemetry.throttle_us = vehicleController_.getThrottleUs();
     telemetry.throttle_idle_us = vehicleController_.getThrottleIdleUs();
     telemetry.throttle_full_us = vehicleController_.getThrottleFullUs();
@@ -144,6 +146,7 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
         telemetry.fuel_level = vehicleData.fuelLevel;
         telemetry.map_kpa = vehicleData.mapKpa;
         telemetry.module_voltage_mv = vehicleData.moduleVoltageMv;
+        telemetry.ecu_voltage_low = (vehicleData.moduleVoltageMv / 1000.0f) < ECU_VOLTAGE_LOW_V;
         telemetry.intake_temp = vehicleData.intakeTemp;
         telemetry.engine_load = vehicleData.engineLoad;
         telemetry.can_status = "connected";
@@ -155,6 +158,7 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
         telemetry.fuel_level = 0;
         telemetry.map_kpa = 0;
         telemetry.module_voltage_mv = 0;
+        telemetry.ecu_voltage_low = false;
         telemetry.intake_temp = 0;
         telemetry.engine_load = 0;
         telemetry.can_status = "disconnected";
@@ -192,6 +196,16 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
 
     telemetry.firmware_version = FIRMWARE_VERSION;
     telemetry.board = BOARD_NAME;
+    telemetry.wifi_ssid = WIFI_AP_SSID;
+    {
+        // Static AP address — formatted once, then reused (no String churn at 5 Hz).
+        static char wifiIp[16] = "";
+        if (wifiIp[0] == '\0') {
+            const IPAddress ip = WIFI_AP_IP;
+            snprintf(wifiIp, sizeof(wifiIp), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
+        }
+        memcpy(telemetry.wifi_ip, wifiIp, sizeof(telemetry.wifi_ip));
+    }
 
     const TransmissionController& trans = vehicleController_.getTransmission();
     telemetry.gear_default_r = trans.getGearPosition(TransmissionController::Gear::GEAR_REVERSE);

@@ -460,6 +460,10 @@ struct ServoChannelConfig {
 //  while the sensor is healthy; sensorless jog relies on the VESC current clamp + fault stop.)
 #define STEER_VESC_TELEM_MS         300   // ms — COMM_GET_VALUES poll period (~3 Hz)
 #define STEER_VESC_COMM_TIMEOUT_MS  1000  // ms — no valid GET_VALUES reply for this long -> driver fault (stop, reject moves)
+// Steering VESC input voltage below this = "low" (telemetry steer_vin_low → web "Увага" warning only,
+// no control action). 21.5 V ≈ 3.58 V/cell on a 6s NMC pack, ≈ 3.07 V/cell on a 7s LiFePO4 pack —
+// low but not yet harmful for either. Adjust per vehicle build.
+#define STEER_VIN_LOW_V             21.5f // V
 
 // Throttle Servo Parameters
 #define THROTTLE_SERVO_MIN_US    800   // Minimum servo pulse width (µs) — mechanical range floor / slider bound
@@ -733,6 +737,10 @@ enum class InputSource {
 #define CAN_RX_LWS_MASK_REG   (((uint32_t)CAN_RX_LWS_MASK) << 16)    // 0x07FF0000
 #define CAN_RX_LWS_FILTER_REG (((uint32_t)STEER_LWS_CAN_ID) << 16)   // 0x03050000
 
+// ECU module (12 V battery) voltage below this = "low" (telemetry ecu_voltage_low → web "Увага"
+// warning only). Lead-acid starter battery at rest: 12.0 V ≈ 50 % state of charge.
+#define ECU_VOLTAGE_LOW_V         12.0f // V
+
 // ECU Capability Probe (on-demand diagnostic sweep)
 #define CAN_PROBE_RETRY_ATTEMPTS  1     // Retries per probe request (keeps worst-case sweep duration bounded)
 #define PROBE_RESULT_TTL          8000  // ms - window during which completed probe results are embedded in telemetry
@@ -757,7 +765,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.3.0"
+#define FIRMWARE_VERSION "1.4.0"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry
