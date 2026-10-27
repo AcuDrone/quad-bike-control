@@ -69,30 +69,31 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     }
     telemetry.steering_pct = (int)vehicleController_.getSteeringPercent();
     const SteeringController& steering = vehicleController_.getSteering();
-    // One frame: unwrapped fine counts from the captured center, sensor direction
-    // Display frame: while calibration points are pending, the session points
-    // relative to the center point (or the first point captured when no center
-    // is recorded yet); otherwise the stored calibration (see getDisplayPoint()).
-    telemetry.steer_position = steering.getDisplayPosition();
-    telemetry.steer_center = 0;
-    telemetry.steer_center_set = steering.getDisplayPoint(SteeringController::CAL_CENTER, telemetry.steer_center);
-    telemetry.steer_left_set = steering.getDisplayPoint(SteeringController::CAL_LEFT, telemetry.steer_left);
-    telemetry.steer_right_set = steering.getDisplayPoint(SteeringController::CAL_RIGHT, telemetry.steer_right);
-    telemetry.steer_cal_points = "";
-    if (steering.hasCalPoint(SteeringController::CAL_LEFT))   telemetry.steer_cal_points += 'L';
-    if (steering.hasCalPoint(SteeringController::CAL_CENTER)) telemetry.steer_cal_points += 'C';
-    if (steering.hasCalPoint(SteeringController::CAL_RIGHT))  telemetry.steer_cal_points += 'R';
-    telemetry.steer_cal_error = steering.getCalError();
-    telemetry.steer_cal_lost = steering.isCalSessionLost();
-    telemetry.steer_fine_raw = steering.getFineRaw();
-    telemetry.steer_coarse_raw = steering.getCoarseRaw();
-    telemetry.steer_turn = steering.getTurn();
-    telemetry.steer_ratio = steering.getRatio();
-    telemetry.steer_residual = steering.getResidual();
-    telemetry.steer_residual_valid = steering.hasResidual();
+    // Steering angle sensor (Bosch LWS on CAN): degrees, firmware sign (+ = right)
+    const LwsSensor& lws = steering.lwsSensor();
+    telemetry.steer_angle_valid = steering.hasAngle();
+    telemetry.steer_angle = steering.getAngleDeg();
+    telemetry.steer_rate_valid = steering.hasRate();
+    telemetry.steer_rate = (float)steering.getRateDegS();
+    telemetry.steer_left_set = steering.getLeftLimit() != SteeringController::POS_UNSET;
+    telemetry.steer_left = (float)steering.getLeftLimit() / 10.0f;
+    telemetry.steer_right_set = steering.getRightLimit() != SteeringController::POS_UNSET;
+    telemetry.steer_right = (float)steering.getRightLimit() / 10.0f;
+    telemetry.steer_lws_seen = lws.hasFrame();
+    telemetry.steer_lws_ok = lws.statusOk();
+    telemetry.steer_lws_cal = lws.statusCal();
+    telemetry.steer_lws_adj = lws.statusAdj();
+    telemetry.steer_lws_fault_code = lws.faultCode();
     telemetry.steer_sensor_fault = SteeringController::faultToken(steering.getSensorFault());
     telemetry.steer_sensor_ok = steering.isSensorOk();
     telemetry.steer_calibrated = steering.isCalibrated();
+    telemetry.steer_range_warning = steering.isRangeWarning();
+    telemetry.steer_lws_fps = lws.fps();
+    telemetry.steer_lws_crc_err = lws.crcErrors();
+    telemetry.steer_lws_cnt_err = lws.counterErrors();
+    telemetry.steer_lws_miss = lws.missedFrames();
+    telemetry.steer_zero_state = SteeringController::zeroStateToken(steering.getZeroState());
+    telemetry.steer_zero_error = steering.getZeroError();
     telemetry.steer_motor_current = steering.getMotorCurrent();
     telemetry.steer_fet_temp = steering.getFetTemp();
     telemetry.steer_vesc_fault = steering.getVescFault();

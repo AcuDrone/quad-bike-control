@@ -49,6 +49,13 @@ fourth BTS7960. MAVLink stays on UART1 (X9); the console is USB-CDC.
 - Commit messages: Clear, imperative mood
 - Hardware testing required before merge
 
+### Versioning and Changelog
+- `FIRMWARE_VERSION` lives in `include/Constants.h`; the web UI reads it from telemetry (`firmware_version`), never from `data/index.html`
+- Every OpenSpec change that alters user-visible behaviour bumps `FIRMWARE_VERSION` (semver: breaking calibration or wiring = minor bump, fixes = patch) and adds a release entry to `include/Changelog.h`
+- Changelog entry: `{version, date, uk:[...], en:[...]}`, newest first, one short plain-language line per change in BOTH Ukrainian and English, written for the operator (served by `GET /api/changelog`, shown in the web UI "What's new")
+- Several changes shipped together may share one release entry (e.g. 1.2.0 bundled all aztec changes); the entry must say when recalibration is required
+- `tasks.md` of each change lists the version bump and the changelog line as explicit tasks
+
 ## Domain Context
 
 ### ArduPilot Rover Integration

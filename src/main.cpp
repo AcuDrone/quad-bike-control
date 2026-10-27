@@ -23,14 +23,13 @@
 // ACTUATOR INSTANCES
 // ============================================================================
 
-// Steering Actuator (Flipsky 75200 VESC over UART0 / X1 + two AS5600 angle sensors:
-// FINE on the steering shaft via I2C1 `Wire` / X14, COARSE on a geared-down shaft
-// via I2C2 `Wire1` / X15 — together an absolute multi-turn position).
+// Steering Actuator (Flipsky 75200 VESC over UART0 / X1 + Bosch LWS steering-angle
+// sensor on the shared MCP2515 CAN bus — absolute multi-turn angle, frame 0x305).
 // The VESC driver MUST be constructed before the steering controller that
-// references it (global init order is top-to-bottom within this file). The buses
-// are only bound here; they are opened in setup() before steering begin().
+// references it (global init order is top-to-bottom within this file). The LWS is
+// attached to the CAN controller in setup() (vehicleController.initCAN()).
 VescMotorDriver steeringVesc(VESC_UART_NUM);
-SteeringController steeringActuator(steeringVesc, Wire, Wire1);
+SteeringController steeringActuator(steeringVesc);
 
 // Throttle Servo
 ThrottleController throttle;
@@ -45,14 +44,12 @@ MavlinkInterface mavlinkInterface;
 
 // ── I2C TOPOLOGY (scan-verified; overrides the schematic's port names) ───────
 //   I2C2 (Wire1, GPIO48/47) : on-board PCA9557s — opto inputs U10 @0x1A,
-//                             CD4051 mux U2 @0x1C — + relay board @0x1F and the
-//                             COARSE steering AS5600 @0x36, both on X15
-//   I2C1 (Wire,  GPIO1/2)   : external headers only — FINE steering AS5600 @0x36 on X14
-// Expected boot scan: I2C1 = 0x36; I2C2 = 0x1A 0x1C 0x1F 0x36.
-// Only the fine AS5600 may restart its own bus (I2C1). I2C2 is shared, so it is
-// restarted ONLY by recoverI2C2IfWedged() below, never by a device driver.
+//                             CD4051 mux U2 @0x1C — + relay board @0x1F on X15
+//   I2C1 (Wire,  GPIO1/2)   : external header X14 only — no device fitted, NOT started
+// Expected boot scan: I2C2 = 0x1A 0x1C 0x1F. Nothing restarts Wire1 after setup().
 // Fallback if X15 ever goes silent: the relay board also works on X14 → I2C1
-// (change the RelayController argument below from Wire1 to Wire).
+// (change the RelayController argument below from Wire1 to Wire, and start Wire on
+// PIN_I2C1_SDA/PIN_I2C1_SCL in setup()).
 
 // Opto-isolated board inputs (3-bit gear code on port bits 0/1/6, brake endstop bit 4) on I2C2
 BoardInputs boardInputs(Wire1);
@@ -90,40 +87,6 @@ static void scanI2CBus(TwoWire& bus, const char* label) {
         }
     }
     Debug::println("[I2C] " + String(label) + " devices:" + (found.isEmpty() ? " none" : found));
-}
-
-// Coordinated I2C2 (Wire1) recovery. The ESP32 I2C driver can wedge into
-// ESP_ERR_INVALID_STATE after a corrupted transaction and stays broken until the
-// bus is torn down and restarted. Wire1 is shared (opto inputs, relay board,
-// coarse AS5600), so no single driver may restart it. It is restarted here only
-// when two INDEPENDENT devices fail together — the coarse AS5600 (at least
-// AS5600_RECOVER_AFTER_FAILS failed transactions in a row) AND the opto-input
-// expander (BoardInputs faulted) — which points to the bus, not to one device.
-// Called at the end of loop(), after every Wire1 user has finished for the
-// iteration (all I2C traffic runs on this loop task, so nothing is in flight).
-// The restart does not touch any PCA9557 register: relay outputs and expander
-// configuration stay as the devices hold them; BoardInputs re-configures itself
-// on its own recovery cadence and RelayController keeps verifying its writes.
-static void recoverI2C2IfWedged() {
-    static uint32_t lastAttemptMs = 0;
-    static bool attempted = false;
-
-    if (steeringActuator.getCoarseConsecutiveFailures() < AS5600_RECOVER_AFTER_FAILS) return;
-    if (!boardInputs.isFaulted()) return;   // expanders read fine: bus healthy, steering fault only
-
-    uint32_t now = millis();
-    if (attempted && (now - lastAttemptMs) < I2C2_BUS_RECOVER_MS) return;
-    attempted = true;
-    lastAttemptMs = now;
-
-    // Master-gated (no feature flag), like the boot bus scan: one line per attempt.
-    Debug::println("[I2C] I2C2 (Wire1) suspected wedged (coarse AS5600 failures=" +
-                   String(steeringActuator.getCoarseConsecutiveFailures()) +
-                   ", opto inputs faulted) — re-initializing");
-    Wire1.end();
-    if (!Wire1.begin(PIN_RELAY_SDA, PIN_RELAY_SCL, I2C_BUS_FREQ_HZ)) {
-        Debug::println("[I2C] ERROR: I2C2 (Wire1) re-init failed");
-    }
 }
 
 // ============================================================================
@@ -205,21 +168,18 @@ void setup() {
     // Record the boost enable and start rail monitoring (grace window + ADC setup)
     vehicleController.initBoostRail();
 
-    // ── I2C buses (map at the top of this file) ──────────────────────────────
-    // main.cpp is the single owner of both buses: they are opened here, before any
+    // ── I2C bus (map at the top of this file) ────────────────────────────────
+    // main.cpp is the single owner of the bus: it is opened here, before any
     // consumer, so no driver depends on another driver's initialization succeeding.
-    if (!Wire.begin(PIN_STEER_SDA, PIN_STEER_SCL, I2C_BUS_FREQ_HZ)) {
-        Debug::println("[INIT] ERROR: I2C1 (Wire) init failed");
-    }
+    // I2C1 (Wire, X14) has no device fitted and is not started.
     if (!Wire1.begin(PIN_RELAY_SDA, PIN_RELAY_SCL, I2C_BUS_FREQ_HZ)) {
         Debug::println("[INIT] ERROR: I2C2 (Wire1) init failed");
     }
 
-    // Enumerate both buses before any driver claims them, so a missing or
-    // mis-strapped expander is obvious from the boot log alone.
+    // Enumerate the bus before any driver claims it, so a missing or mis-strapped
+    // expander is obvious from the boot log alone (expected: 0x1A 0x1C 0x1F).
     if (Debug::isEnabled()) {
-        scanI2CBus(Wire,  "I2C1 (Wire)");
-        scanI2CBus(Wire1, "I2C2 (Wire1)");
+        scanI2CBus(Wire1, "I2C2 (Wire1, expect 0x1A 0x1C 0x1F)");
     }
 
     // Opto-isolated inputs (gear code lines + brake limit sensor)
@@ -242,26 +202,20 @@ void setup() {
     // silent; the controller stays driver-down until the first valid reply).
     steeringVesc.begin(PIN_VESC_RX, PIN_VESC_TX, VESC_UART_BAUD);
 
-    // Initialize steering actuator (VESC driver + fine/coarse AS5600 pair — no homing:
-    // the absolute turn is recovered from the coarse sensor). begin() ALWAYS loads the
-    // calibration; a sensor that did not answer is re-probed from update().
-    if (!steeringActuator.begin(PIN_STEER_SDA, PIN_STEER_SCL, PIN_RELAY_SDA, PIN_RELAY_SCL)) {
-        Debug::printlnFeature(DebugFeature::SERVO, "ERROR: Steering sensor(s) missing — steering held until they answer");
-    }
-    // Boot centering only with a calibration, both sensors healthy and the turn
-    // recovered without a mismatch (isSensorOk() covers the last two when calibrated).
-    // The move cannot be issued here: the VESC link is only known to be up after its
-    // first reply, inside update(). requestBootCenter() defers it to update() and
-    // drops it after STEER_BOOT_CENTER_TIMEOUT_MS ("[STEER] Moving to center" is
-    // logged when the move is actually issued).
-    if (steeringActuator.isCalibrated() && steeringActuator.isSensorOk() &&
-        steeringActuator.isTurnRecovered()) {
-        Debug::printlnFeature(DebugFeature::SERVO, "[STEER] Boot centering requested (waiting for VESC link)");
+    // Initialize steering actuator (VESC driver + Bosch LWS on CAN — no homing: the
+    // angle is absolute). begin() loads the limits (migrating older NVS layouts); the
+    // sensor is attached to the CAN controller in initCAN() below.
+    steeringActuator.begin();
+    // Boot centering whenever calibrated. The LWS, the ECU and the VESC come up on the
+    // ignition key and may start after the ESP32 boots, so the move is deferred to
+    // update(): issued once the sensor is healthy and the VESC link is up, dropped
+    // after STEER_BOOT_CENTER_TIMEOUT_MS ("[STEER] Moving to center" is logged when
+    // the move is actually issued).
+    if (steeringActuator.isCalibrated()) {
+        Debug::printlnFeature(DebugFeature::SERVO, "[STEER] Boot centering requested (waiting for sensor + VESC link)");
         steeringActuator.requestBootCenter();
     } else {
-        Debug::printlnFeature(DebugFeature::SERVO,
-            !steeringActuator.isSensorOk() ? "[STEER] Sensor fault / turn not recovered — holding position"
-                                           : "[STEER] Not calibrated — holding position");
+        Debug::printlnFeature(DebugFeature::SERVO, "[STEER] Not calibrated — holding position");
     }
 
     // Initialize transmission servo
@@ -298,7 +252,8 @@ void setup() {
     // Restore the engine hour meter from NVS (must run after NVS is up, so not in a ctor)
     vehicleController.initEngineHourMeter();
 
-    // Initialize CAN controller
+    // Initialize CAN controller (engine ECU + steering-angle sensor on one bus). It also
+    // attaches the steering controller's LWS decoder as the 0x305 frame sink.
     if (!vehicleController.initCAN()) {
         Debug::printlnFeature(DebugFeature::CAN, "WARNING: CAN controller failed (will continue without vehicle data)");
     }
@@ -384,8 +339,8 @@ void loop() {
     report.steerMotorCurrentA = steering.getMotorCurrent();        // MOTOR current, not input
     report.steerFetTempC      = steering.getFetTemp();
     report.steerInputVoltageV = steering.getInputVoltage();        // 24 V boost rail at the VESC
-    // Steering POSITION from the same controller but a DIFFERENT gate: the AS5600's, not the
-    // VESC's. Filled unconditionally — the gating is applied where the message is packed, so
+    // Steering POSITION from the same controller but a DIFFERENT gate: the CAN steering-angle
+    // sensor's (healthy + both limits stored), not the VESC's. Filled unconditionally — the gating is applied where the message is packed, so
     // this stays a plain snapshot.
     report.steerPercent     = steering.getSteeringPercent();       // -100 left .. 0 .. +100 right
     report.steerSensorOk    = steering.isSensorOk();
@@ -397,9 +352,4 @@ void loop() {
 
     // Broadcast telemetry to web clients
     telemetryManager.update();
-
-    // Last: every Wire1 user (boardInputs, steering, relays, web commands) has
-    // finished for this iteration, so a coordinated I2C2 restart cannot cut a
-    // transaction in half.
-    recoverI2C2IfWedged();
 }

@@ -660,14 +660,15 @@
                 <div id="gear-codes-status" style="margin-top: 10px; font-size: 0.8em; color: var(--muted-foreground); min-height: 1.2em;"></div>
             </div>
 
-            <!-- Steering Calibration (fine + coarse AS5600 multi-turn sensor pair) -->
+            <!-- Steering Calibration (Bosch LWS steering-angle sensor on CAN: center = sensor zero) -->
             <div class="card">
                 <h2 data-i18n="card_steer_cal">🎯 Steering Calibration</h2>
                 <p data-i18n-html="steer_cal_help" style="font-size: 0.8em; color: var(--muted-foreground); margin-bottom: 12px;">
-                    Two AS5600 sensors (fine on the steering shaft, coarse on the geared shaft). Position is in fine counts from center.
-                    Hold <b>◀ / ▶</b> to jog the wheel and press <b>Left</b>, <b>Center</b> and <b>Right</b> in any order: each button records only its own point.
-                    The calibration completes and is saved once all three points are set. Capture all three in one power-on: a reboot or a sensor fault discards unfinished points.
+                    Bosch steering-angle sensor on CAN. The center is the sensor's own zero.
                 </p>
+                <div id="steer-sensorless-note" data-i18n="steer_sensorless_note" style="display: none; margin-bottom: 8px; font-size: 0.8em; color: var(--warning);">
+                    ⚠ No healthy sensor: jog and nudge run open loop, without stall protection — watch the wheels and release at the lock.
+                </div>
                 <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 16px;">
                     <button id="steer-jog-left" data-i18n="btn_jog_left" style="flex:1; padding:16px 10px; border-radius:6px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer; font-size:1em;">◀ Jog Left</button>
                     <button id="steer-jog-right" data-i18n="btn_jog_right" style="flex:1; padding:16px 10px; border-radius:6px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer; font-size:1em;">Jog Right ▶</button>
@@ -682,29 +683,44 @@
                            oninput="document.getElementById('steer-jog-speed-val').textContent = this.value">
                     <span id="steer-jog-speed-val" style="color:var(--foreground); min-width:2.2em; text-align:right;">180</span>
                 </div>
-                <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 4px;">
+                <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 8px;">
                     <button onclick="steerCapture('steer_cal_left')" data-i18n="btn_set_left" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Set Left</button>
-                    <button onclick="steerCapture('steer_cal_center')" data-i18n="btn_set_center" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Set Center</button>
                     <button onclick="steerCapture('steer_cal_right')" data-i18n="btn_set_right" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Set Right</button>
                 </div>
-                <div style="margin-top: 8px; font-size: 0.8em; color: var(--muted-foreground);">
-                    <span data-i18n="lbl_position">Position:</span> <span id="steer-pos">--</span> &nbsp;|&nbsp;
-                    <span data-i18n="lbl_pos_left">L:</span> <span id="steer-left-cur">--</span><span id="steer-left-mark" style="color: var(--success);"></span> &nbsp;
-                    <span data-i18n="lbl_pos_center">C:</span> <span id="steer-center-cur">--</span><span id="steer-center-mark" style="color: var(--success);"></span> &nbsp;
-                    <span data-i18n="lbl_pos_right">R:</span> <span id="steer-right-cur">--</span><span id="steer-right-mark" style="color: var(--success);"></span>
+                <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 4px;">
+                    <button onclick="steerSensorZero()" data-i18n="btn_steer_zero" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--danger) 55%, black); color:var(--foreground); cursor:pointer;">Set sensor zero</button>
                 </div>
-                <div id="steer-cal-session" style="margin-top: 4px; font-size: 0.8em; color: var(--warning); min-height: 1.2em;"></div>
+                <div style="margin-top: 8px; font-size: 0.8em; color: var(--muted-foreground);">
+                    <span data-i18n="lbl_steer_angle">Angle:</span> <span id="steer-angle">--</span>° &nbsp;
+                    <span data-i18n="lbl_steer_rate">Rate:</span> <span id="steer-rate">--</span>&nbsp;°/s
+                </div>
                 <div style="margin-top: 4px; font-size: 0.8em; color: var(--muted-foreground);">
-                    <span data-i18n="lbl_fine_raw">Fine:</span> <span id="steer-fine-raw">--</span> &nbsp;
-                    <span data-i18n="lbl_coarse_raw">Coarse:</span> <span id="steer-coarse-raw">--</span> &nbsp;
-                    <span data-i18n="lbl_turn">Turn:</span> <span id="steer-turn">--</span> &nbsp;|&nbsp;
-                    <span data-i18n="lbl_ratio">Ratio:</span> <span id="steer-ratio">--</span> &nbsp;
-                    <span data-i18n="lbl_residual">Residual:</span> <span id="steer-residual">--</span>
+                    <span data-i18n="lbl_pos_left">L:</span> <span id="steer-left-cur">--</span>°<span id="steer-left-warn" style="color: var(--warning);"></span> &nbsp;|&nbsp;
+                    <span data-i18n="lbl_pos_right">R:</span> <span id="steer-right-cur">--</span>°<span id="steer-right-warn" style="color: var(--warning);"></span>
+                </div>
+                <div id="steer-range-note" data-i18n="steer_range_note" style="display: none; margin-top: 4px; font-size: 0.8em; color: var(--warning);">
+                    ⚠ A limit is beyond ±550°: the sensor latches a fault at about ±600°. Automatic steering stops at 550°.
                 </div>
                 <div style="margin-top: 4px; font-size: 0.8em; color: var(--muted-foreground);">
                     <span data-i18n="lbl_sensor">Sensor:</span> <span id="steer-sensor-status">--</span>
                     <span id="steer-sensor-fault"></span> &nbsp;|&nbsp;
                     <span data-i18n="lbl_calibration">Calibration:</span> <span id="steer-cal-status">--</span>
+                </div>
+                <div style="margin-top: 4px; font-size: 0.8em; color: var(--muted-foreground);">
+                    <span data-i18n="lbl_lws_status">Status:</span>
+                    OK <span id="steer-lws-ok">--</span> &nbsp;cal <span id="steer-lws-cal">--</span> &nbsp;adj <span id="steer-lws-adj">--</span> &nbsp;
+                    <span data-i18n="lbl_lws_fault_code">fault:</span> <span id="steer-lws-fault-code">--</span> &nbsp;|&nbsp;
+                    <span id="steer-lws-fps">--</span>&nbsp;<span data-i18n="lbl_lws_fps">fps</span>
+                </div>
+                <div style="margin-top: 4px; font-size: 0.8em; color: var(--muted-foreground);">
+                    <span data-i18n="lbl_lws_errors">Errors:</span>
+                    <span data-i18n="lbl_lws_crc">checksum</span> <span id="steer-lws-crc">--</span> &nbsp;
+                    <span data-i18n="lbl_lws_cnt">counter</span> <span id="steer-lws-cnt">--</span> &nbsp;
+                    <span data-i18n="lbl_lws_miss">missed</span> <span id="steer-lws-miss">--</span>
+                </div>
+                <div style="margin-top: 4px; font-size: 0.8em; color: var(--muted-foreground);">
+                    <span data-i18n="lbl_steer_zero">Sensor zero:</span> <span id="steer-zero-state">--</span>
+                    <span id="steer-zero-error" style="color: var(--danger);"></span>
                 </div>
                 <div style="margin-top: 4px; font-size: 0.8em; color: var(--muted-foreground);">
                     <span data-i18n="lbl_steer_motor_current">Motor:</span> <span id="steer-motor-current">--</span>&nbsp;A &nbsp;|&nbsp;
@@ -1175,29 +1191,48 @@
 
                 // Steering calibration card
                 card_steer_cal: '🎯 Steering Calibration',
-                steer_cal_help: 'Two AS5600 sensors (fine on the steering shaft, coarse on the geared shaft). Position is in fine counts from center. Hold <b>◀ / ▶</b> to jog the wheel and press <b>Left</b>, <b>Center</b> and <b>Right</b> in any order: each button records only its own point (pressing it again re-records it). The calibration completes and is saved once all three points are set. Capture all three in one power-on: a reboot or a sensor fault discards unfinished points.',
+                steer_cal_help: 'Bosch steering-angle sensor on CAN; angles in degrees, + = right. The <b>center is the sensor\'s own zero</b>. Calibration: hold <b>◀ / ▶</b> to jog the wheels straight ahead, <b>restart the vehicle</b> (power-cycles the sensor), press <b>Set sensor zero</b>, then jog to each lock and press <b>Set Left</b> and <b>Set Right</b> (each is saved at once). Jog and nudge always work, even without a sensor. A sensor reporting <b>range latched</b> is cleared only by restarting the vehicle; jogging past about 550° risks that latch.',
+                steer_sensorless_note: '⚠ No healthy sensor: jog and nudge run open loop, without stall protection — watch the wheels and release at the lock.',
                 btn_jog_left: '◀ Jog Left',
                 btn_jog_right: 'Jog Right ▶',
                 btn_nudge_left: '◂ Nudge',
                 btn_nudge_right: 'Nudge ▸',
-                lbl_jog_speed: 'Jog speed',
+                lbl_jog_speed: 'Jog speed',
                 btn_set_left: 'Set Left',
-                btn_set_center: 'Set Center',
                 btn_set_right: 'Set Right',
-                lbl_position: 'Position:',
-                lbl_fine_raw: 'Fine:',
-                lbl_coarse_raw: 'Coarse:',
-                lbl_turn: 'Turn:',
-                lbl_ratio: 'Ratio:',
-                lbl_residual: 'Residual:',
-                steer_fault_fine_i2c: 'fine sensor: no I2C',
-                steer_fault_fine_magnet: 'fine sensor: no magnet',
-                steer_fault_coarse_i2c: 'coarse sensor: no I2C',
-                steer_fault_coarse_magnet: 'coarse sensor: no magnet',
-                steer_fault_mismatch: 'sensors disagree',
-                steer_fault_recovering: 'recovering turn',
+                btn_steer_zero: 'Set sensor zero',
+                steer_zero_confirm: 'Set the sensor zero HERE?\n\nThe current wheel position becomes the steering center, and the stored Left and Right limits will be erased — capture them again afterwards.\n\nOnly do this with the wheels straight ahead, after restarting the vehicle.',
+                steer_zero_sending: 'Setting sensor zero…',
+                lbl_steer_angle: 'Angle:',
+                lbl_steer_rate: 'Rate:',
+                lbl_steer_zero: 'Sensor zero:',
+                lbl_lws_status: 'Status:',
+                lbl_lws_fault_code: 'fault:',
+                lbl_lws_fps: 'fps',
+                lbl_lws_errors: 'Errors:',
+                lbl_lws_crc: 'checksum',
+                lbl_lws_cnt: 'counter',
+                lbl_lws_miss: 'missed',
+                steer_range_note: '⚠ A limit is beyond ±550°: the sensor latches a fault at about ±600°. Automatic steering stops at 550°.',
+                steer_limit_beyond_safe: ' ⚠ beyond 550° — sensor latch near',
+                steer_fault_zeroing: 'setting zero',
+                steer_fault_can_down: 'CAN down',
+                steer_fault_timeout: 'no frames',
+                steer_fault_range_latched: 'range latched — restart the vehicle',
+                steer_fault_sensor_fault: 'sensor fault',
+                steer_fault_not_calibrated: 'sensor has no zero — Set sensor zero',
+                steer_fault_angle_invalid: 'angle invalid',
+                steer_zero_idle: '--',
+                steer_zero_running: 'running…',
+                steer_zero_ok: 'confirmed',
+                steer_zero_failed: 'FAILED',
+                steer_zero_err_busy: 'busy — try again',
+                steer_zero_err_can_unavailable: 'CAN unavailable',
+                steer_zero_err_tx_failed: 'CAN send failed',
+                steer_zero_err_range_latched: 'range latched — restart the vehicle and retry',
+                steer_zero_err_no_frames: 'no sensor frames',
+                steer_zero_err_not_confirmed: 'sensor did not confirm the zero',
                 lbl_pos_left: 'L:',
-                lbl_pos_center: 'C:',
                 lbl_pos_right: 'R:',
                 lbl_sensor: 'Sensor:',
                 lbl_calibration: 'Calibration:',
@@ -1206,14 +1241,6 @@
                 sensor_fault: 'FAULT',
                 cal_calibrated: 'CALIBRATED',
                 cal_not_calibrated: 'NOT CALIBRATED',
-                steer_cal_points_set: 'Points set this power-on:',
-                steer_cal_points_missing: 'still needed:',
-                steer_cal_pt_L: 'Left',
-                steer_cal_pt_C: 'Center',
-                steer_cal_pt_R: 'Right',
-                steer_cal_rejected: 'Calibration rejected:',
-                steer_cal_recapture: 're-capture the wrong point.',
-                steer_cal_lost: 'Unfinished calibration points were discarded (sensor fault) — capture all three again.',
                 lbl_steer_motor_current: 'Motor:',
                 lbl_steer_fet_temp: 'FET:',
                 lbl_steer_driver: 'Driver:',
@@ -1491,29 +1518,48 @@
 
                 // Steering calibration card
                 card_steer_cal: '🎯 Калібрування керма',
-                steer_cal_help: 'Два датчики AS5600 (точний на валу керма, грубий на редукторі). Положення — у відліках точного датчика від центру. Утримуйте <b>◀ / ▶</b>, щоб провертати кермо, і натискайте <b>Ліво</b>, <b>Центр</b> та <b>Право</b> у будь-якому порядку: кожна кнопка фіксує лише свою точку (повторне натискання перезаписує її). Калібрування завершується й зберігається, щойно задано всі три точки. Зафіксуйте всі три за одне ввімкнення: перезавантаження або збій датчика скидає незавершені точки.',
+                steer_cal_help: 'Датчик кута керма Bosch на шині CAN; кути в градусах, + = вправо. <b>Центр — це власний нуль датчика</b>. Калібрування: утримуючи <b>◀ / ▶</b>, виставте колеса прямо, <b>перезапустіть машину</b> (датчик перезавантажиться), натисніть <b>Задати нуль датчика</b>, потім доверніть кермо до кожного упору й натисніть <b>Задати ліво</b> та <b>Задати право</b> (кожна межа зберігається одразу). Проворот і підштовхування працюють завжди, навіть без датчика. Стан датчика <b>«вихід за діапазон»</b> знімається лише перезапуском машини; проворот далі ніж приблизно на 550° ризикує його спричинити.',
+                steer_sensorless_note: '⚠ Датчик несправний: проворот і підштовхування працюють без зворотного зв\'язку й без захисту від заклинювання — стежте за колесами й відпускайте кнопку біля упору.',
                 btn_jog_left: '◀ Проворот вліво',
                 btn_jog_right: 'Проворот вправо ▶',
                 btn_nudge_left: '◂ Підштовхнути',
                 btn_nudge_right: 'Підштовхнути ▸',
-                lbl_jog_speed: 'Швидкість провороту',
+                lbl_jog_speed: 'Швидкість провороту',
                 btn_set_left: 'Задати ліво',
-                btn_set_center: 'Задати центр',
                 btn_set_right: 'Задати право',
-                lbl_position: 'Положення:',
-                lbl_fine_raw: 'Точний:',
-                lbl_coarse_raw: 'Грубий:',
-                lbl_turn: 'Оберт:',
-                lbl_ratio: 'Передавання:',
-                lbl_residual: 'Розбіжність:',
-                steer_fault_fine_i2c: 'точний датчик: немає I2C',
-                steer_fault_fine_magnet: 'точний датчик: немає магніту',
-                steer_fault_coarse_i2c: 'грубий датчик: немає I2C',
-                steer_fault_coarse_magnet: 'грубий датчик: немає магніту',
-                steer_fault_mismatch: 'датчики не узгоджуються',
-                steer_fault_recovering: 'відновлення оберту',
+                btn_steer_zero: 'Задати нуль датчика',
+                steer_zero_confirm: 'Задати нуль датчика ТУТ?\n\nПоточне положення коліс стане центром керма, а збережені межі «ліво» та «право» буде стерто — після цього зафіксуйте їх знову.\n\nРобіть це лише з колесами, виставленими прямо, після перезапуску машини.',
+                steer_zero_sending: 'Встановлення нуля датчика…',
+                lbl_steer_angle: 'Кут:',
+                lbl_steer_rate: 'Швидкість:',
+                lbl_steer_zero: 'Нуль датчика:',
+                lbl_lws_status: 'Стан:',
+                lbl_lws_fault_code: 'код:',
+                lbl_lws_fps: 'кадр/с',
+                lbl_lws_errors: 'Помилки:',
+                lbl_lws_crc: 'контр. сума',
+                lbl_lws_cnt: 'лічильник',
+                lbl_lws_miss: 'пропущено',
+                steer_range_note: '⚠ Межа далі ніж ±550°: датчик фіксує несправність приблизно на ±600°. Автоматичне кермування зупиняється на 550°.',
+                steer_limit_beyond_safe: ' ⚠ далі 550° — близько до блокування датчика',
+                steer_fault_zeroing: 'встановлення нуля',
+                steer_fault_can_down: 'CAN недоступний',
+                steer_fault_timeout: 'немає кадрів',
+                steer_fault_range_latched: 'вихід за діапазон — перезапустіть машину',
+                steer_fault_sensor_fault: 'несправність датчика',
+                steer_fault_not_calibrated: 'датчик без нуля — задайте нуль датчика',
+                steer_fault_angle_invalid: 'недійсний кут',
+                steer_zero_idle: '--',
+                steer_zero_running: 'виконується…',
+                steer_zero_ok: 'підтверджено',
+                steer_zero_failed: 'ПОМИЛКА',
+                steer_zero_err_busy: 'зайнято — спробуйте ще раз',
+                steer_zero_err_can_unavailable: 'CAN недоступний',
+                steer_zero_err_tx_failed: 'не вдалося надіслати в CAN',
+                steer_zero_err_range_latched: 'вихід за діапазон — перезапустіть машину й повторіть',
+                steer_zero_err_no_frames: 'немає кадрів від датчика',
+                steer_zero_err_not_confirmed: 'датчик не підтвердив нуль',
                 lbl_pos_left: 'Л:',
-                lbl_pos_center: 'Ц:',
                 lbl_pos_right: 'П:',
                 lbl_sensor: 'Датчик:',
                 lbl_calibration: 'Калібрування:',
@@ -1522,14 +1568,6 @@
                 sensor_fault: 'ПОМИЛКА',
                 cal_calibrated: 'ВІДКАЛІБРОВАНО',
                 cal_not_calibrated: 'НЕ ВІДКАЛІБРОВАНО',
-                steer_cal_points_set: 'Задано точок за це ввімкнення:',
-                steer_cal_points_missing: 'ще потрібно:',
-                steer_cal_pt_L: 'Ліво',
-                steer_cal_pt_C: 'Центр',
-                steer_cal_pt_R: 'Право',
-                steer_cal_rejected: 'Калібрування відхилено:',
-                steer_cal_recapture: 'перезафіксуйте хибну точку.',
-                steer_cal_lost: 'Незавершені точки калібрування скинуто (збій датчика) — зафіксуйте всі три знову.',
                 lbl_steer_motor_current: 'Двигун:',
                 lbl_steer_fet_temp: 'FET:',
                 lbl_steer_driver: 'Драйвер:',
@@ -1898,9 +1936,9 @@
                                          data.success ? 'var(--success)' : 'var(--danger)');
                 }
                 // Steering calibration status
-                if (data.message && (data.message.includes('Steering center') ||
-                    data.message.includes('Steering left limit') || data.message.includes('Steering right limit') ||
-                    data.message.includes('Capture ') || data.message.startsWith('Jog'))) {
+                if (data.message && (data.message.includes('Steering left limit') ||
+                    data.message.includes('Steering right limit') || data.message.includes('Capture ') ||
+                    data.message.startsWith('Sensor zero') || data.message.startsWith('Jog'))) {
                     steerCenterStatus(data.success ? data.message : t('error_prefix') + data.message,
                                       data.success ? 'var(--success)' : 'var(--danger)');
                 }
@@ -2194,64 +2232,54 @@
                     ioEl.style.color = faults.length ? 'var(--danger)' : 'var(--success)';
                 }
             }
-            // Steering position frame: fine counts from center (may be negative); null = unset / unreadable
+            // Steering angle sensor (Bosch LWS on CAN): degrees, + = right; null = unset / invalid
             const steerVal = (v) => (v === null || v === undefined) ? '--' : v;
-            if (data.steer_position !== undefined) {
-                document.getElementById('steer-pos').textContent = steerVal(data.steer_position);
+            const steerDeg = (v) => (typeof v === 'number') ? v.toFixed(1) : '--';
+            const steerFlag = (v) => (v === null || v === undefined) ? '--' : (v ? '1' : '0');
+            if (data.steer_angle !== undefined) {
+                document.getElementById('steer-angle').textContent = steerDeg(data.steer_angle);
             }
-            if (data.steer_center !== undefined) {
-                document.getElementById('steer-center-cur').textContent = steerVal(data.steer_center);
+            if (data.steer_rate !== undefined) {
+                document.getElementById('steer-rate').textContent = steerVal(data.steer_rate);
             }
+            // Limits, with a note next to one beyond the ±550° safe range (sensor latch near)
+            const SAFE_DEG = 550;
+            const beyond = (v) => (typeof v === 'number') && Math.abs(v) > SAFE_DEG;
+            const rangeWarn = data.steer_range_warning === true;
             if (data.steer_left !== undefined) {
-                document.getElementById('steer-left-cur').textContent = steerVal(data.steer_left);
+                document.getElementById('steer-left-cur').textContent = steerDeg(data.steer_left);
+                document.getElementById('steer-left-warn').textContent =
+                    (rangeWarn && beyond(data.steer_left)) ? t('steer_limit_beyond_safe') : '';
             }
             if (data.steer_right !== undefined) {
-                document.getElementById('steer-right-cur').textContent = steerVal(data.steer_right);
+                document.getElementById('steer-right-cur').textContent = steerDeg(data.steer_right);
+                document.getElementById('steer-right-warn').textContent =
+                    (rangeWarn && beyond(data.steer_right)) ? t('steer_limit_beyond_safe') : '';
             }
-            // Calibration points recorded this power-on (any order; "" = none pending).
-            // While points are pending, L/C/R are relative to the center point, or to
-            // the first point captured when no center is recorded yet.
-            if (data.steer_cal_points !== undefined) {
-                const pts = data.steer_cal_points || '';
-                const marks = { L: 'steer-left-mark', C: 'steer-center-mark', R: 'steer-right-mark' };
-                for (const k in marks) {
-                    const m = document.getElementById(marks[k]);
-                    if (m) m.textContent = pts.includes(k) ? ' ✓' : '';
-                }
-                const el = document.getElementById('steer-cal-session');
-                if (el) {
-                    const nm = (k) => t('steer_cal_pt_' + k);
-                    let msg = '';
-                    let color = 'var(--warning)';
-                    if (data.steer_cal_error) {
-                        msg = t('steer_cal_rejected') + ' ' + data.steer_cal_error + ' — ' + t('steer_cal_recapture');
-                        color = 'var(--danger)';
-                    } else if (pts) {
-                        const missing = ['L', 'C', 'R'].filter(k => !pts.includes(k)).map(nm);
-                        msg = t('steer_cal_points_set') + ' ' + pts.split('').map(nm).join(', ') +
-                              (missing.length ? '; ' + t('steer_cal_points_missing') + ' ' + missing.join(', ') : '');
-                    } else if (data.steer_cal_lost) {
-                        msg = t('steer_cal_lost');
-                        color = 'var(--danger)';
-                    }
-                    el.textContent = msg;
-                    el.style.color = color;
-                }
+            if (data.steer_range_warning !== undefined) {
+                document.getElementById('steer-range-note').style.display = rangeWarn ? 'block' : 'none';
             }
-            if (data.steer_fine_raw !== undefined) {
-                document.getElementById('steer-fine-raw').textContent = steerVal(data.steer_fine_raw);
+            if (data.steer_lws_ok !== undefined) {
+                document.getElementById('steer-lws-ok').textContent = steerFlag(data.steer_lws_ok);
+                document.getElementById('steer-lws-cal').textContent = steerFlag(data.steer_lws_cal);
+                document.getElementById('steer-lws-adj').textContent = steerFlag(data.steer_lws_adj);
+                document.getElementById('steer-lws-fault-code').textContent = steerVal(data.steer_lws_fault_code);
             }
-            if (data.steer_coarse_raw !== undefined) {
-                document.getElementById('steer-coarse-raw').textContent = steerVal(data.steer_coarse_raw);
+            if (data.steer_lws_fps !== undefined) {
+                document.getElementById('steer-lws-fps').textContent = steerVal(data.steer_lws_fps);
+                document.getElementById('steer-lws-crc').textContent = steerVal(data.steer_lws_crc_err);
+                document.getElementById('steer-lws-cnt').textContent = steerVal(data.steer_lws_cnt_err);
+                document.getElementById('steer-lws-miss').textContent = steerVal(data.steer_lws_miss);
             }
-            if (data.steer_turn !== undefined) {
-                document.getElementById('steer-turn').textContent = steerVal(data.steer_turn);
-            }
-            if (data.steer_ratio !== undefined) {
-                document.getElementById('steer-ratio').textContent = steerVal(data.steer_ratio);
-            }
-            if (data.steer_residual !== undefined) {
-                document.getElementById('steer-residual').textContent = steerVal(data.steer_residual);
+            if (data.steer_zero_state !== undefined) {
+                const st = data.steer_zero_state || 'idle';
+                const el = document.getElementById('steer-zero-state');
+                el.textContent = t('steer_zero_' + st);
+                el.style.color = (st === 'ok') ? 'var(--success)' : (st === 'failed') ? 'var(--danger)'
+                               : (st === 'running') ? 'var(--warning)' : 'var(--muted-foreground)';
+                const errEl = document.getElementById('steer-zero-error');
+                errEl.textContent = (st === 'failed' && data.steer_zero_error)
+                    ? '(' + t('steer_zero_err_' + data.steer_zero_error) + ')' : '';
             }
             if (data.steer_sensor_fault !== undefined) {
                 const el = document.getElementById('steer-sensor-fault');
@@ -2263,6 +2291,8 @@
                 const el = document.getElementById('steer-sensor-status');
                 el.textContent = data.steer_sensor_ok ? t('sensor_ok') : t('sensor_fault');
                 el.style.color = data.steer_sensor_ok ? 'var(--success)' : 'var(--danger)';
+                // Jog / nudge are never disabled by the sensor: only warn that they run sensorless
+                document.getElementById('steer-sensorless-note').style.display = data.steer_sensor_ok ? 'none' : 'block';
             }
             if (data.steer_calibrated !== undefined) {
                 const el = document.getElementById('steer-cal-status');
@@ -2994,7 +3024,7 @@
             }
         }
 
-        // ---- Steering calibration (AS5600) ----
+        // ---- Steering calibration (Bosch LWS on CAN: center = sensor zero) ----
         function steerCenterStatus(msg, color) {
             const el = document.getElementById('steer-center-status');
             if (el) { el.textContent = msg; el.style.color = color || 'var(--muted-foreground)'; }
@@ -3004,6 +3034,13 @@
                 ws.send(JSON.stringify({ cmd: cmd }));
                 steerCenterStatus(t('capturing'), 'var(--muted-foreground)');
             }
+        }
+        function steerSensorZero() {
+            if (!(ws && ws.readyState === WebSocket.OPEN)) return;
+            // The current position becomes the center and the stored limits are erased
+            if (!confirm(t('steer_zero_confirm'))) return;
+            ws.send(JSON.stringify({ cmd: 'steer_lws_zero' }));
+            steerCenterStatus(t('steer_zero_sending'), 'var(--muted-foreground)');
         }
         function steerTest(pct) {
             sendCommand('set_steering', pct);

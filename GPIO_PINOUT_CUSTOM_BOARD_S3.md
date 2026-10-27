@@ -49,8 +49,8 @@ document is the wiring / pin reference only.
 | GPIO | Board net / connector | New firmware function | Old (DevKit) function | Status |
 |------|-----------------------|-----------------------|-----------------------|--------|
 | **0** | BOOT button, Prog X1 pin 6; LED3 via BSS138 VT3 (active high) | Boot strap + system LED (optional) | FREE | NEW ⚠ strapping |
-| **1** | I2C1 SDA — X14 header (fine steering AS5600 0x36 only) | `PIN_STEER_SDA` | FREE | MOVED (was 41) |
-| **2** | I2C1 SCL — same bus | `PIN_STEER_SCL` | FREE | MOVED (was 42) |
+| **1** | I2C1 SDA — X14 header, **no device fitted** (`Wire` not started) | `PIN_I2C1_SDA` — defined, unused | FREE | MOVED (was 41) |
+| **2** | I2C1 SCL — same bus | `PIN_I2C1_SCL` — defined, unused | FREE | MOVED (was 42) |
 | **3** | CD4051 8:1 mux common out (Analog_1..8 = BTS7960 IS) | `PIN_ADC_IS_MUX` — ADC1 | `PIN_THROTTLE_PWM` | NEW (input only) |
 | **4** | PWM_1 → X6 pin 2 (L_PWM) | FREE — reserved for a 4th BTS7960 on X6 | `PIN_VESC_TX` | FREED (VESC moved to UART0 / X1) |
 | **5** | PWM_2 → X6 pin 3 (R_PWM) | FREE — reserved for a 4th BTS7960 on X6 | `PIN_VESC_RX` | FREED (VESC moved to UART0 / X1) |
@@ -74,7 +74,7 @@ document is the wiring / pin reference only.
 | **36** | not connected | — | `PIN_RELAY1` | N/C (→ relay board) |
 | **37** | not connected | — | `PIN_RELAY2` | N/C (→ relay board) |
 | **38** | MCP2515 INT | `PIN_CAN_INT` — optional/future (firmware polls) | `PIN_RELAY3` | NEW |
-| **39** | MCP2515 SPI CS | `PIN_CAN_CS` | `PIN_WHEEL_LOCK` | MOVED (was 10) |
+| **39** | MCP2515 SPI CS | `PIN_CAN_CS` (engine ECU + Bosch LWS steering-angle sensor on one bus) | `PIN_WHEEL_LOCK` | MOVED (was 10) |
 | **40** | MCP2515 SPI CLK | `PIN_CAN_SCK` | FREE | MOVED (was 12) |
 | **41** | MCP2515 SPI MISO | `PIN_CAN_MISO` | `PIN_STEER_SDA` | MOVED (was 13) |
 | **42** | MCP2515 SPI MOSI | `PIN_CAN_MOSI` | `PIN_STEER_SCL` | MOVED (was 11) |
@@ -82,8 +82,8 @@ document is the wiring / pin reference only.
 | **44** | UART0 RX ← Prog X1 RxD (510Ω R14); R64 → CH9121T **removed** on aztec | `PIN_VESC_RX` — VESC UART0 RX (X1) ← VESC TX | console RX | NEW (aztec, needs R63/R64 removed) |
 | **45** | `CFG_CH9121T` via BSS138 | LAN config-mode toggle — unused (CH9121T disconnected on aztec) | FREE | RESERVED ⚠ strapping |
 | **46** | `Bust_On/OFF` → X10 pin 1 | `PIN_BOOST_EN` — boost enable output | FREE | NEW ⚠ strapping |
-| **47** | I2C2 SCL (BSS138 level shift) | On-board U10/U2 + X15 bus SCL (relay board + coarse steering AS5600) | `PIN_GEAR_HIGH` | NEW |
-| **48** | I2C2 SDA (BSS138 level shift) | On-board U10/U2 + X15 bus SDA (relay board + coarse steering AS5600) | FREE | NEW |
+| **47** | I2C2 SCL (BSS138 level shift) | On-board U10/U2 + X15 bus SCL (relay board) | `PIN_GEAR_HIGH` | NEW |
+| **48** | I2C2 SDA (BSS138 level shift) | On-board U10/U2 + X15 bus SDA (relay board) | FREE | NEW |
 
 > GPIO2 was the pin proposed by the pending `add-hall-speed-sensor` change. On this board GPIO2 is
 > I2C1 SCL, and Hall_1 (GPIO14) is scaled for **5V** sensors — the fitted driveline sensor outputs
@@ -109,9 +109,9 @@ document is the wiring / pin reference only.
 | **X10** | Buck Boost board | 1 = Boost On/Off (GPIO46), 2 = GND, 3 = +24V measure → divider → GPIO9 |
 | **X11** | Power in | 3× +12V, 3× GND (main 12V input) |
 | **X12** | LAN UART2 | CH9121T's second UART — LAN-side, **not** an ESP UART |
-| **X13** | CAN | CANL, GND, CANH — TJA1051T/3, split termination 2×60Ω + 47n, common-mode choke |
-| **X14** | I2C1 header — **fine AS5600 steering sensor @ 0x36 only** (on the steering shaft; connected) | VCC 3V3, SDA (GPIO1), SCL (GPIO2), GND |
-| **X15** | I2C2 header — relay board @ 0x1F, **working / bench-verified**, **plus the coarse AS5600 steering sensor @ 0x36** (on the geared-down shaft; keep its cable short and screened — it shares the bus with the expanders) | VCC, SDA (GPIO48), SCL (GPIO47), GND. ⚠ *History:* on the first assembled board this connector passed no signals until rework in the `FB3`/`FB4` ferrite area — **check that area first on any board copy that shows a silent X15** |
+| **X13** | CAN | CANL, GND, CANH — TJA1051T/3, split termination 2×60Ω + 47n, common-mode choke. One 500 kbit/s bus shared by the **engine ECU** (OBD-II) and the **Bosch LWS steering-angle sensor** (0x305) — see §4 "SPI (CAN)" for termination |
+| **X14** | I2C1 header — **empty** (no device fitted; `Wire` is not started). Kept as the relay-board contingency | VCC 3V3, SDA (GPIO1), SCL (GPIO2), GND |
+| **X15** | I2C2 header — relay board @ 0x1F, **working / bench-verified** | VCC, SDA (GPIO48), SCL (GPIO47), GND. ⚠ *History:* on the first assembled board this connector passed no signals until rework in the `FB3`/`FB4` ferrite area — **check that area first on any board copy that shows a silent X15** |
 | **X16** | Opto inputs | In1..In4 (In_Plus / In_Minus pairs) + GND |
 | **X17** | Opto inputs | In5..In8 (In_Plus / In_Minus pairs) + GND |
 | **X18** | Ethernet | RJ45 (CH9121T) |
@@ -169,36 +169,34 @@ BAV199 clamp + 100n, into the CD4051 mux.
 
 | Bus | SDA | SCL | Speed | Devices |
 |-----|-----|-----|-------|---------|
-| I2C1 (`Wire`) | 1 | 2 | 100 kHz | **X14 header only**: the **fine** AS5600 steering sensor @ 0x36 (steering shaft). No other device belongs here; its driver may restart this bus on its own |
-| I2C2 (`Wire1`) | 48 | 47 | 100 kHz | **Both on-board PCA9557s plus the relay board and the coarse steering sensor.** Opto-input **U10 @ 0x1A** (A2A1A0 = 010); mux-control **U2 @ 0x1C** (A2A1A0 = 100); external relay board **@ 0x1F** and **coarse AS5600 @ 0x36** (geared-down shaft), both on header X15. Restarted only by the coordinated recovery in `src/main.cpp` |
+| I2C1 (`Wire`) | 1 | 2 | 100 kHz | **X14 header only — no device fitted**, so `Wire` is not started (`PIN_I2C1_SDA`/`PIN_I2C1_SCL` defined, unused). The steering angle sensor is on CAN |
+| I2C2 (`Wire1`) | 48 | 47 | 100 kHz | **Both on-board PCA9557s plus the relay board.** Opto-input **U10 @ 0x1A** (A2A1A0 = 010); mux-control **U2 @ 0x1C** (A2A1A0 = 100); external relay board **@ 0x1F** on header X15. Opened once in `setup()`; nothing restarts it afterwards |
 
 > ⚠ **EMPIRICAL — established by live `i2cdetect`-style scans on the assembled board, and it
 > overrides the schematic reading.** The schematic's port names suggested the opto-input expander
 > **U10 was on I2C1**; the scans show **both** on-board expanders (U10 @ 0x1A *and* U2 @ 0x1C)
 > answering on **I2C2 (GPIO47/48)**, and nothing on-board answering on I2C1. Trust the copper.
 >
-> The bench-verified I2C2 scan before the steering change was **0x1A, 0x1C, 0x1F** — the two
-> on-board expanders plus the relay board on X15. With the coarse steering AS5600 on X15 the expected
-> boot scan is **I2C1: 0x36; I2C2: 0x1A, 0x1C, 0x1F, 0x36**. The two AS5600s share the fixed address
-> 0x36, which is why they sit on different buses; 0x36 collides with no I2C2 expander. `RelayController` is constructed with `Wire1` in `src/main.cpp`, and the relay
+> The expected boot scan of I2C2 is **0x1A, 0x1C, 0x1F** — the two on-board expanders plus the
+> relay board on X15 (I2C1 is not scanned: nothing is fitted on X14). *History:* firmware 1.2.0 had
+> two AS5600 steering sensors (0x36 on X14 and on X15); since 1.3.0 the steering angle comes from a
+> Bosch LWS sensor on CAN and both are removed. `RelayController` is constructed with `Wire1` in `src/main.cpp`, and the relay
 > board keeps its as-shipped **0x1F** strap (it collides with neither 0x1A nor 0x1C).
 >
 > ⚠ *History (relevant to any board copy):* on the first assembled board X15 passed no signals at
 > all — a device on X15 never answered while the same device answered immediately on X14, twice.
 > It was fixed by rework in the **`FB3`/`FB4` ferrite area**; check there first if X15 is silent on
 > another board. If the connector is ever unusable, the relay board also runs on X14 → I2C1 (change
-> the `RelayController` bus argument to `Wire` and borrow X14 from the fine AS5600) — a contingency, not
-> the current wiring.
+> the `RelayController` bus argument to `Wire` and start `Wire` on `PIN_I2C1_SDA`/`PIN_I2C1_SCL` in
+> `setup()`; X14 is empty) — a contingency, not the current wiring.
 >
-> **I2C2 recovery:** the coarse AS5600 never restarts `Wire1`. `src/main.cpp` restarts it only when
-> the coarse AS5600 (≥ `AS5600_RECOVER_AFTER_FAILS` failures in a row) **and** the opto-input
-> expander are failing at the same time, at most once every `I2C2_BUS_RECOVER_MS`, after every
-> `Wire1` user has finished for the loop iteration. No PCA9557 register is written by the restart.
+> There is no coordinated I2C2 recovery any more (it existed only for the coarse AS5600): the
+> expanders keep their own fail-safes — `BoardInputs` re-configures itself on its recovery cadence and
+> `RelayController` verifies every write.
 
-> Both buses run at **100 kHz** (`I2C_BUS_FREQ_HZ` in `include/Constants.h`, shared by `Wire` and
-> `Wire1`). Both AS5600s are at the far end of cable runs to the steering column (X14 and X15), so
-> signal-integrity margin beats bus speed; 400 kHz was tried and rejected. Going faster is a
-> hardware change first (stronger pull-up on the X14 run), verified on the bench.
+> I2C runs at **100 kHz** (`I2C_BUS_FREQ_HZ` in `include/Constants.h`). The relay board is at the end
+> of a cable run on X15, so signal-integrity margin beats bus speed; 400 kHz was tried and rejected.
+> Going faster is a hardware change first (stronger pull-up), verified on the bench.
 
 ### SPI (CAN)
 
@@ -212,6 +210,25 @@ BAV199 clamp + 100n, into the CD4051 mux.
 
 The MCP2515 crystal on this board is **8 MHz**; firmware already uses `MCP_8MHZ`
 (`src/CANController.cpp`) — no clock change needed.
+
+**One shared CAN bus (X13, 500 kbit/s):**
+
+| Node | IDs | Notes |
+|------|-----|-------|
+| Engine ECU | requests `0x7DF`, replies `0x7E8`–`0x7EF` | OBD-II polling (RPM, coolant, ...) |
+| Bosch LWS steering-angle sensor 0 265 005 486 (PSA 9650236180) | sends `0x305` (DLC 6, every 10 ms); config `0x7C0` | Mounted **directly on the steering shaft**. 12 V from the **ignition key** (switched), ground common with the board. Angle int16, 0.1°/bit, sensor + = left (firmware negates: + = right) |
+
+- **Receive filters** (`applyRxFilters()`): RXB0 = mask `0x7F8` / filters 0–1 `0x7E8` (OBD-II
+  replies); RXB1 = mask `0x7FF` / filters 2–5 `0x305` (steering angle only). Extended frames are
+  rejected; RXB0 → RXB1 rollover stays on.
+- **`0x7C0` is transmitted only by the "Set sensor zero" sequence**, with exactly `05 00`, ~100 ms,
+  `53 30` (zero here, keep output ID `0x305`). Never `03 00`: it moves the sensor's output to ID
+  `0x000`.
+- The sensor latches a fault (code 9) beyond about **±600°**; only a 12 V power cycle — restarting
+  the vehicle — clears it. Closed-loop steering is kept within ±550°.
+- ⚠ **Termination:** the bus must have **exactly two 120 Ω terminators**, one at each end. With the
+  power off, measure **≈ 60 Ω between CAN-H and CAN-L**; ≈ 40 Ω means three terminators (remove the
+  one in the middle of the bus), ≈ 120 Ω means one is missing. Keep the stub to the sensor short.
 
 ### LEDC PWM Channels
 
@@ -443,8 +460,8 @@ A separate 7s LiFePO4 battery also exists in the vehicle power system.
 | `PIN_CAN_SCK` | GPIO 12 | **GPIO 40** |
 | `PIN_CAN_MISO` | GPIO 13 | **GPIO 41** |
 | `PIN_CAN_MOSI` | GPIO 11 | **GPIO 42** |
-| `PIN_STEER_SDA` | GPIO 41 | **GPIO 1** |
-| `PIN_STEER_SCL` | GPIO 42 | **GPIO 2** |
+| `PIN_STEER_SDA` → `PIN_I2C1_SDA` | GPIO 41 | **GPIO 1** (renamed in 1.3.0; X14 empty, defined but unused) |
+| `PIN_STEER_SCL` → `PIN_I2C1_SCL` | GPIO 42 | **GPIO 2** (renamed in 1.3.0; X14 empty, defined but unused) |
 | `PIN_VESC_TX` / `PIN_VESC_RX` | GPIO 4 / 5 | **GPIO 43 / 44** (UART0, X1 — aztec) |
 | `PIN_BRAKE_LPWM` / `PIN_BRAKE_RPWM` | GPIO 6 / 7 | unchanged |
 

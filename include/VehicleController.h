@@ -434,6 +434,10 @@ private:
     // idles the throttle — a demand that outlives an idle command would reopen the throttle.
     float    webThrottleDemandPct_;
 
+    // Portal waiting for the final result of a "Set sensor zero" (steer_lws_zero): the
+    // command is answered once when it starts and again when the zero-set ends.
+    WebPortal* steerZeroResponsePortal_;
+
     /**
      * @brief Apply fail-safe commands (center steering, idle throttle, stop actuators)
      */
@@ -542,14 +546,22 @@ private:
     void updateRailMonitor();
 
     /**
-     * @brief Steering calibration commands (web-only).
-     * Capture commands record the current fine position + coarse raw angle (both
-     * AS5600s) as the center/left/right point, in any order; the calibration is
-     * validated and persisted once all three points are set;
+     * @brief Steering calibration commands (web-only, any input source).
+     * steer_cal_left / steer_cal_right store the current angle as that limit and save it
+     * at once (reply in degrees, with the refusal reason or the beyond-safe-range warning);
+     * steer_cal_center is answered with a failure pointing to "Set sensor zero";
      * jog drives the actuator open-loop (momentary, sign = direction, |value| = duty);
-     * nudge fires one short slow pulse for precise positioning.
+     * nudge fires one short slow pulse for precise positioning. Jog and nudge work
+     * without a healthy sensor.
      */
     void processSteerCalCommand(const String& which, WebPortal& webPortal);
+
+    /**
+     * @brief "Set sensor zero" (steer_lws_zero): start the LWS zero-set sequence with no
+     * precondition. Answered when it starts (or is refused) and again with the final
+     * result (zero confirmed / failed + reason) from update().
+     */
+    void processSteerZeroCommand(WebPortal& webPortal);
     void processSteerJogCommand(float value, WebPortal& webPortal);
     void processSteerNudgeCommand(int8_t direction, WebPortal& webPortal);
 

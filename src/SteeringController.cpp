@@ -1,64 +1,35 @@
 #include "SteeringController.h"
+#include "CANController.h"
 #include "Debug.h"
 #include <Preferences.h>
 
-// NVS calibration layout version ("steering"/cal_ver). Version 2 = dual-sensor pairs.
-static constexpr int32_t STEER_CAL_VERSION = 2;
+// NVS calibration layout version ("steering"/cal_ver). Version 3 = Bosch LWS limits only.
+static constexpr int32_t STEER_CAL_VERSION = 3;
+static const char* const NVS_NS = "steering";
+static const char* const KEY_LIM_L = "lim_l";
+static const char* const KEY_LIM_R = "lim_r";
 
-SteeringController::SteeringController(IMotorDriver& motor, TwoWire& fineBus, TwoWire& coarseBus)
-    : fine_(fineBus, "fine", true),        // sole device on I2C1: may restart its own bus
-      coarse_(coarseBus, "coarse", false), // shares I2C2 with the expanders: never restarts it
-      motor_(motor),
-      fineRaw_(0),
-      fineOk_(false),
-      fineFresh_(false),
-      fineBad_(STEER_SENSOR_FAULT_DEBOUNCE),
-      fineReason_(SensorFault::FINE_I2C),
-      haveFine_(false),
-      prevFineRaw_(0),
-      originRaw_(0),
-      turn_(0),
-      sessionTurn_(0),
-      coarseRaw_(0),
-      coarseOk_(false),
-      coarseBad_(STEER_SENSOR_FAULT_DEBOUNCE),
-      coarseReason_(SensorFault::COARSE_I2C),
-      lastCoarsePollMs_(0),
-      turnRecovered_(false),
-      recoverCount_(0),
-      recoverOffset_(0),
-      mismatch_(false),
-      mismatchLatched_(false),
-      mismatchCount_(0),
-      residual_(0),
-      residualValid_(false),
+SteeringController::SteeringController(IMotorDriver& motor)
+    : motor_(motor),
+      can_(nullptr),
+      lws_(STEER_LWS_TIMEOUT_MS, STEER_LWS_RECOVER_FRAMES),
       sensorOk_(false),
-      fault_(SensorFault::FINE_I2C),
-      fineCenterRaw_(-1),
-      coarseCenterRaw_(-1),
-      fineLeft_(POS_UNSET),
-      coarseLeft_(-1),
-      fineRight_(POS_UNSET),
-      coarseRight_(-1),
-      calSlot_{},
-      calFirst_(-1),
-      calLost_(false),
-      sessionError_(nullptr),
+      fault_(SensorFault::CAN_DOWN),
+      firstFrameLogged_(false),
+      lastStateLogMs_(0),
+      limLeft_(POS_UNSET),
+      limRight_(POS_UNSET),
       calibrated_(false),
-      invert_(false),
-      relLeft_(0),
-      relRight_(0),
-      seam_(0),
-      ratio_(0.0f),
-      linLeft_(0),
-      calError_(nullptr),
       captureError_(nullptr),
       lastCapturePos_(0),
-      lastCaptureCoarse_(0),
+      lastCaptureBeyondSafe_(false),
+      zeroState_(ZeroState::IDLE),
+      zeroError_(nullptr),
+      zeroRefusal_(nullptr),
+      zeroLimitsErased_(false),
       targetRel_(0),
       isMoving_(false),
       moveStartTime_(0),
-      lastMoveLogTime_(0),
       dutyBoost_(0),
       lastProgressPos_(0),
       lastProgressTime_(0),
@@ -76,278 +47,89 @@ SteeringController::SteeringController(IMotorDriver& motor, TwoWire& fineBus, Tw
       bootCenterRequestMs_(0) {
 }
 
-bool SteeringController::begin(gpio_num_t fineSda, gpio_num_t fineScl,
-                               gpio_num_t coarseSda, gpio_num_t coarseScl) {
+bool SteeringController::begin() {
     // The motor driver is initialized by the caller (e.g. VESC UART begin())
     // before this point; command a coast so the actuator starts safe.
     motor_.stop();
 
-    bool fineUp = fine_.begin(fineSda, fineScl);
-    bool coarseUp = coarse_.begin(coarseSda, coarseScl);
-    if (!fineUp) {
-        Debug::printlnFeature(DebugFeature::SERVO, "[STEER] ERROR: fine AS5600 (I2C1/X14) init failed — re-probing");
-    }
-    if (!coarseUp) {
-        Debug::printlnFeature(DebugFeature::SERVO, "[STEER] ERROR: coarse AS5600 (I2C2/X15) init failed — re-probing");
-    }
-
-    // Calibration is ALWAYS loaded: a sensor that answers later (re-probe) makes
-    // steering available without a reboot, after turn recovery.
+    // No I2C probe and no homing: the angle is absolute and arrives over CAN.
     loadCalibration();
 
-    // Prime both sensors and attempt turn recovery right away, so setup() knows
-    // whether to request boot centering. Long enough for the debounce (a single
-    // bad sample at boot must not leave a sensor marked faulted) plus the
-    // STEER_TURN_RECOVER_SAMPLES agreeing coarse polls a turn recovery needs.
-    for (uint8_t i = 0; i < STEER_SENSOR_FAULT_DEBOUNCE + STEER_TURN_RECOVER_SAMPLES && !sensorOk_; i++) {
-        refreshSensors(millis(), true);
-    }
-
     Debug::printfFeature(DebugFeature::SERVO,
-                         "[STEER] Initialized: pos=%ld turn=%ld fine=%ld coarse=%ld, sensor %s (%s)\n",
-                         (long)getPosition(), (long)turn_, (long)getFineRaw(), (long)getCoarseRaw(),
-                         sensorOk_ ? "OK" : "FAULT", faultToken(fault_));
-    return fineUp && coarseUp;
+                         "[STEER] Initialized: Bosch LWS on CAN 0x%03X (pos = -angle, 0.1 deg, + = right), "
+                         "waiting for frames\n", (unsigned)STEER_LWS_CAN_ID);
+    return true;
 }
 
-// === Sensors ===
+// === Sensor ===
 
-const char* SteeringController::faultToken(SensorFault f) {
-    switch (f) {
-        case SensorFault::NONE:          return "none";
-        case SensorFault::FINE_I2C:      return "fine_i2c";
-        case SensorFault::FINE_MAGNET:   return "fine_magnet";
-        case SensorFault::COARSE_I2C:    return "coarse_i2c";
-        case SensorFault::COARSE_MAGNET: return "coarse_magnet";
-        case SensorFault::MISMATCH:      return "mismatch";
-        case SensorFault::RECOVERING:    return "recovering";
+bool SteeringController::hasAngle() const {
+    return lws_.isFresh(millis()) && lws_.angleValid();
+}
+
+bool SteeringController::hasRate() const {
+    return lws_.isFresh(millis()) && lws_.speedValid();
+}
+
+bool SteeringController::isRangeWarning() const {
+    return (limLeft_ != POS_UNSET && abs(limLeft_) > STEER_LWS_SAFE_RANGE) ||
+           (limRight_ != POS_UNSET && abs(limRight_) > STEER_LWS_SAFE_RANGE);
+}
+
+void SteeringController::logState(const char* suffix) {
+    char ang[16];
+    if (lws_.angleValid()) {
+        snprintf(ang, sizeof(ang), "%+.1f", (double)lws_.angleRaw() / 10.0);
+    } else {
+        snprintf(ang, sizeof(ang), "--");
     }
-    return "none";
+    Debug::printfFeature(DebugFeature::SERVO, "[STEER] angle=%s pos=%ld tok=%s fps=%u%s\n",
+                         ang, (long)(lws_.angleValid() ? getPosition() : 0L), faultToken(fault_),
+                         (unsigned)lws_.fps(), suffix ? suffix : "");
 }
 
-int32_t SteeringController::getPosition() const {
-    int32_t origin = (fineCenterRaw_ >= 0) ? fineCenterRaw_ : originRaw_;
-    return fineRaw_ + 4096 * turn_ - origin;
-}
+void SteeringController::refreshSensor(uint32_t now) {
+    const bool zeroing = (zeroState_ == ZeroState::RUNNING);
+    const bool canUp = (can_ != nullptr) && can_->isInitialized() && can_->hasLwsSink();
+    const SensorFault prevFault = fault_;
+    const bool prevOk = sensorOk_;
 
-int32_t SteeringController::relPosition() const {
-    int32_t pos = getPosition();
-    return invert_ ? -pos : pos;
-}
+    fault_ = lws_.evaluate(now, zeroing, canUp);
+    sensorOk_ = lws_.isHealthy();
 
-float SteeringController::expectedFine(int32_t coarseRaw) const {
-    return (float)fineLeft_ + (float)(coarseLin(coarseRaw) - linLeft_) / ratio_;
-}
-
-void SteeringController::sampleFine() {
-    uint16_t raw;
-    bool magnetOk = false;
-    bool readOk = fine_.read(raw, magnetOk);
-
-    // A sample is good only when the bus read succeeded AND the magnet is seen;
-    // a read right after a bus glitch can carry garbage with the MD bit clear,
-    // so neither the position nor the turn counter is updated from bad samples.
-    fineFresh_ = readOk && magnetOk;
-    if (fineFresh_) {
-        int32_t r = raw;
-        if (!haveFine_) {
-            haveFine_ = true;
-            if (fineCenterRaw_ < 0) originRaw_ = r;   // position origin until a center is captured
-        } else {
-            // Incremental turn tracking: the shaft cannot move half a turn between
-            // two loop samples, so a raw jump of more than 2048 counts is a wrap.
-            // The session turn follows the same wraps but is never re-derived.
-            int32_t d = r - prevFineRaw_;
-            if (d > 2048) {
-                turn_--;
-                sessionTurn_--;
-            } else if (d < -2048) {
-                turn_++;
-                sessionTurn_++;
-            }
-        }
-        prevFineRaw_ = r;
-        fineRaw_ = r;
-        fineBad_ = 0;
-        if (!fineOk_) {
-            fineOk_ = true;
-            Debug::printlnFeature(DebugFeature::SERVO, "[STEER] Fine sensor OK");
-        }
-        return;
-    }
-
-    // Debounce: single EMI glitches keep the last position for a few loop
-    // iterations (~ms) instead of stopping the motor and flapping fault logs.
-    if (fineBad_ < 255) fineBad_++;
-    if (fineBad_ >= STEER_SENSOR_FAULT_DEBOUNCE) {
-        fineReason_ = readOk ? SensorFault::FINE_MAGNET : SensorFault::FINE_I2C;
-        if (fineOk_) {
-            fineOk_ = false;
-            turnRecovered_ = false;   // the shaft may move unobserved: recover the turn on return
-            resetRecovery();
-            Debug::printfFeature(DebugFeature::SERVO, "[STEER] Fine sensor fault (%s)\n",
-                                 faultToken(fineReason_));
-            // Fine continuity is lost: the session frame of unfinished points is gone.
-            discardCalSession("fine sensor fault", true);
-        }
-    }
-}
-
-void SteeringController::sampleCoarse() {
-    uint16_t raw;
-    bool magnetOk = false;
-    bool readOk = coarse_.read(raw, magnetOk);
-
-    if (readOk && magnetOk) {
-        coarseRaw_ = raw;
-        coarseBad_ = 0;
-        if (!coarseOk_) {
-            coarseOk_ = true;
-            Debug::printlnFeature(DebugFeature::SERVO, "[STEER] Coarse sensor OK");
-        }
-        // The cross-check needs a fresh fine sample from this same iteration.
-        if (calibrated_ && fineOk_ && fineFresh_) {
-            crossCheck();
-        } else {
-            resetRecovery();   // a poll without a usable pair does not count as agreement
-        }
-        return;
-    }
-
-    resetRecovery();           // recovery needs CONSECUTIVE good coarse polls
-    if (coarseBad_ < 255) coarseBad_++;
-    if (coarseBad_ >= STEER_SENSOR_FAULT_DEBOUNCE) {
-        coarseReason_ = readOk ? SensorFault::COARSE_MAGNET : SensorFault::COARSE_I2C;
-        if (coarseOk_) {
-            coarseOk_ = false;
-            turnRecovered_ = false;
-            resetRecovery();
-            Debug::printfFeature(DebugFeature::SERVO, "[STEER] Coarse sensor fault (%s)\n",
-                                 faultToken(coarseReason_));
-            discardCalSession("coarse sensor fault", true);
-        }
-    }
-}
-
-void SteeringController::crossCheck() {
-    float expected = expectedFine(coarseRaw_);
-    int32_t expectedCounts = (int32_t)lroundf(expected);
-
-    if (!turnRecovered_) {
-        // Turn recovery: pick the turn whose unwrapped fine position is closest to
-        // the coarse-derived expectation. The 1024-count threshold is below half a
-        // turn, so the choice of turn can never be ambiguous. A single sample is
-        // never trusted: STEER_TURN_RECOVER_SAMPLES consecutive coarse polls must
-        // agree on the same turn. Agreement is compared as the correction k − turn_
-        // to the incremental counter, so a fine wrap between polls (wheel pushed
-        // while the motor is stopped) does not count as a disagreement.
-        int32_t base = fineRaw_ - fineCenterRaw_;
-        int32_t k = (int32_t)lroundf((expected - (float)base) / 4096.0f);
-        int32_t pos = base + 4096 * k;
-        residual_ = pos - expectedCounts;
-        residualValid_ = true;
-        if (abs(residual_) > STEER_SENSOR_MISMATCH_COUNTS) {
-            resetRecovery();
-            if (mismatchCount_ < 255) mismatchCount_++;
-            if (mismatchCount_ >= STEER_SENSOR_FAULT_DEBOUNCE && !mismatch_) {
-                mismatch_ = true;
-                Debug::printfFeature(DebugFeature::SERVO,
-                                     "[STEER] Turn recovery: sensors disagree fine=%ld coarse=%ld resid=%ld — mismatch\n",
-                                     (long)fineRaw_, (long)coarseRaw_, (long)residual_);
-            }
-            return;
-        }
-        mismatchCount_ = 0;
-        mismatch_ = false;   // recovery disagreement is transient; only a runtime mismatch latches
-
-        int32_t offset = k - turn_;
-        if (recoverCount_ > 0 && offset == recoverOffset_) {
-            recoverCount_++;
-        } else {
-            recoverOffset_ = offset;   // first sample, or a different turn: restart the count
-            recoverCount_ = 1;
-        }
-        if (recoverCount_ < STEER_TURN_RECOVER_SAMPLES) return;
-
-        turn_ = k;
-        turnRecovered_ = true;
-        resetRecovery();
+    if (!firstFrameLogged_ && lws_.hasFrame()) {
+        firstFrameLogged_ = true;
+        // Raw sensor sign, shown once: the sensor's + is LEFT, the firmware's + is RIGHT.
         Debug::printfFeature(DebugFeature::SERVO,
-                             "[STEER] Turn recovered (%d samples): pos=%ld turn=%ld coarse=%ld resid=%ld\n",
-                             (int)STEER_TURN_RECOVER_SAMPLES, (long)getPosition(), (long)turn_,
-                             (long)coarseRaw_, (long)residual_);
-        return;
+                             "[STEER] LWS first frame: sensor angle=%+.1f deg (sensor + = LEFT) -> "
+                             "pos=%ld (0.1 deg, firmware + = RIGHT), OK=%d cal=%d adj=%d fault=%u\n",
+                             lws_.angleValid() ? (double)lws_.angleRaw() / 10.0 : 0.0,
+                             (long)(lws_.angleValid() ? getPosition() : 0L),
+                             (int)lws_.statusOk(), (int)lws_.statusCal(), (int)lws_.statusAdj(),
+                             (unsigned)lws_.faultCode());
     }
 
-    // Runtime consistency check: a persistent disagreement means a slipped gear or
-    // a lost turn. Re-deriving the turn from one side cannot tell which side is
-    // wrong, so the mismatch LATCHES (cleared only by a completed calibration or a reboot).
-    // The residual keeps being reported while latched, for diagnosis.
-    residual_ = getPosition() - expectedCounts;
-    residualValid_ = true;
-    if (mismatchLatched_) return;
-    if (abs(residual_) > STEER_SENSOR_MISMATCH_COUNTS) {
-        if (mismatchCount_ < 255) mismatchCount_++;
-        if (mismatchCount_ >= STEER_SENSOR_FAULT_DEBOUNCE) {
-            mismatchLatched_ = true;
-            mismatchCount_ = 0;
-            Debug::printfFeature(DebugFeature::SERVO,
-                                 "[STEER] Sensor MISMATCH (latched until a completed calibration or reboot): pos=%ld turn=%ld coarse=%ld resid=%ld\n",
-                                 (long)getPosition(), (long)turn_, (long)coarseRaw_, (long)residual_);
-            // Points pre-filled from (or recorded against) a now-suspect geometry
-            // must not complete a calibration that would clear this latch.
-            discardCalSession("sensor mismatch", true);
+    if (prevOk && !sensorOk_) {
+        // Faults take effect at once: a closed-loop move is stopped, but an active
+        // jog or nudge continues open loop under its own refresh / pulse bounds.
+        if (isMoving_) {
+            motor_.stop();
+            isMoving_ = false;
+            dutyBoost_ = 0;
         }
-    } else {
-        mismatchCount_ = 0;
+        logState(fault_ == SensorFault::RANGE_LATCHED
+                     ? " — SENSOR FAULT: out-of-range latch, restart the vehicle (closed-loop stopped, jog/nudge available)"
+                     : " — SENSOR FAULT (closed-loop stopped, jog/nudge available sensorless)");
+    } else if (!prevOk && sensorOk_) {
+        // Fresh stall baseline: a jog started sensorless has no valid one.
+        lastStallPosition_ = getPosition();
+        lastStallCheckTime_ = now;
+        lastProgressPos_ = getPosition();
+        lastProgressTime_ = now;
+        logState(" — sensor OK");
+    } else if (fault_ != prevFault) {
+        logState(nullptr);
     }
-}
-
-void SteeringController::updateCombinedState() {
-    bool ok = fineOk_ && coarseOk_ &&
-              (!calibrated_ || (turnRecovered_ && !mismatch_ && !mismatchLatched_));
-
-    // Every !ok state maps to a token other than NONE.
-    SensorFault f = SensorFault::NONE;
-    if (!fineOk_) {
-        f = fineReason_;
-    } else if (!coarseOk_) {
-        f = coarseReason_;
-    } else if (calibrated_ && (mismatchLatched_ || mismatch_)) {
-        f = SensorFault::MISMATCH;
-    } else if (calibrated_ && !turnRecovered_) {
-        f = SensorFault::RECOVERING;
-    }
-    fault_ = f;
-
-    if (ok == sensorOk_) return;
-    sensorOk_ = ok;
-    if (!ok) {
-        Debug::printfFeature(DebugFeature::SERVO, "[STEER] SENSOR FAULT (%s) — motor stopped\n",
-                             faultToken(f));
-    } else {
-        Debug::printfFeature(DebugFeature::SERVO, "[STEER] Sensors OK: pos=%ld turn=%ld coarse=%ld\n",
-                             (long)getPosition(), (long)turn_, (long)coarseRaw_);
-    }
-}
-
-bool SteeringController::refreshSensors(uint32_t now, bool forceCoarse) {
-    sampleFine();
-    if (forceCoarse || now - lastCoarsePollMs_ >= STEER_COARSE_POLL_MS) {
-        lastCoarsePollMs_ = now;
-        sampleCoarse();
-    }
-    if (!calibrated_ || !fineOk_ || !coarseOk_) residualValid_ = false;
-    updateCombinedState();
-
-    if (!sensorOk_) {
-        motor_.stop();
-        isMoving_ = false;
-        jogDir_ = 0;
-        jogPulseUntil_ = 0;
-        return false;
-    }
-    return true;   // within the debounce window: control continues on the last good position
 }
 
 // === Movement ===
@@ -360,7 +142,8 @@ void SteeringController::stop() {
 }
 
 void SteeringController::jog(int8_t direction, uint8_t duty) {
-    if (direction != 0 && (!sensorOk_ || !steerDriverOk_)) return;   // no open-loop drive without stall backstop / driver link
+    // Sensorless allowed: only the VESC link (and below, the stall latch) gates a jog.
+    if (direction != 0 && !steerDriverOk_) return;
     if (direction != 0) bootCenterPending_ = false;   // operator command supersedes boot centering
 
     if (direction == 0) {
@@ -375,8 +158,8 @@ void SteeringController::jog(int8_t direction, uint8_t duty) {
     if (duty < STEER_PWM_MIN_DUTY) duty = STEER_PWM_MIN_DUTY;   // below this the actuator stalls
 
     isMoving_ = false;   // jog overrides position control
-    if (jogDir_ != direction) {
-        lastStallPosition_ = relPosition();
+    if (jogDir_ != d) {
+        lastStallPosition_ = getPosition();
         lastStallCheckTime_ = millis();
     }
     jogDir_ = d;
@@ -387,7 +170,8 @@ void SteeringController::jog(int8_t direction, uint8_t duty) {
 }
 
 void SteeringController::nudge(int8_t direction) {
-    if (direction == 0 || !sensorOk_ || !steerDriverOk_) return;
+    // Sensorless allowed: only the VESC link (and the stall latch) gates a nudge.
+    if (direction == 0 || !steerDriverOk_) return;
     bootCenterPending_ = false;   // operator command supersedes boot centering
 
     int8_t d = (direction > 0) ? 1 : -1;
@@ -395,8 +179,8 @@ void SteeringController::nudge(int8_t direction) {
     stallLatched_ = false;
 
     isMoving_ = false;   // nudge overrides position control
-    if (jogDir_ != direction) {
-        lastStallPosition_ = relPosition();
+    if (jogDir_ != d) {
+        lastStallPosition_ = getPosition();
         lastStallCheckTime_ = millis();
     }
     jogDir_ = d;
@@ -409,25 +193,23 @@ void SteeringController::nudge(int8_t direction) {
 void SteeringController::update() {
     uint32_t now = millis();
 
-    // Service the motor driver first: pump VESC UART, refresh telemetry, and run
-    // the fault / over-current / comm-timeout monitors. Returns false when the
-    // driver link is down (mirrors the sensor-fault path: stop + reject).
-    // Sample the sensors FIRST, every iteration, even while the VESC link is down:
-    // the fine-sensor turn counter only stays valid if no sample is skipped.
-    bool sensorsOk = refreshSensors(now);
+    // Sensor health first (frames were dispatched by CANController::update() earlier in
+    // this loop iteration), then the zero-set, then the motor driver monitors.
+    refreshSensor(now);
+    serviceZero(now);
     bool driverOk = serviceDriver(now);
 
-    serviceBootCenter(now, sensorsOk && driverOk);
+    serviceBootCenter(now, driverOk);
 
     if (!driverOk) return;
 
-    if (!sensorsOk) return;
-
     now = millis();
 
-    // Stall detection — applies to any active drive (position move or jog)
-    if (isMoving_ || jogDir_ != 0) {
-        int32_t currentPos = relPosition();
+    // Stall detection — any active drive (position move or jog), ONLY with a healthy
+    // sensor. Sensorless jogs rely on the refresh timeout, the nudge pulse length and
+    // the VESC current clamp / fault stop.
+    if (sensorOk_ && (isMoving_ || jogDir_ != 0)) {
+        int32_t currentPos = getPosition();
         if (now - lastStallCheckTime_ >= STEER_STALL_TIMEOUT) {
             if (abs(currentPos - lastStallPosition_) < STEER_STALL_THRESHOLD) {
                 // Direction that was being driven into the jam (jog dir, else
@@ -442,8 +224,12 @@ void SteeringController::update() {
         }
     }
 
-    // Jog mode (open loop, momentary)
+    // Jog mode (open loop, momentary; never range-guarded)
     if (jogDir_ != 0) {
+        if (now - lastStateLogMs_ >= 250) {
+            lastStateLogMs_ = now;
+            logState(jogPulseUntil_ != 0 ? " nudge" : (sensorOk_ ? " jog" : " jog (sensorless)"));
+        }
         if (jogPulseUntil_ != 0 && (int32_t)(now - jogPulseUntil_) >= 0) {
             stop();   // nudge pulse complete
             return;
@@ -456,12 +242,25 @@ void SteeringController::update() {
     }
 
     if (!isMoving_) return;
+    if (!sensorOk_) {   // refreshSensor() already stopped it; never drive closed loop blind
+        stop();
+        return;
+    }
 
-    // Closed-loop proportional position control
-    int32_t rel = relPosition();
+    // Closed-loop proportional position control (0.1°, positive = right)
+    int32_t rel = getPosition();
     int32_t error = targetRel_ - rel;
 
     if (abs(error) <= STEER_POSITION_TOLERANCE) {
+        stop();
+        return;
+    }
+
+    // Range guard: never drive further outward at or beyond the safe range (e.g. after
+    // an overshoot) — keeps automatic steering out of the sensor's ~600° latch.
+    // Driving back toward zero is always allowed.
+    if (abs(rel) >= STEER_LWS_SAFE_RANGE && ((rel > 0) == (error > 0))) {
+        logState(" — range guard: outward move stopped at the safe range");
         stop();
         return;
     }
@@ -488,18 +287,17 @@ void SteeringController::update() {
     if (duty < STEER_PWM_MIN_DUTY) duty = STEER_PWM_MIN_DUTY;
     if (duty > STEER_PWM_MAX_DUTY) duty = STEER_PWM_MAX_DUTY;
 
-    // Motor positive = wheel right = normalized position increasing
+    // Motor positive = wheel right = position increasing
     int16_t speed = (int16_t)duty;
     lastDriveDir_ = (error > 0) ? 1 : -1;
     motor_.setSpeed(error > 0 ? speed : (int16_t)-speed);
 
-    if (now - lastMoveLogTime_ >= 100) {
-        lastMoveLogTime_ = now;
-        Debug::printfFeature(DebugFeature::SERVO,
-                             "[STEER] pos=%ld turn=%ld coarse=%ld resid=%ld rel=%ld target=%ld err=%ld duty=%d boost=%d\n",
-                             (long)getPosition(), (long)turn_, (long)coarseRaw_,
-                             (long)(residualValid_ ? residual_ : 0), (long)rel, (long)targetRel_,
-                             (long)error, (int)(error > 0 ? speed : -speed), (int)dutyBoost_);
+    if (now - lastStateLogMs_ >= 100) {
+        lastStateLogMs_ = now;
+        char extra[64];
+        snprintf(extra, sizeof(extra), " target=%ld err=%ld duty=%d boost=%d",
+                 (long)targetRel_, (long)error, (int)(error > 0 ? speed : -speed), (int)dutyBoost_);
+        logState(extra);
     }
 }
 
@@ -525,10 +323,11 @@ void SteeringController::triggerStallStop(int8_t dir, const char* reason) {
 }
 
 bool SteeringController::serviceDriver(uint32_t now) {
+    (void)now;
     motor_.poll();   // non-blocking: pump VESC UART + periodic GET_VALUES (no-op for BTS7960)
 
-    // Comm failsafe (mirror the sensor-fault path): no valid telemetry link ->
-    // stop, reject moves, flag driver down. Auto-recovers when replies resume.
+    // Comm failsafe: no valid telemetry link -> stop, reject moves (incl. jog/nudge),
+    // flag driver down. Auto-recovers when replies resume.
     bool ok = motor_.driverOk();
     if (!ok) {
         if (steerDriverOk_) {
@@ -547,9 +346,10 @@ bool SteeringController::serviceDriver(uint32_t now) {
     }
     steerDriverOk_ = true;
 
-    // Nonzero VESC fault code -> immediate stop + latch (current drive direction).
-    // This is the over-current backstop: the VESC raises a fault on Absolute Max
-    // Current (and on over-temperature), and clamps at Motor Current Max below that.
+    // Nonzero VESC fault code -> immediate stop + latch (current drive direction),
+    // also for a sensorless jog. This is the over-current backstop: the VESC raises a
+    // fault on Absolute Max Current (and on over-temperature), and clamps at Motor
+    // Current Max below that.
     if (motor_.hasFault()) {
         if (isMoving_ || jogDir_ != 0) {
             triggerStallStop(lastDriveDir_, "vesc-fault");
@@ -573,17 +373,20 @@ bool SteeringController::setSteeringPercent(float percent) {
     if (percent < -100.0f) percent = -100.0f;
     if (percent > 100.0f) percent = 100.0f;
 
-    // Asymmetric mapping: -100 -> relLeft_ (<0), 0 -> 0, +100 -> relRight_ (>0)
+    // Asymmetric mapping: -100 -> limLeft_ (<0), 0 -> sensor zero, +100 -> limRight_ (>0)
     int32_t target;
     if (percent >= 0.0f) {
-        target = (int32_t)((percent / 100.0f) * relRight_);
+        target = (int32_t)((percent / 100.0f) * (float)limRight_);
     } else {
-        target = (int32_t)((-percent / 100.0f) * relLeft_);
+        target = (int32_t)((-percent / 100.0f) * (float)limLeft_);
     }
 
-    // Clamp to calibrated limits
-    if (target < relLeft_) target = relLeft_;
-    if (target > relRight_) target = relRight_;
+    // Clamp to the calibrated limits, then to the safe range (a limit stored beyond
+    // 550° maps ±100 % to ±550° instead).
+    if (target < limLeft_) target = limLeft_;
+    if (target > limRight_) target = limRight_;
+    if (target < -STEER_LWS_SAFE_RANGE) target = -STEER_LWS_SAFE_RANGE;
+    if (target > STEER_LWS_SAFE_RANGE) target = STEER_LWS_SAFE_RANGE;
 
     // Re-command no-op guard: if a move is already in progress and the new
     // target is within tolerance of the current target, keep the in-flight move
@@ -599,7 +402,7 @@ bool SteeringController::setSteeringPercent(float percent) {
     // (same direction, within cooldown). Opposite-direction and post-cooldown
     // moves are accepted and clear the latch.
     uint32_t now = millis();
-    int32_t rel = relPosition();
+    int32_t rel = getPosition();
     int8_t d = (target > rel) ? 1 : (target < rel ? -1 : 0);
     if (latchBlocks(d, now)) {
         return false;
@@ -608,6 +411,7 @@ bool SteeringController::setSteeringPercent(float percent) {
 
     targetRel_ = target;
     jogDir_ = 0;
+    jogPulseUntil_ = 0;
     isMoving_ = true;
     moveStartTime_ = now;
     lastStallPosition_ = rel;
@@ -623,16 +427,16 @@ void SteeringController::requestBootCenter() {
     bootCenterRequestMs_ = millis();
 }
 
-void SteeringController::serviceBootCenter(uint32_t now, bool ready) {
+void SteeringController::serviceBootCenter(uint32_t now, bool driverReady) {
     if (!bootCenterPending_) return;
-    // A VESC that comes up late must not make the vehicle steer by itself much
-    // later: give up silently once the window has passed.
+    // The LWS, the ECU and the VESC come up on the ignition key after the ESP32 may
+    // have booted: wait for them, but never make the vehicle steer by itself much
+    // later — give up silently once the window has passed.
     if (now - bootCenterRequestMs_ >= STEER_BOOT_CENTER_TIMEOUT_MS) {
         bootCenterPending_ = false;
         return;
     }
-    // sensorOk_ implies the absolute turn is recovered without a mismatch.
-    if (!ready || !calibrated_ || !sensorOk_ || !steerDriverOk_) return;
+    if (!driverReady || !calibrated_ || !sensorOk_ || !steerDriverOk_) return;
 
     bootCenterPending_ = false;
     if (setSteeringPercent(0.0f)) {
@@ -641,14 +445,14 @@ void SteeringController::serviceBootCenter(uint32_t now, bool ready) {
 }
 
 float SteeringController::getSteeringPercent() const {
-    if (!calibrated_) return 0.0f;
+    if (!calibrated_ || !hasAngle()) return 0.0f;
 
-    int32_t rel = relPosition();
+    int32_t rel = getPosition();
     float percent;
     if (rel >= 0) {
-        percent = (relRight_ != 0) ? ((float)rel / relRight_) * 100.0f : 0.0f;
+        percent = (limRight_ != 0) ? ((float)rel / (float)limRight_) * 100.0f : 0.0f;
     } else {
-        percent = (relLeft_ != 0) ? -((float)rel / relLeft_) * 100.0f : 0.0f;
+        percent = (limLeft_ != 0) ? -((float)rel / (float)limLeft_) * 100.0f : 0.0f;
     }
     if (percent < -100.0f) percent = -100.0f;
     if (percent > 100.0f) percent = 100.0f;
@@ -657,353 +461,235 @@ float SteeringController::getSteeringPercent() const {
 
 // === Calibration ===
 
-bool SteeringController::captureCenter() {
-    return capturePoint(CAL_CENTER);
-}
-
 bool SteeringController::captureLeftLimit() {
-    return capturePoint(CAL_LEFT);
+    return captureLimit(true);
 }
 
 bool SteeringController::captureRightLimit() {
-    return capturePoint(CAL_RIGHT);
+    return captureLimit(false);
 }
 
-int32_t SteeringController::displayRef() const {
-    if (calSlot_[CAL_CENTER].valid) return calSlot_[CAL_CENTER].sessionPos;
-    if (calFirst_ >= 0 && calSlot_[calFirst_].valid) return calSlot_[calFirst_].sessionPos;
-    return 0;
-}
-
-int32_t SteeringController::getDisplayPosition() const {
-    return isCalPending() ? sessionPos() - displayRef() : getPosition();
-}
-
-bool SteeringController::getDisplayPoint(CalPoint p, int32_t& pos) const {
-    if (p >= CAL_POINTS) return false;
-    if (isCalPending()) {
-        if (!calSlot_[p].valid) return false;
-        pos = calSlot_[p].sessionPos - displayRef();
-        return true;
-    }
-    switch (p) {
-        case CAL_CENTER:
-            if (!hasCenter()) return false;
-            pos = 0;
-            return true;
-        case CAL_LEFT:
-            if (fineLeft_ == POS_UNSET) return false;
-            pos = fineLeft_;
-            return true;
-        case CAL_RIGHT:
-            if (fineRight_ == POS_UNSET) return false;
-            pos = fineRight_;
-            return true;
-        default:
-            return false;
-    }
-}
-
-void SteeringController::discardCalSession(const char* why, bool byFault) {
-    bool had = isCalPending();
-    for (uint8_t i = 0; i < CAL_POINTS; i++) calSlot_[i] = CalSlot{};
-    calFirst_ = -1;
-    sessionError_ = nullptr;
-    if (had && byFault) {
-        calLost_ = true;
-        Debug::printfFeature(DebugFeature::SERVO,
-                             "[STEER] Unfinished calibration points discarded (%s)\n", why);
-    }
-}
-
-void SteeringController::prefillFromCalibration() {
-    // Only a complete, valid calibration whose absolute turn is currently trusted
-    // can be re-expressed in the session frame (sensorOk_ implies recovered turn
-    // and no mismatch while calibrated).
-    if (!calibrated_ || !sensorOk_ || !turnRecovered_ || mismatch_ || mismatchLatched_) return;
-
-    const int32_t center = sessionPos() - getPosition();
-    const CalSlot stored[CAL_POINTS] = {
-        { true, center + fineLeft_,  coarseLeft_ },
-        { true, center,              coarseCenterRaw_ },
-        { true, center + fineRight_, coarseRight_ },
-    };
-    for (uint8_t i = 0; i < CAL_POINTS; i++) {
-        if (!calSlot_[i].valid) calSlot_[i] = stored[i];
-    }
-    if (calFirst_ < 0) calFirst_ = CAL_CENTER;
-}
-
-bool SteeringController::finalizeCalibration() {
-    const int32_t center = calSlot_[CAL_CENTER].sessionPos;
-    const int32_t newCenterRaw = center & 4095;   // two's complement: mod 4096 for negatives too
-
-    // Validate the candidate with the shared checks; on rejection the previously
-    // active calibration is restored unchanged (nothing is persisted).
-    const int32_t oFc = fineCenterRaw_, oCc = coarseCenterRaw_;
-    const int32_t oFl = fineLeft_, oCl = coarseLeft_, oFr = fineRight_, oCr = coarseRight_;
-
-    fineCenterRaw_ = newCenterRaw;
-    coarseCenterRaw_ = calSlot_[CAL_CENTER].coarseRaw;
-    fineLeft_ = calSlot_[CAL_LEFT].sessionPos - center;
-    coarseLeft_ = calSlot_[CAL_LEFT].coarseRaw;
-    fineRight_ = calSlot_[CAL_RIGHT].sessionPos - center;
-    coarseRight_ = calSlot_[CAL_RIGHT].coarseRaw;
-    revalidateCalibration();
-
-    if (!calibrated_) {
-        sessionError_ = calError_ ? calError_ : "calibration rejected";
-        fineCenterRaw_ = oFc; coarseCenterRaw_ = oCc;
-        fineLeft_ = oFl; coarseLeft_ = oCl; fineRight_ = oFr; coarseRight_ = oCr;
-        revalidateCalibration();
-        return false;
-    }
-
-    // The session frame defines the absolute turn: choose turn_ so that
-    // getPosition() == sessionPos() − center. center − newCenterRaw is an exact
-    // multiple of 4096.
-    turn_ = sessionTurn_ - (center - newCenterRaw) / 4096;
-    turnRecovered_ = true;
-    mismatch_ = false;
-    mismatchLatched_ = false;   // a complete new calibration resolves a latched mismatch
-    mismatchCount_ = 0;
-    resetRecovery();
-    residualValid_ = false;
-    saveCalibration();
-    updateCombinedState();
-    // The points now live in the active calibration; keeping them would let a
-    // later single capture re-finalize against a geometry that may have gone stale.
-    discardCalSession("finalized", false);
-    return true;
-}
-
-bool SteeringController::capturePoint(CalPoint p) {
-    static const char* const kName[CAL_POINTS] = { "Left limit", "Center", "Right limit" };
+bool SteeringController::captureLimit(bool left) {
+    const char* name = left ? "Left limit" : "Right limit";
     captureError_ = nullptr;
+    lastCaptureBeyondSafe_ = false;
 
-    // Both sensors must be individually healthy with a fresh fine sample. A
-    // mismatch / recovering state does not block: completing all three points
-    // is the way out of a stale calibration.
-    if (!fineOk_ || !coarseOk_ || !fineFresh_) {
+    if (!sensorOk_) {
         captureError_ = "sensor fault";
-        return false;
-    }
-
-    // Pre-fill is provisional until the capture is accepted: a refused capture
-    // leaves the session exactly as it was.
-    CalSlot saved[CAL_POINTS];
-    for (uint8_t i = 0; i < CAL_POINTS; i++) saved[i] = calSlot_[i];
-    const int8_t savedFirst = calFirst_;
-    prefillFromCalibration();
-
-    const int32_t pos = sessionPos();
-    // Early feedback: a limit must be clear of the center point (either order).
-    if (p == CAL_CENTER) {
-        if (calSlot_[CAL_LEFT].valid && abs(calSlot_[CAL_LEFT].sessionPos - pos) < STEER_CAL_MIN_SPAN) {
-            captureError_ = "too close to left limit";
-        } else if (calSlot_[CAL_RIGHT].valid && abs(calSlot_[CAL_RIGHT].sessionPos - pos) < STEER_CAL_MIN_SPAN) {
-            captureError_ = "too close to right limit";
+    } else {
+        const int32_t pos = getPosition();
+        if (left) {
+            if (pos > 0)                         captureError_ = "left limit must be left of zero";
+            else if (pos > -STEER_CAL_MIN_SPAN)  captureError_ = "too close to zero";
+        } else {
+            if (pos < 0)                         captureError_ = "right limit must be right of zero";
+            else if (pos < STEER_CAL_MIN_SPAN)   captureError_ = "too close to zero";
         }
-    } else if (calSlot_[CAL_CENTER].valid &&
-               abs(pos - calSlot_[CAL_CENTER].sessionPos) < STEER_CAL_MIN_SPAN) {
-        captureError_ = "too close to center";
     }
     if (captureError_) {
-        for (uint8_t i = 0; i < CAL_POINTS; i++) calSlot_[i] = saved[i];
-        calFirst_ = savedFirst;
-        Debug::printfFeature(DebugFeature::SERVO, "[STEER] %s %s — rejected\n", kName[p], captureError_);
+        Debug::printfFeature(DebugFeature::SERVO, "[STEER] %s capture refused: %s\n", name, captureError_);
+        return false;   // stored limits unchanged
+    }
+
+    // The safe range is deliberately NOT checked: calibration must reach the real locks.
+    const int32_t pos = getPosition();
+    stop();
+    bootCenterPending_ = false;
+    if (left) {
+        limLeft_ = pos;
+        saveLimit(KEY_LIM_L, pos);
+    } else {
+        limRight_ = pos;
+        saveLimit(KEY_LIM_R, pos);
+    }
+    revalidateCalibration();
+    lastCapturePos_ = pos;
+    lastCaptureBeyondSafe_ = abs(pos) > STEER_LWS_SAFE_RANGE;
+
+    Debug::printfFeature(DebugFeature::SERVO, "[STEER] %s saved: %+.1f deg%s%s\n", name,
+                         (double)pos / 10.0,
+                         lastCaptureBeyondSafe_ ? " — WARNING beyond the safe range, near the ~600 deg sensor latch" : "",
+                         calibrated_ ? " — CALIBRATED" : "");
+    return true;
+}
+
+bool SteeringController::requestSensorZero() {
+    zeroRefusal_ = nullptr;
+    if (zeroState_ == ZeroState::RUNNING) {
+        zeroRefusal_ = "busy";
+        return false;
+    }
+    if (can_ == nullptr || !can_->isInitialized()) {
+        zeroRefusal_ = "can_unavailable";
+        finishZero(false, zeroRefusal_);
         return false;
     }
 
-    stop();   // the control frame may change: never keep driving on the old one
+    // No ignition / RPM / standstill precondition. Motion stops and boot centering is
+    // cancelled before the sequence is asked for.
+    stop();
     bootCenterPending_ = false;
-    calLost_ = false;
-    sessionError_ = nullptr;
-    calSlot_[p] = { true, pos, coarseRaw_ };
-    if (calFirst_ < 0) calFirst_ = (int8_t)p;
 
-    lastCapturePos_ = pos - displayRef();
-    lastCaptureCoarse_ = coarseRaw_;
-
-    bool done = calSlot_[CAL_LEFT].valid && calSlot_[CAL_CENTER].valid && calSlot_[CAL_RIGHT].valid;
-    bool finalized = done && finalizeCalibration();
-    Debug::printfFeature(DebugFeature::SERVO,
-                         "[STEER] %s captured: pos=%ld coarse=%ld (points %c%c%c)%s\n",
-                         kName[p], (long)lastCapturePos_, (long)lastCaptureCoarse_,
-                         calSlot_[CAL_LEFT].valid || finalized ? 'L' : '-',
-                         calSlot_[CAL_CENTER].valid || finalized ? 'C' : '-',
-                         calSlot_[CAL_RIGHT].valid || finalized ? 'R' : '-',
-                         finalized ? " — calibration complete and saved" : "");
-    if (sessionError_) {
-        Debug::printfFeature(DebugFeature::SERVO, "[STEER] Calibration rejected: %s (re-capture the bad point)\n",
-                             sessionError_);
+    switch (can_->startLwsZero()) {
+        case CANController::LwsZeroStart::STARTED:
+            break;
+        case CANController::LwsZeroStart::NOT_INITIALIZED:
+            zeroRefusal_ = "can_unavailable";
+            finishZero(false, zeroRefusal_);
+            return false;
+        case CANController::LwsZeroStart::BUSY_PROBE:
+        case CANController::LwsZeroStart::BUSY:
+        default:
+            zeroRefusal_ = "busy";
+            finishZero(false, zeroRefusal_);
+            return false;
     }
+
+    zeroState_ = ZeroState::RUNNING;
+    zeroError_ = nullptr;
+    zeroLimitsErased_ = false;
+    Debug::printlnFeature(DebugFeature::SERVO, "[STEER] Sensor zero-set started");
     return true;
+}
+
+void SteeringController::finishZero(bool ok, const char* reason) {
+    zeroState_ = ok ? ZeroState::OK : ZeroState::FAILED;
+    zeroError_ = ok ? nullptr : reason;
+    if (ok) {
+        Debug::printlnFeature(DebugFeature::SERVO,
+                              "[STEER] Sensor zero confirmed (angle 0.0) — capture Left and Right again");
+    } else {
+        Debug::printfFeature(DebugFeature::SERVO, "[STEER] Sensor zero-set failed: %s\n", reason ? reason : "?");
+    }
+}
+
+void SteeringController::serviceZero(uint32_t now) {
+    if (zeroState_ != ZeroState::RUNNING) return;
+    if (can_ == nullptr) {
+        finishZero(false, "can_unavailable");
+        return;
+    }
+
+    // From the reset frame on, the old zero is no longer guaranteed: limits measured
+    // against it are erased whatever the outcome.
+    if (!zeroLimitsErased_ && can_->lwsZeroResetSent()) {
+        zeroLimitsErased_ = true;
+        eraseLimits();
+        Debug::printlnFeature(DebugFeature::SERVO, "[STEER] Reset frame sent — Left/Right limits erased");
+    }
+
+    if (can_->isLwsZeroRunning()) return;
+
+    if (can_->lwsZeroAbortReason() != nullptr) {
+        finishZero(false, can_->lwsZeroAbortReason());
+        return;
+    }
+    if (!can_->lwsZeroZeroSent()) {
+        finishZero(false, "tx_failed");   // defensive: sequence ended without the zero frame
+        return;
+    }
+
+    // Confirmation: an accepted frame after [53 30] with OK=1, fault=0, cal=1, |angle| ≤ tol.
+    const uint32_t sentMs = can_->lwsZeroSentMs();
+    const bool frameSince = lws_.hasFrame() && (int32_t)(lws_.lastFrameMs() - sentMs) > 0;
+    if (frameSince) {
+        if (lws_.faultCode() == LWS_FAULT_RANGE_LATCHED) {
+            finishZero(false, "range_latched");   // the latched sensor ignores 0x7C0: restart the vehicle
+            return;
+        }
+        if (lws_.statusOk() && lws_.faultCode() == 0 && lws_.statusCal() && lws_.angleValid() &&
+            abs((int32_t)lws_.angleRaw()) <= STEER_LWS_ZERO_TOLERANCE) {
+            finishZero(true, nullptr);
+            return;
+        }
+    }
+    if (now - sentMs >= STEER_LWS_ZERO_CONFIRM_MS) {
+        finishZero(false, frameSince ? "not_confirmed" : "no_frames");
+    }
+}
+
+const char* SteeringController::zeroStateToken(ZeroState s) {
+    switch (s) {
+        case ZeroState::IDLE:    return "idle";
+        case ZeroState::RUNNING: return "running";
+        case ZeroState::OK:      return "ok";
+        case ZeroState::FAILED:  return "failed";
+    }
+    return "idle";
 }
 
 void SteeringController::revalidateCalibration() {
-    calibrated_ = false;
-    invert_ = false;
-    relLeft_ = 0;
-    relRight_ = 0;
-    seam_ = 0;
-    ratio_ = 0.0f;
-    linLeft_ = 0;
-    calError_ = nullptr;
-
-    // Incomplete is not an error: the operator is still capturing.
-    if (fineCenterRaw_ < 0 || coarseCenterRaw_ < 0 ||
-        fineLeft_ == POS_UNSET || coarseLeft_ < 0 ||
-        fineRight_ == POS_UNSET || coarseRight_ < 0) {
-        return;
-    }
-
-    // 1. Limits on opposite sides of center, each at least the minimum span away
-    if (fineLeft_ == 0 || fineRight_ == 0 || (fineLeft_ < 0) == (fineRight_ < 0)) {
-        calError_ = "limits not on opposite sides of center";
-        return;
-    }
-    if (abs(fineLeft_) < STEER_CAL_MIN_SPAN || abs(fineRight_) < STEER_CAL_MIN_SPAN) {
-        calError_ = "limit too close to center";
-        return;
-    }
-
-    // Coarse travel arc: the arc from the left to the right coarse capture that
-    // contains the center capture. Its complement is the unused gap; the seam
-    // sits mid-gap so that (c - seam) mod 4096 is continuous over the travel.
-    const int32_t cL = coarseLeft_;
-    const int32_t cC = coarseCenterRaw_;
-    const int32_t cR = coarseRight_;
-    const int32_t upLR = (cR - cL) & 4095;   // ascending distance left -> right
-    const int32_t upLC = (cC - cL) & 4095;   // ascending distance left -> center
-    int32_t span;
-    if (upLC > 0 && upLC < upLR) {
-        span = upLR;                          // travel ascends from cL to cR
-        seam_ = (cR + (4096 - span) / 2) & 4095;
-    } else {
-        span = (cL - cR) & 4095;              // travel descends from cL to cR
-        seam_ = (cL + (4096 - span) / 2) & 4095;
-    }
-    const int32_t gap = 4096 - span;
-
-    const int32_t lL = coarseLin(cL);
-    const int32_t lC = coarseLin(cC);
-    const int32_t lR = coarseLin(cR);
-
-    // 2. Coarse strictly ordered left, center, right (or reverse): both sensors
-    //    move together in one direction
-    if (!((lL < lC && lC < lR) || (lL > lC && lC > lR))) {
-        calError_ = "coarse not monotonic (center not between limits)";
-        return;
-    }
-
-    // 3. Enough coarse resolution per steering-shaft turn
-    float ratio = (float)(lR - lL) / (float)(fineRight_ - fineLeft_);
-    if (fabsf(ratio) * 4096.0f < (float)STEER_COARSE_MIN_PER_TURN) {
-        calError_ = "ratio too small";
-        return;
-    }
-
-    // 4. Enough unused coarse arc to place the seam
-    if (gap < STEER_COARSE_MIN_GAP) {
-        calError_ = "no coarse gap";
-        return;
-    }
-
-    // 5. Linearity: the center capture must lie on the line through the limits
-    ratio_ = ratio;
-    linLeft_ = lL;
-    float centerExp = expectedFine(cC);
-    if (fabsf(centerExp) > (float)STEER_CAL_LINEARITY_COUNTS) {
-        calError_ = "center not on line";
-        ratio_ = 0.0f;
-        linLeft_ = 0;
-        return;
-    }
-
-    // Normalize sensor direction so that positive = right
-    invert_ = (fineRight_ < 0);
-    relLeft_ = invert_ ? -fineLeft_ : fineLeft_;
-    relRight_ = invert_ ? -fineRight_ : fineRight_;
-    calibrated_ = true;
+    calibrated_ = limLeft_ != POS_UNSET && limRight_ != POS_UNSET &&
+                  limLeft_ <= -STEER_CAL_MIN_SPAN && limRight_ >= STEER_CAL_MIN_SPAN;
 }
 
 void SteeringController::loadCalibration() {
+    limLeft_ = POS_UNSET;
+    limRight_ = POS_UNSET;
+
     Preferences prefs;
     int32_t ver = 0;
-    if (prefs.begin("steering", true)) {
+    if (prefs.begin(NVS_NS, false)) {
         ver = prefs.getInt("cal_ver", 0);
-        if (ver == STEER_CAL_VERSION) {
-            fineCenterRaw_ = prefs.getInt("fc_raw", -1);
-            coarseCenterRaw_ = prefs.getInt("cc_raw", -1);
-            fineLeft_ = prefs.getInt("fl_pos", POS_UNSET);
-            coarseLeft_ = prefs.getInt("cl_raw", -1);
-            fineRight_ = prefs.getInt("fr_pos", POS_UNSET);
-            coarseRight_ = prefs.getInt("cr_raw", -1);
+        if (ver != STEER_CAL_VERSION) {
+            // Migration: remove every obsolete key ONE BY ONE. NEVER clear() this
+            // namespace: the steering speed-scaling base (steer_sca_base) lives here too.
+            static const char* const kObsolete[] = {
+                "fc_raw", "cc_raw", "fl_pos", "cl_raw", "fr_pos", "cr_raw",   // v2 (dual AS5600)
+                "c_ang", "l_ang", "r_ang",                                      // v1 (single sensor)
+                KEY_LIM_L, KEY_LIM_R                                            // no limits after migration
+            };
+            unsigned removed = 0;
+            for (const char* key : kObsolete) {
+                if (prefs.isKey(key) && prefs.remove(key)) removed++;
+            }
+            prefs.putInt("cal_ver", STEER_CAL_VERSION);
+            Debug::printfFeature(DebugFeature::SERVO,
+                                 "[STEER] NVS calibration v%ld -> v%ld: %u old key(s) removed — "
+                                 "recalibration required (sensor zero + Left/Right)\n",
+                                 (long)ver, (long)STEER_CAL_VERSION, removed);
+        } else {
+            limLeft_ = prefs.getInt(KEY_LIM_L, POS_UNSET);
+            limRight_ = prefs.getInt(KEY_LIM_R, POS_UNSET);
         }
         prefs.end();
     }
 
-    // Raw values outside 0..4095 are treated as unset
-    auto rawOk = [](int32_t v) { return v >= 0 && v <= 4095; };
-    if (!rawOk(fineCenterRaw_) || !rawOk(coarseCenterRaw_)) {
-        fineCenterRaw_ = -1;
-        coarseCenterRaw_ = -1;
-    }
-    if (!rawOk(coarseLeft_)) { fineLeft_ = POS_UNSET; coarseLeft_ = -1; }
-    if (!rawOk(coarseRight_)) { fineRight_ = POS_UNSET; coarseRight_ = -1; }
-
-    // Only complete calibrations are used (older firmware could persist a partial
-    // one): an incomplete set is treated as no calibration at all.
-    if (fineCenterRaw_ < 0 || fineLeft_ == POS_UNSET || fineRight_ == POS_UNSET) {
-        fineCenterRaw_ = -1; coarseCenterRaw_ = -1;
-        fineLeft_ = POS_UNSET; coarseLeft_ = -1;
-        fineRight_ = POS_UNSET; coarseRight_ = -1;
-    }
-
-    // A reboot discards any unfinished calibration points; the absolute turn must be recovered.
-    discardCalSession("reboot", false);
-    calLost_ = false;
-    turnRecovered_ = false;
-    resetRecovery();
-    mismatch_ = false;
-    mismatchLatched_ = false;
-    mismatchCount_ = 0;
+    // A stored limit that no longer passes the capture checks is treated as unset.
+    if (limLeft_ != POS_UNSET && limLeft_ > -STEER_CAL_MIN_SPAN) limLeft_ = POS_UNSET;
+    if (limRight_ != POS_UNSET && limRight_ < STEER_CAL_MIN_SPAN) limRight_ = POS_UNSET;
     revalidateCalibration();
 
-    if (ver != STEER_CAL_VERSION) {
-        Debug::printfFeature(DebugFeature::SERVO,
-                             "[STEER] No dual-sensor calibration (cal_ver=%ld) — recalibration required\n",
-                             (long)ver);
-    }
+    char l[16], r[16];
+    if (limLeft_ != POS_UNSET) snprintf(l, sizeof(l), "%+.1f", (double)limLeft_ / 10.0);
+    else snprintf(l, sizeof(l), "--");
+    if (limRight_ != POS_UNSET) snprintf(r, sizeof(r), "%+.1f", (double)limRight_ / 10.0);
+    else snprintf(r, sizeof(r), "--");
     Debug::printfFeature(DebugFeature::SERVO,
-                         "[STEER] Calibration loaded: center=%ld/%ld left=%ld/%ld right=%ld/%ld -> %s%s%s\n",
-                         (long)fineCenterRaw_, (long)coarseCenterRaw_,
-                         (long)(fineLeft_ == POS_UNSET ? -1 : fineLeft_), (long)coarseLeft_,
-                         (long)(fineRight_ == POS_UNSET ? -1 : fineRight_), (long)coarseRight_,
+                         "[STEER] Calibration loaded: left=%s right=%s deg -> %s%s\n", l, r,
                          calibrated_ ? "CALIBRATED" : "NOT CALIBRATED",
-                         calError_ ? " — rejected: " : "", calError_ ? calError_ : "");
-    if (calibrated_) {
-        Debug::printfFeature(DebugFeature::SERVO, "[STEER] Derived: ratio=%.1f coarse/turn seam=%ld invert=%d\n",
-                             (double)(ratio_ * 4096.0f), (long)seam_, invert_);
+                         isRangeWarning() ? " (a limit is beyond the 550 deg safe range)" : "");
+}
+
+void SteeringController::saveLimit(const char* key, int32_t value) {
+    Preferences prefs;
+    if (prefs.begin(NVS_NS, false)) {
+        prefs.putInt("cal_ver", STEER_CAL_VERSION);
+        prefs.putInt(key, value);
+        prefs.end();
     }
 }
 
-void SteeringController::saveCalibration() {
+void SteeringController::eraseLimits() {
     Preferences prefs;
-    if (prefs.begin("steering", false)) {
+    if (prefs.begin(NVS_NS, false)) {
+        // Key by key — never clear() the namespace (steer_sca_base lives here).
+        if (prefs.isKey(KEY_LIM_L)) prefs.remove(KEY_LIM_L);
+        if (prefs.isKey(KEY_LIM_R)) prefs.remove(KEY_LIM_R);
         prefs.putInt("cal_ver", STEER_CAL_VERSION);
-        prefs.putInt("fc_raw", fineCenterRaw_);
-        prefs.putInt("cc_raw", coarseCenterRaw_);
-        prefs.putInt("fl_pos", fineLeft_);
-        prefs.putInt("cl_raw", coarseLeft_);
-        prefs.putInt("fr_pos", fineRight_);
-        prefs.putInt("cr_raw", coarseRight_);
-        // Remove the obsolete single-sensor keys one by one. NEVER clear() this
-        // namespace: the steering speed-scaling base (steer_sca_base) lives here too.
-        if (prefs.isKey("c_ang")) prefs.remove("c_ang");
-        if (prefs.isKey("l_ang")) prefs.remove("l_ang");
-        if (prefs.isKey("r_ang")) prefs.remove("r_ang");
         prefs.end();
     }
+    limLeft_ = POS_UNSET;
+    limRight_ = POS_UNSET;
+    revalidateCalibration();
 }

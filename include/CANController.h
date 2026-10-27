@@ -5,12 +5,19 @@
 #include <mcp_can.h>
 #include "Constants.h"
 
+class LwsSensor;
+
 /**
  * @brief CAN bus controller for reading vehicle OBD-II data via MCP2515
  *
  * Interfaces with MCP2515 SPI CAN controller to read standard OBD-II diagnostic data
  * from vehicle ECU (engine RPM, speed, coolant temperature, etc.).
  * Uses a non-blocking state machine to avoid stalling the main loop.
+ *
+ * The same bus carries the Bosch LWS steering-angle sensor (0x305, 100 Hz): it has its
+ * own receive buffer (RXB1, see applyRxFilters()), every receive path hands 0x305 frames
+ * to the attached LwsSensor in any CAN state, and the LWS zero-set sequence
+ * (startLwsZero()) is the only code that transmits on 0x7C0.
  */
 class CANController {
 public:
@@ -78,6 +85,9 @@ public:
     // Outcome of a startProbe() request
     enum class ProbeStart : uint8_t { STARTED, BUSY, NO_ECU };
 
+    // Outcome of a startLwsZero() request
+    enum class LwsZeroStart : uint8_t { STARTED, NOT_INITIALIZED, BUSY_PROBE, BUSY };
+
     CANController();
     ~CANController();
 
@@ -128,6 +138,37 @@ public:
      */
     ProbeResults getProbeResults() const { return probeResults_; }
 
+    /** @brief True once the MCP2515 is initialised and on the bus */
+    bool isInitialized() const { return initialized_; }
+
+    // ---- Bosch LWS steering-angle sensor (shared bus) ------------------------
+
+    /**
+     * @brief Attach the steering-angle frame sink (owned by the steering controller).
+     * Every standard-ID 0x305 frame read on any receive path goes to sink->onFrame().
+     */
+    void attachLwsSink(LwsSensor* sink) { lwsSink_ = sink; }
+    bool hasLwsSink() const { return lwsSink_ != nullptr; }
+
+    /**
+     * @brief Start the LWS zero-set sequence: pause OBD-II polling (an in-flight request
+     * completes or times out first), send 0x7C0 [05 00], wait STEER_LWS_ZERO_GAP_MS
+     * without blocking, send 0x7C0 [53 30], resume polling. The two payloads are fixed;
+     * no API takes a 0x7C0 payload.
+     * @return STARTED, or why it was refused (nothing is sent then)
+     */
+    LwsZeroStart startLwsZero();
+
+    /** @brief True while the zero-set sequence is running (OBD-II polling paused) */
+    bool isLwsZeroRunning() const;
+    /** @brief The reset frame [05 00] of the last sequence was sent */
+    bool lwsZeroResetSent() const { return lwsZeroResetSent_; }
+    /** @brief The zero frame [53 30] of the last sequence was sent (at lwsZeroSentMs()) */
+    bool lwsZeroZeroSent() const { return lwsZeroZeroSent_; }
+    uint32_t lwsZeroSentMs() const { return lwsZeroSentMs_; }
+    /** @brief Abort reason of the last sequence ("tx_failed"), nullptr if none */
+    const char* lwsZeroAbortReason() const { return lwsZeroAbort_; }
+
 private:
     // State machine states
     enum class OBDState : uint8_t {
@@ -139,6 +180,15 @@ private:
     enum class Mode : uint8_t {
         NORMAL,
         PROBING
+    };
+
+    // LWS zero-set sub-state machine (runs next to the OBD-II one, polling paused)
+    enum class LwsZeroPhase : uint8_t {
+        IDLE,        // not running (last result in the lwsZero* fields)
+        WAIT_IDLE,   // let an in-flight OBD-II request complete / time out
+        SEND_RESET,  // send 0x7C0 [05 00]
+        GAP,         // wait STEER_LWS_ZERO_GAP_MS (non-blocking)
+        SEND_ZERO    // send 0x7C0 [53 30], then back to IDLE (OBD-II resumes)
     };
 
     // Probe sequencer phases
@@ -207,6 +257,15 @@ private:
     uint32_t probeRequestSentTime_; // millis() when current probe request was sent
     uint8_t probeRetryCount_;       // retries used on the current probe request
 
+    // ---- LWS steering sensor state --------------------------------------------
+    LwsSensor* lwsSink_;            // steering-angle frame sink (nullptr = none attached)
+    LwsZeroPhase lwsZeroPhase_;
+    uint32_t lwsZeroPhaseMs_;       // millis() when the current phase started
+    bool lwsZeroResetSent_;
+    bool lwsZeroZeroSent_;
+    uint32_t lwsZeroSentMs_;        // millis() when [53 30] was sent
+    const char* lwsZeroAbort_;      // "tx_failed" or nullptr
+
     bool sendOBDRequest(uint8_t pid);
     bool sendMode03Request();
     bool tryReceiveResponse();
@@ -238,14 +297,24 @@ private:
     // Clear MCP_EFLG_RX0OVR/RX1OVR if set, logging at most once per CAN_OVERFLOW_LOG_INTERVAL
     void checkRxOverflow();
 
-    // Program the MCP2515 masks/filters so only standard IDs 0x7E8-0x7EF reach the RX
-    // buffers. Must run after begin() and before setMode(MCP_NORMAL) — init_Mask()/
+    // Program the MCP2515 masks/filters: RXB0 = OBD-II replies 0x7E8-0x7EF, RXB1 = LWS
+    // 0x305 only. Must run after begin() and before setMode(MCP_NORMAL) — init_Mask()/
     // init_Filt() drop the chip into CONFIG mode and restore the library's cached mode.
     bool applyRxFilters();
 
     // While IDLE: pull any queued frames out of the MCP2515 RX buffers so they
     // never sit full between polls; unmatched frames go through logUnmatchedFrame()
     void drainRxBuffers();
+
+    // Called FIRST for every frame read on any receive path: a standard-ID 0x305 frame
+    // goes to the LWS sink (if attached) and returns true — it is then neither an
+    // OBD-II candidate nor logged as unmatched.
+    bool dispatchSteeringFrame(unsigned long canId, uint8_t len, const uint8_t* buf);
+
+    // Zero-set sequencer step (called from update() while IDLE in NORMAL mode)
+    void serviceLwsZero();
+    // Send one of the two fixed 0x7C0 payloads: zeroFrame=false -> [05 00], true -> [53 30]
+    bool sendLwsCfg(bool zeroFrame);
 
     // Probe sequencer helpers
     void updateProbe();

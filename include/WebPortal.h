@@ -63,30 +63,32 @@ public:
         uint16_t throttle_full_us;    // Calibrated full-throttle endpoint (µs)
         bool throttle_calibrating;    // True while a throttle calibration session is active
         int steering_pct;         // Steering percentage (-100 to +100)
-        // Steering position — ONE display frame: unwrapped fine-AS5600 counts in
-        // sensor direction, relative to the calibrated center; while calibration
-        // points are pending, relative to the center point (or to the first point
-        // captured when no center is recorded yet); relative to the boot fine sample
-        // when nothing is set. Positions may be negative, so "unset" is JSON null.
-        int32_t steer_position;   // Current unwrapped fine position
-        int32_t steer_center;     // Center point: always 0 (the frame is relative to it whenever it is set)
-        bool steer_center_set;    // Center set -> steer_center, else null
-        int32_t steer_left;       // Left limit position, valid only if steer_left_set
+        // Steering angle (Bosch LWS on CAN). Degrees, firmware sign (+ = right), relative to
+        // the sensor's stored zero. Every "_valid"/"_set"/"_seen" false is serialised as JSON
+        // null — never NaN, never a sentinel number.
+        float steer_angle;        // Current angle, deg (1 decimal), valid only if steer_angle_valid
+        bool steer_angle_valid;   // Fresh accepted frame with a valid angle
+        float steer_rate;         // Signed rotation rate, deg/s (+ = turning right), valid only if steer_rate_valid
+        bool steer_rate_valid;
+        float steer_left;         // Stored left limit, deg, valid only if steer_left_set
         bool steer_left_set;
-        int32_t steer_right;      // Right limit position, valid only if steer_right_set
+        float steer_right;        // Stored right limit, deg, valid only if steer_right_set
         bool steer_right_set;
-        int32_t steer_fine_raw;   // Fine AS5600 raw angle 0-4095, -1 = not readable (null)
-        int32_t steer_coarse_raw; // Coarse AS5600 raw angle 0-4095, -1 = not readable (null)
-        int32_t steer_turn;       // Fine-sensor turn index relative to the center turn
-        float steer_ratio;        // Derived coarse counts per fine-shaft turn, NAN = not calibrated (null)
-        int32_t steer_residual;   // Fine-vs-coarse disagreement (fine counts), valid only if steer_residual_valid
-        bool steer_residual_valid;
-        const char* steer_sensor_fault; // none | fine_i2c | fine_magnet | coarse_i2c | coarse_magnet | mismatch | recovering
-        bool steer_sensor_ok;     // Both sensors healthy and, when calibrated, turn recovered without mismatch
-        bool steer_calibrated;    // True when center + both limits are valid
-        String steer_cal_points;  // Pending calibration points this power cycle: subset of "LCR" ("" = none pending)
-        const char* steer_cal_error; // Last finalization rejected (all 3 points set): failed check, nullptr = none
-        bool steer_cal_lost;      // Unfinished points were discarded by a sensor fault (until the next capture)
+        bool steer_lws_seen;      // A frame has been accepted since boot (else the four below are null)
+        bool steer_lws_ok;        // Last accepted frame: sensor OK bit
+        bool steer_lws_cal;       // Last accepted frame: calibrated bit
+        bool steer_lws_adj;       // Last accepted frame: adjusted bit
+        uint8_t steer_lws_fault_code; // Last accepted frame: fault code 0-15 (9 = range latch)
+        const char* steer_sensor_fault; // none | zeroing | can_down | timeout | range_latched | sensor_fault | not_calibrated | angle_invalid
+        bool steer_sensor_ok;     // Sensor healthy (token none for STEER_LWS_RECOVER_FRAMES frames)
+        bool steer_calibrated;    // True when both limits are stored and valid
+        bool steer_range_warning; // Either stored limit beyond ±STEER_LWS_SAFE_RANGE (near the ~600° latch)
+        uint16_t steer_lws_fps;   // Accepted frames in the last second (~100 when healthy)
+        uint32_t steer_lws_crc_err; // Cumulative checksum errors since boot
+        uint32_t steer_lws_cnt_err; // Cumulative repeated-counter errors since boot
+        uint32_t steer_lws_miss;    // Cumulative missed frames (counter jumps) since boot
+        const char* steer_zero_state; // idle | running | ok | failed
+        const char* steer_zero_error; // Reason token when failed, nullptr = null
 
         // Steering VESC driver telemetry
         float steer_motor_current; // Steering motor current (A) from the VESC

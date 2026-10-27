@@ -43,11 +43,11 @@ After the ESP32 boots:
 1. **WiFi Network:**
    - SSID: `QuadBike-Control`
    - Password: None (open network)
-   - IP Address: `192.168.4.1`
+   - IP Address: `192.168.10.1`
 
 2. **Connect your device:**
    - On your laptop/phone, connect to the `QuadBike-Control` WiFi network
-   - Open a web browser and navigate to: `http://192.168.4.1`
+   - Open a web browser and navigate to: `http://192.168.10.1`
 
 ### 4. Use the Web Portal
 
@@ -133,11 +133,11 @@ All settings are in [include/Constants.h](include/Constants.h):
 - Verify ESP32 has booted successfully
 - Check if WiFi is disabled in your region's frequency band
 
-### Cannot access web interface (http://192.168.4.1)
+### Cannot access web interface (http://192.168.10.1)
 - Ensure you're connected to the `QuadBike-Control` WiFi network
 - Check that filesystem was uploaded: `pio run -t uploadfs`
 - Check serial monitor for "SPIFFS mounted" and "index.html" found messages
-- Try accessing by IP: `http://192.168.4.1/index.html`
+- Try accessing by IP: `http://192.168.10.1/index.html`
 
 ### Telemetry not updating
 - Check WebSocket connection indicator (should show "Connected")
@@ -195,7 +195,7 @@ Serial commands still work alongside web portal:
 
 ```
 ESP32-C6
-├── WiFi AP (192.168.4.1)
+├── WiFi AP (192.168.10.1)
 ├── AsyncWebServer (port 80)
 │   ├── HTTP: Serves /index.html
 │   └── WebSocket (/ws): Real-time telemetry & commands
@@ -247,4 +247,4 @@ For issues or questions:
 
 ---
 
-**Access URL:** http://192.168.4.1 (after connecting to QuadBike-Control WiFi)
+**Access URL:** http://192.168.10.1 (after connecting to QuadBike-Control WiFi)

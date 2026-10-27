@@ -1,5 +1,7 @@
 #include "CANController.h"
 #include "Debug.h"
+#include "Lws305.h"
+#include "LwsSensor.h"
 #include <SPI.h>
 
 // Candidate PIDs test-requested during a probe (order matters for reporting)
@@ -43,7 +45,14 @@ CANController::CANController()
       probeCandidateIdx_(0),
       probeRequestInFlight_(false),
       probeRequestSentTime_(0),
-      probeRetryCount_(0) {
+      probeRetryCount_(0),
+      lwsSink_(nullptr),
+      lwsZeroPhase_(LwsZeroPhase::IDLE),
+      lwsZeroPhaseMs_(0),
+      lwsZeroResetSent_(false),
+      lwsZeroZeroSent_(false),
+      lwsZeroSentMs_(0),
+      lwsZeroAbort_(nullptr) {
     // Initialize vehicle data to safe defaults
     vehicleData_.engineRPM = 0;
     vehicleData_.vehicleSpeed = 0;
@@ -202,6 +211,13 @@ void CANController::update() {
             drainRxBuffers();
             checkRxOverflow();
             logHealth();
+
+            // LWS zero-set: OBD-II polling is paused (no new request) while it runs.
+            // Reaching IDLE means any in-flight request has completed or timed out.
+            if (lwsZeroPhase_ != LwsZeroPhase::IDLE) {
+                serviceLwsZero();
+                break;
+            }
 
             int8_t index = selectNextPID();
             if (index < 0) {
@@ -368,6 +384,9 @@ bool CANController::tryReceiveResponse() {
         }
 
         mcp_can_->readMsgBuf(&canId, &len, rxBuf);
+        if (dispatchSteeringFrame(canId, len, rxBuf)) {
+            continue;  // steering angle frame: handed to the LWS decoder
+        }
 
         // OBD-II responses are from 0x7E8 to 0x7EF (ECU response IDs)
         if (canId >= 0x7E8 && canId <= 0x7EF) {
@@ -504,7 +523,13 @@ void CANController::modifyRegister(uint8_t address, uint8_t mask, uint8_t data) 
     SPI.endTransaction();
 }
 
-// Restrict the MCP2515 RX buffers to the OBD-II response window 0x7E8-0x7EF.
+// Two acceptance paths on the one shared bus (design D3):
+//   RXB0 = MASK0 0x7F8 + RXF0/RXF1 0x7E8  -> OBD-II responses 0x7E8-0x7EF
+//   RXB1 = MASK1 0x7FF + RXF2..RXF5 0x305 -> Bosch LWS steering angle only
+// so the 100 Hz angle stream and the OBD replies never evict each other. BUKT (RXB0 ->
+// RXB1 rollover) is left enabled as the library sets it in begin(): an OBD reply that
+// arrives while RXB0 is full rolls into RXB1 (the receive paths accept it from either
+// buffer); the only loss case is RX1OVR dropping one LWS frame, which is harmless.
 //
 // Encoding (mcp_can.cpp, mcp2515_write_mf(), lines 722-748): for ext == 0 the library
 // does `canid = (uint16_t)(id >> 16)` and then writes
@@ -515,30 +540,35 @@ void CANController::modifyRegister(uint8_t address, uint8_t mask, uint8_t data) 
 // which passes init_Mask(0, 0x7F00000) / init_Filt(0, 0x7DF0000).
 //
 // mask 0x7F8 << 16 keeps ID bits 10:3 as "care" and bits 2:0 as "don't care";
-// filter 0x7E8 << 16 therefore accepts exactly 0x7E8..0x7EF.
+// filter 0x7E8 << 16 therefore accepts exactly 0x7E8..0x7EF. mask 0x7FF << 16 with
+// filter 0x305 << 16 accepts exactly 0x305.
 // Mask 0 gates RXB0 (filters 0-1), mask 1 gates RXB1 (filters 2-5), so both masks and
 // all six filters must be set or an unfiltered buffer keeps letting broadcasts through.
-// ext = 0 on every filter also clears EXIDE, so extended frames match nothing and are
-// rejected outright.
+// ext = 0 on every mask and filter also clears EXIDE, so extended frames match nothing
+// and are rejected outright. Re-applied after every chip reset (recoverFromBusOff()).
 bool CANController::applyRxFilters() {
     if (mcp_can_ == nullptr) {
         return false;
     }
 
     bool ok = true;
-    ok &= (mcp_can_->init_Mask(0, 0, CAN_RX_ID_MASK_REG) == MCP2515_OK);
-    ok &= (mcp_can_->init_Mask(1, 0, CAN_RX_ID_MASK_REG) == MCP2515_OK);
-    for (uint8_t n = 0; n < 6; n++) {
-        ok &= (mcp_can_->init_Filt(n, 0, CAN_RX_ID_FILTER_REG) == MCP2515_OK);
+    // RXB0: OBD-II response window
+    ok &= (mcp_can_->init_Mask(0, 0, CAN_RX_OBD_MASK_REG) == MCP2515_OK);
+    ok &= (mcp_can_->init_Filt(0, 0, CAN_RX_OBD_FILTER_REG) == MCP2515_OK);
+    ok &= (mcp_can_->init_Filt(1, 0, CAN_RX_OBD_FILTER_REG) == MCP2515_OK);
+    // RXB1: steering-angle frame only
+    ok &= (mcp_can_->init_Mask(1, 0, CAN_RX_LWS_MASK_REG) == MCP2515_OK);
+    for (uint8_t n = 2; n < 6; n++) {
+        ok &= (mcp_can_->init_Filt(n, 0, CAN_RX_LWS_FILTER_REG) == MCP2515_OK);
     }
 
     Debug::printfFeature(DebugFeature::CAN,
-        "[CAN] RX acceptance filter: standard IDs 0x%03X-0x%03X only "
-        "(mask=0x%03X filter=0x%03X, regs 0x%08lX/0x%08lX)%s\n",
-        (unsigned)CAN_RX_ID_FILTER,
-        (unsigned)(CAN_RX_ID_FILTER | (~CAN_RX_ID_MASK & 0x7FF)),
-        (unsigned)CAN_RX_ID_MASK, (unsigned)CAN_RX_ID_FILTER,
-        (unsigned long)CAN_RX_ID_MASK_REG, (unsigned long)CAN_RX_ID_FILTER_REG,
+        "[CAN] RX filters: RXB0 OBD 0x%03X-0x%03X (mask=0x%03X filt=0x%03X), "
+        "RXB1 LWS 0x%03X (mask=0x%03X filt=0x%03X), std IDs only%s\n",
+        (unsigned)CAN_RX_OBD_FILTER,
+        (unsigned)(CAN_RX_OBD_FILTER | (~CAN_RX_OBD_MASK & 0x7FF)),
+        (unsigned)CAN_RX_OBD_MASK, (unsigned)CAN_RX_OBD_FILTER,
+        (unsigned)STEER_LWS_CAN_ID, (unsigned)CAN_RX_LWS_MASK, (unsigned)STEER_LWS_CAN_ID,
         ok ? "" : " [FAILED]");
 
     return ok;
@@ -640,8 +670,114 @@ void CANController::drainRxBuffers() {
             break;
         }
         mcp_can_->readMsgBuf(&canId, &len, rxBuf);
-        // Nothing is expected while IDLE, so every frame here is "unmatched"
+        if (dispatchSteeringFrame(canId, len, rxBuf)) {
+            continue;  // steering angle frame: handed to the LWS decoder
+        }
+        // No OBD-II reply is expected while IDLE, so every other frame is "unmatched"
         logUnmatchedFrame(canId, len, rxBuf);
+    }
+}
+
+// ============================================================================
+// BOSCH LWS STEERING-ANGLE SENSOR (shared bus)
+// ============================================================================
+
+bool CANController::dispatchSteeringFrame(unsigned long canId, uint8_t len, const uint8_t* buf) {
+    // readMsgBuf() ORs 0x80000000 into the ID of an extended frame and 0x40000000 into a
+    // remote request, so only a standard data frame compares equal to 0x305.
+    if (canId != (unsigned long)STEER_LWS_CAN_ID) {
+        return false;
+    }
+    if (lwsSink_ != nullptr) {
+        lwsSink_->onFrame(buf, len, millis());
+    }
+    return true;
+}
+
+// The ONLY transmitter on 0x7C0 in the firmware. The payload is chosen here from the two
+// fixed constants in Lws305.h — no caller can supply one, so [03 00] (which would move
+// the sensor's output to ID 0x000) can never be sent.
+bool CANController::sendLwsCfg(bool zeroFrame) {
+    if (!initialized_ || mcp_can_ == nullptr) {
+        return false;
+    }
+    const uint8_t* src = zeroFrame ? LWS_CFG_ZERO_ID305 : LWS_CFG_RESET;
+    uint8_t tx[2] = {src[0], src[1]};   // the library takes a non-const buffer
+    byte result = mcp_can_->sendMsgBuf(STEER_LWS_CFG_ID, 0, sizeof(tx), tx);
+    Debug::printfFeature(DebugFeature::CAN, "[CAN] LWS 0x%03X [%02X %02X] %s\n",
+                         (unsigned)STEER_LWS_CFG_ID, tx[0], tx[1],
+                         result == CAN_OK ? "sent" : "SEND FAILED");
+    return result == CAN_OK;
+}
+
+CANController::LwsZeroStart CANController::startLwsZero() {
+    if (!initialized_ || mcp_can_ == nullptr) {
+        return LwsZeroStart::NOT_INITIALIZED;
+    }
+    if (mode_ == Mode::PROBING) {
+        return LwsZeroStart::BUSY_PROBE;   // short and bounded: the operator presses again
+    }
+    if (lwsZeroPhase_ != LwsZeroPhase::IDLE) {
+        return LwsZeroStart::BUSY;
+    }
+    lwsZeroResetSent_ = false;
+    lwsZeroZeroSent_ = false;
+    lwsZeroSentMs_ = 0;
+    lwsZeroAbort_ = nullptr;
+    lwsZeroPhase_ = LwsZeroPhase::WAIT_IDLE;
+    lwsZeroPhaseMs_ = millis();
+    Debug::printlnFeature(DebugFeature::CAN, "[CAN] LWS zero-set started — OBD-II polling paused");
+    return LwsZeroStart::STARTED;
+}
+
+bool CANController::isLwsZeroRunning() const {
+    return lwsZeroPhase_ != LwsZeroPhase::IDLE;
+}
+
+void CANController::serviceLwsZero() {
+    // Called only while state_ == IDLE in NORMAL mode: no OBD-II request is in flight.
+    uint32_t now = millis();
+    switch (lwsZeroPhase_) {
+        case LwsZeroPhase::IDLE:
+            return;
+
+        case LwsZeroPhase::WAIT_IDLE:
+            lwsZeroPhase_ = LwsZeroPhase::SEND_RESET;
+            lwsZeroPhaseMs_ = now;
+            // fall through: the bus is ours now
+            [[fallthrough]];
+
+        case LwsZeroPhase::SEND_RESET:
+            if (!sendLwsCfg(false)) {
+                lwsZeroAbort_ = "tx_failed";
+                lwsZeroPhase_ = LwsZeroPhase::IDLE;
+                Debug::printlnFeature(DebugFeature::CAN, "[CAN] LWS zero-set aborted (tx_failed) — OBD-II resumed");
+                return;
+            }
+            lwsZeroResetSent_ = true;
+            lwsZeroPhase_ = LwsZeroPhase::GAP;
+            lwsZeroPhaseMs_ = millis();
+            return;
+
+        case LwsZeroPhase::GAP:
+            if (now - lwsZeroPhaseMs_ < STEER_LWS_ZERO_GAP_MS) {
+                return;   // non-blocking wait
+            }
+            lwsZeroPhase_ = LwsZeroPhase::SEND_ZERO;
+            [[fallthrough]];
+
+        case LwsZeroPhase::SEND_ZERO:
+            if (!sendLwsCfg(true)) {
+                lwsZeroAbort_ = "tx_failed";
+                lwsZeroPhase_ = LwsZeroPhase::IDLE;
+                Debug::printlnFeature(DebugFeature::CAN, "[CAN] LWS zero-set aborted (tx_failed) — OBD-II resumed");
+                return;
+            }
+            lwsZeroZeroSent_ = true;
+            lwsZeroSentMs_ = millis();
+            lwsZeroPhase_ = LwsZeroPhase::IDLE;   // DONE: polling resumes where the scheduler left off
+            Debug::printlnFeature(DebugFeature::CAN, "[CAN] LWS zero-set frames sent — OBD-II resumed");
+            return;
     }
 }
 
@@ -697,6 +833,9 @@ bool CANController::tryReceiveProbeResponse(uint8_t expectedMode, uint8_t expect
         }
 
         mcp_can_->readMsgBuf(&canId, &len, rxBuf);
+        if (dispatchSteeringFrame(canId, len, rxBuf)) {
+            continue;  // steering angle frame: handed to the LWS decoder
+        }
 
         // OBD-II responses are from 0x7E8 to 0x7EF (ECU response IDs)
         if (canId >= 0x7E8 && canId <= 0x7EF && len >= 2) {
@@ -724,8 +863,8 @@ bool CANController::tryReceiveProbeResponse(uint8_t expectedMode, uint8_t expect
 }
 
 CANController::ProbeStart CANController::startProbe(bool gearChangeActive) {
-    // Reject if a probe is already running
-    if (mode_ == Mode::PROBING) {
+    // Reject if a probe is already running, or an LWS zero-set holds the bus
+    if (mode_ == Mode::PROBING || lwsZeroPhase_ != LwsZeroPhase::IDLE) {
         return ProbeStart::BUSY;
     }
 

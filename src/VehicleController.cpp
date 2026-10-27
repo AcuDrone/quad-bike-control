@@ -58,7 +58,8 @@ VehicleController::VehicleController(SteeringController& steering,
       lastSteerScaleLogMs_(0),
       steerTestSpeedMs_(0.0f),
       steerTestSpeedSetMs_(0),
-      webThrottleDemandPct_(0.0f) {
+      webThrottleDemandPct_(0.0f),
+      steerZeroResponsePortal_(nullptr) {
 }
 
 void VehicleController::initBoostRail() {
@@ -154,6 +155,11 @@ bool VehicleController::initCAN() {
 
     bool result = canController_.begin();
     canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM);
+    // The Bosch LWS steering-angle sensor shares this bus: every 0x305 frame goes to the
+    // steering controller's decoder, and the zero-set runs here. Attached even if init
+    // failed, so the steering reports `can_down` rather than `timeout`.
+    canController_.attachLwsSink(&steering_.lwsSensor());
+    steering_.attachCan(&canController_);
     return result;
 }
 
@@ -256,8 +262,24 @@ void VehicleController::update() {
         updateGearBoostPID();
     }
 
-    // Update steering position control
+    // Update steering position control (after canController_.update(): it sees this
+    // iteration's angle frames)
     steering_.update();
+
+    // Final answer to a pending "Set sensor zero"
+    if (steerZeroResponsePortal_ != nullptr &&
+        steering_.getZeroState() != SteeringController::ZeroState::RUNNING) {
+        if (steering_.getZeroState() == SteeringController::ZeroState::OK) {
+            steerZeroResponsePortal_->sendResponse(true,
+                "Sensor zero confirmed (angle 0.0°) — capture Left and Right again");
+        } else {
+            const char* why = steering_.getZeroError();
+            String reason = why ? String(why) : String("unknown");
+            if (reason == "range_latched") reason += " — restart the vehicle and retry";
+            steerZeroResponsePortal_->sendResponse(false, "Sensor zero failed: " + reason);
+        }
+        steerZeroResponsePortal_ = nullptr;
+    }
 
     // Update position control for transmission actuator
     transmission_.update();
@@ -337,6 +359,10 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
         return;
     } else if (cmd.cmd == "steer_cal_center" || cmd.cmd == "steer_cal_left" || cmd.cmd == "steer_cal_right") {
         processSteerCalCommand(cmd.cmd, webPortal);
+        return;
+    } else if (cmd.cmd == "steer_lws_zero") {
+        // Sensor zero-set: no ignition / RPM / standstill precondition, any input source
+        processSteerZeroCommand(webPortal);
         return;
     } else if (cmd.cmd == "steer_jog") {
         processSteerJogCommand(cmd.floatValue, webPortal);
@@ -1202,46 +1228,41 @@ void VehicleController::processBoostCommand(bool on, WebPortal& webPortal) {
 }
 
 void VehicleController::processSteerCalCommand(const String& which, WebPortal& webPortal) {
-    bool ok;
-    String what;
     if (which == "steer_cal_center") {
-        ok = steering_.captureCenter();
-        what = "center";
-    } else if (which == "steer_cal_left") {
-        ok = steering_.captureLeftLimit();
-        what = "left limit";
-    } else {
-        ok = steering_.captureRightLimit();
-        what = "right limit";
+        // The center is the steering sensor's own stored zero: there is no center capture.
+        webPortal.sendResponse(false,
+            "Capture center removed: the center is the sensor zero — use \"Set sensor zero\"");
+        return;
     }
 
+    const bool left = (which == "steer_cal_left");
+    const String what = left ? "left limit" : "right limit";
+    const bool ok = left ? steering_.captureLeftLimit() : steering_.captureRightLimit();
     if (!ok) {
         const char* reason = steering_.getCaptureError();
         webPortal.sendResponse(false, "Capture " + what + " failed: " + String(reason ? reason : "unknown"));
         return;
     }
-    // Both sensors are recorded at every capture: fine position (display frame:
-    // counts from the center point, or from the first point while no center is
-    // recorded) + coarse raw angle. Points may be captured in any order.
-    String saved = "Steering " + what + " recorded: pos=" + String(steering_.getLastCapturePos()) +
-                   ", coarse=" + String(steering_.getLastCaptureCoarse());
-    const char* calError = steering_.getCalError();
-    if (calError) {
-        // All three points are set but the geometry/ratio check rejected them:
-        // nothing is saved, the points are kept so the bad one can be re-captured.
-        webPortal.sendResponse(false, saved + " — calibration rejected: " + String(calError) +
-                                      " (re-capture the wrong point)");
+
+    // Saved immediately; reported in degrees, firmware sign (+ = right)
+    String msg = "Steering " + what + " saved: " +
+                 String((float)steering_.getLastCapturePos() / 10.0f, 1) + "°";
+    if (steering_.isLastCaptureBeyondSafe()) {
+        msg += " — WARNING: beyond the ±550° safe range, near the sensor latch at ~600°"
+               " (closed-loop moves stop at 550°)";
+    }
+    msg += steering_.isCalibrated() ? " — calibration complete" : " — capture the other limit too";
+    webPortal.sendResponse(true, msg);
+}
+
+void VehicleController::processSteerZeroCommand(WebPortal& webPortal) {
+    if (!steering_.requestSensorZero()) {
+        const char* why = steering_.getZeroRefusal();
+        webPortal.sendResponse(false, "Sensor zero refused: " + String(why ? why : "unknown"));
         return;
     }
-    if (!steering_.isCalPending()) {
-        webPortal.sendResponse(true, saved + " — calibration complete and saved");
-        return;
-    }
-    String missing;
-    if (!steering_.hasCalPoint(SteeringController::CAL_LEFT))   missing += " left";
-    if (!steering_.hasCalPoint(SteeringController::CAL_CENTER)) missing += " center";
-    if (!steering_.hasCalPoint(SteeringController::CAL_RIGHT))  missing += " right";
-    webPortal.sendResponse(true, saved + " (calibration incomplete, still needed:" + missing + ")");
+    steerZeroResponsePortal_ = &webPortal;   // final result sent from update()
+    webPortal.sendResponse(true, "Sensor zero started — Left/Right limits will be erased");
 }
 
 void VehicleController::processSteerJogCommand(float value, WebPortal& webPortal) {

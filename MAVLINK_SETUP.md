@@ -174,14 +174,15 @@ the autopilot. Scheduling is internal to `MavlinkInterface::report()`, called ev
 
 Engine data comes from the CAN bus (`CANController::VehicleData`); ground speed, odometer and trip
 come from the hall wheel-speed sensor (GPIO 8 / X2), independently of CAN health. Steering-VESC
-electrical data comes from the VESC's own UART, and the measured steering position from the AS5600
-on the steering shaft — three more sources, each with its own validity gate.
+electrical data comes from the VESC's own UART, and the measured steering position from the Bosch
+LWS steering-angle sensor on the steering shaft (frame `0x305` on the same CAN bus as the ECU, with
+its own health gate) — three more sources, each with its own validity gate.
 
 Value-to-name summary for the six steering `NAMED_VALUE_FLOAT` messages:
 
 | Value | `name` | Rate | Source | Comp |
 |-------|--------|------|--------|------|
-| Steering position, **MEASURED** (%) | `STEER_POS` | 5 Hz | AS5600 | 25 |
+| Steering position, **MEASURED** (%) | `STEER_POS` | 5 Hz | Bosch LWS (CAN `0x305`) | 25 |
 | Steering motor current (A) | `STEER_A` | 5 Hz | VESC UART | 25 |
 | VESC input voltage, 24 V rail (V) | `VESC_V` | 5 Hz | VESC UART | 25 |
 | VESC FET temperature (°C) | `VESC_TEMP` | 1 Hz | VESC UART | 25 |
@@ -423,14 +424,14 @@ not the raw demand of any one input.)
 ### Steering telemetry (`NAMED_VALUE_FLOAT`)
 
 The **steering VESC** (Flipsky 75200) is the only smart driver on this vehicle. Its telemetry, the
-measured steering position from the AS5600 on the shaft it drives, and the speed-scale the firmware
+measured steering position from the Bosch LWS angle sensor on the shaft it drives, and the speed-scale the firmware
 is applying to that shaft's commands ride **exactly six** `NAMED_VALUE_FLOAT` (251) messages from
 component 25 — the **one scoped exception** to the "everything in the field that names it, in a
 single `EFI_STATUS`" rule stated above.
 
 | `name` | Value | Unit | Rate | Unknown | Gate |
 |--------|-------|------|------|---------|------|
-| `STEER_POS` | **MEASURED** steering position | % of calibrated travel, `-100` left … `0` centre … `+100` right | 5 Hz | `NaN` | `steerSensorOk && steerCalibrated` (AS5600) |
+| `STEER_POS` | **MEASURED** steering position | % of calibrated travel, `-100` left … `0` centre (sensor zero) … `+100` right | 5 Hz | `NaN` | `steerSensorOk && steerCalibrated` (CAN angle sensor healthy, both limits stored) |
 | `STEER_A` | VESC average **motor** current | A | 5 Hz | `NaN` | `steerDriverOk` |
 | `VESC_V` | VESC-measured **input** voltage (24 V boost rail) | V | 5 Hz | `NaN` | `steerDriverOk` |
 | `VESC_TEMP` | VESC power-stage (FET) temperature | °C | 1 Hz | `NaN` | `steerDriverOk` |
@@ -496,19 +497,20 @@ Also rejected:
 - **`STEER_A` is MOTOR current, not input current.** The same `COMM_GET_VALUES` payload carries both
   (`avg_motor_current` at offset 5, decoded; `avg_input_current` at offset 9, not decoded). Motor
   current is the one that moves with steering effort, so it is the one reported.
-- **`STEER_POS` is percent of calibrated travel, NOT degrees.** The firmware holds no
-  counts-to-degrees calibration anywhere (the AS5600's 0–4095 counts are only ever normalised
-  against the stored centre and the two limits), and the two halves are scaled independently because
-  the travel is asymmetric. **Negative is LEFT, positive is RIGHT** — the sign convention of
+- **`STEER_POS` is percent of calibrated travel, NOT degrees**, even though the sensor itself
+  reports degrees (0.1° resolution): the autopilot sees the same scale it commands on
+  `SERVO_OUTPUT_RAW`. The angle is normalised against the sensor's own zero (the centre) and the two
+  stored limits, and the two halves are scaled independently because the travel is asymmetric. **Negative is LEFT, positive is RIGHT** — the sign convention of
   `SteeringController::getSteeringPercent()`. **`0.0` is a real reading: straight ahead**, which is
   precisely why "unknown" must be `NaN` and never `0` (`getSteeringPercent()` itself returns `0.0f`
   when uncalibrated, so passing it through unguarded would report "wheels dead centre" for a vehicle
   whose steering position is entirely unknown — the same trap the `fuel_pressure` note above
   records, resolved the same way).
-- **`STEER_POS` has the AS5600's gate, not the VESC's** — `isSensorOk() && isCalibrated()`,
-  **independent** of `VESC_OK`. All four combinations are reachable and all four are meaningful:
+- **`STEER_POS` has the angle sensor's gate, not the VESC's** — `isSensorOk() && isCalibrated()`
+  (fault token `none` and both limits stored), **independent** of `VESC_OK`. All four combinations
+  are reachable and all four are meaningful:
 
-| VESC | AS5600 | `STEER_A` / `VESC_V` / `VESC_TEMP` | `VESC_OK` | `STEER_POS` |
+| VESC | Angle sensor | `STEER_A` / `VESC_V` / `VESC_TEMP` | `VESC_OK` | `STEER_POS` |
 |------|--------|------------------------------------|-----------|-------------|
 | healthy | healthy + calibrated | live | `1.0` | live position |
 | **silent** | healthy + calibrated | `NaN` | `0.0` | **live position** — a dead VESC does not blind the shaft sensor |
@@ -517,6 +519,27 @@ Also rejected:
 
   This is the same sensor-driven caveat `fuel_flow` already carries: "everything is unknown, so one
   subsystem is down" does **not** hold in reverse for this value.
+
+- **Steering sensor fault tokens** (web telemetry `steer_sensor_fault`; `STEER_POS` is `NaN` for
+  every token except `none`, in this priority order):
+
+| Token | Meaning | Operator action |
+|-------|---------|-----------------|
+| `zeroing` | "Set sensor zero" sequence running (`0x7C0 [05 00]`, ~100 ms, `[53 30]`, confirmation) | wait (≈ 1 s) |
+| `can_down` | CAN controller not initialised | check the MCP2515 / boot log |
+| `timeout` | no valid `0x305` frame for 100 ms (unplugged, unpowered, checksum errors, frozen counter) | check the sensor's CAN wiring and its 12 V (ignition key) |
+| `range_latched` | sensor fault code 9: turned beyond its ~±600° range; it stays latched until power-cycled | **restart the vehicle** (the stored zero survives) |
+| `sensor_fault` | sensor OK bit clear or another nonzero fault code | check the sensor |
+| `not_calibrated` | the sensor has no stored zero | jog to straight ahead, restart, "Set sensor zero" |
+| `angle_invalid` | angle `0x7FFF` | check the sensor |
+| `none` | healthy (after 5 consecutive good frames) | — |
+
+  A fault stops a closed-loop move and the autopilot's percent commands are rejected. **Jog and
+  nudge from the web portal keep working without a sensor** (open loop, no stall protection — only
+  the jog dead-man timeout, the nudge pulse length and the VESC current limit / fault stop apply), so
+  the steering can always be centred and the sensor re-zeroed. While the sensor is unhealthy
+  `STEER_POS` stays `NaN` even if a jog is moving the steering. Closed-loop (percent) moves are
+  clamped to ±550° so automatic steering never reaches the latch.
 
 - **Consumer note.** The **commanded** steering already reaches the GCS as `SERVO_OUTPUT_RAW` from
   the autopilot's steering channel; `STEER_POS` adds the **measured** half, so command-vs-actual
@@ -547,7 +570,7 @@ repeating the last number seen:
 |--------|--------------------------|-----------------|
 | `STEER_A`, `VESC_V`, `VESC_TEMP` | `NaN` | render `--` |
 | `VESC_OK` | `0.0` | read this as "VESC offline", and grey the three above |
-| `STEER_POS` | **unaffected** — its gate is the AS5600's | keep reading it |
+| `STEER_POS` | **unaffected** — its gate is the angle sensor's | keep reading it |
 
 > **All five keep being sent in that state.** Suppression would make "the peripheral is alive and
 > its VESC is down" look identical to "the peripheral is gone", and those need different responses
@@ -792,7 +815,7 @@ Five independent validity domains share the link. They do **not** move together:
 | **Gear switches** | physical gear reads UNKNOWN | `fuel_flow` only |
 | **Hall speed sensor** | `state.speedValid` = `SpeedSensor::isValid()` | `VFR_HUD.groundspeed` (→ `NaN`) and `VISION_POSITION_DELTA` (→ silence) |
 | **Steering VESC link** | `state.steerDriverOk` = `SteeringController::isDriverOk()` | `STEER_A`, `VESC_V`, `VESC_TEMP` (→ `NaN`) and `VESC_OK` (→ `0.0`) |
-| **Steering position sensor** | `steerSensorOk && steerCalibrated` (AS5600 + stored calibration) | `STEER_POS` only (→ `NaN`) |
+| **Steering position sensor** | `steerSensorOk && steerCalibrated` (Bosch LWS on CAN `0x305` + both stored limits) | `STEER_POS` only (→ `NaN`) |
 
 - **All seven CAN fields NaN at once** → CAN/ECU is down (or the engine harness is off); gear,
   `throttle_out`, flags, ODO, TRIP and ground speed are unaffected.
@@ -805,9 +828,12 @@ Five independent validity domains share the link. They do **not** move together:
   VESC is unplugged, unpowered or silent past its comm timeout. All five names **keep arriving**,
   which is how this is told apart from "the peripheral is gone"; CAN, gear, speed and `STEER_POS`
   are unaffected.
-- **`STEER_POS` = `NaN` alone, with `VESC_OK` = `1`** → the AS5600 is unhealthy or the steering is
-  uncalibrated. Says **nothing** about the VESC — like `fuel_flow`, this value has its own sensor,
-  its own gate and its own `NaN`, and the reverse implication does not hold.
+- **`STEER_POS` = `NaN` alone, with `VESC_OK` = `1`** → the steering angle sensor is unhealthy (see
+  the fault tokens above; `range_latched` = restart the vehicle) or the steering is uncalibrated.
+  Says **nothing** about the VESC — like `fuel_flow`, this value has its own sensor, its own gate and
+  its own `NaN`, and the reverse implication does not hold. The angle sensor shares the CAN bus with
+  the ECU but not its gate: an ECU that is off (seven CAN fields `NaN`) leaves `STEER_POS` live, and
+  only a dead bus or MCP2515 takes both down.
 - **Nothing at all from 1/25** → the peripheral or the serial link is gone. The two `HEARTBEAT`s are
   independent: the Pixhawk's continuing while comp 25's stops is exactly this case.
 

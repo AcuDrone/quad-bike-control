@@ -132,15 +132,16 @@ public:
                                           // the load. NOT the ECU module voltage in
                                           // EFI_STATUS.ignition_voltage (12 V side, PID 0x42)
 
-        // --- Steering POSITION (AS5600) -------------------------------------------------
+        // --- Steering POSITION (Bosch LWS steering-angle sensor on CAN) -------------------
         // A DIFFERENT validity gate from the driver fields above: this is the shaft sensor's,
-        // not the VESC's. A dead VESC does not blind the AS5600, and an uncalibrated steering
-        // does not make the VESC's electrical readings stale.
+        // not the VESC's. A dead VESC does not blind the angle sensor, and an uncalibrated
+        // steering does not make the VESC's electrical readings stale.
         float       steerPercent;         // MEASURED steering position: -100 (left limit) .. 0
-                                          // (centre) .. +100 (right limit), percent of the
-                                          // CALIBRATED lock-to-lock range — NOT degrees
-        bool        steerSensorOk;        // AS5600 reading healthy
-        bool        steerCalibrated;      // centre/limits stored — steerPercent is meaningful
+                                          // (centre = sensor zero) .. +100 (right limit), percent
+                                          // of the CALIBRATED lock-to-lock range — NOT degrees
+        bool        steerSensorOk;        // CAN steering-angle sensor healthy (fault token none;
+                                          // false on timeout, range_latched, zeroing, ...)
+        bool        steerCalibrated;      // both limits stored — steerPercent is meaningful
                                           // only while BOTH flags are true
 
         // --- Steering speed scaling (STEER_SCA) -----------------------------------------

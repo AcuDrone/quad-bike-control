@@ -14,6 +14,23 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.3.0","date":"2026-10-27","uk":[
+"Кут керма тепер читається з датчика Bosch на шині CAN; датчики AS5600 прибрано",
+"Нова кнопка «Задати нуль датчика»: поточне положення коліс стає центром керма",
+"Центр керма — це нуль датчика; калібруються лише межі «ліво» та «право», кожна зберігається одразу",
+"Проворот і підштовхування керма працюють навіть без датчика (без захисту від заклинювання)",
+"Датчик за межами діапазону (~600°) показує «перезапустіть машину»; автоматичне кермо зупиняється на 550°",
+"Після оновлення потрібне повторне калібрування керма: нуль датчика (якщо треба), потім «ліво» та «право»",
+"Адреса web-панелі змінена на 192.168.10.1 (було 192.168.4.1)"
+],"en":[
+"Steering angle now comes from the Bosch sensor on the CAN bus; the AS5600 sensors are removed",
+"New \"Set sensor zero\" button: the current wheel position becomes the steering center",
+"The steering center is the sensor zero; only Left and Right are captured, each saved at once",
+"Steering jog and nudge work even without a sensor (no stall protection)",
+"A sensor past its range (~600°) shows \"restart the vehicle\"; automatic steering stops at 550°",
+"Steering must be recalibrated after this update: sensor zero (if needed), then Left and Right",
+"Web portal address changed to 192.168.10.1 (was 192.168.4.1)"
+]},
 {"version":"1.2.0","date":"2026-10-19","uk":[
 "Кермо баггі (ODES Junglecross 800): два датчики AS5600, положення на кілька обертів керма",
 "Положення керма відновлюється після ввімкнення без пошуку нуля",

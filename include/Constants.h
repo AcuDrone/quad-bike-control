@@ -51,13 +51,12 @@
 #define VESC_UART_NUM       0             // UART_NUM_0
 #define VESC_UART_BAUD      115200        // VESC app default baud
 
-// I2C1 ("Wire") — the EXTERNAL header bus: the FINE AS5600 steering angle sensor
-// @ 0x36 (on the steering shaft) on X14 is the only device on it (see the bus map
-// below). The COARSE AS5600 (geared-down shaft) is on I2C2 / X15.
-// The bus is opened once in main.cpp; no driver on this bus may re-open it with
-// different parameters.
-#define PIN_STEER_SDA       GPIO_NUM_1    // I2C1 SDA
-#define PIN_STEER_SCL       GPIO_NUM_2    // I2C1 SCL
+// I2C1 ("Wire") — the EXTERNAL header bus on X14: NO device fitted (the steering
+// angle sensor is a Bosch LWS on the CAN bus), so `Wire` is not started. DEFINED
+// ONLY — kept for the documented contingency of moving the relay board to X14
+// (see the bus map below).
+#define PIN_I2C1_SDA        GPIO_NUM_1    // I2C1 SDA (X14) — defined, unused
+#define PIN_I2C1_SCL        GPIO_NUM_2    // I2C1 SCL (X14) — defined, unused
 
 // Throttle Servo (PWM via LEDC) — X8 pin 2
 #define PIN_THROTTLE_PWM    GPIO_NUM_15  // LEDC Channel 1
@@ -70,7 +69,9 @@
 #define LEDC_CH_BRAKE_RPWM  4
 #define LEDC_CH_BRAKE_LPWM  5
 
-// SPI CAN Controller (MCP2515 + TJA1051T/3, 8 MHz crystal → MCP_8MHZ)
+// SPI CAN Controller (MCP2515 + TJA1051T/3, 8 MHz crystal → MCP_8MHZ). One shared
+// 500 kbit/s bus: the engine ECU (OBD-II 0x7DF/0x7E8) AND the Bosch LWS steering
+// angle sensor (0x305, 100 Hz). See "CAN CONTROLLER CONFIGURATION" for the filter plan.
 #define PIN_CAN_MOSI        GPIO_NUM_42  // SPI MOSI
 #define PIN_CAN_MISO        GPIO_NUM_41  // SPI MISO
 #define PIN_CAN_SCK         GPIO_NUM_40  // SPI SCK
@@ -107,39 +108,31 @@
 // BUS MAP — scan-verified on the assembled board. It overrides the schematic
 // port names, which suggested U10 was on I2C1:
 //
-//   I2C1 "Wire"  (GPIO1/2)   : external headers only —
-//                              FINE AS5600 0x36 (X14, steering shaft, reserved for it)
+//   I2C1 "Wire"  (GPIO1/2)   : external header X14 only — NO device fitted, not started
 //   I2C2 "Wire1" (GPIO48/47) : BOTH on-board PCA9557s —
 //                              opto-input U10 0x1A, CD4051 mux U2 0x1C
 //                              + external relay board 0x1F on header X15
-//                              + COARSE AS5600 0x36 on header X15 (geared-down shaft)
 //
-// The two AS5600s share the fixed address 0x36, hence the two buses; 0x36 collides
-// with no I2C2 expander. Expected boot scan: I2C1 = 0x36; I2C2 = 0x1A 0x1C 0x1F 0x36.
-// Only the fine AS5600 may restart its own bus (I2C1). I2C2 is restarted only by the
-// coordinator in main.cpp (see I2C2_BUS_RECOVER_MS).
+// Expected boot scan: I2C2 = 0x1A 0x1C 0x1F. No driver and no coordinator restarts
+// Wire1 after setup(); each expander keeps its own fail-safe (BoardInputs re-configures
+// itself, RelayController verifies every write).
+// (Steering feedback is on CAN since firmware 1.3.0 — the former AS5600 pair on
+// X14/X15 and the coordinated I2C2 recovery are gone.)
 //
 // ⚠ The I2C2 level shifter low side is jumper-selected: R16 populated (3V3),
 //   R18 not (pinout §8.6).
 
-#define PIN_RELAY_SDA       GPIO_NUM_48  // I2C2 SDA (on-board U10/U2 + X15 relay board + coarse AS5600, BSS138 level shifted)
-#define PIN_RELAY_SCL       GPIO_NUM_47  // I2C2 SCL (on-board U10/U2 + X15 relay board + coarse AS5600, BSS138 level shifted)
-// Both buses run at 100 kHz. Both AS5600s (X14 and X15) sit at the end of cable runs to the
-// steering column, so signal integrity wins over speed — user decision. 400 kHz was tried and
-// rejected: not enough margin on that cable. Raising it again would need a stronger pull-up.
-#define I2C_BUS_FREQ_HZ     100000       // Both buses run at 100 kHz (see note above)
+#define PIN_RELAY_SDA       GPIO_NUM_48  // I2C2 SDA (on-board U10/U2 + X15 relay board, BSS138 level shifted)
+#define PIN_RELAY_SCL       GPIO_NUM_47  // I2C2 SCL (on-board U10/U2 + X15 relay board, BSS138 level shifted)
+// I2C runs at 100 kHz (the relay board sits at the end of a cable run on X15); 400 kHz was
+// tried and rejected for lack of margin. Raising it again would need a stronger pull-up.
+#define I2C_BUS_FREQ_HZ     100000       // 100 kHz (see note above)
 
 #define PCA9557_ADDR_INPUTS        0x1A  // On-board opto-input expander U10 (I2C2)
 // External relay board on X15 → I2C2, as shipped strapped A2A1A0 = 111 → 0x1F.
 // The strap is kept: 0x1F collides with neither on-board expander (0x1A / 0x1C).
 #define PCA9557_ADDR_RELAYS        0x1F  // External relay board
 #define PCA9557_ADDR_MUX_RESERVED  0x1C  // On-board CD4051 mux control U2 (I2C2) — NEVER addressed
-
-// AS5600 bus fault handling
-#define AS5600_RECOVER_AFTER_FAILS 5     // consecutive failed AS5600 transactions: fine sensor restarts I2C1;
-                                         // coarse sensor only makes main.cpp CONSIDER an I2C2 restart
-#define I2C2_BUS_RECOVER_MS        2000  // ms — min interval between coordinated Wire1 restarts (main.cpp).
-                                         // Only when the coarse AS5600 AND the opto-input expander fail together
 
 // Opto-isolated input bit indices on PCA9557 U10.
 //
@@ -401,37 +394,44 @@ struct ServoChannelConfig {
 #define SERVO_PWM_FREQ        50     // Hz (20ms period)
 
 // Steering Actuator Parameters
-// Position feedback is two AS5600 sensors (aztec buggy, ±1.7 steering-shaft turns):
-//  - FINE   AS5600 on the steering shaft (I2C1, X14): 12-bit counts, ~0.088°/LSB, one turn
-//  - COARSE AS5600 on a geared-down shaft (I2C2, X15): < 360° over the whole travel
-// All positions are UNWRAPPED fine counts relative to the calibrated center (int32,
-// about ±6963 counts for ±1.7 turns): fineRaw + 4096·turn − fineCenterRaw. The turn is
-// tracked incrementally and recovered from the coarse sensor at boot / after a fault.
-// Center and left/right limits are captured via the web UI (each capture records both
-// sensors; the coarse-to-fine ratio is derived, never stored) and kept in NVS namespace
-// "steering": cal_ver (=2), fc_raw, cc_raw (center pair), fl_pos, cl_raw (left pair),
-// fr_pos, cr_raw (right pair). The old single-sensor keys c_ang/l_ang/r_ang are removed.
-// Uncalibrated => percent commands rejected.
-#define STEER_POSITION_TOLERANCE  10    // +/- fine counts for position match (~0.9° of shaft) — bench-tune
-#define STEER_MOVE_TIMEOUT        7500  // ms - maximum time for any movement. Reviewed for 3.4-turn lock-to-lock: ~2 s at full
-                                        // speed (half a turn ≈ 0.3 s), so 7.5 s keeps >3x margin for the P-taper near target — bench-check
-#define STEER_STALL_THRESHOLD     5     // fine counts - stall detection threshold — bench-tune
+// Position feedback: Bosch LWS steering-angle sensor 0 265 005 486 (PSA 9650236180)
+// mounted DIRECTLY on the steering shaft, read over the shared MCP2515 CAN bus
+// (frame 0x305, DLC 6, 100 Hz; decoder include/Lws305.h, health src/LwsSensor.cpp).
+// It is absolute over several turns (measured range ≈ ±600°, beyond which it LATCHES
+// fault code 9 until its 12 V — the ignition key — is power-cycled) and stores its own zero.
+//  - SIGN: the sensor's angle is positive = LEFT (counter-clockwise). The firmware position
+//    is the FIXED negation pos = −angle, so positive = RIGHT, like IMotorDriver::setSpeed()
+//    and steering_pct. A mirrored mount is refused at limit capture (left limit > 0).
+//  - UNITS: every steering position, limit, tolerance and gain below is in 0.1° of
+//    steering-shaft angle (int32).
+//  - CENTER = the sensor's own stored zero (angle 0.0), set with the web "Set sensor zero"
+//    (0x7C0 [05 00], ~100 ms, [53 30] — see CANController). There is no centre capture.
+//  - NVS namespace "steering" (shared with steer_sca_base — NEVER clear() it), layout v3:
+//    cal_ver (=3), lim_l, lim_r (0.1°, firmware sign). Older keys (v2 fc_raw/cc_raw/fl_pos/
+//    cl_raw/fr_pos/cr_raw, v1 c_ang/l_ang/r_ang) are removed one by one on first boot ->
+//    recalibration required. Calibrated = both limits stored and valid.
+//  - Percent commands need a healthy sensor + both limits; jog/nudge only need the VESC link
+//    (sensorless open loop is allowed, with no stall backstop).
+// The values marked bench-tune were converted from AS5600 counts (1 count ≈ 0.88 × 0.1°).
+#define STEER_POSITION_TOLERANCE  10    // 0.1° (1.0°) - +/- position match — bench-tune
+#define STEER_MOVE_TIMEOUT        7500  // ms - maximum time for any movement — bench-check a full lock-to-lock move
+#define STEER_STALL_THRESHOLD     5     // 0.1° (0.5°) - progress below this over STEER_STALL_TIMEOUT = stall — bench-tune
 #define STEER_STALL_TIMEOUT       500   // ms - time without position change = stall
-#define STEER_CAL_MIN_SPAN        50    // fine counts - min |limit - center| accepted at calibration (~4.4°) — bench-tune
-#define STEER_SENSOR_FAULT_DEBOUNCE 5   // consecutive bad samples (per sensor; mismatch: coarse samples) before declaring a fault
+#define STEER_CAL_MIN_SPAN        300   // 0.1° (30.0°) - min |limit| from the sensor zero accepted at capture — bench-tune
+#define STEER_BOOT_CENTER_TIMEOUT_MS  5000  // ms - a pending boot centering (waits for sensor + VESC link) is dropped after this
 
-// Dual-sensor (fine + coarse AS5600) multi-turn tracking
-#define STEER_COARSE_POLL_MS          10    // ms - coarse sensor poll period (turn recovery + consistency check; keeps I2C2 traffic low)
-#define STEER_SENSOR_MISMATCH_COUNTS  1024  // fine counts (quarter turn) - max fine-vs-coarse residual; beyond = mismatch fault. Must stay < 2048
-#define STEER_COARSE_MIN_PER_TURN     150   // coarse counts per steering-shaft turn - min derived ratio accepted at calibration
-#define STEER_COARSE_MIN_GAP          256   // coarse counts (~22.5°) - min unused coarse arc accepted at calibration (seam lives mid-gap)
-#define STEER_CAL_LINEARITY_COUNTS    512   // fine counts - max distance of the center capture from the line through the two limits
-#define STEER_SENSOR_REPROBE_MS       1000  // ms - re-probe period for an AS5600 that did not answer at boot
-#define STEER_TURN_RECOVER_SAMPLES    5     // consecutive agreeing coarse polls (same turn, residual < MISMATCH_COUNTS) to accept a turn recovery
-#define STEER_BOOT_CENTER_TIMEOUT_MS  5000  // ms - a pending boot centering (waits for sensors + VESC link) is dropped after this
+// Bosch LWS sensor health, range guard and zero-set
+#define STEER_LWS_TIMEOUT_MS      100   // ms - no ACCEPTED 0x305 frame for this long = fault "timeout" (frames every 10 ms)
+#define STEER_LWS_RECOVER_FRAMES  5     // consecutive good frames (≈50 ms) before the sensor is healthy again
+#define STEER_LWS_SAFE_RANGE      5500  // 0.1° (550.0°) - closed-loop (percent) targets are clamped to ±this and
+                                        // stopped driving outward beyond it, keeping clear of the ~600° latch.
+                                        // NOT applied to jog/nudge/limit captures (operator's decision)
+#define STEER_LWS_ZERO_GAP_MS     100   // ms - pause between 0x7C0 [05 00] and [53 30] (non-blocking)
+#define STEER_LWS_ZERO_CONFIRM_MS 1000  // ms - after [53 30], wait this long for OK=1 fault=0 cal=1 |angle| ≤ tolerance
+#define STEER_LWS_ZERO_TOLERANCE  10    // 0.1° (1.0°) - |angle| accepted as "zero confirmed"
 
 // Proportional PWM control: duty = clamp(|error| * STEER_KP + boost, MIN, MAX)
-#define STEER_KP                  1.0f  // PWM duty (0-255) per fine count of error — bench-tune
+#define STEER_KP                  1.15f // PWM duty (0-255) per 0.1° of error (saturates at ≈22°) — bench-tune
 #define STEER_PWM_MIN_DUTY        140   // enough to overcome static friction (bench: no movement at 70)
 #define STEER_PWM_MAX_DUTY        255   // full speed for large errors
 
@@ -439,24 +439,25 @@ struct ServoChannelConfig {
 // makes no progress, duty escalates above the P term until movement resumes.
 // (Bench: closed-loop stalled ~72 counts short of the left lock at MIN duty.)
 #define STEER_BOOST_CHECK_MS      100   // ms - progress check period
-#define STEER_BOOST_MIN_PROGRESS  3     // fine counts per check period considered "moving" — bench-tune
+#define STEER_BOOST_MIN_PROGRESS  3     // 0.1° (0.3°) per check period considered "moving" — bench-tune
 #define STEER_BOOST_STEP          30    // duty added (stalled) or removed (moving) per check
 
 // Calibration jog (momentary open-loop drive from the web UI)
 #define STEER_JOG_DUTY            180   // PWM duty while jogging (default when the UI sends no speed; min working duty is ~140)
 #define STEER_JOG_TIMEOUT_MS      500   // ms - auto-stop if the jog command is not refreshed
 #define STEER_NUDGE_DUTY          150   // PWM duty for a precision nudge pulse (just above friction)
-#define STEER_NUDGE_MS            70    // ms - nudge pulse length (finer: ~1-2 counts per tap)
+#define STEER_NUDGE_MS            70    // ms - nudge pulse length (a degree or two per tap)
 
 // Re-command guard + stall latch (MAVLink streams steering at ~25 Hz; without
 // these the stall/move timers never elapse — the fixed re-command bug).
-#define STEER_RETARGET_TOLERANCE  70    // fine counts (~1% of half-travel) — re-command within this of the current target is a no-op (timers keep running)
+#define STEER_RETARGET_TOLERANCE  50    // 0.1° (5.0°, ≈1% of a ~500° half-travel) — re-command within this of the current target is a no-op (timers keep running) — bench-tune
 #define STEER_STALL_COOLDOWN_MS   700   // ms — same-direction moves refused after a stall; opposite direction always allowed
 
 // VESC steering driver telemetry monitor + failsafe
 // (Over-current is left to the VESC itself: Motor Current Max clamp, Absolute Max
 //  Current fault — surfaced here as a fault code — and MOSFET temperature limiting.
-//  Mechanical jams are caught by the fine-AS5600 stall detector, STEER_STALL_TIMEOUT.)
+//  Mechanical jams are caught by the steering-angle stall detector, STEER_STALL_TIMEOUT,
+//  while the sensor is healthy; sensorless jog relies on the VESC current clamp + fault stop.)
 #define STEER_VESC_TELEM_MS         300   // ms — COMM_GET_VALUES poll period (~3 Hz)
 #define STEER_VESC_COMM_TIMEOUT_MS  1000  // ms — no valid GET_VALUES reply for this long -> driver fault (stop, reject moves)
 
@@ -652,8 +653,8 @@ struct ServoChannelConfig {
 #define WIFI_AP_PASSWORD      ""                  // No password (open network)
 #define WIFI_AP_CHANNEL       1                   // WiFi channel (1-13)
 #define WIFI_AP_MAX_CLIENTS   5                   // Maximum simultaneous clients
-#define WIFI_AP_IP            IPAddress(192, 168, 4, 1)     // ESP32 IP address
-#define WIFI_AP_GATEWAY       IPAddress(192, 168, 4, 1)     // Gateway IP
+#define WIFI_AP_IP            IPAddress(192, 168, 10, 1)    // ESP32 IP address
+#define WIFI_AP_GATEWAY       IPAddress(192, 168, 10, 1)    // Gateway IP
 #define WIFI_AP_SUBNET        IPAddress(255, 255, 255, 0)   // Subnet mask
 
 // ============================================================================
@@ -710,16 +711,27 @@ enum class InputSource {
 #define CAN_REINIT_NO_DATA_MS        15000 // ms - full chip re-init when polling but no valid OBD response for this long (heals a wedged TX / latched ABAT once the ECU powers up)
 #define CAN_REINIT_MIN_INTERVAL_MS   15000 // ms - minimum spacing between forced re-inits
 
-// MCP2515 hardware acceptance filtering (standard 11-bit IDs only).
+// MCP2515 hardware acceptance filtering (standard 11-bit IDs only), two paths on ONE bus.
 // The ECU floods the bus with broadcast frames (Delphi MT05 sends 0x301 etc.) which
-// overrun the two RX buffers faster than the loop can drain them. Accept only the
-// OBD-II response window 0x7E8-0x7EF: (id & 0x7F8) == 0x7E8.
+// overrun the two RX buffers faster than the loop can drain them, so only two things
+// are accepted, each through its own buffer:
+//   RXB0: MASK0 0x7F8, RXF0/RXF1 0x7E8      -> OBD-II responses 0x7E8-0x7EF
+//   RXB1: MASK1 0x7FF, RXF2..RXF5 0x305     -> Bosch LWS steering angle (100 Hz)
+// so the 100 Hz angle stream and the OBD replies never evict each other. BUKT (RXB0 ->
+// RXB1 rollover, set by the library) stays on: an OBD reply arriving while RXB0 is full
+// lands in RXB1; the only loss is one LWS frame on RX1OVR, which is harmless.
 // The coryjfowler MCP_CAN library expects standard mask/filter IDs shifted left by 16
 // (mcp2515_write_mf() takes bits 26:16 as the 11-bit ID when ext == 0).
-#define CAN_RX_ID_MASK            0x7F8   // 11-bit acceptance mask (care bits 10:3)
-#define CAN_RX_ID_FILTER          0x7E8   // 11-bit acceptance filter (OBD-II ECU responses)
-#define CAN_RX_ID_MASK_REG   (((uint32_t)CAN_RX_ID_MASK) << 16)    // 0x07F80000
-#define CAN_RX_ID_FILTER_REG (((uint32_t)CAN_RX_ID_FILTER) << 16)  // 0x07E80000
+#define CAN_RX_OBD_MASK           0x7F8   // 11-bit acceptance mask (care bits 10:3)
+#define CAN_RX_OBD_FILTER         0x7E8   // 11-bit acceptance filter (OBD-II ECU responses)
+#define CAN_RX_OBD_MASK_REG   (((uint32_t)CAN_RX_OBD_MASK) << 16)    // 0x07F80000
+#define CAN_RX_OBD_FILTER_REG (((uint32_t)CAN_RX_OBD_FILTER) << 16)  // 0x07E80000
+#define CAN_RX_LWS_MASK           0x7FF   // 11-bit mask: exact match
+#define STEER_LWS_CAN_ID          0x305   // Bosch LWS steering-angle frame (standard ID)
+#define STEER_LWS_CFG_ID          0x7C0   // LWS configuration frame — sent ONLY by the zero-set sequence
+                                          // in CANController, with ONLY [05 00] / [53 30] (never [03 00])
+#define CAN_RX_LWS_MASK_REG   (((uint32_t)CAN_RX_LWS_MASK) << 16)    // 0x07FF0000
+#define CAN_RX_LWS_FILTER_REG (((uint32_t)STEER_LWS_CAN_ID) << 16)   // 0x03050000
 
 // ECU Capability Probe (on-demand diagnostic sweep)
 #define CAN_PROBE_RETRY_ATTEMPTS  1     // Retries per probe request (keeps worst-case sweep duration bounded)
@@ -745,7 +757,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.2.0"
+#define FIRMWARE_VERSION "1.3.0"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

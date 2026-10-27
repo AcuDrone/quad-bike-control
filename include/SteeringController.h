@@ -3,82 +3,69 @@
 
 #include <Arduino.h>
 #include "Constants.h"
-#include "AS5600Sensor.h"
 #include "IMotorDriver.h"
+#include "LwsSensor.h"
+
+class CANController;
 
 /**
  * @brief Steering actuator controller: drives an IMotorDriver (VESC over UART)
- * with proportional PWM and absolute MULTI-TURN position feedback from two
- * AS5600 magnetic angle sensors (aztec buggy, ±1.7 steering-shaft turns).
+ * with proportional PWM and absolute multi-turn position feedback from a Bosch LWS
+ * steering-angle sensor 0 265 005 486 mounted directly on the steering shaft and
+ * read over the shared MCP2515 CAN bus (frame 0x305, 100 Hz).
  *
- *  - FINE sensor on the steering shaft (I2C1 `Wire`, X14): one turn = 4096 counts.
- *    Its turns are tracked incrementally (a raw jump > 2048 counts is a wrap).
- *  - COARSE sensor on a geared-down shaft (I2C2 `Wire1`, X15) sweeping < 360°
- *    lock to lock: absolute but coarse. It is linearised with a "seam" placed in
- *    its unused arc and mapped onto the fine position through a line fitted at
- *    calibration (the ratio is derived, never stored).
- *
- * All positions are UNWRAPPED fine counts relative to the calibrated center
- * (int32): pos = fineRaw + 4096·turn − fineCenterRaw, in sensor direction; the
- * control loop uses rel = invert ? −pos : pos (positive = right).
- *
- * No homing: at boot (and after any sensor fault) the absolute turn is recovered
- * from the coarse sensor, accepted only after STEER_TURN_RECOVER_SAMPLES
- * consecutive coarse polls agree on it. While calibrated the two sensors are
- * cross-checked on every coarse sample; a persistent disagreement LATCHES a
- * mismatch fault that only a completed calibration or a reboot clears. Any fault on
- * either sensor (I2C failure, magnet lost, or fine/coarse mismatch) stops the
- * motor and rejects commands; there is no single-sensor degraded mode.
- *
- * Calibration (NVS namespace "steering", keys cal_ver/fc_raw/cc_raw/fl_pos/
- * cl_raw/fr_pos/cr_raw): the center, left and right captures may be made in ANY
- * order. Each capture records only its own point (unwrapped fine position in a
- * session frame counted from boot + coarse raw) into a session slot; nothing is
- * cleared by another capture. Once all three slots are set the calibration is
- * validated and, if accepted, becomes active and is persisted (only complete
- * calibrations are stored). The session frame needs fine-sensor continuity, so a
- * reboot or a sensor fault (fine/coarse fault, latched mismatch) discards the
- * slots of an unfinished calibration. When the stored calibration is complete
- * and its absolute turn is trusted, empty slots are pre-filled from it, so a
- * single point can be re-captured on an already calibrated vehicle.
+ *  - Position = −angle (the sensor's positive is LEFT; the firmware's positive is
+ *    RIGHT), in 0.1° of steering-shaft angle (int32), relative to the sensor's own
+ *    stored zero. No homing, no turn tracking: every frame is absolute.
+ *  - Health (fault token, design D5): zeroing > can_down > timeout > range_latched >
+ *    sensor_fault > not_calibrated > angle_invalid > none. Faults take effect at once;
+ *    recovery needs STEER_LWS_RECOVER_FRAMES good frames. A fault stops a closed-loop
+ *    move and rejects percent commands; jog and nudge keep working (sensorless, open
+ *    loop, no stall backstop) — they only need the VESC link and no stall latch.
+ *  - Calibration: center = sensor zero (set by requestSensorZero()); NVS namespace
+ *    "steering" v3 keeps only lim_l / lim_r (0.1°, firmware sign). Each capture is saved
+ *    at once; calibrated = both limits stored and valid.
+ *  - Range guard: percent-driven (closed-loop) targets are clamped to the limits, then to
+ *    ±STEER_LWS_SAFE_RANGE, and a closed-loop move driving outward at |pos| ≥ that range
+ *    is stopped. Jog, nudge and captures are not guarded.
  */
 class SteeringController {
 public:
-    /** @brief Combined steering-sensor fault reason (telemetry token via faultToken()) */
-    enum class SensorFault : uint8_t {
-        NONE,
-        FINE_I2C,
-        FINE_MAGNET,
-        COARSE_I2C,
-        COARSE_MAGNET,
-        MISMATCH,
-        RECOVERING      // both sensors healthy and calibrated, absolute turn not yet recovered
-    };
+    /** @brief Steering-angle sensor fault reason (telemetry token via faultToken()) */
+    using SensorFault = LwsFault;
 
     /** @brief Sentinel for an unset limit position (positions may be negative) */
     static constexpr int32_t POS_UNSET = INT32_MIN;
 
+    /** @brief Zero-set progress (telemetry token via zeroStateToken()) */
+    enum class ZeroState : uint8_t { IDLE, RUNNING, OK, FAILED };
+
     /**
-     * @brief Construct bound to an already-constructed motor driver and the two
-     * I2C buses (opened later by main.cpp).
+     * @brief Construct bound to an already-constructed motor driver.
      * The driver's own begin() (e.g. VESC UART init) must be called by the
      * caller before SteeringController::begin().
-     * @param fineBus   Bus of the fine sensor (`Wire`, I2C1) — the sensor may restart it
-     * @param coarseBus Bus of the coarse sensor (`Wire1`, I2C2) — never restarted here
      */
-    SteeringController(IMotorDriver& motor, TwoWire& fineBus, TwoWire& coarseBus);
+    explicit SteeringController(IMotorDriver& motor);
 
     /**
-     * @brief Probe both AS5600 sensors, load the calibration (always, even if a
-     * sensor is missing) and prime the sensor state, including turn recovery.
-     * A sensor that does not answer is re-probed every STEER_SENSOR_REPROBE_MS.
-     * @return true if both sensors answered (a silent VESC does not block boot;
-     *         see driver-ok gating below)
+     * @brief Coast the motor and load the limits from NVS (migrating older layouts).
+     * The sensor starts as `timeout` (or `can_down`) until frames arrive.
      */
-    bool begin(gpio_num_t fineSda, gpio_num_t fineScl, gpio_num_t coarseSda, gpio_num_t coarseScl);
+    bool begin();
 
     /**
-     * @brief Update sensor readings and position control — call every loop iteration
+     * @brief Bind the CAN controller that feeds lwsSensor() and runs the zero-set.
+     * Without it the sensor state is `can_down`.
+     */
+    void attachCan(CANController* can) { can_ = can; }
+
+    /** @brief The frame sink to attach to the CAN controller */
+    LwsSensor& lwsSensor() { return lws_; }
+    const LwsSensor& lwsSensor() const { return lws_; }
+
+    /**
+     * @brief Sensor health, zero-set and position control — call every loop
+     * iteration, after CANController::update().
      */
     void update();
 
@@ -90,158 +77,101 @@ public:
     // === Steering interface ===
 
     /**
-     * @brief Set steering by percentage: -100 (left limit) .. 0 (center) .. +100 (right limit).
-     * Left and right ranges may be asymmetric.
-     * @return false if rejected (not calibrated or sensor invalid)
+     * @brief Set steering by percentage: -100 (left limit) .. 0 (sensor zero) .. +100
+     * (right limit), then clamped to ±STEER_LWS_SAFE_RANGE.
+     * @return false if rejected (limits missing, sensor unhealthy, VESC down, stall latch)
      */
     bool setSteeringPercent(float percent);
     float getSteeringPercent() const;
 
     /**
      * @brief Request a one-shot move to center once it becomes possible
-     * (calibrated, combined sensor state OK, VESC link up). Issued from update();
+     * (calibrated, sensor healthy, VESC link up). Issued from update();
      * dropped silently after STEER_BOOT_CENTER_TIMEOUT_MS, and cancelled by any
-     * steering command or capture made before it fires.
+     * accepted steering/jog/nudge command, capture or zero-set made before it fires.
      */
     void requestBootCenter();
 
     // === Calibration ===
 
     /**
-     * @brief Momentary open-loop jog for calibration: -1 = left, +1 = right, 0 = stop.
-     * Auto-stops if not refreshed within STEER_JOG_TIMEOUT_MS.
-     * @param duty PWM duty 0-255; clamped up to STEER_PWM_MIN_DUTY (below it the actuator stalls)
+     * @brief Momentary open-loop jog: -1 = left, +1 = right, 0 = stop.
+     * Needs only the VESC link (sensorless allowed). Auto-stops if not refreshed
+     * within STEER_JOG_TIMEOUT_MS. Not limited by the range guard.
+     * @param duty PWM duty 0-255; clamped up to STEER_PWM_MIN_DUTY
      */
     void jog(int8_t direction, uint8_t duty = STEER_JOG_DUTY);
 
     /**
-     * @brief Precision nudge: one STEER_NUDGE_MS pulse at STEER_NUDGE_DUTY,
-     * moving a few counts per call. For landing exactly on center during calibration.
+     * @brief Precision nudge: one STEER_NUDGE_MS pulse at STEER_NUDGE_DUTY.
+     * Same gating as jog().
      */
     void nudge(int8_t direction);
 
-    /** @brief Calibration point / session slot index */
-    enum CalPoint : uint8_t { CAL_LEFT = 0, CAL_CENTER = 1, CAL_RIGHT = 2, CAL_POINTS = 3 };
-
     /**
-     * @brief Record the center point (session fine position + coarse raw) into
-     * its session slot. Requires both sensors healthy and a fresh fine sample (a
-     * mismatch does not block: completing a calibration is the way out of it).
-     * Must be at least STEER_CAL_MIN_SPAN away from an already recorded limit.
-     * Clears nothing else. When all three slots are set the calibration is
-     * finalized (validated, activated, persisted); a rejected finalization keeps
-     * the slots and getCalError() names the failed check.
-     * @return true if the point was recorded (else see getCaptureError())
-     */
-    bool captureCenter();
-
-    /**
-     * @brief Record a limit point into its session slot; same rules as
-     * captureCenter(), and at least STEER_CAL_MIN_SPAN away from a recorded center.
-     * @return true if the point was recorded (else see getCaptureError())
+     * @brief Store the current position as the left / right limit and save it at once.
+     * Needs a healthy sensor; left must be ≤ −STEER_CAL_MIN_SPAN, right ≥ +STEER_CAL_MIN_SPAN.
+     * A limit beyond ±STEER_LWS_SAFE_RANGE is accepted with a warning (isLastCaptureBeyondSafe()).
+     * @return true if saved (else see getCaptureError())
      */
     bool captureLeftLimit();
     bool captureRightLimit();
 
     /** @brief Why the last capture was refused (nullptr if it was accepted) */
     const char* getCaptureError() const { return captureError_; }
-
-    /**
-     * @brief Failed check of the last finalization attempt (all three points set
-     * but rejected), or nullptr. Cleared by the next capture and when the
-     * session is discarded.
-     */
-    const char* getCalError() const { return sessionError_; }
-
-    /** @brief True while at least one session point is recorded (unfinished or rejected calibration) */
-    bool isCalPending() const { return calSlot_[CAL_LEFT].valid || calSlot_[CAL_CENTER].valid || calSlot_[CAL_RIGHT].valid; }
-
-    /** @brief True if session point p is recorded */
-    bool hasCalPoint(CalPoint p) const { return p < CAL_POINTS && calSlot_[p].valid; }
-
-    /** @brief True if unfinished session points were discarded by a sensor fault (cleared by the next capture) */
-    bool isCalSessionLost() const { return calLost_; }
-
-    /**
-     * @brief Position shown to the operator: while session points are pending,
-     * in the session display frame (see getDisplayPoint()); otherwise getPosition().
-     */
-    int32_t getDisplayPosition() const;
-
-    /**
-     * @brief Calibration point shown to the operator, in the same frame as
-     * getDisplayPosition(). While session points are pending these are the
-     * session points relative to the center point when it is recorded, otherwise
-     * relative to the FIRST recorded point (so the first capture reads 0 and the
-     * others read their distance from it). Without a pending session these are
-     * the stored calibration (center = 0, limits from center).
-     * @return false if that point is not set
-     */
-    bool getDisplayPoint(CalPoint p, int32_t& pos) const;
-
-    /** @brief Fine position (display frame) / coarse raw recorded by the last successful capture */
+    /** @brief Position stored by the last successful capture, 0.1° */
     int32_t getLastCapturePos() const { return lastCapturePos_; }
-    int32_t getLastCaptureCoarse() const { return lastCaptureCoarse_; }
+    /** @brief The last successful capture lies beyond ±STEER_LWS_SAFE_RANGE */
+    bool isLastCaptureBeyondSafe() const { return lastCaptureBeyondSafe_; }
 
     /**
-     * @brief Load calibration from NVS (called by begin()).
+     * @brief Run the sensor zero-set: stop motion, cancel boot centering, ask the CAN
+     * controller for 0x7C0 [05 00] / [53 30], erase both limits once the reset frame is
+     * sent, and confirm within STEER_LWS_ZERO_CONFIRM_MS. No ignition/RPM/standstill
+     * precondition. Progress: getZeroState()/getZeroError().
+     * @return true if started (else getZeroRefusal(): "busy" or "can_unavailable")
      */
+    bool requestSensorZero();
+    const char* getZeroRefusal() const { return zeroRefusal_; }
+    ZeroState getZeroState() const { return zeroState_; }
+    /** @brief Failure reason of the last zero-set (nullptr unless FAILED) */
+    const char* getZeroError() const { return zeroError_; }
+    static const char* zeroStateToken(ZeroState s);
+
+    /** @brief Load the limits from NVS, migrating older layouts (called by begin()). */
     void loadCalibration();
 
     // === State ===
 
     bool isCalibrated() const { return calibrated_; }
 
-    /**
-     * @brief Combined sensor health: both sensors healthy and, when calibrated,
-     * the absolute turn recovered without a fine/coarse mismatch.
-     */
+    /** @brief Steering-angle sensor healthy (token `none` for the recovery streak) */
     bool isSensorOk() const { return sensorOk_; }
 
-    /** @brief True once the absolute turn has been recovered from the coarse sensor */
-    bool isTurnRecovered() const { return turnRecovered_; }
+    /** @brief Current position, 0.1°, firmware sign (+ = right); meaningful while isSensorOk() */
+    int32_t getPosition() const { return lws_.position(); }
 
-    /** @brief True while a runtime mismatch is latched (cleared by a completed calibration or reboot) */
-    bool isMismatchLatched() const { return mismatchLatched_; }
+    /** @brief Stored limits (0.1°, firmware sign), POS_UNSET if unset */
+    int32_t getLeftLimit() const { return limLeft_; }
+    int32_t getRightLimit() const { return limRight_; }
 
-    /**
-     * @brief Current unwrapped fine position in counts, SENSOR direction,
-     * relative to the captured center (or to the boot-time fine sample when no
-     * center is captured).
-     */
-    int32_t getPosition() const;
+    /** @brief Either stored limit lies beyond ±STEER_LWS_SAFE_RANGE (near the ~600° latch) */
+    bool isRangeWarning() const;
 
-    /** @brief True when a center pair is captured (its position is 0 by definition) */
-    bool hasCenter() const { return fineCenterRaw_ >= 0; }
+    /** @brief Fresh accepted frame with a valid angle: getAngleDeg() is meaningful */
+    bool hasAngle() const;
+    /** @brief Steering angle in degrees, firmware sign (+ = right) */
+    float getAngleDeg() const { return (float)getPosition() / 10.0f; }
+    /** @brief Fresh accepted frame with a valid speed byte: getRateDegS() is meaningful */
+    bool hasRate() const;
+    /** @brief Signed rotation rate, deg/s (+ = turning right) */
+    int32_t getRateDegS() const { return lws_.rateDegS(); }
 
-    /** @brief Stored limit positions (fine counts from center, sensor direction), POS_UNSET if unset */
-    int32_t getLeftLimit() const { return fineLeft_; }
-    int32_t getRightLimit() const { return fineRight_; }
-
-    /** @brief Last fine / coarse raw angle (0-4095), -1 while that sensor is faulted */
-    int32_t getFineRaw() const { return fineOk_ ? fineRaw_ : -1; }
-    int32_t getCoarseRaw() const { return coarseOk_ ? coarseRaw_ : -1; }
-
-    /** @brief Turn index of the fine sensor relative to the center turn */
-    int32_t getTurn() const { return turn_; }
-
-    /** @brief Derived coarse counts per fine-shaft turn (signed), NAN when not calibrated */
-    float getRatio() const { return calibrated_ ? ratio_ * 4096.0f : NAN; }
-
-    /** @brief True when getResidual() is meaningful (calibrated, both sensors healthy) */
-    bool hasResidual() const { return calibrated_ && fineOk_ && coarseOk_ && residualValid_; }
-
-    /** @brief Last fine-vs-coarse disagreement in fine counts */
-    int32_t getResidual() const { return residual_; }
-
-    /** @brief Current combined fault reason */
+    /** @brief Current fault reason */
     SensorFault getSensorFault() const { return fault_; }
 
-    /** @brief Telemetry token for a fault reason: none, fine_i2c, fine_magnet, coarse_i2c, coarse_magnet, mismatch, recovering */
-    static const char* faultToken(SensorFault f);
-
-    /** @brief Consecutive failed transactions of the coarse sensor (main.cpp I2C2 recovery) */
-    uint16_t getCoarseConsecutiveFailures() const { return coarse_.consecutiveFailures(); }
+    /** @brief Telemetry token: none, zeroing, can_down, timeout, range_latched, sensor_fault, not_calibrated, angle_invalid */
+    static const char* faultToken(SensorFault f) { return lwsFaultToken(f); }
 
     // === VESC driver telemetry (for the web/telemetry layer) ===
 
@@ -257,83 +187,36 @@ public:
     uint8_t getVescFault() const { return motor_.faultCode(); }
 
 private:
-    AS5600Sensor fine_;         // steering shaft (I2C1, may restart its own bus)
-    AS5600Sensor coarse_;       // geared-down shaft (I2C2, never restarts the bus)
     IMotorDriver& motor_;
+    CANController* can_;
+    LwsSensor lws_;
 
-    // Fine sensor state
-    int32_t fineRaw_;           // last good fine raw angle (0-4095)
-    bool fineOk_;               // debounced fine health
-    bool fineFresh_;            // the most recent fine sample was good
-    uint8_t fineBad_;           // consecutive bad fine samples (fault debounce)
-    SensorFault fineReason_;    // FINE_I2C / FINE_MAGNET
-    bool haveFine_;             // a previous good fine sample exists (turn tracking)
-    int32_t prevFineRaw_;       // previous good fine sample (wrap carry)
-    int32_t originRaw_;         // boot-time fine sample: position origin while no center is captured
-    int32_t turn_;              // signed turn counter relative to the center turn
-    int32_t sessionTurn_;       // fine wraps counted since boot (session frame, never recovered/reset by calibration)
-
-    // Coarse sensor state
-    int32_t coarseRaw_;         // last good coarse raw angle (0-4095)
-    bool coarseOk_;             // debounced coarse health
-    uint8_t coarseBad_;         // consecutive bad coarse samples (fault debounce)
-    SensorFault coarseReason_;  // COARSE_I2C / COARSE_MAGNET
-    uint32_t lastCoarsePollMs_;
-
-    // Cross-check / turn recovery
-    bool turnRecovered_;        // absolute turn known (recovered or defined by a capture)
-    uint8_t recoverCount_;      // consecutive agreeing recovery samples (STEER_TURN_RECOVER_SAMPLES)
-    int32_t recoverOffset_;     // candidate turn correction (k − turn_) shared by those samples
-    bool mismatch_;             // recovery samples keep disagreeing (transient: clears when they agree)
-    bool mismatchLatched_;      // runtime mismatch: cleared only by a completed calibration or reboot
-    uint8_t mismatchCount_;     // consecutive mismatching coarse samples (debounce)
-    int32_t residual_;          // last pos − expected(coarse), fine counts
-    bool residualValid_;
-
-    // Combined state
+    // Sensor health
     bool sensorOk_;
     SensorFault fault_;
+    bool firstFrameLogged_;      // raw sensor sign shown once at boot
+    uint32_t lastStateLogMs_;    // rate limit for the while-moving debug log
 
-    // Calibration pairs (stored)
-    int32_t fineCenterRaw_;     // 0-4095, -1 = unset
-    int32_t coarseCenterRaw_;   // 0-4095, -1 = unset
-    int32_t fineLeft_;          // fine counts from center (sensor dir), POS_UNSET = unset
-    int32_t coarseLeft_;        // 0-4095, -1 = unset
-    int32_t fineRight_;
-    int32_t coarseRight_;
-
-    // Calibration session slots (RAM only): points recorded this power cycle, in
-    // the session frame sessionPos = fineRaw + 4096·sessionTurn.
-    struct CalSlot {
-        bool valid;
-        int32_t sessionPos;
-        int32_t coarseRaw;
-    };
-    CalSlot calSlot_[CAL_POINTS];
-    int8_t calFirst_;           // first recorded slot (display reference without a center), -1 = none
-    bool calLost_;              // unfinished points were discarded by a sensor fault
-    const char* sessionError_;  // failed check of the last finalization attempt (nullptr = none)
-
-    // Calibration (derived by revalidateCalibration, never stored)
+    // Calibration (NVS v3)
+    int32_t limLeft_;            // 0.1°, firmware sign, < 0; POS_UNSET = unset
+    int32_t limRight_;           // 0.1°, firmware sign, > 0; POS_UNSET = unset
     bool calibrated_;
-    bool invert_;               // sensor counts decrease when the wheel moves right
-    int32_t relLeft_;           // normalized left limit relative to center (< 0)
-    int32_t relRight_;          // normalized right limit relative to center (> 0)
-    int32_t seam_;              // coarse raw value in the middle of the unused arc
-    float ratio_;               // coarse counts per fine count (signed)
-    int32_t linLeft_;           // seam-linearised coarse value at the left limit
-    const char* calError_;      // failed check of the ACTIVE calibration (nullptr = valid/incomplete)
 
     // Capture bookkeeping (for the web response)
     const char* captureError_;
     int32_t lastCapturePos_;
-    int32_t lastCaptureCoarse_;
+    bool lastCaptureBeyondSafe_;
 
-    // Position control state (normalized counts relative to center)
+    // Zero-set
+    ZeroState zeroState_;
+    const char* zeroError_;      // reason when FAILED
+    const char* zeroRefusal_;    // reason of the last refused requestSensorZero()
+    bool zeroLimitsErased_;      // limits erased for the running sequence
+
+    // Position control state (0.1°, firmware sign)
     int32_t targetRel_;
     bool isMoving_;
     uint32_t moveStartTime_;
-    uint32_t lastMoveLogTime_;   // rate limit for the while-moving debug log
 
     // Anti-stall boost (extra duty above the P term while progress stalls under load)
     int16_t dutyBoost_;
@@ -345,7 +228,7 @@ private:
     uint32_t lastJogRefresh_;
     uint32_t jogPulseUntil_;    // nudge mode: absolute ms to stop at (0 = normal hold-jog)
 
-    // Stall detection
+    // Stall detection (only while the sensor is healthy)
     int32_t lastStallPosition_;
     uint32_t lastStallCheckTime_;
     int8_t lastDriveDir_;        // sign of the last nonzero drive command (+1 right, -1 left)
@@ -359,12 +242,9 @@ private:
     // VESC driver health / monitors
     bool steerDriverOk_;         // mirrors driver link health (false until first good reply)
 
-    // One-shot boot centering (deferred until sensors + VESC link are up)
+    // One-shot boot centering (deferred until sensor + VESC link are up)
     bool bootCenterPending_;
     uint32_t bootCenterRequestMs_;
-
-    /** @brief Position normalized so that positive = right (control frame) */
-    int32_t relPosition() const;
 
     /** @brief True if a new move in direction d must be refused due to the stall latch */
     bool latchBlocks(int8_t d, uint32_t now) const;
@@ -376,61 +256,30 @@ private:
      *  @return false if the driver is down (caller should skip driving this cycle) */
     bool serviceDriver(uint32_t now);
 
-    /**
-     * @brief Sample the fine sensor (every call) and the coarse sensor (every
-     * STEER_COARSE_POLL_MS, or now if forceCoarse), update the combined state and
-     * stop the motor on fault.
-     * @return false while the combined sensor state is faulted
-     */
-    bool refreshSensors(uint32_t now, bool forceCoarse = false);
+    /** @brief Evaluate the LWS health (D5); on a new fault stop a closed-loop move only */
+    void refreshSensor(uint32_t now);
 
-    /** @brief One fine sample: debounce + incremental turn tracking */
-    void sampleFine();
-
-    /** @brief One coarse sample: debounce + turn recovery / consistency check */
-    void sampleCoarse();
-
-    /** @brief Turn recovery (D4) or runtime residual check (D5) on a fresh coarse sample */
-    void crossCheck();
-
-    /** @brief Forget a partially agreed turn recovery (any poll that does not agree) */
-    void resetRecovery() { recoverCount_ = 0; }
+    /** @brief Advance a running zero-set (limit erase, CAN result, confirmation) */
+    void serviceZero(uint32_t now);
+    void finishZero(bool ok, const char* reason);
 
     /** @brief Issue the pending boot centering once possible, or drop it on timeout */
-    void serviceBootCenter(uint32_t now, bool ready);
+    void serviceBootCenter(uint32_t now, bool driverReady);
 
-    /** @brief Recompute sensorOk_ / fault_ */
-    void updateCombinedState();
+    /** @brief Shared capture path for the two limits */
+    bool captureLimit(bool left);
 
-    /** @brief Seam-linearised coarse value: (c − seam) mod 4096 */
-    int32_t coarseLin(int32_t c) const { return (c - seam_) & 4095; }
-
-    /** @brief Expected fine position (sensor dir, from center) for a coarse raw value */
-    float expectedFine(int32_t coarseRaw) const;
-
-    /** @brief Shared capture path for the three calibration points */
-    bool capturePoint(CalPoint p);
-
-    /** @brief Current position in the session frame: fineRaw + 4096·sessionTurn */
-    int32_t sessionPos() const { return fineRaw_ + 4096 * sessionTurn_; }
-
-    /** @brief Session-frame reference for display: center slot, else first slot */
-    int32_t displayRef() const;
-
-    /** @brief Fill empty slots from the stored calibration when its absolute turn is trusted */
-    void prefillFromCalibration();
-
-    /** @brief Try to turn three valid slots into the active calibration; false + sessionError_ if rejected */
-    bool finalizeCalibration();
-
-    /** @brief Drop all session slots; byFault marks the loss for the UI (only if any slot existed) */
-    void discardCalSession(const char* why, bool byFault);
-
-    /** @brief Recompute calibrated_/invert_/relLeft_/relRight_/seam_/ratio_ and calError_ */
+    /** @brief Recompute calibrated_ from the limits */
     void revalidateCalibration();
 
-    /** @brief Persist the calibration pairs to NVS (v2 layout) */
-    void saveCalibration();
+    /** @brief Persist one limit key (v3 layout) */
+    void saveLimit(const char* key, int32_t value);
+
+    /** @brief Erase both limits (NVS + RAM) */
+    void eraseLimits();
+
+    /** @brief One debug line: angle, pos, token, fps (+ suffix) */
+    void logState(const char* suffix);
 };
 
 #endif // STEERING_CONTROLLER_H

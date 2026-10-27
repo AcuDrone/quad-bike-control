@@ -734,9 +734,10 @@ void MavlinkInterface::report(const StateReport& state) {
         // distinguishable from "peripheral gone".
         //
         //   STEER_POS -> MEASURED steering position, PERCENT of the CALIBRATED lock-to-lock
-        //                range: -100 = left lock, 0 = centre, +100 = right lock. NOT degrees —
-        //                the firmware holds no counts-to-degrees calibration anywhere. Its
-        //                validity gate is the AS5600's (sensor healthy AND calibrated), NOT the
+        //                range: -100 = left lock, 0 = centre (sensor zero), +100 = right lock.
+        //                NOT degrees, even though the sensor reports degrees: the autopilot
+        //                sees the scale it commands. Its validity gate is the CAN steering-
+        //                angle sensor's (healthy AND both limits stored), NOT the
         //                VESC's, so it stays live with the VESC unplugged and goes NaN with the
         //                VESC healthy but the steering uncalibrated. 0.0 is a REAL reading
         //                (wheels dead centre), which is exactly why "unknown" must be NaN.
