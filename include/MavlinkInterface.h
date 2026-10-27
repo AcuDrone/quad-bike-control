@@ -15,8 +15,9 @@
  * to the MAVLink network: HEARTBEAT plus a single EFI_STATUS from this component,
  * a VFR_HUD carrying hall-sensor ground speed, the steering VESC's telemetry plus the
  * applied steering speed-scale as exactly six NAMED_VALUE_FLOAT values (STEER_POS,
- * STEER_A, VESC_V at 5 Hz; VESC_TEMP, VESC_OK, STEER_SCA at 1 Hz), plus STATUSTEXT
- * for state transitions.
+ * STEER_A, VESC_V at 5 Hz; VESC_TEMP, VESC_OK, STEER_SCA at 1 Hz), the steering control
+ * mode as one NAMED_VALUE_INT (STEER_MODE, 1 Hz + on change), plus STATUSTEXT for state
+ * transitions (gear / ignition / fail-safe, and steering mode changes).
  *
  * Those six names are the project's ONE scoped exception to the "everything in the
  * field that names it, in a single EFI_STATUS" rule: the two standard ESC telemetry
@@ -149,6 +150,11 @@ public:
         // after rate limiting, 0..1. NEVER NaN: 1.0 is the definite answer "not scaling",
         // and a ground station must plot it as a flat line at one, not as a gap.
         float       steerScale;
+
+        // --- Steering control mode (STEER_MODE NAMED_VALUE_INT) ---------------------------
+        // SteerMode as selected by the vehicle layer this iteration: 0 = position, 1 = rate
+        // (no sensor, stick = rotation rate), 2 = blocked. Reporting only, never a control input.
+        uint8_t     steerMode;
         // Note: oil temperature is not available from the ECU and is not reported.
         // Ground speed is NOT carried in EFI_STATUS — it comes from the hall speed
         // sensor and is reported separately via VFR_HUD.
@@ -197,6 +203,13 @@ public:
 
     /** @brief True if a command frame arrived within MAVLINK_CMD_TIMEOUT_MS. */
     bool isSignalValid() const;
+
+    /**
+     * @brief Monotonic count of accepted SERVO_OUTPUT_RAW command frames since boot.
+     * A changed value means a fresh command; an unchanged one means getSteering() etc.
+     * only re-read the last decoded channels.
+     */
+    uint32_t getCommandCount() const { return totalCommands_; }
 
     /** @brief ms since the last command frame. */
     uint32_t getSignalAge() const;
@@ -345,6 +358,10 @@ private:
     // Inbound trip reset, latched here and performed by the vehicle layer
     bool     tripResetPending_;        // set by an accepted MAV_CMD_USER_1, cleared on consumption
 
+    // Steering control mode (STEER_MODE NAMED_VALUE_INT + mode STATUSTEXT)
+    uint8_t  lastSteerModeTx_;         // value last sent as STEER_MODE (0xFF = none yet)
+    uint8_t  lastSteerModeAnnounced_;  // mode last announced by STATUSTEXT (0xFF = baseline pending)
+
     // Change detection for STATUSTEXT
     char     lastGear_[4];
     char     lastIgnition_[12];
@@ -363,6 +380,9 @@ private:
     // exactly 10 bytes and a shorter literal would over-read. Takes DECODED scalars so this
     // header stays free of the mavlink C library headers.
     void sendNamedFloat(uint32_t nowMs, const char* name, float value);
+
+    // Send one NAMED_VALUE_INT (252) from this component, same zero-padding rule as above.
+    void sendNamedInt(uint32_t nowMs, const char* name, int32_t value);
 
     // Autopilot parameter subscription. Takes DECODED scalars (like handleServoOutputRaw) so
     // this header stays free of the mavlink C library headers. One handler for the whole table:

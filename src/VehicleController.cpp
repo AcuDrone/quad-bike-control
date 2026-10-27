@@ -25,6 +25,8 @@ VehicleController::VehicleController(SteeringController& steering,
       lastRailSampleMs_(0),
       lastRailWarnMs_(0),
       currentInputSource_(InputSource::FAILSAFE),
+      steerMode_(SteerMode::BLOCKED),   // the sensor starts unhealthy (no frames yet)
+      lastMavCmdCount_(0),
       failsafeApplied_(false),
       webControl_(false),
       currentBrakeTarget_(0.0f),
@@ -214,10 +216,17 @@ void VehicleController::update() {
             "[STEER] TEST speed override expired — back to the measured speed");
     }
 
+    // Steering control mode for this iteration — BEFORE the MAVLink commands, so a change of
+    // source (web takeover, FAILSAFE) or autopilot mode stops a rate drive in this same loop.
+    updateSteerMode();
+
     // Process MAVLink commands if MAVLink is active
     if (currentInputSource_ == InputSource::MAVLINK) {
         processMavlinkCommands();
     } else {
+        // No autopilot command path: keep the frame counter in step so a later return to
+        // MAVLink never treats an old frame as a fresh rate command.
+        lastMavCmdCount_ = mavlink_.getCommandCount();
         // The scale is a property of the AUTOPILOT command path alone. With the web or the
         // fail-safe in charge nothing is being scaled, so the reported scale must say so rather
         // than freeze at whatever the autopilot path last computed — a stale 0.18 on the portal
@@ -265,6 +274,11 @@ void VehicleController::update() {
     // Update steering position control (after canController_.update(): it sees this
     // iteration's angle frames)
     steering_.update();
+
+    // Re-derive the steering mode once more: steering_.update() may just have changed the
+    // sensor health, and the MAVLink report / web telemetry built after this loop must see
+    // a mode consistent with it (steer_mode is position exactly when steer_sensor_ok).
+    updateSteerMode();
 
     // Final answer to a pending "Set sensor zero"
     if (steerZeroResponsePortal_ != nullptr &&
@@ -481,6 +495,9 @@ String VehicleController::getFromGearString() const {
 void VehicleController::applyFailsafe() {
     if (currentInputSource_ == InputSource::FAILSAFE && !failsafeApplied_) {
         Debug::printlnFeature(DebugFeature::VEHICLE, "[FAILSAFE] Entering safe state");
+        // Centres with a healthy sensor; refused without one (never centres blind). A rate
+        // drive was already stopped this iteration: FAILSAFE makes the mode BLOCKED and
+        // updateSteerMode() ran stopRate() before this.
         steering_.setSteeringPercent(0.0f);
         throttle_.idle();
         webThrottleDemandPct_ = 0.0f;  // a demand that outlives the idle would reopen the throttle
@@ -504,7 +521,53 @@ void VehicleController::applyFailsafe() {
     }
 }
 
+void VehicleController::updateSteerMode() {
+    const bool sourceIsMavlink = (currentInputSource_ == InputSource::MAVLINK);
+    const bool apKnown = mavlink_.hasAutopilotMode();
+    const bool apManual = mavlink_.getAutopilotCustomMode() == ROVER_CUSTOM_MODE_MANUAL;
+    const SteerMode mode = steerModeSelect(steering_.isSensorOk(), sourceIsMavlink, apKnown, apManual);
+    if (mode == steerMode_) return;
+
+    // Reason: the sensor state when it is what changed, else the source, else the autopilot mode.
+    char reason[40];
+    if (mode == SteerMode::POSITION) {
+        snprintf(reason, sizeof(reason), "sensor OK");
+    } else if (steerMode_ == SteerMode::POSITION) {
+        snprintf(reason, sizeof(reason), "sensor %s",
+                 SteeringController::faultToken(steering_.getSensorFault()));
+    } else if (!sourceIsMavlink) {
+        snprintf(reason, sizeof(reason), "source %s",
+                 (currentInputSource_ == InputSource::WEB) ? INPUT_SOURCE_NAME_WEB : INPUT_SOURCE_NAME_FAILSAFE);
+    } else if (!apKnown) {
+        snprintf(reason, sizeof(reason), "autopilot mode unknown");
+    } else if (apManual) {
+        snprintf(reason, sizeof(reason), "autopilot MANUAL");
+    } else {
+        snprintf(reason, sizeof(reason), "autopilot mode %lu", (unsigned long)mavlink_.getAutopilotCustomMode());
+    }
+    Debug::printfFeature(DebugFeature::SERVO, "[STEER] mode: %s -> %s (%s)\n",
+                         steerModeToken(steerMode_), steerModeToken(mode), reason);
+
+    // Every change stops a rate-owned drive (a web jog/nudge and a closed-loop move are
+    // untouched) and every entry into RATE needs the stick centred once before motion.
+    if (steerMode_ == SteerMode::RATE) {
+        steering_.stopRate();
+    }
+    if (mode == SteerMode::RATE) {
+        steering_.disarmRate();
+        Debug::printlnFeature(DebugFeature::SERVO, "[STEER] rate mode: centre the stick to arm");
+    }
+    steerMode_ = mode;
+}
+
 void VehicleController::processMavlinkCommands() {
+    // Fresh-frame detection for the rate drive: the decoded channels are re-read every loop,
+    // but only a NEW SERVO_OUTPUT_RAW may refresh the rate jog (else a stale value would keep
+    // the motor running past STEER_JOG_TIMEOUT_MS).
+    const uint32_t cmdCount = mavlink_.getCommandCount();
+    const bool freshFrame = (cmdCount != lastMavCmdCount_);
+    lastMavCmdCount_ = cmdCount;
+
     if (!mavlink_.isSignalValid()) {
         return;  // Safety check
     }
@@ -513,8 +576,17 @@ void VehicleController::processMavlinkCommands() {
     // command and the actuator — the same place ArduPilot's own MANUAL_OPTIONS scaling sat,
     // only on the side of the link that owns the speed measurement. The web set_steering path
     // below is deliberately NOT scaled: it is a bench control with no road speed behind it.
+    // In RATE mode (no sensor, MANUAL) the same scaled value is a rotation-rate command,
+    // passed on once per fresh frame; POSITION and BLOCKED keep the percent path (refused
+    // without a sensor).
     float steeringPct = applySteeringScale(mavlink_.getSteering());
-    steering_.setSteeringPercent(steeringPct);
+    if (steerMode_ == SteerMode::RATE) {
+        if (freshFrame) {
+            steering_.setRateCommand(steeringPct);
+        }
+    } else {
+        steering_.setSteeringPercent(steeringPct);
+    }
 
     // Apply throttle — skipped when gear boost PID is active (PID overrides)
     if (!gearBoostActive_) {
@@ -612,6 +684,11 @@ void VehicleController::processGearCommand(const String& gearStr, WebPortal& web
 }
 
 void VehicleController::processSteeringCommand(float value, WebPortal& webPortal) {
+    if (!steering_.isSensorOk()) {
+        // Defence in depth: the web UI locks the slider while steer_mode != position.
+        webPortal.sendResponse(false, "Steering rejected: no steering sensor — use Jog/Nudge");
+        return;
+    }
     if (!steering_.setSteeringPercent(value)) {
         webPortal.sendResponse(false, "Steering rejected (not calibrated or sensor fault)");
         return;

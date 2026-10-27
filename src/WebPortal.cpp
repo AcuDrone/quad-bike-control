@@ -551,8 +551,8 @@ bool WebPortal::parseWebCommand(uint8_t* data, size_t len) {
 // ============================================================================
 
 String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
-    // Capacity headroom: ~80 top-level fields (incl. 4 steering-VESC fields, 18 steering
-    // angle-sensor fields, wheel_lock_fitted, the relay_test bitfield, the
+    // Capacity headroom: ~81 top-level fields (incl. 4 steering-VESC fields, 19 steering
+    // angle-sensor / mode fields (steer_mode: one more slot, static token stored by pointer), wheel_lock_fitted, the relay_test bitfield, the
     // 5 rail / board-I/O fields, the 12 hall-speed / limiter / distance fields and the
     // 4 steering speed-scaling fields, gear_code / gear_sensed / gear_codes_custom, steer_vin /
     // steer_vin_low / ecu_voltage_low, wifi_ssid / wifi_ip) + a 16-element
@@ -604,6 +604,7 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
         doc["steer_lws_fault_code"] = (const char*)nullptr;
     }
     doc["steer_sensor_fault"] = telemetry.steer_sensor_fault;   // static token, stored by pointer
+    doc["steer_mode"] = telemetry.steer_mode;                   // position | rate | blocked, static token
     doc["steer_sensor_ok"] = telemetry.steer_sensor_ok;
     doc["steer_calibrated"] = telemetry.steer_calibrated;
     doc["steer_range_warning"] = telemetry.steer_range_warning;

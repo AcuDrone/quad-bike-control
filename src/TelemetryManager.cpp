@@ -85,6 +85,7 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.steer_lws_adj = lws.statusAdj();
     telemetry.steer_lws_fault_code = lws.faultCode();
     telemetry.steer_sensor_fault = SteeringController::faultToken(steering.getSensorFault());
+    telemetry.steer_mode = steerModeToken(vehicleController_.getSteerMode());
     telemetry.steer_sensor_ok = steering.isSensorOk();
     telemetry.steer_calibrated = steering.isCalibrated();
     telemetry.steer_range_warning = steering.isRangeWarning();

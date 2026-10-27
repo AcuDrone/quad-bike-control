@@ -448,6 +448,11 @@ struct ServoChannelConfig {
 #define STEER_NUDGE_DUTY          150   // PWM duty for a precision nudge pulse (just above friction)
 #define STEER_NUDGE_MS            70    // ms - nudge pulse length (a degree or two per tap)
 
+// Sensorless rate mode (aztec, include/SteerRate.h): with the LWS unhealthy, the source MAVLink
+// and the autopilot in MANUAL/unknown, the stick is a rotation-rate command. It adds NO tunable:
+// it reuses RC_STEERING_DEADBAND (stop zone), STEER_PWM_MIN_DUTY / STEER_PWM_MAX_DUTY (duty =
+// MIN + (MAX − MIN)·d²) and STEER_JOG_TIMEOUT_MS (stop without a fresh SERVO_OUTPUT_RAW).
+
 // Re-command guard + stall latch (MAVLink streams steering at ~25 Hz; without
 // these the stall/move timers never elapse — the fixed re-command bug).
 #define STEER_RETARGET_TOLERANCE  50    // 0.1° (5.0°, ≈1% of a ~500° half-travel) — re-command within this of the current target is a no-op (timers keep running) — bench-tune
@@ -765,7 +770,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.4.0"
+#define FIRMWARE_VERSION "1.5.0"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

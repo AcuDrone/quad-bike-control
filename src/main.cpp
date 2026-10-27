@@ -348,6 +348,8 @@ void loop() {
     // The applied steering speed-scale (STEER_SCA). Always finite, 1.0 = not scaling — there is
     // no "unknown" state, so this is never gated and never NaN.
     report.steerScale       = vehicleController.getSteerScale();
+    // Steering control mode (STEER_MODE NAMED_VALUE_INT): 0 position, 1 rate, 2 blocked.
+    report.steerMode        = (uint8_t)vehicleController.getSteerMode();
     mavlinkInterface.report(report);
 
     // Broadcast telemetry to web clients

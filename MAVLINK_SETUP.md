@@ -15,7 +15,7 @@ mapping) and the **wire contract** (every outbound message field by field, with 
 | Link | UART1, 8N1, **115200** (`MAVLINK_BAUD_RATE`), channel `MAVLINK_COMM_0` |
 
 ArduPilot forwards **target-less** messages (`HEARTBEAT`, `EFI_STATUS`, `VFR_HUD`,
-`NAMED_VALUE_FLOAT`, `STATUSTEXT`, and
+`NAMED_VALUE_FLOAT`, `NAMED_VALUE_INT`, `STATUSTEXT`, and
 `VISION_POSITION_DELTA`, which it also consumes itself) from TELEM2 to every other MAVLink port, so
 they reach the GCS unchanged; `COMMAND_ACK` **is** addressed — to the requester — and rides the route
 ArduPilot learned from this component's own outbound traffic. Mission Planner will **not** populate
@@ -155,7 +155,7 @@ outputs must align with these indices (see `ServoChannelConfig` in `include/Cons
 
 ## Vehicle state reported back to the autopilot
 
-Ten outbound message types: six periodic, one reactive acknowledgement, three requests toward
+Eleven outbound message types: seven periodic, one reactive acknowledgement, three requests toward
 the autopilot. Scheduling is internal to `MavlinkInterface::report()`, called every loop iteration from
 `src/main.cpp`; the `StateReport` snapshot it consumes is declared in `include/MavlinkInterface.h`.
 
@@ -165,8 +165,9 @@ the autopilot. Scheduling is internal to `MavlinkInterface::report()`, called ev
 | `EFI_STATUS` | 225 | 5 Hz (`MAVLINK_REPORT_TX_MS` = 200 ms) | All engine/vehicle telemetry in one message | none — fields go NaN instead |
 | `VFR_HUD` | 74 | 5 Hz (same tick) | Hall ground speed + throttle for a HUD | none |
 | `NAMED_VALUE_FLOAT` | 251 | 5 Hz (same tick) ×3 + 1 Hz (`MAVLINK_STEER_SLOW_TX_MS` = 1000 ms) ×3 | The six steering values: `STEER_POS`, `STEER_A`, `VESC_V`, `VESC_TEMP`, `VESC_OK`, `STEER_SCA` | none — values go NaN instead (`VESC_OK` and `STEER_SCA` never do) |
+| `NAMED_VALUE_INT` | 252 | 1 Hz (`MAVLINK_STEER_SLOW_TX_MS`) + once immediately on every change | `STEER_MODE`: steering control mode, `0` = position, `1` = rate (no sensor), `2` = blocked | none — always sent, never any other value |
 | `VISION_POSITION_DELTA` | 11011 | ≤ 5 Hz (same tick) | Wheel odometry as an EKF3-fusable body-frame delta | **heavily gated** — silence over zeros |
-| `STATUSTEXT` | 253 | on change, ≥ 250 ms apart | Gear / ignition / fail-safe transitions | only on an actual change |
+| `STATUSTEXT` | 253 | on change, ≥ 250 ms apart | Gear / ignition / fail-safe transitions; steering mode changes | only on an actual change |
 | `COMMAND_ACK` | 77 | reactive | Answer to a `COMMAND_LONG` addressed exactly to 1/25 | broadcasts get **no** ACK |
 | `REQUEST_DATA_STREAM` | 66 | ≤ 1 per 3 s | Ask for `SERVO_OUTPUT_RAW` | while the command rate is below 10 Hz |
 | `COMMAND_LONG` (`SET_MESSAGE_INTERVAL`) | 76 | ≤ 1 per 3 s | Same request, modern form | same gate, sent together |
@@ -188,6 +189,13 @@ Value-to-name summary for the six steering `NAMED_VALUE_FLOAT` messages:
 | VESC FET temperature (°C) | `VESC_TEMP` | 1 Hz | VESC UART | 25 |
 | VESC link health (`1.0` / `0.0`) | `VESC_OK` | 1 Hz | VESC UART | 25 |
 | Applied steering speed-scale (`0`…`1`, `1` = not scaling) | `STEER_SCA` | 1 Hz | vehicle layer | 25 |
+
+Plus one `NAMED_VALUE_INT` (252), a different message id, so it does not widen the six-float
+exception:
+
+| Value | `name` | Rate | Source | Comp |
+|-------|--------|------|--------|------|
+| Steering control mode (`0` position, `1` rate, `2` blocked) | `STEER_MODE` | 1 Hz + on change | vehicle layer | 25 |
 
 ### `HEARTBEAT` (0) — 1 Hz
 
@@ -454,6 +462,23 @@ MAVLink side computes or influences the scale.
 The `time_boot_ms` field of all six carries the report tick's own `millis()`. It **wraps at 49.7
 days** — that is what the field is *defined* as (`uint32_t` ms since boot), not a defect to fix.
 
+#### `STEER_MODE` (`NAMED_VALUE_INT` 252)
+
+The steering control mode the vehicle layer selected in the latest loop iteration (see "Steering
+without the angle sensor (rate mode)" below):
+
+| Value | Mode | Meaning |
+|-------|------|---------|
+| `0` | `position` | Bosch LWS healthy: the stick commands a steering **position** (closed loop) |
+| `1` | `rate` | No sensor, MAVLink in charge, autopilot in MANUAL (or mode unknown): the stick commands a rotation **rate** |
+| `2` | `blocked` | No sensor in any other case (web control, fail-safe, autonomous mode): the stick steers nothing |
+
+Sent from 1/25 on the 1 Hz slow steering timer and **once immediately** on every change, whatever the
+sensor, VESC or link state; never any value but 0, 1 or 2. `time_boot_ms` is the tick's `millis()`.
+The name is exactly 10 characters and goes out **without** a NUL (trim on length). It is the only
+`NAMED_VALUE_INT` this component sends, and it is reporting only: nothing is stopped or interlocked
+by sending it. `STEER_POS` stays `NaN` in `rate` and `blocked`, because the sensor is unhealthy.
+
 #### Why `NAMED_VALUE_FLOAT` here, and only here
 
 **Because the standard ESC messages never reach a consumer.** An earlier revision of this firmware
@@ -673,6 +698,18 @@ Emitted **outside** the 200 ms telemetry tick — the change test runs on every 
 `"OFF"` / `"ACC"` / `"IGNITION"` / `"CRANKING"`, `"?"` if null. Example: `gear=N ign=IGNITION`, or
 `gear=N ign=OFF FAILSAFE`.
 
+**Steering mode changes** produce a separate `STATUSTEXT` through the **same** 250 ms limiter:
+
+| New mode | `text` | `severity` |
+|----------|--------|------------|
+| `rate` | `Steer: RATE mode (no sensor)` | `MAV_SEVERITY_WARNING` (4) |
+| `blocked` | `Steer: blocked (no sensor)` | `MAV_SEVERITY_WARNING` (4) |
+| `position` | `Steer: position mode` | `MAV_SEVERITY_INFO` (6) |
+
+The first `report()` after boot only takes the baseline (no text). A change held back by the limiter
+stays pending and is announced with the then-current mode on the next call past the window; the
+change is visible at once through `STEER_MODE` either way.
+
 **Trigger:** the first `report()` after boot, or any change of gear string, ignition string or the
 fail-safe flag. **Rate limit:** `MAVLINK_STATUSTEXT_MIN_MS` = 250 ms; the "last sent" strings are
 updated only when a message actually goes out, so a suppressed change is sent on the next call past
@@ -773,6 +810,31 @@ The 1 Hz `[MAV]` debug line reports `spdmax:<m/s> age:<ms> valid:<Y|N>`, separat
 (`nan`), "answered and fresh" (a 0 → 5000 ms age sawtooth) and "stale/link down" (`valid:N`). The
 vehicle layer logs `[SPEED] Speed limit: … m/s (… km/h) from SPEED_MAX` on each change, and
 `[SPEED] Speed limit: none …` when it stops limiting.
+
+## Steering without the angle sensor (rate mode)
+
+If the Bosch LWS steering-angle sensor becomes unhealthy (CAN unplugged, frame timeout, the ±600°
+latch, `not_calibrated`, …), position steering is impossible. The firmware then switches
+**automatically** — no switch, no parameter — to **rate mode** when the input source is MAVLink and
+the autopilot is in **MANUAL** (or its mode is unknown/stale). `STEER_MODE` = 1 and
+`Steer: RATE mode (no sensor)` announce it.
+
+- **MANUAL only.** In any known non-MANUAL mode, with the web in control, or in fail-safe the mode
+  is `blocked`: the stick steers nothing (web Jog/Nudge still work).
+- **Stick = rotation rate.** Inside the ±2 % deadband the motor stops; outside it the VESC duty is
+  `140 + 115 · d²` (d = deflection beyond the deadband, 0…1), so full stick = duty 255, + = right.
+  The speed scale (`STEER_SCA`) shrinks the deflection, and so the rate, above the base speed.
+- **Centre to arm.** After every entry into rate mode the stick must be seen centred once before the
+  wheels move. A held stick at the moment the sensor dies does not turn into a rotation.
+- **Release = stop within 500 ms.** Each new `SERVO_OUTPUT_RAW` refreshes the drive; without one for
+  `STEER_JOG_TIMEOUT_MS` (500 ms) the motor stops. A centred stick stops it on the next frame.
+- **No end-stop protection** except the VESC's own *Motor Current Max* clamp and *Absolute Max
+  Current* fault. There is no position, so no software limits, stall detection or range guard. Watch
+  the wheels.
+- **`SERVO_OUTPUT_RAW` must arrive at ≥ 5 Hz** (normally 25 Hz, requested by the firmware); below
+  about 2 Hz the drive stutters on the 500 ms timeout.
+- When the sensor is healthy again the drive stops, the wheels hold where they are, and the next
+  stick movement is a normal position command (`Steer: position mode`).
 
 ## Fail-safe
 

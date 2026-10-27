@@ -14,6 +14,17 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.0","date":"2026-10-28","uk":[
+"Без датчика кута кермо керується стіком як швидкістю: відхилення = обертання, центр = стоп; тільки в MANUAL",
+"Перед початком руху стік потрібно один раз поставити в центр",
+"Повзунок керма в веб-панелі блокується без датчика; Jog/Nudge працюють",
+"Повторне калібрування не потрібне"
+],"en":[
+"Without the angle sensor the stick steers by rate: deflection = rotation, centre = stop; MANUAL only",
+"Centre the stick once before the wheels will move",
+"The web steering slider is locked without the sensor; Jog/Nudge still work",
+"No recalibration required"
+]},
 {"version":"1.4.0","date":"2026-10-27","uk":[
 "Веб-панель перероблена на сервісну консоль: розділи Діагностика, Калібрування, Тести, Система",
 "Довідка до кожної картки за кнопкою ⓘ",

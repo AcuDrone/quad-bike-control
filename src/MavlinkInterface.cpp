@@ -25,6 +25,12 @@ static_assert(sizeof(NV_VESC_V)    - 1 <= 10, "NAMED_VALUE_FLOAT name field is 1
 static_assert(sizeof(NV_VESC_TEMP) - 1 <= 10, "NAMED_VALUE_FLOAT name field is 10 bytes");
 static_assert(sizeof(NV_VESC_OK)   - 1 <= 10, "NAMED_VALUE_FLOAT name field is 10 bytes");
 static_assert(sizeof(NV_STEER_SCA) - 1 <= 10, "NAMED_VALUE_FLOAT name field is 10 bytes");
+
+// The ONE NAMED_VALUE_INT (252) name: the steering control mode, 0 = position, 1 = rate,
+// 2 = blocked. A different message id from the six floats above, so it does not widen the
+// NAMED_VALUE_FLOAT exception. Exactly 10 characters: goes out WITHOUT a NUL.
+constexpr char NV_STEER_MODE[] = "STEER_MODE";
+static_assert(sizeof(NV_STEER_MODE) - 1 <= 10, "NAMED_VALUE_INT name field is 10 bytes");
 }  // namespace
 
 MavlinkInterface::MavlinkInterface()
@@ -53,6 +59,8 @@ MavlinkInterface::MavlinkInterface()
       lastSteerSlowTx_(0),
       lastStatustextTx_(0),
       tripResetPending_(false),
+      lastSteerModeTx_(0xFF),
+      lastSteerModeAnnounced_(0xFF),
       lastFailsafe_(false),
       stateInitialized_(false) {
     for (uint8_t i = 0; i < 16; i++) {
@@ -108,6 +116,8 @@ bool MavlinkInterface::begin(uint8_t rxPin, uint8_t txPin, uint8_t uartNum, uint
     modeRxMs_ = 0;
     tripResetPending_ = false; // no inbound command yet
     lastSteerSlowTx_ = 0;      // first VESC_TEMP / VESC_OK / STEER_SCA go out on the first report()
+    lastSteerModeTx_ = 0xFF;   // first STEER_MODE goes out on the first report()
+    lastSteerModeAnnounced_ = 0xFF;
 
     Debug::printfFeature(DebugFeature::MAVLINK,
         "[MAV] Initialized on UART%d RX=%d TX=%d @ %lu baud (MAVLink2)\n",
@@ -557,9 +567,11 @@ void MavlinkInterface::report(const StateReport& state) {
     // All vehicle telemetry in ONE EFI_STATUS message from this component (25), so the values
     // can never override one another (unlike same-named NAMED_VALUE_FLOAT, which share a single
     // message id and collide in name-agnostic stores). Read by the QuadBike MP plugin via a
-    // packet subscription. The steering VESC's five named floats below are the ONE scoped
+    // packet subscription. The steering VESC's six named floats below are the ONE scoped
     // exception to this rule, forced by a dialect gap rather than by preference, and they are
     // the only NAMED_VALUE_FLOAT this component ever sends — see that block for the argument.
+    // The steering control mode rides a separate NAMED_VALUE_INT (252), STEER_MODE — the only
+    // NAMED_VALUE_INT this component sends; it does not widen the float exception.
     //
     // PRINCIPLE: every value sits in the field that NAMES it, so the message is self-describing.
     // Only five fields are repurposed, and each is documented below.
@@ -795,7 +807,8 @@ void MavlinkInterface::report(const StateReport& state) {
     // The raw VESC mc_fault_code and the boot-cumulative reply / fault counters are deliberately
     // NOT on the link: six names is the whole set. The fault code stays reachable on the web
     // portal (steer_vesc_fault) and the serial console.
-    if (now - lastSteerSlowTx_ >= MAVLINK_STEER_SLOW_TX_MS) {
+    const bool steerSlowTick = (now - lastSteerSlowTx_ >= MAVLINK_STEER_SLOW_TX_MS);
+    if (steerSlowTick) {
         lastSteerSlowTx_ = now;
         sendNamedFloat(now, NV_VESC_TEMP, state.steerDriverOk ? state.steerFetTempC : NAN);
         sendNamedFloat(now, NV_VESC_OK,   state.steerDriverOk ? 1.0f : 0.0f);
@@ -807,6 +820,41 @@ void MavlinkInterface::report(const StateReport& state) {
             sca = 1.0f;
         }
         sendNamedFloat(now, NV_STEER_SCA, constrain(sca, 0.0f, 1.0f));
+    }
+
+    // STEER_MODE (NAMED_VALUE_INT 252): the steering control mode the vehicle layer selected
+    // this iteration — 0 = position (sensor healthy, closed loop), 1 = rate (no sensor, the
+    // stick commands a rotation rate, MANUAL only), 2 = blocked (no sensor, nothing steers
+    // but web jog/nudge). On the same 1 Hz slow timer (sent just above, so the tick has
+    // already decided steerSlowTick), and once immediately on every change.
+    // Sent UNCONDITIONALLY, whatever the sensor / VESC / link state. Reporting only: nothing
+    // here stops, interlocks or otherwise influences the steering.
+    {
+        uint8_t mode = state.steerMode;
+        if (mode > 2) mode = 2;   // never anything but 0/1/2 on the wire
+        if (steerSlowTick || mode != lastSteerModeTx_) {
+            lastSteerModeTx_ = mode;
+            sendNamedInt(now, NV_STEER_MODE, (int32_t)mode);
+        }
+
+        // STATUSTEXT on a mode change, through the shared MAVLINK_STATUSTEXT_MIN_MS limiter.
+        // The first report only takes the baseline. A change held back by the limiter stays
+        // pending and is announced with the then-current mode (STEER_MODE above already
+        // carries it either way).
+        if (lastSteerModeAnnounced_ == 0xFF) {
+            lastSteerModeAnnounced_ = mode;
+        } else if (mode != lastSteerModeAnnounced_ &&
+                   (now - lastStatustextTx_ >= MAVLINK_STATUSTEXT_MIN_MS)) {
+            lastStatustextTx_ = now;
+            lastSteerModeAnnounced_ = mode;
+            if (mode == 1) {
+                sendStatusText(MAV_SEVERITY_WARNING, "Steer: RATE mode (no sensor)");
+            } else if (mode == 2) {
+                sendStatusText(MAV_SEVERITY_WARNING, "Steer: blocked (no sensor)");
+            } else {
+                sendStatusText(MAV_SEVERITY_INFO, "Steer: position mode");
+            }
+        }
     }
 
     // STATUSTEXT on gear / ignition / fail-safe transitions (rate-limited).
@@ -946,6 +994,22 @@ void MavlinkInterface::sendNamedFloat(uint32_t nowMs, const char* name, float va
                     //                 is what this field is DEFINED as; not a defect to "fix".
         name10,     // name[10]     <- zero-padded above
         value);     // value        <- NaN means "this source is unhealthy", never "zero"
+    uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+    serial_->write(buf, len);
+}
+
+void MavlinkInterface::sendNamedInt(uint32_t nowMs, const char* name, int32_t value) {
+    // Same 10-byte zero-padding rule as sendNamedFloat(): the pack helper copies exactly 10 bytes.
+    char name10[10] = {0};
+    strncpy(name10, name, sizeof(name10));
+
+    mavlink_message_t msg;
+    uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+    mavlink_msg_named_value_int_pack(
+        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &msg,
+        nowMs,      // time_boot_ms <- the report tick's own millis()
+        name10,     // name[10]     <- zero-padded above
+        value);
     uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
     serial_->write(buf, len);
 }

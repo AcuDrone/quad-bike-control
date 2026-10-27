@@ -36,6 +36,8 @@ SteeringController::SteeringController(IMotorDriver& motor)
       jogDir_(0),
       lastJogRefresh_(0),
       jogPulseUntil_(0),
+      jogOwner_(JogOwner::NONE),
+      rateArmed_(false),
       lastStallPosition_(0),
       lastStallCheckTime_(0),
       lastDriveDir_(0),
@@ -109,6 +111,12 @@ void SteeringController::refreshSensor(uint32_t now) {
                              (unsigned)lws_.faultCode());
     }
 
+    if (!prevOk && sensorOk_ && jogDir_ != 0 && jogOwner_ == JogOwner::RATE) {
+        // Defence in depth: a rate drive never runs with a healthy sensor. The vehicle
+        // layer also calls stopRate() on RATE -> POSITION; the wheel holds where it is.
+        stop();
+    }
+
     if (prevOk && !sensorOk_) {
         // Faults take effect at once: a closed-loop move is stopped, but an active
         // jog or nudge continues open loop under its own refresh / pulse bounds.
@@ -139,6 +147,40 @@ void SteeringController::stop() {
     isMoving_ = false;
     jogDir_ = 0;
     jogPulseUntil_ = 0;
+    jogOwner_ = JogOwner::NONE;
+}
+
+void SteeringController::stopRate() {
+    if (jogDir_ != 0 && jogOwner_ == JogOwner::RATE) {
+        stop();
+    }
+}
+
+bool SteeringController::webJogActive(uint32_t now) const {
+    if (jogDir_ == 0 || jogOwner_ != JogOwner::WEB) return false;
+    if (jogPulseUntil_ != 0) return (int32_t)(now - jogPulseUntil_) < 0;   // nudge pulse running
+    return (now - lastJogRefresh_) < STEER_JOG_TIMEOUT_MS;                  // hold-jog refreshed
+}
+
+bool SteeringController::driveJog(int8_t d, uint8_t duty, JogOwner owner, uint32_t pulseMs) {
+    const uint32_t now = millis();
+    if (latchBlocks(d, now)) return false;   // stalled in this direction, still in cooldown
+    stallLatched_ = false;                   // accepted move clears the latch
+
+    if (duty < STEER_PWM_MIN_DUTY) duty = STEER_PWM_MIN_DUTY;   // below this the actuator stalls
+
+    isMoving_ = false;   // jog overrides position control
+    if (jogDir_ != d) {
+        lastStallPosition_ = getPosition();
+        lastStallCheckTime_ = now;
+    }
+    jogDir_ = d;
+    jogOwner_ = owner;
+    lastDriveDir_ = d;
+    lastJogRefresh_ = now;
+    jogPulseUntil_ = pulseMs ? now + pulseMs : 0;
+    motor_.setSpeed(jogDir_ * (int16_t)duty);
+    return true;
 }
 
 void SteeringController::jog(int8_t direction, uint8_t duty) {
@@ -147,26 +189,11 @@ void SteeringController::jog(int8_t direction, uint8_t duty) {
     if (direction != 0) bootCenterPending_ = false;   // operator command supersedes boot centering
 
     if (direction == 0) {
-        if (jogDir_ != 0) stop();
+        if (jogDir_ != 0) stop();   // stops whatever jog is active, a rate drive included
         return;
     }
 
-    int8_t d = (direction > 0) ? 1 : -1;
-    if (latchBlocks(d, millis())) return;   // stalled in this direction, still in cooldown
-    stallLatched_ = false;                  // accepted move clears the latch
-
-    if (duty < STEER_PWM_MIN_DUTY) duty = STEER_PWM_MIN_DUTY;   // below this the actuator stalls
-
-    isMoving_ = false;   // jog overrides position control
-    if (jogDir_ != d) {
-        lastStallPosition_ = getPosition();
-        lastStallCheckTime_ = millis();
-    }
-    jogDir_ = d;
-    lastDriveDir_ = d;
-    lastJogRefresh_ = millis();
-    jogPulseUntil_ = 0;
-    motor_.setSpeed(jogDir_ * (int16_t)duty);
+    driveJog((direction > 0) ? 1 : -1, duty, JogOwner::WEB, 0);
 }
 
 void SteeringController::nudge(int8_t direction) {
@@ -174,20 +201,30 @@ void SteeringController::nudge(int8_t direction) {
     if (direction == 0 || !steerDriverOk_) return;
     bootCenterPending_ = false;   // operator command supersedes boot centering
 
-    int8_t d = (direction > 0) ? 1 : -1;
-    if (latchBlocks(d, millis())) return;   // same-direction refusal during cooldown
-    stallLatched_ = false;
+    driveJog((direction > 0) ? 1 : -1, STEER_NUDGE_DUTY, JogOwner::WEB, STEER_NUDGE_MS);
+}
 
-    isMoving_ = false;   // nudge overrides position control
-    if (jogDir_ != d) {
-        lastStallPosition_ = getPosition();
-        lastStallCheckTime_ = millis();
+bool SteeringController::setRateCommand(float pct) {
+    // Rate driving is impossible while a position is available (defence in depth: the
+    // vehicle layer only calls this in RATE mode, which requires an unhealthy sensor).
+    if (sensorOk_ || !steerDriverOk_) return false;
+
+    const int16_t duty = steerRateDuty(pct, RC_STEERING_DEADBAND, STEER_PWM_MIN_DUTY, STEER_PWM_MAX_DUTY);
+    if (duty == 0) {
+        // Centred stick: arms the path and stops a rate drive — never a web jog/nudge.
+        rateArmed_ = true;
+        stopRate();
+        return true;
     }
-    jogDir_ = d;
-    lastDriveDir_ = d;
-    lastJogRefresh_ = millis();
-    jogPulseUntil_ = millis() + STEER_NUDGE_MS;
-    motor_.setSpeed(jogDir_ * STEER_NUDGE_DUTY);
+    if (!rateArmed_) return false;   // centre-to-arm pending
+
+    // A web jog/nudge has priority: rate commands neither stop nor override it.
+    if (webJogActive(millis())) return true;
+
+    const int8_t d = (duty > 0) ? 1 : -1;
+    if (!driveJog(d, (uint8_t)(duty > 0 ? duty : -duty), JogOwner::RATE, 0)) return false;
+    bootCenterPending_ = false;   // an accepted drive supersedes boot centering
+    return true;
 }
 
 void SteeringController::update() {
@@ -208,7 +245,13 @@ void SteeringController::update() {
     // Stall detection — any active drive (position move or jog), ONLY with a healthy
     // sensor. Sensorless jogs rely on the refresh timeout, the nudge pulse length and
     // the VESC current clamp / fault stop.
-    if (sensorOk_ && (isMoving_ || jogDir_ != 0)) {
+    // Rate mode: stall detection is bypassed BY DESIGN. A RATE-owned drive exists only
+    // while the sensor is unhealthy (setRateCommand() refuses otherwise, and
+    // refreshSensor() stops it on recovery), so this check, the anti-stall boost, the
+    // move timeout and the range guard below (closed loop only, isMoving_) never run
+    // for it. End stops are left to the VESC current limit; the VESC fault / comm stops
+    // in serviceDriver(), the stall latch and the jog refresh timeout still apply.
+    if (sensorOk_ && (isMoving_ || (jogDir_ != 0 && jogOwner_ != JogOwner::RATE))) {
         int32_t currentPos = getPosition();
         if (now - lastStallCheckTime_ >= STEER_STALL_TIMEOUT) {
             if (abs(currentPos - lastStallPosition_) < STEER_STALL_THRESHOLD) {
@@ -228,14 +271,18 @@ void SteeringController::update() {
     if (jogDir_ != 0) {
         if (now - lastStateLogMs_ >= 250) {
             lastStateLogMs_ = now;
-            logState(jogPulseUntil_ != 0 ? " nudge" : (sensorOk_ ? " jog" : " jog (sensorless)"));
+            logState(jogOwner_ == JogOwner::RATE ? " rate"
+                     : jogPulseUntil_ != 0 ? " nudge"
+                     : (sensorOk_ ? " jog" : " jog (sensorless)"));
         }
         if (jogPulseUntil_ != 0 && (int32_t)(now - jogPulseUntil_) >= 0) {
             stop();   // nudge pulse complete
             return;
         }
         if (now - lastJogRefresh_ >= STEER_JOG_TIMEOUT_MS) {
-            Debug::printlnFeature(DebugFeature::SERVO, "[STEER] Jog timeout — stopping");
+            Debug::printlnFeature(DebugFeature::SERVO, jogOwner_ == JogOwner::RATE
+                                  ? "[STEER] Rate timeout (no fresh frame) — stopping"
+                                  : "[STEER] Jog timeout — stopping");
             stop();
         }
         return;

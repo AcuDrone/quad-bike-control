@@ -651,7 +651,7 @@
             </div>
             <!-- Steering state (read-only diagnostics, tile grid like Telemetry / CAN) -->
             <div class="card">
-                <h2 data-i18n="card_steer_state">🎯 Steering: state</h2>
+                <h2 class="card-title"><span data-i18n="card_steer_state">🎯 Steering: state</span><button type="button" class="help-btn" onclick="openHelp('steer_state_help,steer_rate_help', 'card_steer_state')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
                 <div class="telemetry-grid">
                     <div class="telemetry-item">
                         <div class="telemetry-label" data-i18n="sd_angle">Angle</div>
@@ -675,6 +675,10 @@
                         <div class="telemetry-label" data-i18n="sd_sensor">Sensor</div>
                         <div class="telemetry-value" style="font-size: 1.3em;"><span data-bind="steer-sensor-status">--</span></div>
                         <div class="sd-sub" style="color: var(--danger);"><span data-bind="steer-sensor-fault"></span></div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="sd_mode">Mode</div>
+                        <div class="telemetry-value" style="font-size: 1.3em;"><span id="steer-mode">--</span></div>
                     </div>
                     <div class="telemetry-item">
                         <div class="telemetry-label" data-i18n="sd_cal">Calibration</div>
@@ -1063,7 +1067,7 @@
             <div class="main-grid">
             <!-- Manual Control -->
             <div class="card">
-                <h2 class="card-title"><span data-i18n="card_manual_control">🎮 Manual Control</span><button type="button" class="help-btn" onclick="openHelp('web_control_hint', 'card_manual_control')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <h2 class="card-title"><span data-i18n="card_manual_control">🎮 Manual Control</span><button type="button" class="help-btn" onclick="openHelp('web_control_hint,steer_lock_help', 'card_manual_control')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
                 <div id="control-warning" class="warning" data-i18n="warn_mav_active" style="display: none;">
                     MAVLink control is active. Manual control disabled.
                 </div>
@@ -1096,6 +1100,7 @@
                         <button id="steer-test-center" onclick="steerTest(0)" data-i18n="steer_test_center" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">Center</button>
                         <button id="steer-test-right" onclick="steerTest(100)" data-i18n="steer_test_right" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">Right ⟹</button>
                     </div>
+                    <div id="steer-lock-hint" style="display: none; margin-bottom: 8px; font-size: 0.8em; color: var(--warning);"></div>
                 </div>
 
                 <div class="slider-container">
@@ -1293,6 +1298,9 @@
                 btn_take_control: 'Take Control',
                 btn_release_control: 'Release Control',
                 web_control_hint: 'Engages web control — MAVLink is ignored until released or all browsers disconnect.',
+                steer_lock_help: 'The steering slider and the <b>Left / Center / Right</b> buttons are locked while the steering angle sensor is unhealthy (steering mode is not <b>Position</b>): a percent command needs the angle, so the firmware would refuse it anyway. Without the sensor use <b>Jog / Nudge</b> in Calibration, or steer with the autopilot stick in MANUAL (rate mode). Throttle, brake, gear and Take Control are not affected.',
+                steer_lock_rate: 'No angle sensor: the stick steers by rate (MANUAL only). Slider disabled; Jog/Nudge still work.',
+                steer_lock_blocked: 'No angle sensor: slider disabled, use Jog/Nudge in Calibration.',
                 h_gear_selection: 'Gear Selection',
                 lbl_servo: 'Servo:',
                 steer_test_left: '⟸ Left',
@@ -1581,6 +1589,7 @@
                 att_steer_vin: 'VESC voltage low (%s V)',
                 att_can: 'No ECU link',
                 att_ecu_volt: '12 V voltage low (%s V)',
+                att_steer_rate: 'Steering without sensor: rate mode — the stick sets the rotation speed, centre = stop.',
 
                 // Steering: state card (Diagnostics)
                 card_steer_state: '🎯 Steering: state',
@@ -1590,6 +1599,12 @@
                 sd_left: 'Limit L',
                 sd_right: 'Limit R',
                 sd_sensor: 'Sensor',
+                sd_mode: 'Mode',
+                steer_mode_position: 'Position',
+                steer_mode_rate: 'Rate (no sensor)',
+                steer_mode_blocked: 'Blocked',
+                steer_state_help: 'Read-only state of the steering: Bosch LWS angle sensor, stored limits and the steering VESC. <b>Mode</b> shows how the autopilot stick is used: <b>Position</b> — the stick sets the wheel angle (normal, sensor healthy).',
+                steer_rate_help: 'Without a healthy angle sensor the mode becomes <b>Rate (no sensor)</b> — only while the autopilot is in <b>MANUAL</b> (or its mode is unknown): stick deflection = direction and speed of rotation, centre = stop. After entering this mode <b>centre the stick once</b> to arm it. If no stick frames arrive the wheel stops within 500 ms. There is <b>no end-stop protection</b> except the VESC current limit — watch the wheels and centre the stick near the lock. In other autopilot modes, under web control and in failsafe the mode is <b>Blocked</b>: no motion; the web slider is locked, Jog/Nudge still work. Position mode returns by itself once the sensor recovers.',
                 sd_cal: 'Calibration',
                 sd_driver: 'VESC driver',
                 sd_zero: 'Sensor zero',
@@ -1655,6 +1670,9 @@
                 btn_take_control: 'Взяти керування',
                 btn_release_control: 'Звільнити керування',
                 web_control_hint: "Вмикає веб-керування — MAVLink ігнорується, доки не звільните або всі браузери не від'єднаються.",
+                steer_lock_help: 'Повзунок керма та кнопки <b>Вліво / Центр / Вправо</b> заблоковані, поки датчик кута керма несправний (режим керма не <b>Позиція</b>): команда у відсотках потребує кута, тож прошивка її все одно відхилить. Без датчика використовуйте <b>Jog / Nudge</b> у Калібруванні або кермуйте стіком автопілота в MANUAL (режим швидкості). Газ, гальмо, передачі та «Взяти керування» працюють як раніше.',
+                steer_lock_rate: 'Без датчика кута кермо керується стіком як швидкістю (тільки MANUAL). Повзунок вимкнено, Jog/Nudge працюють.',
+                steer_lock_blocked: 'Немає датчика кута: повзунок вимкнено, використовуйте Jog/Nudge у Калібруванні.',
                 h_gear_selection: 'Вибір передачі',
                 lbl_servo: 'Серво:',
                 steer_test_left: '⟸ Вліво',
@@ -1942,6 +1960,7 @@
                 att_steer_vin: 'Напруга VESC низька (%s В)',
                 att_can: 'Немає зв’язку з ЕБК',
                 att_ecu_volt: 'Напруга 12 В низька (%s В)',
+                att_steer_rate: 'Кермо без датчика: режим швидкості — стік задає швидкість, центр = стоп.',
 
                 // Steering: state card (Diagnostics)
                 card_steer_state: '🎯 Кермо: стан',
@@ -1951,6 +1970,12 @@
                 sd_left: 'Межа Л',
                 sd_right: 'Межа П',
                 sd_sensor: 'Датчик',
+                sd_mode: 'Режим',
+                steer_mode_position: 'Позиція',
+                steer_mode_rate: 'Швидкість (без датчика)',
+                steer_mode_blocked: 'Заблоковано',
+                steer_state_help: 'Стан керма лише для читання: датчик кута Bosch LWS, збережені межі та VESC керма. <b>Режим</b> показує, як використовується стік автопілота: <b>Позиція</b> — стік задає кут коліс (норма, датчик справний).',
+                steer_rate_help: 'Без справного датчика кута режим стає <b>Швидкість (без датчика)</b> — лише коли автопілот у <b>MANUAL</b> (або його режим невідомий): відхилення стіка = напрям і швидкість обертання, центр = стоп. Після входу в цей режим <b>один раз відцентруйте стік</b>, щоб його активувати. Якщо кадри стіка не надходять, кермо зупиняється протягом 500 мс. <b>Захисту від упорів немає</b>, окрім обмеження струму VESC — стежте за колесами й центруйте стік біля упору. В інших режимах автопілота, при веб-керуванні та у failsafe режим <b>Заблоковано</b>: руху немає; повзунок у вебі заблоковано, Jog/Nudge працюють. Режим «Позиція» повертається сам, щойно датчик відновиться.',
                 sd_cal: 'Калібрування',
                 sd_driver: 'Драйвер VESC',
                 sd_zero: 'Нуль датчика',
@@ -2067,6 +2092,7 @@
         let currentInputSource = 'FAILSAFE';
         let lastControlsInputSource = null;
         let controlsEnabled = false;
+        let lastSteerMode = null;   // last received telemetry steer_mode (null = never received)
 
         // Track which controls are being actively used
         let activeControls = {
@@ -2509,6 +2535,18 @@
                 setBound('steer-sensor-fault', (tok && tok !== 'none') ? '(' + t('steer_fault_' + tok) + ')' : '',
                          { color: 'var(--danger)' });
             }
+            {
+                // Steering mode tile: position / rate / blocked; missing or unknown → '--' (D9)
+                const modeEl = document.getElementById('steer-mode');
+                const m = data.steer_mode;
+                const modeColor = { position: 'var(--success)', rate: 'var(--danger)', blocked: 'var(--warning)' };
+                if (modeEl) {
+                    const known = typeof m === 'string' && Object.prototype.hasOwnProperty.call(modeColor, m);
+                    modeEl.textContent = known ? t('steer_mode_' + m) : '--';
+                    modeEl.style.color = known ? modeColor[m] : '';
+                }
+                if (data.steer_mode !== undefined) lastSteerMode = (typeof m === 'string') ? m : null;
+            }
             if (data.steer_sensor_ok !== undefined) {
                 setBound('steer-sensor-status', data.steer_sensor_ok ? t('sensor_ok') : t('sensor_fault'),
                          { color: data.steer_sensor_ok ? 'var(--success)' : 'var(--danger)' });
@@ -2658,10 +2696,18 @@
             gearButtons.forEach(btn => btn.disabled = !controlsEnabled);
 
             // Enable/disable sliders
-            document.getElementById('steering-slider').disabled = !controlsEnabled;
-            document.getElementById('steer-test-left').disabled = !controlsEnabled;
-            document.getElementById('steer-test-center').disabled = !controlsEnabled;
-            document.getElementById('steer-test-right').disabled = !controlsEnabled;
+            // Percent steering also needs the angle sensor: locked while steer_mode is not 'position' (D10)
+            const steerLocked = typeof lastSteerMode === 'string' && lastSteerMode !== 'position';
+            const steerEnabled = controlsEnabled && !steerLocked;
+            document.getElementById('steering-slider').disabled = !steerEnabled;
+            document.getElementById('steer-test-left').disabled = !steerEnabled;
+            document.getElementById('steer-test-center').disabled = !steerEnabled;
+            document.getElementById('steer-test-right').disabled = !steerEnabled;
+            const lockHint = document.getElementById('steer-lock-hint');
+            if (lockHint) {
+                lockHint.textContent = steerLocked ? t(lastSteerMode === 'rate' ? 'steer_lock_rate' : 'steer_lock_blocked') : '';
+                lockHint.style.display = steerLocked ? 'block' : 'none';
+            }
             document.getElementById('throttle-slider').disabled = !controlsEnabled;
             document.getElementById('brake-slider').disabled = !controlsEnabled;
         }
@@ -3721,6 +3767,7 @@
             const items = [];   // [text, 'bad' | 'warn']
             const vescFault = data.steer_vesc_fault || 0;
             if (data.steer_sensor_ok === false) items.push([t('att_sensorless'), 'bad']);
+            if (data.steer_mode === 'rate') items.push([t('att_steer_rate'), 'bad']);
             if (data.steer_driver_ok === false) items.push([t('att_vesc', t('driver_down')), 'bad']);
             else if (vescFault) items.push([t('att_vesc', t('driver_fault') + ' ' + vescFault), 'bad']);
             if (data.steer_range_warning === true) items.push([t('att_range'), 'warn']);

@@ -5,6 +5,7 @@
 #include "Constants.h"
 #include "IMotorDriver.h"
 #include "LwsSensor.h"
+#include "SteerRate.h"
 
 class CANController;
 
@@ -28,6 +29,19 @@ class CANController;
  *  - Range guard: percent-driven (closed-loop) targets are clamped to the limits, then to
  *    ±STEER_LWS_SAFE_RANGE, and a closed-loop move driving outward at |pos| ≥ that range
  *    is stopped. Jog, nudge and captures are not guarded.
+ *  - Steering modes (selected by VehicleController, see SteerRate.h): POSITION while the
+ *    sensor is healthy (closed loop, setSteeringPercent()); RATE while it is not, the
+ *    source is MAVLink and the autopilot is in MANUAL/unknown; BLOCKED otherwise.
+ *  - Rate drive (RATE mode only): setRateCommand(pct) is a continuous jog with variable
+ *    duty (steerRateDuty(): deadband → 0, else 140..255 quadratic). Refused while the
+ *    sensor is healthy, the VESC is down, or the path is disarmed (centre-to-arm: one
+ *    zero-duty command arms it after disarmRate()). It reuses the jog refresh timeout
+ *    (STEER_JOG_TIMEOUT_MS), the stall latch and the VESC fault / comm stops; position
+ *    stall detection, boost, move timeout and range guard never apply to it.
+ *  - Jog ownership: an active jog is owned by WEB (jog()/nudge()) or RATE
+ *    (setRateCommand()). Rate commands never stop or override a WEB jog/nudge; a zero
+ *    rate command and stopRate() stop only a RATE-owned drive; jog(0) and stop() stop
+ *    any jog.
  */
 class SteeringController {
 public:
@@ -36,6 +50,9 @@ public:
 
     /** @brief Sentinel for an unset limit position (positions may be negative) */
     static constexpr int32_t POS_UNSET = INT32_MIN;
+
+    /** @brief Owner of the active open-loop jog drive */
+    enum class JogOwner : uint8_t { NONE, WEB, RATE };
 
     /** @brief Zero-set progress (telemetry token via zeroStateToken()) */
     enum class ZeroState : uint8_t { IDLE, RUNNING, OK, FAILED };
@@ -107,6 +124,31 @@ public:
      * Same gating as jog().
      */
     void nudge(int8_t direction);
+
+    // === Sensorless rate drive (RATE mode) ===
+
+    /**
+     * @brief Rate command from the autopilot stick (−100..+100, + = right), RATE mode only.
+     * Duty = steerRateDuty(pct, RC_STEERING_DEADBAND, STEER_PWM_MIN_DUTY, STEER_PWM_MAX_DUTY),
+     * driven as a RATE-owned jog refreshed by every call (stops after STEER_JOG_TIMEOUT_MS
+     * without one). Duty 0 arms the path and stops a RATE-owned drive only. Ignored
+     * (returns true) while a WEB jog/nudge is active.
+     * @return false if refused (sensor healthy, VESC down, disarmed with nonzero duty,
+     *         direction stall-latched)
+     */
+    bool setRateCommand(float pct);
+
+    /** @brief Stop a RATE-owned drive at once; a WEB jog/nudge or a closed-loop move is untouched */
+    void stopRate();
+
+    /** @brief Disarm the rate path: nonzero rate commands are refused until a zero one */
+    void disarmRate() { rateArmed_ = false; }
+
+    /** @brief The rate path has seen a centred stick since the last disarmRate() */
+    bool isRateArmed() const { return rateArmed_; }
+
+    /** @brief Owner of the active jog (NONE when no jog/nudge/rate drive runs) */
+    JogOwner getJogOwner() const { return jogDir_ != 0 ? jogOwner_ : JogOwner::NONE; }
 
     /**
      * @brief Store the current position as the left / right limit and save it at once.
@@ -227,6 +269,8 @@ private:
     int8_t jogDir_;
     uint32_t lastJogRefresh_;
     uint32_t jogPulseUntil_;    // nudge mode: absolute ms to stop at (0 = normal hold-jog)
+    JogOwner jogOwner_;          // who started the active jog (WEB jog/nudge or RATE)
+    bool rateArmed_;             // centre-to-arm: a zero rate command was seen since disarmRate()
 
     // Stall detection (only while the sensor is healthy)
     int32_t lastStallPosition_;
@@ -245,6 +289,17 @@ private:
     // One-shot boot centering (deferred until sensor + VESC link are up)
     bool bootCenterPending_;
     uint32_t bootCenterRequestMs_;
+
+    /**
+     * @brief Shared open-loop jog start/refresh (stall-latch check, lastDriveDir_,
+     * lastJogRefresh_, setSpeed(d·duty)). Caller has checked the VESC link.
+     * @param pulseMs 0 = hold-jog (refresh timeout), else nudge pulse length
+     * @return false if refused by the stall latch
+     */
+    bool driveJog(int8_t d, uint8_t duty, JogOwner owner, uint32_t pulseMs);
+
+    /** @brief A WEB-owned jog (refreshed within STEER_JOG_TIMEOUT_MS) or nudge (pulse running) is active */
+    bool webJogActive(uint32_t now) const;
 
     /** @brief True if a new move in direction d must be refused due to the stall latch */
     bool latchBlocks(int8_t d, uint32_t now) const;

@@ -280,6 +280,13 @@ public:
     float getSteerScale() const { return steerScaleApplied_; }
 
     /**
+     * @brief Steering control mode selected in the latest update() (SteerRate.h):
+     * POSITION while the steering sensor is healthy; RATE while it is not, the source is
+     * MAVLink and the autopilot is in MANUAL (or its mode is unknown/stale); BLOCKED otherwise.
+     */
+    SteerMode getSteerMode() const { return steerMode_; }
+
+    /**
      * @brief Live bench test-speed override in m/s, 0 when none is in force.
      * RAM only, never persisted, and it reaches NOTHING but the steering-scale calculation.
      */
@@ -372,6 +379,10 @@ private:
 
     // State tracking
     InputSource currentInputSource_;
+
+    // Steering control mode (change add-aztec-steering-rate-mode)
+    SteerMode steerMode_;           // re-derived every update() before the MAVLink commands
+    uint32_t lastMavCmdCount_;      // MavlinkInterface::getCommandCount() seen last iteration
     bool failsafeApplied_;
     bool webControl_;   // latched web-control override (MAVLink ignored while true)
 
@@ -442,6 +453,13 @@ private:
      * @brief Apply fail-safe commands (center steering, idle throttle, stop actuators)
      */
     void applyFailsafe();
+
+    /**
+     * @brief Re-derive steerMode_ (steerModeSelect()) and apply the transition actions:
+     * one serial line per change, stopRate() when leaving RATE, disarmRate() when entering it.
+     * Called every update() before processMavlinkCommands().
+     */
+    void updateSteerMode();
 
     /**
      * @brief Process MAVLink commands from the autopilot

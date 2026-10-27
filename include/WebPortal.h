@@ -80,6 +80,7 @@ public:
         bool steer_lws_adj;       // Last accepted frame: adjusted bit
         uint8_t steer_lws_fault_code; // Last accepted frame: fault code 0-15 (9 = range latch)
         const char* steer_sensor_fault; // none | zeroing | can_down | timeout | range_latched | sensor_fault | not_calibrated | angle_invalid
+        const char* steer_mode;   // position | rate | blocked (static token, SteerRate.h)
         bool steer_sensor_ok;     // Sensor healthy (token none for STEER_LWS_RECOVER_FRAMES frames)
         bool steer_calibrated;    // True when both limits are stored and valid
         bool steer_range_warning; // Either stored limit beyond ±STEER_LWS_SAFE_RANGE (near the ~600° latch)
