@@ -89,6 +89,7 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.steer_sensor_ok = steering.isSensorOk();
     telemetry.steer_calibrated = steering.isCalibrated();
     telemetry.steer_range_warning = steering.isRangeWarning();
+    telemetry.steer_sensor_inv = steering.isSensorInverted();
     telemetry.steer_lws_fps = lws.fps();
     telemetry.steer_lws_crc_err = lws.crcErrors();
     telemetry.steer_lws_cnt_err = lws.counterErrors();

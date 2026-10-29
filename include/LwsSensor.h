@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "Lws305.h"
+#include "SteerSensorDir.h"
 
 /**
  * @brief Steering-angle sensor fault token (design D5), in priority order.
@@ -68,15 +69,26 @@ public:
 
     int16_t angleRaw() const { return lwsAngleRaw(last_); }         // sensor sign (+ = left), 0.1°
     bool angleValid() const { return haveFrame_ && lwsAngleValid(last_); }
-    /** @brief Firmware position: the NEGATED sensor angle (+ = right), 0.1° */
-    int32_t position() const { return -(int32_t)lwsAngleRaw(last_); }
+    /**
+     * @brief Firmware position (+ = right), 0.1°: the NEGATED sensor angle for a normal
+     * mount, the angle unchanged when the sensor is mounted mirrored (setInverted(true)).
+     */
+    int32_t position() const { return steerSensorPosition(lwsAngleRaw(last_), inv_); }
     bool statusOk() const { return lwsOk(last_); }
     bool statusCal() const { return lwsCal(last_); }
     bool statusAdj() const { return lwsAdj(last_); }
     uint8_t faultCode() const { return lwsFault(last_); }
     bool speedValid() const { return haveFrame_ && lwsSpeedValid(last_); }
-    /** @brief Signed rotation rate, deg/s, firmware sign (+ = turning right = clockwise) */
-    int32_t rateDegS() const { return lwsDirCW(last_) ? (int32_t)lwsSpeedDegS(last_) : -(int32_t)lwsSpeedDegS(last_); }
+    /**
+     * @brief Signed rotation rate, deg/s, firmware sign (+ = turning right): +speed for
+     * clockwise on a normal mount, negated when the sensor is mounted mirrored.
+     */
+    int32_t rateDegS() const { return steerSensorRate((int32_t)lwsSpeedDegS(last_), lwsDirCW(last_), inv_); }
+
+    // --- Sensor direction (normal / mirrored mount) ---------------------------
+    /** @brief Mirrored mount: position() and rateDegS() keep the sensor's sign. Default false. */
+    void setInverted(bool inv) { inv_ = inv; }
+    bool isInverted() const { return inv_; }
 
     // --- Counters (cumulative since boot) --------------------------------------
     uint32_t crcErrors() const { return crcErr_; }
@@ -107,6 +119,8 @@ private:
     uint8_t goodStreak_;       // consecutive accepted frames whose own token is NONE
     LwsFault fault_;
     bool healthy_;
+
+    bool inv_ = false;         // sensor mounted mirrored (owned by SteeringController / NVS)
 
     /** @brief Token derived from the status bits / angle of the last accepted frame */
     LwsFault frameFault() const;

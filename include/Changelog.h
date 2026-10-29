@@ -14,6 +14,15 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.1","date":"2026-10-29","uk":[
+"Напрямок датчика кута визначається автоматично при калібруванні лімітів; дзеркальний монтаж більше не потребує перемонтажу",
+"Після першого ліміту перевірте: Jog ▶ збільшує кут",
+"Повторне калібрування не потрібне"
+],"en":[
+"Steering sensor direction is detected at limit capture; a mirrored mount no longer needs re-fitting",
+"After the first limit, check that Jog ▶ increases the angle",
+"No recalibration required"
+]},
 {"version":"1.5.0","date":"2026-10-28","uk":[
 "Без датчика кута кермо керується стіком як швидкістю: відхилення = обертання, центр = стоп; тільки в MANUAL",
 "Перед початком руху стік потрібно один раз поставити в центр",

@@ -83,8 +83,8 @@ it. Cards are shown in one column.
   `include/Constants.h`); the page only shows the flags the firmware sends.
 - **Telemetry**: gear and its sensor code, servo position, brake, throttle (µs), steering, speed,
   MAVLink link.
-- **Кермо: стан / Steering: state**: tiles for angle, rate, left/right limits, sensor state,
-  calibration, VESC driver, sensor zero, motor current, FET temperature and VESC input voltage, plus
+- **Кермо: стан / Steering: state**: tiles for angle, rate, left/right limits, sensor state (with
+  the "mirrored" marker for a mirrored sensor mount), calibration, VESC driver, sensor zero, motor current, FET temperature and VESC input voltage, plus
   one line of raw LWS status bits and error counters.
 - **Vehicle Data (CAN)**: engine data from the ECU, engine hours and trip hours, CAN status, and
   "Probe ECU" with its results.
@@ -94,7 +94,10 @@ it. Cards are shown in one column.
 
 **Калібрування / Calibration**:
 - **Steering calibration**: jog / nudge / jog speed, Set Left, Set Right, Set sensor zero, the
-  angle, the limits and one sensor | calibration status line.
+  angle, the limits and one sensor | calibration status line. The sensor direction (normal or
+  mirrored mount) is detected from the first limit capture and shown as "дзеркально" / "mirrored"
+  next to the sensor state; right after that capture check that Jog ▶ makes the angle grow. After
+  re-mounting the sensor: jog straight ahead, Set sensor zero, then capture both limits.
 - **Throttle calibration**: the idle and full sliders always show the saved endpoints and are
   locked; "Start Calibration" unlocks them (engine off), then Save or Cancel.
 - **Gear position defaults**: one servo slider (0–100 %). Press **Start** to unlock it; dragging

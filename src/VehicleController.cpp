@@ -1328,7 +1328,14 @@ void VehicleController::processSteerCalCommand(const String& which, WebPortal& w
         msg += " — WARNING: beyond the ±550° safe range, near the sensor latch at ~600°"
                " (closed-loop moves stop at 550°)";
     }
-    msg += steering_.isCalibrated() ? " — calibration complete" : " — capture the other limit too";
+    if (steering_.isLastCaptureToggled()) {
+        // The capture inferred the sensor direction; the opposite limit was cleared.
+        msg += String(" — sensor direction detected: ") +
+               (steering_.isSensorInverted() ? "mirrored" : "normal") +
+               " — capture the " + (left ? "right" : "left") + " limit again";
+    } else {
+        msg += steering_.isCalibrated() ? " — calibration complete" : " — capture the other limit too";
+    }
     webPortal.sendResponse(true, msg);
 }
 

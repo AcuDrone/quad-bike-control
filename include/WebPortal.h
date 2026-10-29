@@ -84,6 +84,7 @@ public:
         bool steer_sensor_ok;     // Sensor healthy (token none for STEER_LWS_RECOVER_FRAMES frames)
         bool steer_calibrated;    // True when both limits are stored and valid
         bool steer_range_warning; // Either stored limit beyond ±STEER_LWS_SAFE_RANGE (near the ~600° latch)
+        bool steer_sensor_inv;    // Sensor-direction flag: true = sensor mounted mirrored (inferred at limit capture)
         uint16_t steer_lws_fps;   // Accepted frames in the last second (~100 when healthy)
         uint32_t steer_lws_crc_err; // Cumulative checksum errors since boot
         uint32_t steer_lws_cnt_err; // Cumulative repeated-counter errors since boot

@@ -651,7 +651,7 @@
             </div>
             <!-- Steering state (read-only diagnostics, tile grid like Telemetry / CAN) -->
             <div class="card">
-                <h2 class="card-title"><span data-i18n="card_steer_state">🎯 Steering: state</span><button type="button" class="help-btn" onclick="openHelp('steer_state_help,steer_rate_help', 'card_steer_state')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <h2 class="card-title"><span data-i18n="card_steer_state">🎯 Steering: state</span><button type="button" class="help-btn" onclick="openHelp('steer_state_help,steer_mirrored_help,steer_rate_help', 'card_steer_state')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
                 <div class="telemetry-grid">
                     <div class="telemetry-item">
                         <div class="telemetry-label" data-i18n="sd_angle">Angle</div>
@@ -674,7 +674,7 @@
                     <div class="telemetry-item">
                         <div class="telemetry-label" data-i18n="sd_sensor">Sensor</div>
                         <div class="telemetry-value" style="font-size: 1.3em;"><span data-bind="steer-sensor-status">--</span></div>
-                        <div class="sd-sub" style="color: var(--danger);"><span data-bind="steer-sensor-fault"></span></div>
+                        <div class="sd-sub" style="color: var(--danger);"><span data-bind="steer-sensor-fault"></span><span data-bind="steer-sensor-mirrored" style="color: var(--muted-foreground);"></span></div>
                     </div>
                     <div class="telemetry-item">
                         <div class="telemetry-label" data-i18n="sd_mode">Mode</div>
@@ -889,7 +889,7 @@
             <div class="main-grid">
             <!-- Steering Calibration (Bosch LWS steering-angle sensor on CAN: center = sensor zero) -->
             <div class="card">
-                <h2 class="card-title"><span data-i18n="card_steer_cal">🎯 Steering Calibration</span><button type="button" class="help-btn" onclick="openHelp('steer_cal_help', 'card_steer_cal')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <h2 class="card-title"><span data-i18n="card_steer_cal">🎯 Steering Calibration</span><button type="button" class="help-btn" onclick="openHelp('steer_cal_help,steer_dir_help', 'card_steer_cal')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
                 <div id="steer-sensorless-note" data-i18n="steer_sensorless_note" style="display: none; margin-bottom: 8px; font-size: 0.8em; color: var(--warning);">
                     ⚠ No healthy sensor: jog and nudge run open loop, without stall protection — watch the wheels and release at the lock.
                 </div>
@@ -926,7 +926,7 @@
                 </div>
                 <div style="margin-top: 4px; font-size: 0.8em; color: var(--muted-foreground);">
                     <span data-i18n="lbl_sensor">Sensor:</span> <span data-bind="steer-sensor-status">--</span>
-                    <span data-bind="steer-sensor-fault"></span> &nbsp;|&nbsp;
+                    <span data-bind="steer-sensor-fault"></span><span data-bind="steer-sensor-mirrored"></span> &nbsp;|&nbsp;
                     <span data-i18n="lbl_calibration">Calibration:</span> <span data-bind="steer-cal-status">--</span>
                 </div>
                 <div id="steer-center-status" style="margin-top: 8px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
@@ -1334,6 +1334,7 @@
                 // Steering calibration card
                 card_steer_cal: '🎯 Steering Calibration',
                 steer_cal_help: 'Bosch steering-angle sensor on CAN; angles in degrees, + = right. The <b>center is the sensor\'s own zero</b>. Calibration: hold <b>◀ / ▶</b> to jog the wheels straight ahead, <b>restart the vehicle</b> (power-cycles the sensor), press <b>Set sensor zero</b>, then jog to each lock and press <b>Set Left</b> and <b>Set Right</b> (each is saved at once). Jog and nudge always work, even without a sensor. A sensor reporting <b>range latched</b> is cleared only by restarting the vehicle; jogging past about 550° risks that latch.',
+                steer_dir_help: 'The <b>sensor direction</b> (normal or mirrored mount) is detected automatically from the <b>first limit capture</b>: a capture on the "wrong" side of zero flips it, the other limit is cleared and must be captured again. Right after the first capture check that <b>Jog ▶ makes the angle grow</b>; if it shrinks, Left and Right were captured at the wrong locks — jog straight ahead, press <b>Set sensor zero</b> and capture again. After <b>re-mounting the sensor</b>: jog straight ahead, press <b>Set sensor zero</b> (erases the limits), then capture both limits.',
                 steer_sensorless_note: '⚠ No healthy sensor: jog and nudge run open loop, without stall protection — watch the wheels and release at the lock.',
                 btn_jog_left: '◀ Jog Left',
                 btn_jog_right: 'Jog Right ▶',
@@ -1359,6 +1360,7 @@
                 steer_fault_sensor_fault: 'sensor fault',
                 steer_fault_not_calibrated: 'sensor has no zero — Set sensor zero',
                 steer_fault_angle_invalid: 'angle invalid',
+                steer_sensor_mirrored: 'mirrored',
                 steer_zero_idle: '--',
                 steer_zero_running: 'running…',
                 steer_zero_ok: 'confirmed',
@@ -1604,6 +1606,7 @@
                 steer_mode_rate: 'Rate (no sensor)',
                 steer_mode_blocked: 'Blocked',
                 steer_state_help: 'Read-only state of the steering: Bosch LWS angle sensor, stored limits and the steering VESC. <b>Mode</b> shows how the autopilot stick is used: <b>Position</b> — the stick sets the wheel angle (normal, sensor healthy).',
+                steer_mirrored_help: '<b>mirrored</b> next to the Sensor state means the angle sensor is fitted mirrored on the shaft. The firmware detected this at the first limit capture and corrects the sign: angles and rates are always shown with <b>+ = right</b>.',
                 steer_rate_help: 'Without a healthy angle sensor the mode becomes <b>Rate (no sensor)</b> — only while the autopilot is in <b>MANUAL</b> (or its mode is unknown): stick deflection = direction and speed of rotation, centre = stop. After entering this mode <b>centre the stick once</b> to arm it. If no stick frames arrive the wheel stops within 500 ms. There is <b>no end-stop protection</b> except the VESC current limit — watch the wheels and centre the stick near the lock. In other autopilot modes, under web control and in failsafe the mode is <b>Blocked</b>: no motion; the web slider is locked, Jog/Nudge still work. Position mode returns by itself once the sensor recovers.',
                 sd_cal: 'Calibration',
                 sd_driver: 'VESC driver',
@@ -1706,6 +1709,7 @@
                 // Steering calibration card
                 card_steer_cal: '🎯 Калібрування керма',
                 steer_cal_help: 'Датчик кута керма Bosch на шині CAN; кути в градусах, + = вправо. <b>Центр — це власний нуль датчика</b>. Калібрування: утримуючи <b>◀ / ▶</b>, виставте колеса прямо, <b>перезапустіть машину</b> (датчик перезавантажиться), натисніть <b>Задати нуль датчика</b>, потім доверніть кермо до кожного упору й натисніть <b>Задати ліво</b> та <b>Задати право</b> (кожна межа зберігається одразу). Проворот і підштовхування працюють завжди, навіть без датчика. Стан датчика <b>«вихід за діапазон»</b> знімається лише перезапуском машини; проворот далі ніж приблизно на 550° ризикує його спричинити.',
+                steer_dir_help: '<b>Напрямок датчика</b> (звичайний чи дзеркальний монтаж) визначається автоматично за <b>першим захопленим лімітом</b>: захоплення з «неправильного» боку від нуля перемикає його, другий ліміт скидається, і його треба захопити знову. Одразу після першого захоплення перевірте, що <b>Jog ▶ збільшує кут</b>; якщо кут зменшується, ліво й право захоплено не на тих упорах — виставте колеса прямо, натисніть <b>Задати нуль датчика</b> і захопіть знову. Після <b>перемонтажу датчика</b>: виставте колеса прямо, натисніть <b>Задати нуль датчика</b> (стирає межі), потім захопіть обидва ліміти.',
                 steer_sensorless_note: '⚠ Датчик несправний: проворот і підштовхування працюють без зворотного зв\'язку й без захисту від заклинювання — стежте за колесами й відпускайте кнопку біля упору.',
                 btn_jog_left: '◀ Проворот вліво',
                 btn_jog_right: 'Проворот вправо ▶',
@@ -1731,6 +1735,7 @@
                 steer_fault_sensor_fault: 'несправність датчика',
                 steer_fault_not_calibrated: 'датчик без нуля — задайте нуль датчика',
                 steer_fault_angle_invalid: 'недійсний кут',
+                steer_sensor_mirrored: 'дзеркально',
                 steer_zero_idle: '--',
                 steer_zero_running: 'виконується…',
                 steer_zero_ok: 'підтверджено',
@@ -1975,6 +1980,7 @@
                 steer_mode_rate: 'Швидкість (без датчика)',
                 steer_mode_blocked: 'Заблоковано',
                 steer_state_help: 'Стан керма лише для читання: датчик кута Bosch LWS, збережені межі та VESC керма. <b>Режим</b> показує, як використовується стік автопілота: <b>Позиція</b> — стік задає кут коліс (норма, датчик справний).',
+                steer_mirrored_help: '<b>дзеркально</b> біля стану датчика означає, що датчик кута встановлено на валу дзеркально. Прошивка визначила це при першому захопленні ліміту й виправляє знак: кути та швидкості завжди показано з <b>+ = вправо</b>.',
                 steer_rate_help: 'Без справного датчика кута режим стає <b>Швидкість (без датчика)</b> — лише коли автопілот у <b>MANUAL</b> (або його режим невідомий): відхилення стіка = напрям і швидкість обертання, центр = стоп. Після входу в цей режим <b>один раз відцентруйте стік</b>, щоб його активувати. Якщо кадри стіка не надходять, кермо зупиняється протягом 500 мс. <b>Захисту від упорів немає</b>, окрім обмеження струму VESC — стежте за колесами й центруйте стік біля упору. В інших режимах автопілота, при веб-керуванні та у failsafe режим <b>Заблоковано</b>: руху немає; повзунок у вебі заблоковано, Jog/Nudge працюють. Режим «Позиція» повертається сам, щойно датчик відновиться.',
                 sd_cal: 'Калібрування',
                 sd_driver: 'Драйвер VESC',
@@ -2535,6 +2541,9 @@
                 setBound('steer-sensor-fault', (tok && tok !== 'none') ? '(' + t('steer_fault_' + tok) + ')' : '',
                          { color: 'var(--danger)' });
             }
+            // Sensor-direction flag (inferred at limit capture): marker only while mirrored;
+            // nothing when false or missing (older firmware)
+            setBound('steer-sensor-mirrored', data.steer_sensor_inv === true ? ' · ' + t('steer_sensor_mirrored') : '');
             {
                 // Steering mode tile: position / rate / blocked; missing or unknown → '--' (D9)
                 const modeEl = document.getElementById('steer-mode');

@@ -551,8 +551,9 @@ bool WebPortal::parseWebCommand(uint8_t* data, size_t len) {
 // ============================================================================
 
 String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
-    // Capacity headroom: ~81 top-level fields (incl. 4 steering-VESC fields, 19 steering
-    // angle-sensor / mode fields (steer_mode: one more slot, static token stored by pointer), wheel_lock_fitted, the relay_test bitfield, the
+    // Capacity headroom: ~82 top-level fields (incl. 4 steering-VESC fields, 20 steering
+    // angle-sensor / mode fields (steer_mode: one more slot, static token stored by pointer;
+    // steer_sensor_inv: one bool slot, ~25 B of JSON), wheel_lock_fitted, the relay_test bitfield, the
     // 5 rail / board-I/O fields, the 12 hall-speed / limiter / distance fields and the
     // 4 steering speed-scaling fields, gear_code / gear_sensed / gear_codes_custom, steer_vin /
     // steer_vin_low / ecu_voltage_low, wifi_ssid / wifi_ip) + a 16-element
@@ -608,6 +609,7 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["steer_sensor_ok"] = telemetry.steer_sensor_ok;
     doc["steer_calibrated"] = telemetry.steer_calibrated;
     doc["steer_range_warning"] = telemetry.steer_range_warning;
+    doc["steer_sensor_inv"] = telemetry.steer_sensor_inv;   // always a bool (RAM copy of NVS `inv`)
     doc["steer_lws_fps"] = telemetry.steer_lws_fps;
     doc["steer_lws_crc_err"] = telemetry.steer_lws_crc_err;
     doc["steer_lws_cnt_err"] = telemetry.steer_lws_cnt_err;

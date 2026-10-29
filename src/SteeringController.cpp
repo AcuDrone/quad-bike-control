@@ -3,11 +3,13 @@
 #include "Debug.h"
 #include <Preferences.h>
 
-// NVS calibration layout version ("steering"/cal_ver). Version 3 = Bosch LWS limits only.
-static constexpr int32_t STEER_CAL_VERSION = 3;
+// NVS calibration layout version ("steering"/cal_ver). Version 4 = Bosch LWS limits +
+// sensor-direction flag `inv`. Version 3 (limits only, fixed negation) migrates keeping the limits.
+static constexpr int32_t STEER_CAL_VERSION = 4;
 static const char* const NVS_NS = "steering";
 static const char* const KEY_LIM_L = "lim_l";
 static const char* const KEY_LIM_R = "lim_r";
+static const char* const KEY_INV = "inv";
 
 SteeringController::SteeringController(IMotorDriver& motor)
     : motor_(motor),
@@ -20,9 +22,11 @@ SteeringController::SteeringController(IMotorDriver& motor)
       limLeft_(POS_UNSET),
       limRight_(POS_UNSET),
       calibrated_(false),
+      inv_(false),
       captureError_(nullptr),
       lastCapturePos_(0),
       lastCaptureBeyondSafe_(false),
+      lastCaptureToggled_(false),
       zeroState_(ZeroState::IDLE),
       zeroError_(nullptr),
       zeroRefusal_(nullptr),
@@ -58,8 +62,9 @@ bool SteeringController::begin() {
     loadCalibration();
 
     Debug::printfFeature(DebugFeature::SERVO,
-                         "[STEER] Initialized: Bosch LWS on CAN 0x%03X (pos = -angle, 0.1 deg, + = right), "
-                         "waiting for frames\n", (unsigned)STEER_LWS_CAN_ID);
+                         "[STEER] Initialized: Bosch LWS on CAN 0x%03X (pos = %sangle per sensor direction: %s, "
+                         "0.1 deg, + = right), waiting for frames\n", (unsigned)STEER_LWS_CAN_ID,
+                         inv_ ? "+" : "-", inv_ ? "mirrored" : "normal");
     return true;
 }
 
@@ -101,12 +106,13 @@ void SteeringController::refreshSensor(uint32_t now) {
 
     if (!firstFrameLogged_ && lws_.hasFrame()) {
         firstFrameLogged_ = true;
-        // Raw sensor sign, shown once: the sensor's + is LEFT, the firmware's + is RIGHT.
+        // Raw sensor sign, shown once: the sensor's + is LEFT on a normal mount (RIGHT when
+        // mirrored, inv=1); the firmware's + is always RIGHT.
         Debug::printfFeature(DebugFeature::SERVO,
-                             "[STEER] LWS first frame: sensor angle=%+.1f deg (sensor + = LEFT) -> "
-                             "pos=%ld (0.1 deg, firmware + = RIGHT), OK=%d cal=%d adj=%d fault=%u\n",
+                             "[STEER] LWS first frame: sensor angle=%+.1f deg (raw sensor sign) -> "
+                             "pos=%ld (0.1 deg, firmware + = RIGHT), inv=%d OK=%d cal=%d adj=%d fault=%u\n",
                              lws_.angleValid() ? (double)lws_.angleRaw() / 10.0 : 0.0,
-                             (long)(lws_.angleValid() ? getPosition() : 0L),
+                             (long)(lws_.angleValid() ? getPosition() : 0L), (int)inv_,
                              (int)lws_.statusOk(), (int)lws_.statusCal(), (int)lws_.statusAdj(),
                              (unsigned)lws_.faultCode());
     }
@@ -334,7 +340,9 @@ void SteeringController::update() {
     if (duty < STEER_PWM_MIN_DUTY) duty = STEER_PWM_MIN_DUTY;
     if (duty > STEER_PWM_MAX_DUTY) duty = STEER_PWM_MAX_DUTY;
 
-    // Motor positive = wheel right = position increasing
+    // Motor positive = wheel right = position increasing. THE sign-critical spot: this relies
+    // on the sensor sign (direction flag inv_) matching the motor sign. It is gated by
+    // calibrated_, i.e. both limits captured under the same flag (SteerSensorDir.h).
     int16_t speed = (int16_t)duty;
     lastDriveDir_ = (error > 0) ? 1 : -1;
     motor_.setSpeed(error > 0 ? speed : (int16_t)-speed);
@@ -520,34 +528,63 @@ bool SteeringController::captureLimit(bool left) {
     const char* name = left ? "Left limit" : "Right limit";
     captureError_ = nullptr;
     lastCaptureBeyondSafe_ = false;
+    lastCaptureToggled_ = false;
 
+    SteerDirResult r = {SteerDirAction::REFUSE_TOO_CLOSE, inv_, 0, false};
     if (!sensorOk_) {
         captureError_ = "sensor fault";
     } else {
-        const int32_t pos = getPosition();
-        if (left) {
-            if (pos > 0)                         captureError_ = "left limit must be left of zero";
-            else if (pos > -STEER_CAL_MIN_SPAN)  captureError_ = "too close to zero";
-        } else {
-            if (pos < 0)                         captureError_ = "right limit must be right of zero";
-            else if (pos < STEER_CAL_MIN_SPAN)   captureError_ = "too close to zero";
+        const bool oppositeSet = (left ? limRight_ : limLeft_) != POS_UNSET;
+        r = steerDirCapture(left, getPosition(), inv_, oppositeSet, STEER_CAL_MIN_SPAN);
+        if (r.action == SteerDirAction::REFUSE_TOO_CLOSE) {
+            captureError_ = "too close to zero";
+        } else if (r.action == SteerDirAction::REFUSE_CONTRADICTS) {
+            captureError_ = left
+                ? "reads right of zero, contradicting the stored right limit — sensor zero off-centre "
+                  "or sensor re-mounted: jog straight ahead, Set sensor zero, capture both limits"
+                : "reads left of zero, contradicting the stored left limit — sensor zero off-centre "
+                  "or sensor re-mounted: jog straight ahead, Set sensor zero, capture both limits";
         }
     }
     if (captureError_) {
         Debug::printfFeature(DebugFeature::SERVO, "[STEER] %s capture refused: %s\n", name, captureError_);
-        return false;   // stored limits unchanged
+        return false;   // stored limits and the direction flag unchanged
     }
 
     // The safe range is deliberately NOT checked: calibration must reach the real locks.
-    const int32_t pos = getPosition();
     stop();
     bootCenterPending_ = false;
+
+    const char* oppositeKey = nullptr;
+    if (r.action == SteerDirAction::TOGGLE_AND_STORE) {
+        // The capture is on the wrong side and the opposite limit is unset: the sensor is
+        // mounted the other way. Apply the flag; the position of the same raw angle is −pos.
+        inv_ = r.inv;
+        lws_.setInverted(inv_);
+        if (r.clearOpposite) {   // defensive: with the strict rule the opposite is already unset
+            if (left) limRight_ = POS_UNSET; else limLeft_ = POS_UNSET;
+            oppositeKey = left ? KEY_LIM_R : KEY_LIM_L;
+        }
+        // Baselines holding old-sign values would fake progress / a stall.
+        const uint32_t now = millis();
+        lastStallPosition_ = getPosition();
+        lastStallCheckTime_ = now;
+        lastProgressPos_ = getPosition();
+        lastProgressTime_ = now;
+        lastCaptureToggled_ = true;
+        Debug::printfFeature(DebugFeature::SERVO,
+                             "[STEER] sensor direction: %s (inferred from the %s limit capture) — "
+                             "capture the %s limit again\n",
+                             inv_ ? "mirrored" : "normal", left ? "left" : "right", left ? "right" : "left");
+    }
+
+    const int32_t pos = r.pos;
     if (left) {
         limLeft_ = pos;
-        saveLimit(KEY_LIM_L, pos);
+        saveLimit(KEY_LIM_L, pos, lastCaptureToggled_, oppositeKey);
     } else {
         limRight_ = pos;
-        saveLimit(KEY_LIM_R, pos);
+        saveLimit(KEY_LIM_R, pos, lastCaptureToggled_, oppositeKey);
     }
     revalidateCalibration();
     lastCapturePos_ = pos;
@@ -673,34 +710,46 @@ void SteeringController::revalidateCalibration() {
 void SteeringController::loadCalibration() {
     limLeft_ = POS_UNSET;
     limRight_ = POS_UNSET;
+    inv_ = false;
 
     Preferences prefs;
     int32_t ver = 0;
     if (prefs.begin(NVS_NS, false)) {
         ver = prefs.getInt("cal_ver", 0);
-        if (ver != STEER_CAL_VERSION) {
+        if (ver == STEER_CAL_VERSION) {
+            limLeft_ = prefs.getInt(KEY_LIM_L, POS_UNSET);
+            limRight_ = prefs.getInt(KEY_LIM_R, POS_UNSET);
+            inv_ = prefs.getBool(KEY_INV, false);
+        } else if (ver == 3) {
+            // v3 limits were captured with the fixed negation (= normal mount): keep them.
+            limLeft_ = prefs.getInt(KEY_LIM_L, POS_UNSET);
+            limRight_ = prefs.getInt(KEY_LIM_R, POS_UNSET);
+            prefs.putBool(KEY_INV, false);
+            prefs.putInt("cal_ver", STEER_CAL_VERSION);
+            Debug::printfFeature(DebugFeature::SERVO,
+                                 "[STEER] NVS calibration v3 -> v4: limits kept, sensor direction normal\n");
+        } else {
             // Migration: remove every obsolete key ONE BY ONE. NEVER clear() this
             // namespace: the steering speed-scaling base (steer_sca_base) lives here too.
             static const char* const kObsolete[] = {
                 "fc_raw", "cc_raw", "fl_pos", "cl_raw", "fr_pos", "cr_raw",   // v2 (dual AS5600)
                 "c_ang", "l_ang", "r_ang",                                      // v1 (single sensor)
-                KEY_LIM_L, KEY_LIM_R                                            // no limits after migration
+                KEY_LIM_L, KEY_LIM_R, KEY_INV                                   // no limits after migration
             };
             unsigned removed = 0;
             for (const char* key : kObsolete) {
                 if (prefs.isKey(key) && prefs.remove(key)) removed++;
             }
             prefs.putInt("cal_ver", STEER_CAL_VERSION);
+            prefs.putBool(KEY_INV, false);
             Debug::printfFeature(DebugFeature::SERVO,
                                  "[STEER] NVS calibration v%ld -> v%ld: %u old key(s) removed — "
                                  "recalibration required (sensor zero + Left/Right)\n",
                                  (long)ver, (long)STEER_CAL_VERSION, removed);
-        } else {
-            limLeft_ = prefs.getInt(KEY_LIM_L, POS_UNSET);
-            limRight_ = prefs.getInt(KEY_LIM_R, POS_UNSET);
         }
         prefs.end();
     }
+    lws_.setInverted(inv_);
 
     // A stored limit that no longer passes the capture checks is treated as unset.
     if (limLeft_ != POS_UNSET && limLeft_ > -STEER_CAL_MIN_SPAN) limLeft_ = POS_UNSET;
@@ -713,16 +762,21 @@ void SteeringController::loadCalibration() {
     if (limRight_ != POS_UNSET) snprintf(r, sizeof(r), "%+.1f", (double)limRight_ / 10.0);
     else snprintf(r, sizeof(r), "--");
     Debug::printfFeature(DebugFeature::SERVO,
-                         "[STEER] Calibration loaded: left=%s right=%s deg -> %s%s\n", l, r,
-                         calibrated_ ? "CALIBRATED" : "NOT CALIBRATED",
+                         "[STEER] Calibration loaded: left=%s right=%s deg -> %s, sensor direction: %s%s\n", l, r,
+                         calibrated_ ? "CALIBRATED" : "NOT CALIBRATED", inv_ ? "mirrored" : "normal",
                          isRangeWarning() ? " (a limit is beyond the 550 deg safe range)" : "");
 }
 
-void SteeringController::saveLimit(const char* key, int32_t value) {
+void SteeringController::saveLimit(const char* key, int32_t value, bool writeInv, const char* oppositeKey) {
     Preferences prefs;
     if (prefs.begin(NVS_NS, false)) {
+        // Order on a direction toggle: the limit, then `inv`, then remove the opposite.
+        // A power loss in between leaves at most one limit valid under the stored flag,
+        // so the steering is not calibrated and the closed loop cannot run.
         prefs.putInt("cal_ver", STEER_CAL_VERSION);
         prefs.putInt(key, value);
+        if (writeInv) prefs.putBool(KEY_INV, inv_);
+        if (oppositeKey != nullptr && prefs.isKey(oppositeKey)) prefs.remove(oppositeKey);
         prefs.end();
     }
 }
@@ -731,6 +785,7 @@ void SteeringController::eraseLimits() {
     Preferences prefs;
     if (prefs.begin(NVS_NS, false)) {
         // Key by key — never clear() the namespace (steer_sca_base lives here).
+        // The sensor-direction flag `inv` is kept; the next capture re-confirms or toggles it.
         if (prefs.isKey(KEY_LIM_L)) prefs.remove(KEY_LIM_L);
         if (prefs.isKey(KEY_LIM_R)) prefs.remove(KEY_LIM_R);
         prefs.putInt("cal_ver", STEER_CAL_VERSION);

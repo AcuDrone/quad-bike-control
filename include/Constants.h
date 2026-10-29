@@ -399,17 +399,19 @@ struct ServoChannelConfig {
 // (frame 0x305, DLC 6, 100 Hz; decoder include/Lws305.h, health src/LwsSensor.cpp).
 // It is absolute over several turns (measured range ≈ ±600°, beyond which it LATCHES
 // fault code 9 until its 12 V — the ignition key — is power-cycled) and stores its own zero.
-//  - SIGN: the sensor's angle is positive = LEFT (counter-clockwise). The firmware position
-//    is the FIXED negation pos = −angle, so positive = RIGHT, like IMotorDriver::setSpeed()
-//    and steering_pct. A mirrored mount is refused at limit capture (left limit > 0).
+//  - SIGN: on a normal mount the sensor's angle is positive = LEFT (counter-clockwise) and
+//    the firmware position is pos = −angle; on a mirrored mount (NVS flag `inv` = true) it is
+//    pos = +angle. Either way positive = RIGHT, like IMotorDriver::setSpeed() and steering_pct.
+//    The flag is inferred at limit capture (include/SteerSensorDir.h), never set by hand.
 //  - UNITS: every steering position, limit, tolerance and gain below is in 0.1° of
 //    steering-shaft angle (int32).
 //  - CENTER = the sensor's own stored zero (angle 0.0), set with the web "Set sensor zero"
 //    (0x7C0 [05 00], ~100 ms, [53 30] — see CANController). There is no centre capture.
-//  - NVS namespace "steering" (shared with steer_sca_base — NEVER clear() it), layout v3:
-//    cal_ver (=3), lim_l, lim_r (0.1°, firmware sign). Older keys (v2 fc_raw/cc_raw/fl_pos/
-//    cl_raw/fr_pos/cr_raw, v1 c_ang/l_ang/r_ang) are removed one by one on first boot ->
-//    recalibration required. Calibrated = both limits stored and valid.
+//  - NVS namespace "steering" (shared with steer_sca_base — NEVER clear() it), layout v4:
+//    cal_ver (=4), lim_l, lim_r (0.1°, firmware sign), inv (bool, true = mirrored). v3 limits
+//    are kept with inv = false. Older keys (v2 fc_raw/cc_raw/fl_pos/cl_raw/fr_pos/cr_raw,
+//    v1 c_ang/l_ang/r_ang) are removed one by one on first boot -> recalibration required.
+//    Calibrated = both limits stored and valid.
 //  - Percent commands need a healthy sensor + both limits; jog/nudge only need the VESC link
 //    (sensorless open loop is allowed, with no stall backstop).
 // The values marked bench-tune were converted from AS5600 counts (1 count ≈ 0.88 × 0.1°).
@@ -417,7 +419,7 @@ struct ServoChannelConfig {
 #define STEER_MOVE_TIMEOUT        7500  // ms - maximum time for any movement — bench-check a full lock-to-lock move
 #define STEER_STALL_THRESHOLD     5     // 0.1° (0.5°) - progress below this over STEER_STALL_TIMEOUT = stall — bench-tune
 #define STEER_STALL_TIMEOUT       500   // ms - time without position change = stall
-#define STEER_CAL_MIN_SPAN        300   // 0.1° (30.0°) - min |limit| from the sensor zero accepted at capture — bench-tune
+#define STEER_CAL_MIN_SPAN        300   // 0.1° (30.0°) - min |limit| from the sensor zero accepted at capture, also the min |angle| that may toggle the sensor direction — bench-tune
 #define STEER_BOOT_CENTER_TIMEOUT_MS  5000  // ms - a pending boot centering (waits for sensor + VESC link) is dropped after this
 
 // Bosch LWS sensor health, range guard and zero-set
@@ -770,7 +772,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.0"
+#define FIRMWARE_VERSION "1.5.1"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

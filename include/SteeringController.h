@@ -6,6 +6,7 @@
 #include "IMotorDriver.h"
 #include "LwsSensor.h"
 #include "SteerRate.h"
+#include "SteerSensorDir.h"
 
 class CANController;
 
@@ -15,17 +16,24 @@ class CANController;
  * steering-angle sensor 0 265 005 486 mounted directly on the steering shaft and
  * read over the shared MCP2515 CAN bus (frame 0x305, 100 Hz).
  *
- *  - Position = −angle (the sensor's positive is LEFT; the firmware's positive is
- *    RIGHT), in 0.1° of steering-shaft angle (int32), relative to the sensor's own
- *    stored zero. No homing, no turn tracking: every frame is absolute.
+ *  - Position = −angle for a normal mount (the sensor's positive is LEFT; the firmware's
+ *    positive is RIGHT), +angle for a mirrored mount (NVS flag `inv`), in 0.1° of
+ *    steering-shaft angle (int32), relative to the sensor's own stored zero. No homing,
+ *    no turn tracking: every frame is absolute. The flag is applied inside LwsSensor, so
+ *    every consumer of getPosition() / getRateDegS() sees the firmware sign only.
+ *  - Sensor direction (SteerSensorDir.h): inferred at limit capture, never set by hand.
+ *    A capture on the wrong side of zero (by ≥ STEER_CAL_MIN_SPAN) toggles the flag only
+ *    while the opposite limit is unset, and clears it; with the opposite limit stored it
+ *    is refused (no ping-pong). Below the span it never toggles. A zero-set keeps the flag.
  *  - Health (fault token, design D5): zeroing > can_down > timeout > range_latched >
  *    sensor_fault > not_calibrated > angle_invalid > none. Faults take effect at once;
  *    recovery needs STEER_LWS_RECOVER_FRAMES good frames. A fault stops a closed-loop
  *    move and rejects percent commands; jog and nudge keep working (sensorless, open
  *    loop, no stall backstop) — they only need the VESC link and no stall latch.
  *  - Calibration: center = sensor zero (set by requestSensorZero()); NVS namespace
- *    "steering" v3 keeps only lim_l / lim_r (0.1°, firmware sign). Each capture is saved
- *    at once; calibrated = both limits stored and valid.
+ *    "steering" v4 keeps lim_l / lim_r (0.1°, firmware sign) and inv (bool). v3 limits
+ *    are kept with inv = false. Each capture is saved at once; calibrated = both limits
+ *    stored and valid (always under one flag).
  *  - Range guard: percent-driven (closed-loop) targets are clamped to the limits, then to
  *    ±STEER_LWS_SAFE_RANGE, and a closed-loop move driving outward at |pos| ≥ that range
  *    is stopped. Jog, nudge and captures are not guarded.
@@ -152,8 +160,9 @@ public:
 
     /**
      * @brief Store the current position as the left / right limit and save it at once.
-     * Needs a healthy sensor; left must be ≤ −STEER_CAL_MIN_SPAN, right ≥ +STEER_CAL_MIN_SPAN.
-     * A limit beyond ±STEER_LWS_SAFE_RANGE is accepted with a warning (isLastCaptureBeyondSafe()).
+     * Needs a healthy sensor and |pos| ≥ STEER_CAL_MIN_SPAN. A capture on the wrong side
+     * toggles the sensor-direction flag while the opposite limit is unset (and clears it),
+     * or is refused while it is stored (steerDirCapture()). A limit beyond ±STEER_LWS_SAFE_RANGE is accepted with a warning (isLastCaptureBeyondSafe()).
      * @return true if saved (else see getCaptureError())
      */
     bool captureLeftLimit();
@@ -165,6 +174,8 @@ public:
     int32_t getLastCapturePos() const { return lastCapturePos_; }
     /** @brief The last successful capture lies beyond ±STEER_LWS_SAFE_RANGE */
     bool isLastCaptureBeyondSafe() const { return lastCaptureBeyondSafe_; }
+    /** @brief The last successful capture toggled the sensor-direction flag */
+    bool isLastCaptureToggled() const { return lastCaptureToggled_; }
 
     /**
      * @brief Run the sensor zero-set: stop motion, cancel boot centering, ask the CAN
@@ -186,6 +197,9 @@ public:
     // === State ===
 
     bool isCalibrated() const { return calibrated_; }
+
+    /** @brief Sensor-direction flag: true = sensor mounted mirrored (NVS `inv`) */
+    bool isSensorInverted() const { return inv_; }
 
     /** @brief Steering-angle sensor healthy (token `none` for the recovery streak) */
     bool isSensorOk() const { return sensorOk_; }
@@ -239,15 +253,17 @@ private:
     bool firstFrameLogged_;      // raw sensor sign shown once at boot
     uint32_t lastStateLogMs_;    // rate limit for the while-moving debug log
 
-    // Calibration (NVS v3)
+    // Calibration (NVS v4)
     int32_t limLeft_;            // 0.1°, firmware sign, < 0; POS_UNSET = unset
     int32_t limRight_;           // 0.1°, firmware sign, > 0; POS_UNSET = unset
     bool calibrated_;
+    bool inv_;                   // sensor mounted mirrored (RAM copy of NVS `inv`, pushed into lws_)
 
     // Capture bookkeeping (for the web response)
     const char* captureError_;
     int32_t lastCapturePos_;
     bool lastCaptureBeyondSafe_;
+    bool lastCaptureToggled_;
 
     // Zero-set
     ZeroState zeroState_;
@@ -327,10 +343,13 @@ private:
     /** @brief Recompute calibrated_ from the limits */
     void revalidateCalibration();
 
-    /** @brief Persist one limit key (v3 layout) */
-    void saveLimit(const char* key, int32_t value);
+    /**
+     * @brief Persist one limit key (v4 layout). With a flag toggle, in the same session:
+     * the limit, then `inv`, then remove the opposite key (oppositeKey, nullptr = none).
+     */
+    void saveLimit(const char* key, int32_t value, bool writeInv = false, const char* oppositeKey = nullptr);
 
-    /** @brief Erase both limits (NVS + RAM) */
+    /** @brief Erase both limits (NVS + RAM); the sensor-direction flag is kept */
     void eraseLimits();
 
     /** @brief One debug line: angle, pos, token, fps (+ suffix) */
