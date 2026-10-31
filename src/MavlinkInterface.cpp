@@ -78,8 +78,9 @@ MavlinkInterface::MavlinkInterface()
 }
 
 bool MavlinkInterface::begin(uint8_t rxPin, uint8_t txPin, uint8_t uartNum, uint32_t baud) {
-    // UART0 (GPIO43/44, X1) is the steering VESC link and UART2 is unused; the
-    // console is USB-CDC. MAVLink lives on UART1 (X9).
+    // UART0 (GPIO43/44) is the steering VESC on aztec (X1) / the reserved CH9121T
+    // link on the quad; UART2 is the steering VESC on the quad (X6) / unused on
+    // aztec; the console is USB-CDC. MAVLink lives on UART1 (X9).
     if (uartNum == UART_NUM_1) {
         serial_ = &Serial1;
     } else {

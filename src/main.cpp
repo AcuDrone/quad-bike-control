@@ -23,8 +23,9 @@
 // ACTUATOR INSTANCES
 // ============================================================================
 
-// Steering Actuator (Flipsky 75200 VESC over UART0 / X1 + Bosch LWS steering-angle
-// sensor on the shared MCP2515 CAN bus — absolute multi-turn angle, frame 0x305).
+// Steering Actuator (Flipsky 75200 VESC over VESC_UART_NUM — UART2 / X6 on the quad,
+// UART0 / X1 on aztec — + Bosch LWS steering-angle sensor on the shared MCP2515 CAN
+// bus — absolute multi-turn angle, frame 0x305).
 // The VESC driver MUST be constructed before the steering controller that
 // references it (global init order is top-to-bottom within this file). The LWS is
 // attached to the CAN controller in setup() (vehicleController.initCAN()).
@@ -93,10 +94,11 @@ static void scanI2CBus(TwoWire& bus, const char* label) {
 // SETUP
 // ============================================================================
 
-// ESP-IDF log sink while UART0 carries the steering VESC: the IDF console is UART0
-// (primary) + USB-Serial-JTAG (secondary) in the prebuilt sdkconfig, so component
-// ESP_LOGx output (wifi, nvs, ...) would otherwise be interleaved into VESC frames.
-// Route it to the USB-CDC console only.
+// ESP-IDF log sink that keeps UART0 silent: UART0 (GPIO43/44) is the steering VESC
+// on aztec and the reserved CH9121T LAN-chip link on the quad bike. The IDF console
+// is UART0 (primary) + USB-Serial-JTAG (secondary) in the prebuilt sdkconfig, so
+// component ESP_LOGx output (wifi, nvs, ...) would otherwise be written onto that
+// link. Route it to the USB-CDC console only.
 static int usbOnlyLogVprintf(const char* fmt, va_list args) {
     char buf[256];
     int n = vsnprintf(buf, sizeof(buf), fmt, args);
@@ -118,10 +120,11 @@ void setup() {
     // the vehicle must boot with no laptop attached; early output may be lost.
     Serial.begin(SERIAL_BAUD_RATE);
 
-    // UART0 (GPIO43/44, X1) is the steering VESC link: keep every runtime log path
+    // UART0 (GPIO43/44) is the steering VESC on aztec / the reserved CH9121T link on
+    // the quad — never put a console or log output on it: keep every runtime log path
     // off it before anything can log. ets_printf / ROM putc -> nowhere; ESP-IDF
-    // esp_log -> USB-CDC only. (The ROM bootloader still prints at reset; the VESC
-    // ignores unframed bytes.)
+    // esp_log -> USB-CDC only. (The ROM bootloader still prints at reset; a VESC on
+    // UART0 ignores unframed bytes.)
     uartSetDebug(NULL);
     esp_log_set_vprintf(usbOnlyLogVprintf);
 

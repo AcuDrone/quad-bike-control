@@ -648,7 +648,8 @@ void VehicleController::processMavlinkCommands() {
     bool frontLightOn = mavlink_.getFrontLight();
     relayController_.setFrontLight(frontLightOn);
 
-    // Front-wheel lock (channel 7) — not fitted on aztec; RelayController rejects a LOCK
+    // Front-wheel lock (channel 7) — fitted on the quad; on aztec (not fitted)
+    // RelayController rejects a LOCK
     relayController_.setWheelLock(mavlink_.getWheelLock());
 }
 

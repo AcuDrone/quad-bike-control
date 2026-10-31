@@ -983,8 +983,8 @@
                 </div>
                 <div id="gear-default-status" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
             </div>
-            <!-- Gear Sensor Codes (aztec 3-bit gear code calibration) -->
-            <div class="card">
+            <!-- Gear Sensor Codes: aztec 3-bit gear code calibration — hidden when the firmware sends no `gear_codes` -->
+            <div class="card" id="card-gear-codes" style="display:none">
                 <h2 class="card-title"><span data-i18n="card_gear_codes">🔢 Gear Sensor Codes</span><button type="button" class="help-btn" onclick="openHelp('gear_codes_help', 'card_gear_codes')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
                 <div style="display: flex; gap: 6px; margin-bottom: 8px;">
                     <div id="gear-bit-a" style="flex:1; text-align:center; padding:8px 4px; border-radius:6px; border:1px solid var(--border); background:var(--secondary); color:var(--muted-foreground); font-weight:bold;">A (0)</div>
@@ -1386,7 +1386,7 @@
 
                 // Relay test card
                 card_relay_test: '🧪 Relay Test',
-                relay_test_help: 'Wiring check: toggle one relay at a time. <b>Ignition must be OFF</b> and the light off. Each relay switches off by itself after 30 s (starter: 2 s); any ignition / light command switches all test relays off.',
+                relay_test_help: 'Wiring check: toggle one relay at a time. <b>Ignition must be OFF</b>, the light off and the wheel lock released (if fitted). Each relay switches off by itself after 30 s (starter: 2 s); any ignition / light / wheel-lock command switches all test relays off. On a paired relay (ignition, wheel lock) each relay is tested on its own — one contact drives the load for up to 30 s.',
                 relay_test_relay: 'Relay %s',
                 relay_fn_1: 'ignition',
                 relay_fn_2: 'starter (max 2 s)',
@@ -1396,7 +1396,15 @@
                 relay_fn_6: 'lock (unassigned)',
                 relay_fn_7: 'spare',
                 relay_fn_8: 'spare',
-                relay_test_blocked: 'Available only with ignition OFF, light off and the relay board healthy.',
+                relay_fn_q_1: 'ignition (pair with 2)',
+                relay_fn_q_2: 'ignition (pair with 1)',
+                relay_fn_q_3: 'starter (max 2 s)',
+                relay_fn_q_4: 'light',
+                relay_fn_q_5: 'wheel lock (pair with 6)',
+                relay_fn_q_6: 'wheel lock (pair with 5)',
+                relay_fn_q_7: 'spare',
+                relay_fn_q_8: 'spare',
+                relay_test_blocked: 'Available only with ignition OFF, light off, wheel lock released (if fitted) and the relay board healthy.',
 
                 // Throttle calibration card
                 card_throttle_cal: '🎚️ Throttle Calibration',
@@ -1761,7 +1769,7 @@
 
                 // Throttle calibration card
                 card_relay_test: '🧪 Перевірка реле',
-                relay_test_help: 'Перевірка проводки: вмикайте по одному реле. <b>Запалювання має бути ВИМК</b>, світло вимкнене. Кожне реле вимикається само через 30 с (стартер: 2 с); будь-яка команда запалювання / світла вимикає всі тестові реле.',
+                relay_test_help: 'Перевірка проводки: вмикайте по одному реле. <b>Запалювання має бути ВИМК</b>, світло вимкнене, блокування колеса відпущене (якщо встановлене). Кожне реле вимикається само через 30 с (стартер: 2 с); будь-яка команда запалювання / світла / блокування колеса вимикає всі тестові реле. Реле з пари (запалювання, блокування колеса) перевіряється окремо — один контакт живить навантаження до 30 с.',
                 relay_test_relay: 'Реле %s',
                 relay_fn_1: 'запалювання',
                 relay_fn_2: 'стартер (макс. 2 с)',
@@ -1771,7 +1779,15 @@
                 relay_fn_6: 'замок (не призначено)',
                 relay_fn_7: 'резерв',
                 relay_fn_8: 'резерв',
-                relay_test_blocked: 'Доступно лише при ВИМК запалюванні, вимкненому світлі та справній платі реле.',
+                relay_fn_q_1: 'запалювання (пара з 2)',
+                relay_fn_q_2: 'запалювання (пара з 1)',
+                relay_fn_q_3: 'стартер (макс. 2 с)',
+                relay_fn_q_4: 'світло',
+                relay_fn_q_5: 'блокування колеса (пара з 6)',
+                relay_fn_q_6: 'блокування колеса (пара з 5)',
+                relay_fn_q_7: 'резерв',
+                relay_fn_q_8: 'резерв',
+                relay_test_blocked: 'Доступно лише при ВИМК запалюванні, вимкненому світлі, відпущеному блокуванні колеса (якщо встановлене) та справній платі реле.',
 
                 card_throttle_cal: '🎚️ Калібрування дроселя',
                 throttle_cal_help: 'Крайні точки серво дроселя (µs). <b>Двигун має бути вимкнено.</b> Натисніть <b>Почати</b>, потягніть повзунок — серво рухається наживо — потім <b>Зберегти</b>. Повний газ може бути меншим за холостий (дзеркальне серво).',
@@ -2451,10 +2467,12 @@
 
             // Relay test — the toggles show the firmware's `relay_test` bits (from the relay
             // shadow byte), never a local guess; ON is offered only with ignition OFF, light
-            // off and a healthy relay board (the firmware enforces the same gate).
+            // off, wheel lock released and a healthy relay board (the firmware enforces the
+            // same gate).
             if (data.relay_test !== undefined) {
                 relayTestBits = data.relay_test;
-                relayTestAllowed = data.ignition_state === 'OFF' && !data.front_light_on && !data.io_relay_fault;
+                relayTestAllowed = data.ignition_state === 'OFF' && !data.front_light_on &&
+                                   !data.wheel_lock_on && !data.io_relay_fault;
                 renderRelayTest();
             }
 
@@ -2952,6 +2970,10 @@
         }
 
         function updateGearCodes(data) {
+            // The card exists only for firmware with gear-code calibration (aztec);
+            // a build without `gear_codes` (quad bike) hides it.
+            const card = document.getElementById('card-gear-codes');
+            if (card) card.style.display = data.gear_codes ? '' : 'none';
             if (data.gear_code !== undefined) {
                 const live = data.gear_code;
                 const ids = ['gear-bit-a', 'gear-bit-b', 'gear-bit-c'];
@@ -3258,6 +3280,12 @@
         }
 
         // ---- Relay test (wiring check; firmware gate: ignition OFF, no function relay on) ----
+        // Relay labels follow the vehicle: `wheelLockFitted` (telemetry `wheel_lock_fitted`)
+        // stands in for the vehicle until the firmware sends a `vehicle` key —
+        // fitted = quad bike (relay_fn_q_*), not fitted = aztec buggy (relay_fn_*).
+        function relayFnLabel(n) {
+            return t((wheelLockFitted ? 'relay_fn_q_' : 'relay_fn_') + n);
+        }
         let relayTestBits = 0;          // telemetry `relay_test`: bit0 = Relay_1 … bit7 = Relay_8
         let relayTestAllowed = false;
         function renderRelayTest() {
@@ -3287,9 +3315,9 @@
                 name.textContent = t('relay_test_relay', n);
                 const desc = document.createElement('span');
                 desc.className = 'relay-btn-desc';
-                desc.textContent = t('relay_fn_' + n);
+                desc.textContent = relayFnLabel(n);
                 btn.append(name, desc);
-                btn.title = t('relay_test_relay', n) + ' — ' + t('relay_fn_' + n) + ': ' + (on ? t('on') : t('off'));
+                btn.title = t('relay_test_relay', n) + ' — ' + relayFnLabel(n) + ': ' + (on ? t('on') : t('off'));
             }
             const status = document.getElementById('relay-test-status');
             if (status && !status.dataset.msg) {

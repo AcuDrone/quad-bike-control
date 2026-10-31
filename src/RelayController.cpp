@@ -1,17 +1,43 @@
 #include "RelayController.h"
 #include "Debug.h"
 
-// The aztec function masks must be disjoint and, together with the reserved
-// relays, cover the whole port exactly once.
+// The function masks must be pairwise disjoint, disjoint from the reserved relays,
+// and together with them cover the whole port exactly once. The wheel-lock mask is
+// a function mask only where the lock is fitted (RELAY_MASK_WHEEL_LOCK is not
+// defined otherwise).
+#if RELAY_WHEEL_LOCK_FITTED
+#define RELAY_FUNCTION_MASKS_ (RELAY_MASK_IGNITION | RELAY_MASK_STARTER | RELAY_MASK_FRONT_LIGHT | RELAY_MASK_WHEEL_LOCK)
+static_assert((RELAY_MASK_WHEEL_LOCK & RELAY_MASK_IGNITION) == 0 &&
+              (RELAY_MASK_WHEEL_LOCK & RELAY_MASK_STARTER) == 0 &&
+              (RELAY_MASK_WHEEL_LOCK & RELAY_MASK_FRONT_LIGHT) == 0 &&
+              (RELAY_MASK_WHEEL_LOCK & RELAY_MASK_RESERVED) == 0 &&
+              RELAY_MASK_WHEEL_LOCK != 0,
+              "wheel-lock relay mask overlaps another function or the reserved relays");
+#else
+#define RELAY_FUNCTION_MASKS_ (RELAY_MASK_IGNITION | RELAY_MASK_STARTER | RELAY_MASK_FRONT_LIGHT)
+#endif
 static_assert((RELAY_MASK_IGNITION & RELAY_MASK_STARTER) == 0 &&
               (RELAY_MASK_IGNITION & RELAY_MASK_FRONT_LIGHT) == 0 &&
               (RELAY_MASK_STARTER & RELAY_MASK_FRONT_LIGHT) == 0 &&
-              ((RELAY_MASK_IGNITION | RELAY_MASK_STARTER | RELAY_MASK_FRONT_LIGHT) & RELAY_MASK_RESERVED) == 0,
+              (RELAY_FUNCTION_MASKS_ & RELAY_MASK_RESERVED) == 0,
               "relay function masks overlap");
-static_assert((RELAY_MASK_IGNITION | RELAY_MASK_STARTER | RELAY_MASK_FRONT_LIGHT | RELAY_MASK_RESERVED) == 0xFF,
+static_assert((RELAY_FUNCTION_MASKS_ | RELAY_MASK_RESERVED) == 0xFF,
               "relay masks must cover all eight relays");
-// The relay-test lookup must agree with the function masks and the reserved set,
-// and map the eight relays onto eight distinct port bits.
+// The relay-test lookup must agree with the function masks and the reserved set of
+// this vehicle, and map the eight relays onto eight distinct port bits.
+#if RELAY_WHEEL_LOCK_FITTED
+// Quad bike: paired ignition (Relay_1+2), starter Relay_3, light Relay_4,
+// paired wheel lock (Relay_5+6), spare Relay_7/8.
+static_assert((RelayController::relayIoMask(1) | RelayController::relayIoMask(2)) == RELAY_MASK_IGNITION &&
+              RelayController::relayIoMask(3) == RELAY_MASK_STARTER &&
+              RelayController::relayIoMask(4) == RELAY_MASK_FRONT_LIGHT &&
+              (RelayController::relayIoMask(5) | RelayController::relayIoMask(6)) == RELAY_MASK_WHEEL_LOCK,
+              "relay test lookup disagrees with the function masks");
+static_assert((RelayController::relayIoMask(7) | RelayController::relayIoMask(8)) == RELAY_MASK_RESERVED,
+              "relay test lookup disagrees with RELAY_MASK_RESERVED");
+#else
+// Aztec buggy: single ignition Relay_1, starter Relay_2, light Relay_3,
+// reserved Relay_4..8.
 static_assert(RelayController::relayIoMask(1) == RELAY_MASK_IGNITION &&
               RelayController::relayIoMask(2) == RELAY_MASK_STARTER &&
               RelayController::relayIoMask(3) == RELAY_MASK_FRONT_LIGHT,
@@ -20,6 +46,8 @@ static_assert((RelayController::relayIoMask(4) | RelayController::relayIoMask(5)
                RelayController::relayIoMask(6) | RelayController::relayIoMask(7) |
                RelayController::relayIoMask(8)) == RELAY_MASK_RESERVED,
               "relay test lookup disagrees with RELAY_MASK_RESERVED");
+#endif
+#undef RELAY_FUNCTION_MASKS_
 static_assert((RelayController::relayIoMask(1) | RelayController::relayIoMask(2) |
                RelayController::relayIoMask(3) | RelayController::relayIoMask(4) |
                RelayController::relayIoMask(5) | RelayController::relayIoMask(6) |
@@ -36,7 +64,11 @@ RelayController::RelayController(TwoWire& bus)
       allOffEscalation_(false),
       currentIgnitionState_(IgnitionState::OFF),
       frontLightOn_(false),
+#if RELAY_WHEEL_LOCK_FITTED
+      wheelLockOn_(false),
+#else
       wheelLockRejectLogged_(false),
+#endif
       crankingStartTime_(0),
       isCranking_(false),
       testMask_(0),
@@ -94,6 +126,9 @@ bool RelayController::begin() {
     // Set initial state
     currentIgnitionState_ = IgnitionState::OFF;
     frontLightOn_ = false;
+#if RELAY_WHEEL_LOCK_FITTED
+    wheelLockOn_ = false;    // the port was just written all-off, lock included
+#endif
     ignitionHighSince_ = 0;
     crankArmed_ = false;
     isCranking_ = false;
@@ -130,7 +165,7 @@ void RelayController::setIgnitionState(IgnitionState state) {
             clearRelayTests("ignition command takes over");
         }
 
-        // The ignition/ECU line (Relay_1, RELAY_MASK_IGNITION) is HIGH in
+        // The ignition/ECU line (RELAY_MASK_IGNITION) is HIGH in
         // ACC/IGNITION/CRANKING, LOW only in OFF. Start the pre-crank dwell clock on the
         // LOW->HIGH edge; reset it only on OFF (jitter between ACC and IGNITION keeps the
         // ignition line powered, so it must NOT reset).
@@ -199,7 +234,25 @@ void RelayController::setFrontLight(bool on) {
 }
 
 bool RelayController::setWheelLock(bool locked) {
-    // Aztec: no relay behind the wheel-lock function (RELAY_WHEEL_LOCK_FITTED = 0).
+#if RELAY_WHEEL_LOCK_FITTED
+    // Quad bike: the lock drives RELAY_MASK_WHEEL_LOCK (Relay_5 + Relay_6).
+    if (!initialized_ || faulted_) {
+        Debug::printfFeature(DebugFeature::RELAY,
+            "[RELAY] Wheel lock command (%s) ignored — relay expander unavailable\n",
+            locked ? "LOCKED" : "UNLOCKED");
+        return false;
+    }
+    if (wheelLockOn_ != locked) {
+        Debug::printfFeature(DebugFeature::RELAY, "[RELAY] Front Wheel Lock: %s\n", locked ? "LOCKED" : "UNLOCKED");
+        if (locked) {
+            clearRelayTests("wheel lock command takes over");
+        }
+        wheelLockOn_ = locked;
+        updateRelays();
+    }
+    return true;
+#else
+    // Not fitted (aztec): no relay behind the wheel-lock function.
     // Reject rather than "succeed" silently; the port is never touched, so the
     // reserved lock relays (Relay_4..Relay_6) can't be energized through this path.
     // Release requests arrive every control loop from the MAVLink servo channel and
@@ -214,12 +267,13 @@ bool RelayController::setWheelLock(bool locked) {
             "(further requests ignored silently)");
     }
     return false;
+#endif
 }
 
 void RelayController::allOff() {
     Debug::printlnFeature(DebugFeature::RELAY, "[RELAY] Fail-safe: All relays OFF");
 
-    // Update state
+    // Update state (a fitted wheel lock deliberately holds its last state)
     currentIgnitionState_ = IgnitionState::OFF;
     frontLightOn_ = false;
     isCranking_ = false;
@@ -302,17 +356,20 @@ void RelayController::update(uint16_t engineRpm) {
 
 uint8_t RelayController::computeShadow() const {
     bool ignitionLine = (currentIgnitionState_ != IgnitionState::OFF);
-    // The starter FUNCTION bit is ONLY ever set in CRANKING (a Relay_2 web test is
-    // the only other way, ignition OFF only and capped at RELAY_TEST_STARTER_MAX_MS).
+    // The starter FUNCTION bit is ONLY ever set in CRANKING (a web test of the starter
+    // relay is the only other way, ignition OFF only and capped at RELAY_TEST_STARTER_MAX_MS).
     bool starter = (currentIgnitionState_ == IgnitionState::CRANKING);
 
-    // Start from all-off so the reserved relays (RELAY_MASK_RESERVED: the three
-    // pending locks Relay_4/5/6 and the spares Relay_7/8) are written off unless the
-    // web relay test energizes one.
+    // Start from all-off so the reserved relays (RELAY_MASK_RESERVED: the spares, and
+    // on aztec the three pending locks) are written off unless the web relay test
+    // energizes one. Relay numbers per vehicle: see RelayController.h.
     uint8_t shadow = 0x00;
-    shadow = withMask(shadow, RELAY_MASK_IGNITION,    ignitionLine);   // Relay_1 (IO4)
-    shadow = withMask(shadow, RELAY_MASK_STARTER,     starter);        // Relay_2 (IO5)
-    shadow = withMask(shadow, RELAY_MASK_FRONT_LIGHT, frontLightOn_);  // Relay_3 (IO6)
+    shadow = withMask(shadow, RELAY_MASK_IGNITION,    ignitionLine);
+    shadow = withMask(shadow, RELAY_MASK_STARTER,     starter);
+    shadow = withMask(shadow, RELAY_MASK_FRONT_LIGHT, frontLightOn_);
+#if RELAY_WHEEL_LOCK_FITTED
+    shadow = withMask(shadow, RELAY_MASK_WHEEL_LOCK,  wheelLockOn_);
+#endif
     shadow &= (uint8_t)~RELAY_MASK_RESERVED;                           // belt and braces
     shadow |= testMask_;                                               // web relay test (ignition OFF only)
     return shadow;
@@ -405,12 +462,18 @@ bool RelayController::setRelayTest(uint8_t relayNumber, bool on, const char*& re
         return true;       // a failed write faults the driver, which drops every test bit
     }
 
-    // ON: only on a quiet port — ignition OFF, no crank pending, no function relay energized.
+    // ON: only on a quiet port — ignition OFF, no crank pending, no function relay
+    // energized (light off, wheel lock released where fitted).
     if (currentIgnitionState_ != IgnitionState::OFF || crankArmed_ || isCranking_) {
         reason = "Relay test only allowed with ignition OFF";
     } else if (frontLightOn_) {
         reason = "Relay test refused - front light is on (all relay functions must be off)";
     }
+#if RELAY_WHEEL_LOCK_FITTED
+    else if (wheelLockOn_) {
+        reason = "Relay test refused - wheel lock is engaged (all relay functions must be off)";
+    }
+#endif
     if (reason) {
         Debug::printfFeature(DebugFeature::RELAY,
             "[RELAY] Test Relay_%u ON rejected — %s\n", relayNumber, reason);

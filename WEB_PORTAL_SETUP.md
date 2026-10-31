@@ -56,7 +56,7 @@ operator drives through the autopilot and does not need it.
 
 **Layout.** A sidebar on the left holds the brand "Сервісна консоль" / "Service console", four
 section buttons and, at the bottom, two status items: the WebSocket state (Connected /
-Disconnected) and the firmware version with the board name (e.g. `1.4.0 · aztec`; click it to open
+Disconnected) and the firmware version with the board name (e.g. `1.5.2 · Control_v0`; click it to open
 "What's new"). Exactly one section is shown at a time; the page remembers the last one in the
 browser (`localStorage` key `ui_section`) and opens on **Diagnostics** the first time, or when the
 browser blocks storage (private window). All cards keep updating in the background, so switching
@@ -106,9 +106,10 @@ it. Cards are shown in one column.
   gear at the current position is highlighted. The ▶ R / N / H / L row moves the servo to a saved
   position. **Done**, or a lost WebSocket connection, locks the slider again. The RPM boost target
   is set in the same card.
-- **Gear sensor codes**: live bits A/B/C and the decoded gear; **Save as R/N/H/L** assigns the live
-  code to a gear (each button shows the stored code, "(default)", or "not set"); "Reset to
-  defaults".
+- **Gear sensor codes** (aztec only — shown only when the firmware sends `gear_codes`; hidden on the
+  quad bike, which senses one line per gear): live bits A/B/C and the decoded gear; **Save as
+  R/N/H/L** assigns the live code to a gear (each button shows the stored code, "(default)", or
+  "not set"); "Reset to defaults".
 - **Speed sensor**: pulses per revolution, wheel circumference, speed-limit readout, steering
   scaling base and bench test speed.
 
@@ -117,8 +118,10 @@ it. Cards are shown in one column.
   Disabled while MAVLink control is active.
 - **Ignition & lighting**: ignition OFF / ACC / START, front light, wheel lock (if fitted), 24 V
   boost rail, and their telemetry.
-- **Relay test**: eight buttons "Relay 1…8" with the relay function; an energised relay is
-  highlighted. Switching a relay on needs ignition OFF, light off and a healthy relay board.
+- **Relay test**: eight buttons "Relay 1…8" with the relay function (quad bike labels when the
+  wheel lock is fitted, aztec labels otherwise); an energised relay is highlighted. Switching a
+  relay on needs ignition OFF, light off, the wheel lock released (if fitted) and a healthy relay
+  board.
 
 **Система / System**:
 - **System maintenance**: debug output on/off, RPM boost test, firmware upload (OTA), "What's new".

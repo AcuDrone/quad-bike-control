@@ -9,6 +9,8 @@ HS-1005SGT 150KG (16.8 V max supply — never on the 24V boost rail).
 The aztec steering VESC (Flipsky 75200) talks UART0 on the Prog header X1 (GPIO43 TX / GPIO44 RX);
 this requires R63/R64 (UART0 → CH9121T LAN chip) removed on the board. X6 (GPIO4/5) is free for a
 fourth BTS7960. MAVLink stays on UART1 (X9); the console is USB-CDC.
+On master (quad bike) the steering VESC stays on UART2 / X6 (GPIO4/5) and R63/R64 to the CH9121T
+stay fitted; the front-wheel lock is fitted.
 
 ## Tech Stack
 - **Platform**: ESP32-S3-WROOM-1U on the custom `Control_v0` control board (see `GPIO_PINOUT_CUSTOM_BOARD_S3.md`)
