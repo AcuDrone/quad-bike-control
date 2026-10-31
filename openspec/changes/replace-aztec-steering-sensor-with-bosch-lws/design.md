@@ -288,7 +288,7 @@ about the same physical angle, rounded to a sensible step, and marked **bench-tu
 | `STEER_STALL_THRESHOLD` | 5 | 0.44° | **5** (0.5°) | progress in 500 ms below this = stall; bench-tune |
 | `STEER_BOOST_MIN_PROGRESS` | 3 | 0.26° | **3** (0.3°) | per 100 ms check; bench-tune |
 | `STEER_KP` | 1.0 duty/count | duty saturates at 255 counts ≈ 22.4° | **1.15f** duty per 0.1° | saturates at ≈ 222 units ≈ 22.2°; bench-tune |
-| `STEER_CAL_MIN_SPAN` | 50 | 4.4° | **300** (30.0°) | deliberately larger: limits are hundreds of degrees from zero, so 30° only catches a capture made at the centre by mistake; bench-tune |
+| `STEER_CAL_MIN_SPAN` | 50 | 4.4° | **200** (20.0°) | deliberately larger: limits are hundreds of degrees from zero, so 20° only catches a capture made at the centre by mistake; bench-tune |
 | `STEER_RETARGET_TOLERANCE` | 70 | 6.2° (≈ 1 % of the old half-travel) | **50** (5.0°) | ≈ 1 % of a ~500° half-travel; bench-tune |
 | `STEER_MOVE_TIMEOUT` | 7500 ms | — | 7500 ms | unchanged; bench-check a full lock-to-lock move |
 
