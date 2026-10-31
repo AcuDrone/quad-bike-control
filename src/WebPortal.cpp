@@ -551,30 +551,19 @@ bool WebPortal::parseWebCommand(uint8_t* data, size_t len) {
 // ============================================================================
 
 String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
-    // Capacity headroom: ~82 top-level fields (incl. 4 steering-VESC fields, 20 steering
+    // Capacity headroom: ~79 top-level fields (incl. 4 steering-VESC fields, 20 steering
     // angle-sensor / mode fields (steer_mode: one more slot, static token stored by pointer;
     // steer_sensor_inv: one bool slot, ~25 B of JSON), wheel_lock_fitted, the relay_test bitfield, the
     // 5 rail / board-I/O fields, the 12 hall-speed / limiter / distance fields and the
-    // 4 steering speed-scaling fields, gear_code / gear_sensed / gear_codes_custom, steer_vin /
-    // steer_vin_low / ecu_voltage_low, wifi_ssid / wifi_ip) + a 16-element
-    // array + the nested probe / po / bm / dtc / gearDefaults / gear_codes objects, plus copied
+    // 4 steering speed-scaling fields, steer_vin / steer_vin_low / ecu_voltage_low,
+    // wifi_ssid / wifi_ip) + a 16-element
+    // array + the nested probe / po / bm / dtc / gearDefaults objects, plus copied
     // String values. Sized to 4096 to leave room for the transient `probe` object (only present
     // while probe results are fresh).
     StaticJsonDocument<4096> doc;
 
     doc["timestamp"] = telemetry.timestamp;
     doc["gear"] = telemetry.gear;
-    doc["gear_code"] = telemetry.gear_code;      // -1 = opto inputs stale
-    doc["gear_sensed"] = telemetry.gear_sensed;  // static string, stored by pointer
-    {
-        // Active gear code table (-1 = unset) + "differs from default" mask (web gear code calibration)
-        JsonObject gearCodes = doc.createNestedObject("gear_codes");
-        gearCodes["R"] = telemetry.gear_code_r;
-        gearCodes["N"] = telemetry.gear_code_n;
-        gearCodes["H"] = telemetry.gear_code_h;
-        gearCodes["L"] = telemetry.gear_code_l;
-        doc["gear_codes_custom"] = telemetry.gear_codes_custom;  // bit0 R, bit1 N, bit2 H, bit3 L
-    }
     doc["hall_position"] = telemetry.hall_position;
     doc["brake_pct"] = telemetry.brake_pct;
     doc["throttle_us"] = telemetry.throttle_us;

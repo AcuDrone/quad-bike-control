@@ -44,29 +44,6 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.timestamp = millis();
 
     telemetry.gear = vehicleController_.getCurrentGearString();
-    {
-        // Bench wiring check: the raw gear code and its instant decode (no retry cache)
-        const TransmissionController& trans = vehicleController_.getTransmission();
-        telemetry.gear_code = trans.getGearCode();
-        telemetry.gear_sensed = telemetry.gear_code < 0
-            ? "?"
-            : TransmissionController::getGearLetter(trans.decodeGearCode((uint8_t)telemetry.gear_code));
-        // Active code table (web gear code calibration)
-        using G = TransmissionController::Gear;
-        auto codeOrUnset = [&trans](G g) -> int8_t {
-            uint8_t c = trans.getGearCodeFor(g);
-            return c == TransmissionController::GEAR_CODE_UNSET ? (int8_t)-1 : (int8_t)c;
-        };
-        telemetry.gear_code_r = codeOrUnset(G::GEAR_REVERSE);
-        telemetry.gear_code_n = codeOrUnset(G::GEAR_NEUTRAL);
-        telemetry.gear_code_h = codeOrUnset(G::GEAR_HIGH);
-        telemetry.gear_code_l = codeOrUnset(G::GEAR_LOW);
-        telemetry.gear_codes_custom =
-            (trans.isGearCodeDefault(G::GEAR_REVERSE) ? 0 : 0x01) |
-            (trans.isGearCodeDefault(G::GEAR_NEUTRAL) ? 0 : 0x02) |
-            (trans.isGearCodeDefault(G::GEAR_HIGH)    ? 0 : 0x04) |
-            (trans.isGearCodeDefault(G::GEAR_LOW)     ? 0 : 0x08);
-    }
     telemetry.steering_pct = (int)vehicleController_.getSteeringPercent();
     const SteeringController& steering = vehicleController_.getSteering();
     // Steering angle sensor (Bosch LWS on CAN): degrees, firmware sign (+ = right)

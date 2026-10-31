@@ -49,13 +49,6 @@ public:
     struct Telemetry {
         uint32_t timestamp;       // System time in milliseconds
         String gear;              // Current gear: "R", "N", "L", "H"
-        int8_t gear_code;         // Raw 3-bit gear code [bit0 bit1 bit6] 0..7, -1 = inputs stale
-        const char* gear_sensed;  // gear_code decoded now (no retry cache): "R"/"N"/"H"/"L"/"?"
-        int8_t gear_code_r;       // Active gear code table (web-calibrated or Constants.h default), -1 = unset
-        int8_t gear_code_n;
-        int8_t gear_code_h;
-        int8_t gear_code_l;
-        uint8_t gear_codes_custom; // Bitmask of table entries differing from the default: bit0 R, bit1 N, bit2 H, bit3 L
         float hall_position;      // Transmission servo position (0.0–100.0 %)
         float brake_pct;          // Brake position percentage (0-100)
         uint16_t throttle_us;         // Throttle servo pulse width (µs)

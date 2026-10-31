@@ -14,6 +14,25 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.2","date":"2026-10-31","uk":[
+"Квадроцикл: кут керма тепер читається з датчика Bosch на шині CAN; AS5600 більше не використовується",
+"Нова кнопка «Задати нуль датчика»; калібруються лише межі «ліво» та «право»",
+"Без датчика кермо керується стіком як швидкістю (тільки MANUAL); перед рухом стік один раз у центр",
+"Веб-панель — сервісна консоль за адресою 192.168.10.1 (було 192.168.4.1)",
+"Перевірка реле у веб-панелі (лише при вимкненому запалюванні та відпущеному блокуванні колеса)",
+"Калібрування газу приймає дзеркальний серво",
+"Блокування переднього колеса, реле, датчики передач і VESC на X6 — без змін",
+"Потрібне повторне калібрування керма: нуль датчика, потім «ліво» та «право»"
+],"en":[
+"Quad: steering angle now comes from the Bosch sensor on the CAN bus; the AS5600 is no longer used",
+"New \"Set sensor zero\" button; only the left and right limits are calibrated",
+"Without the sensor the stick steers by rate (MANUAL only); centre the stick once before moving",
+"Web portal is a service console at 192.168.10.1 (was 192.168.4.1)",
+"Relay test in the web portal (ignition off and wheel lock released only)",
+"Throttle calibration accepts a mirrored servo",
+"Front-wheel lock, relays, gear sensors and the VESC on X6 are unchanged",
+"Steering recalibration required: sensor zero, then left and right"
+]},
 {"version":"1.5.1","date":"2026-10-29","uk":[
 "Напрямок датчика кута визначається автоматично при калібруванні лімітів; дзеркальний монтаж більше не потребує перемонтажу",
 "Після першого ліміту перевірте: Jog ▶ збільшує кут",

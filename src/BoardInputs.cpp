@@ -6,7 +6,7 @@ static constexpr uint32_t BOARD_INPUT_FAIL_LOG_MS = 1000;
 
 BoardInputs::BoardInputs(TwoWire& bus)
     : expander_(bus, PCA9557_ADDR_INPUTS),
-      snapshot_{0, false, false, 0},
+      snapshot_{false, false, false, false, false, false, 0},
       rawInputs_(0),
       lastLoggedRaw_(0xFFFF),
       initialized_(false),
@@ -61,8 +61,10 @@ bool BoardInputs::begin() {
     applyRaw(raw);
 
     Debug::printfFeature(DebugFeature::VEHICLE,
-        "[IO] Opto inputs initialized @0x%02X raw=0x%02X (gear code=%u brake:%d)\n",
-        PCA9557_ADDR_INPUTS, raw, (unsigned)snapshot_.gearCode, snapshot_.brakeReleased);
+        "[IO] Opto inputs initialized @0x%02X raw=0x%02X (R:%d N:%d L:%d H:%d brake:%d)\n",
+        PCA9557_ADDR_INPUTS, raw,
+        snapshot_.gearReverse, snapshot_.gearNeutral, snapshot_.gearLow,
+        snapshot_.gearHigh, snapshot_.brakeReleased);
     return true;
 }
 
@@ -98,8 +100,9 @@ void BoardInputs::update() {
         if (lastLoggedRaw_ != (uint16_t)raw) {
             lastLoggedRaw_ = raw;
             Debug::printfFeature(DebugFeature::VEHICLE,
-                "[IO] raw=0x%02X (gear code=%u brake:%d)\n", raw,
-                (unsigned)snapshot_.gearCode, snapshot_.brakeReleased);
+                "[IO] raw=0x%02X (R:%d N:%d L:%d H:%d brake:%d)\n", raw,
+                snapshot_.gearReverse, snapshot_.gearNeutral, snapshot_.gearLow,
+                snapshot_.gearHigh, snapshot_.brakeReleased);
         }
         return;
     }
@@ -152,19 +155,17 @@ bool BoardInputs::bitHigh(uint8_t raw, uint8_t bit) {
     return (raw >> bit) & 0x01;
 }
 
-uint8_t BoardInputs::extractGearCode(uint8_t raw) {
-    return (uint8_t)((bitHigh(raw, BOARD_IN_BIT_GEAR_CODE_A) << 2) |
-                     (bitHigh(raw, BOARD_IN_BIT_GEAR_CODE_B) << 1) |
-                      bitHigh(raw, BOARD_IN_BIT_GEAR_CODE_C));
-}
-
 void BoardInputs::applyRaw(uint8_t raw) {
     rawInputs_ = raw;
-    // Gear code lines are engaged-HIGH, so they are read as raw levels —
-    // BOARD_INPUT_ACTIVE_LOW is the brake's. The code is published undecoded; a lost
-    // opto feed (111) and all-open mid-shift (000) both decode to GEAR_UNKNOWN in
-    // TransmissionController::decodeGearCode().
-    snapshot_.gearCode      = extractGearCode(raw);
+    // Gear channels are engaged-HIGH (each position OPENS its normally-conducting
+    // opto), so they are read as raw levels — BOARD_INPUT_ACTIVE_LOW is the brake's.
+    // This fails safe both ways: a lost opto feed floats every gear bit HIGH →
+    // multiple active → GEAR_UNKNOWN, and mid-shift all four read LOW → none
+    // active → GEAR_UNKNOWN.
+    snapshot_.gearReverse   = bitHigh(raw, BOARD_IN_BIT_GEAR_REVERSE);
+    snapshot_.gearNeutral   = bitHigh(raw, BOARD_IN_BIT_GEAR_NEUTRAL);
+    snapshot_.gearLow       = bitHigh(raw, BOARD_IN_BIT_GEAR_LOW);
+    snapshot_.gearHigh      = bitHigh(raw, BOARD_IN_BIT_GEAR_HIGH);
     snapshot_.brakeReleased = bitAsserted(raw, BOARD_IN_BIT_BRAKE_LIMIT);
     snapshot_.valid = true;
 }

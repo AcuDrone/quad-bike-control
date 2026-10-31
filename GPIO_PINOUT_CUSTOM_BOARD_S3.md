@@ -1,7 +1,7 @@
 # ESP32-S3 GPIO Pinout — Custom Control Board "Control_v0"
 
 **Hardware:** custom control PCB `Control_v0` — ESP32-S3-WROOM-1U (external antenna), `qio_qspi` mode
-**Vehicle (branch `aztec`):** ODES JUNGLECROSS 800 EFI/EPS buggy — the quad bike on the same board is documented on `master`
+**Vehicle (branch `master`):** the quad bike — the ODES JUNGLECROSS 800 EFI/EPS buggy on the same board is documented on `aztec`
 **Schematic:** `Control_v0.PrjPcb` (7 sheets, Altium) — Alexandr Tulusha, 14.06.2026
 **Companion boards:** `Buck Boost.PrjPcb` (→ X10), `Relay.PrjPcb` (→ **X15 / I2C2**, bench-verified)
 **Pin Definitions:** `include/Constants.h`
@@ -36,7 +36,7 @@
 | Relays | off-board `Relay` PCB — 8× SRD-12VDC + PCA9557 @ 0x1F on **X15 / I2C2** (scan-verified, all relay functions bench-tested) |
 | 24V rail | off-board `Buck Boost` PCB — TL494 two-phase 12V→24V, 0-26V / 0-15A, INA180 current sense (X10) |
 | CAN | MCP2515 + TJA1051T/3, **8 MHz** crystal |
-| Wired LAN | CH9121T + RJ45 (X18) — **disconnected on the aztec board** (R63/R64 removed; UART0 now drives the steering VESC on X1) |
+| Wired LAN (future) | CH9121T + RJ45 (X18) on UART0 (R63/R64 fitted on the quad board; on the aztec board they are removed and UART0 drives the steering VESC) |
 
 **Firmware strategy — HARD SWITCH.** `include/Constants.h` will be rewritten to this map; DevKit wiring
 is no longer supported on this branch. The implementation lands as a separate OpenSpec change — this
@@ -52,8 +52,8 @@ document is the wiring / pin reference only.
 | **1** | I2C1 SDA — X14 header, **no device fitted** (`Wire` not started) | `PIN_I2C1_SDA` — defined, unused | FREE | MOVED (was 41) |
 | **2** | I2C1 SCL — same bus | `PIN_I2C1_SCL` — defined, unused | FREE | MOVED (was 42) |
 | **3** | CD4051 8:1 mux common out (Analog_1..8 = BTS7960 IS) | `PIN_ADC_IS_MUX` — ADC1 | `PIN_THROTTLE_PWM` | NEW (input only) |
-| **4** | PWM_1 → X6 pin 2 (L_PWM) | FREE — reserved for a 4th BTS7960 on X6 | `PIN_VESC_TX` | FREED (VESC moved to UART0 / X1) |
-| **5** | PWM_2 → X6 pin 3 (R_PWM) | FREE — reserved for a 4th BTS7960 on X6 | `PIN_VESC_RX` | FREED (VESC moved to UART0 / X1) |
+| **4** | PWM_1 → X6 pin 2 (L_PWM) | `PIN_VESC_TX` — UART2 TX | same | UNCHANGED |
+| **5** | PWM_2 → X6 pin 3 (R_PWM) | `PIN_VESC_RX` — UART2 RX | same | UNCHANGED |
 | **6** | PWM_3 → X7 pin 2 (L_PWM) | `PIN_BRAKE_LPWM` — LEDC ch5 | same | UNCHANGED |
 | **7** | PWM_4 → X7 pin 3 (R_PWM) | `PIN_BRAKE_RPWM` — LEDC ch4 | same | UNCHANGED |
 | **8** | Opto-isolated input via 6N137 (X2, ex-"S-BUS") | `PIN_SPEED_SENSOR` — driveline speed (PCNT) ⚠ inverted, see §3/§8.9 | `PIN_MAVLINK_RX` | RE-PINNED |
@@ -78,9 +78,9 @@ document is the wiring / pin reference only.
 | **40** | MCP2515 SPI CLK | `PIN_CAN_SCK` | FREE | MOVED (was 12) |
 | **41** | MCP2515 SPI MISO | `PIN_CAN_MISO` | `PIN_STEER_SDA` | MOVED (was 13) |
 | **42** | MCP2515 SPI MOSI | `PIN_CAN_MOSI` | `PIN_STEER_SCL` | MOVED (was 11) |
-| **43** | UART0 TX → Prog X1 TxD (510Ω R13); R63 → CH9121T **removed** on aztec | `PIN_VESC_TX` — VESC UART0 TX (X1) → VESC RX | console TX | NEW (aztec, needs R63/R64 removed) |
-| **44** | UART0 RX ← Prog X1 RxD (510Ω R14); R64 → CH9121T **removed** on aztec | `PIN_VESC_RX` — VESC UART0 RX (X1) ← VESC TX | console RX | NEW (aztec, needs R63/R64 removed) |
-| **45** | `CFG_CH9121T` via BSS138 | LAN config-mode toggle — unused (CH9121T disconnected on aztec) | FREE | RESERVED ⚠ strapping |
+| **43** | UART0 TX → Prog X1 (510Ω R13) **and** CH9121T RXD1 (100Ω R63) | RESERVED — future wired LAN (no console, no log output) | console TX | RESERVED ⚠ shared |
+| **44** | UART0 RX ← Prog X1 (510Ω R14) **and** CH9121T TXD1 (100Ω R64) | RESERVED — future wired LAN | console RX | RESERVED ⚠ shared |
+| **45** | `CFG_CH9121T` via BSS138 | LAN config-mode toggle — unused until LAN enabled | FREE | RESERVED ⚠ strapping |
 | **46** | `Bust_On/OFF` → X10 pin 1 | `PIN_BOOST_EN` — boost enable output | FREE | NEW ⚠ strapping |
 | **47** | I2C2 SCL (BSS138 level shift) | On-board U10/U2 + X15 bus SCL (relay board) | `PIN_GEAR_HIGH` | NEW |
 | **48** | I2C2 SDA (BSS138 level shift) | On-board U10/U2 + X15 bus SDA (relay board) | FREE | NEW |
@@ -97,14 +97,14 @@ document is the wiring / pin reference only.
 
 | Connector | Purpose | Pinout |
 |-----------|---------|--------|
-| **X1** | Prog header — **steering VESC UART0** (aztec) | 1=3V3, 2=RESET, 3=GND, 4=TxD (GPIO43) → **VESC RX**, 5=RxD (GPIO44) ← **VESC TX**, 6=BOOT. 3.3V logic, direct through 510Ω R13/R14 (no level shifter); wire TxD/RxD/GND only, **not** 3V3. ⚠ No longer usable for UART flashing — flash over USB-C (RESET/BOOT still work) |
+| **X1** | Prog / programming header | 3V3, RESET, GND, TxD (GPIO43), RxD (GPIO44), BOOT (on aztec this header carries the steering VESC on UART0) |
 | **X2** | Driveline speed sensor (12V), opto-isolated | 1 = In+, 2 = In− → 470Ω `R22` → 6N137 LED → open-collector output + pull-up → **GPIO8**. ⚠ **Inverted** (LED on → GPIO8 low) and ⚠ **needs an extra series resistor** — see below |
 | **X3** | Hall 1 — spare | 1=5V, 2=Hall A (GPIO14), 3=Hall B (GPIO21), 4=GND |
 | **X4** | Hall 2 — spare | 1=5V, 2=Hall A (GPIO12), 3=Hall B (GPIO13), 4=GND |
 | **X5** | Hall 3 — spare | 1=5V, 2=Hall A (GPIO10), 3=Hall B (GPIO11), 4=GND |
-| **X6** | FREE — reserved for a 4th BTS7960 | 1=5V(fused), 2=L_PWM (GPIO4), 3=R_PWM (GPIO5), 4/5=L_IS/R_IS (mux CH3/CH0), 6=GND. *History:* carried the steering VESC UART2 until it moved to X1 / UART0 |
+| **X6** | VESC steering (UART2) | 1=5V(fused), 2=L_PWM → **VESC RX** (GPIO4 TX), 3=R_PWM → **VESC TX** (GPIO5 RX), 4/5=IS n/c, 6=GND |
 | **X7** | Brake BTS7960 | 1=5V(fused), 2=L_PWM (GPIO6), 3=R_PWM (GPIO7), 4=L_IS, 5=R_IS, 6=GND |
-| **X8** | Servos | 1=5V(fused, servo supply), 2=throttle PWM (GPIO15), 3=transmission PWM (GPIO16 — GXservo HS-1005SGT 150KG on aztec), 4/5=IS, 6=GND |
+| **X8** | Servos | 1=5V(fused, servo supply), 2=throttle PWM (GPIO15), 3=transmission PWM (GPIO16 — HappyModel Super400 Plus on the quad), 4/5=IS, 6=GND |
 | **X9** | MAVLink → Pixhawk TELEM | 2 → Pixhawk RX (GPIO17 TX), 3 ← Pixhawk TX (GPIO18 RX), 6=GND. ⚠ **Do NOT connect pin 1 (5V)**; leave 4/5 unconnected |
 | **X10** | Buck Boost board | 1 = Boost On/Off (GPIO46), 2 = GND, 3 = +24V measure → divider → GPIO9 |
 | **X11** | Power in | 3× +12V, 3× GND (main 12V input) |
@@ -117,9 +117,8 @@ document is the wiring / pin reference only.
 | **X18** | Ethernet | RJ45 (CH9121T) |
 | **USB-C** | Flashing + console | Native USB (GPIO19/20), USB-CDC |
 
-⚠ **Transmission servo supply (aztec):** the GXservo HS-1005SGT 150KG (180°, 500–2500 µs capable;
-firmware uses the verified 800–2200 µs range) is rated for **16.8 V max**. It must **not** be
-powered from the 24V boost rail.
+(The aztec buggy's transmission servo, a GXservo HS-1005SGT, is limited to 16.8 V and must never be
+fed from the 24V boost rail — documented on `aztec`.)
 
 **Hall input conditioning (X3/X4/X5):** ferrite bead (1 kΩ @ 100 MHz) → 1.2K / 2.2K divider (×0.65)
 → PESD3V3L1UA TVS + 100n. Designed for **5V** sensors. All three channels are **spare** — the
@@ -160,9 +159,9 @@ BAV199 clamp + 100n, into the CD4051 mux.
 
 | UART | RX | TX | Baud | Purpose |
 |------|----|----|------|---------|
-| UART0 | 44 | 43 | 115200 | VESC steering driver (Flipsky 75200) via Prog header X1 (aztec: R63/R64 removed). Console is USB-CDC |
+| UART0 | 44 | 43 | — | **RESERVED** for CH9121T wired LAN (future). Console is USB-CDC; no log output on UART0 |
 | UART1 | 18 | 17 | 115200 | MAVLink 2 ↔ Pixhawk TELEM (via X9) |
-| UART2 | — | — | — | Unused (GPIO4/5 / X6 freed for a 4th BTS7960) |
+| UART2 | 5 | 4 | 115200 | VESC steering driver (Flipsky 75200) via X6 — unchanged |
 | — | — | — | — | No UART is free for S-BUS; **S-BUS is dropped for good** and GPIO8 (X2 opto) is now the speed-sensor pulse input |
 
 ### I2C Allocation
@@ -268,39 +267,24 @@ schematic port names implied I2C1, the copper says I2C2 — see §4.)
 routing is not 1:1, exactly like the relay board in §6. The X16 gear lines land on port bits 0, 1, 6
 and 7 (**bench-verified 2026-08-21** on the quad bike by sweeping the lever against a live raw dump).
 
-**This is the aztec buggy assignment** (branch `aztec`). The quad bike reads the gear one-hot on four
-lines (bit 0 NEUTRAL, bit 1 REVERSE, bit 6 LOW, bit 7 HIGH — observed bytes between `0x1C`, R `0x1E`,
-N `0x1D`, L `0x5C`, H `0x9C`); that assignment is documented on `master`. The aztec gear selector
-instead drives a **3-bit code** on three of the same lines, and bit 7 is **not wired** — firmware
-ignores it completely (it may float HIGH).
+**This is the quad bike assignment** (branch `master`): one line per gear. (The aztec buggy drives a
+3-bit gear code on bits 0, 1 and 6 instead; that assignment is documented on `aztec`.)
 
-| Port bit | Connector | Function (aztec) | Asserted level |
+| Port bit | Connector | Function | Asserted level |
 |----------|-----------|----------|----------------|
-| 0 | X16 | Gear code bit A — left/MSB (quad-bike NEUTRAL line) | **HIGH** |
-| 1 | X16 | Gear code bit B — middle (quad-bike REVERSE line) | **HIGH** |
-| 6 | X16 | Gear code bit C — right/LSB (quad-bike LOW line) | **HIGH** |
-| 7 | X16 | Not wired on aztec — ignored | — |
+| 0 | X16 | Gear NEUTRAL | **HIGH** |
+| 1 | X16 | Gear REVERSE | **HIGH** |
+| 6 | X16 | Gear LOW | **HIGH** |
+| 7 | X16 | Gear HIGH | **HIGH** |
 | 4 | X17 | Brake limit sensor ("released" endstop — 1000 ms overrun logic, I2C latency acceptable) | LOW (`BOARD_INPUT_ACTIVE_LOW`, **not** bench-verified) |
 | 2, 3, 5 | X17 | Spare — never moved during the sweep | — |
 
-Gear code, written `[bit0 bit1 bit6]` (`GEAR_CODE_*` in `Constants.h`, decoded only in
-`TransmissionController::decodeGearCode()`):
+The gear channels are **engaged-HIGH**: every wired gear opto conducts at rest (pin LOW) and
+selecting a position *opens* exactly that one channel, driving its pin HIGH. Observed port bytes:
+between positions `0x1C`, R `0x1E`, N `0x1D`, L `0x5C`, H `0x9C`.
 
-| Gear | Code | bit 0 | bit 1 | bit 6 |
-|------|------|-------|-------|-------|
-| L (LOW) | `101` | 1 | 0 | 1 |
-| H (HIGH) | `001` | 0 | 0 | 1 |
-| N (NEUTRAL) | `011` | 0 | 1 | 1 |
-| R (REVERSE) | `010` | 0 | 1 | 0 |
-| — | `000`, `100`, `110`, `111` | | | → `GEAR_UNKNOWN` |
-
-The code lines keep the same **engaged-HIGH** opto polarity as the quad bike: an opto conducts at
-rest (pin LOW) and an engaged line opens it, driving its pin HIGH ("1").
-
-This still fails safe in both directions: losing the opto feed floats all three code bits HIGH →
-`111` → `GEAR_UNKNOWN`; with all lines open (e.g. mid-shift) the code reads `000` → `GEAR_UNKNOWN`.
-Telemetry publishes the raw code as `gear_code` (0..7, -1 when the inputs are stale) and its instant
-decode as `gear_sensed`, so the wiring can be checked on the bench.
+This fails safe in both directions: losing the opto feed floats all four gear bits HIGH →
+multiple-active → `GEAR_UNKNOWN`; mid-shift all four read LOW → none-active → `GEAR_UNKNOWN`.
 
 ---
 
@@ -312,19 +296,18 @@ intended home **X15 / I2C2** and answers at 0x1F; every relay function below has
 the bench. **X4..X11 below are the RELAY BOARD's own connectors** — not the main board's X4/X5 Hall
 headers in §3.
 
-**This is the aztec buggy assignment** (branch `aztec`). The same relay PCB is wired differently on
-the quad bike — ignition on the paired Relay_1 + Relay_2 and a front-wheel lock on the paired
-Relay_5 + Relay_6; that assignment is documented on `master`. The PCB's IO routing below is identical
-on both vehicles.
+**This is the quad bike assignment** (branch `master`). The same relay PCB is wired differently on
+the aztec buggy (single ignition relay, no front-wheel lock); that assignment is documented on
+`aztec`. The PCB's IO routing below is identical on both vehicles.
 
-| Relay | PCA9557 IO | Port bit | Connector | Function (aztec) |
+| Relay | PCA9557 IO | Port bit | Connector | Function |
 |-------|-----------|----------|-----------|----------|
-| Relay_1 | **IO4** | `0b00010000` | X4 | Ignition / ECU line (single relay) |
-| Relay_2 | **IO5** | `0b00100000` | X5 | Starter solenoid |
-| Relay_3 | **IO6** | `0b01000000` | X6 | Front light |
-| Relay_4 | **IO7** | `0b10000000` | X7 | Lock A — reserved, off except in the web relay test (function specified in a later change) |
-| Relay_5 | **IO3** | `0b00001000` | X8 | Lock B — reserved, off except in the web relay test (function specified in a later change) |
-| Relay_6 | **IO2** | `0b00000100` | X9 | Lock C — reserved, off except in the web relay test (function specified in a later change) |
+| Relay_1 | **IO4** | `0b00010000` | X4 | Ignition / ECU line — **pair with Relay_2** |
+| Relay_2 | **IO5** | `0b00100000` | X5 | Ignition / ECU line — **pair with Relay_1** |
+| Relay_3 | **IO6** | `0b01000000` | X6 | Starter solenoid |
+| Relay_4 | **IO7** | `0b10000000` | X7 | Front light |
+| Relay_5 | **IO3** | `0b00001000` | X8 | Front-wheel lock — **pair with Relay_6** |
+| Relay_6 | **IO2** | `0b00000100` | X9 | Front-wheel lock — **pair with Relay_5** |
 | Relay_7 | **IO0** | `0b00000001` | X10 | Spare — off except in the web relay test |
 | Relay_8 | **IO1** | `0b00000010` | X11 | Spare — off except in the web relay test |
 
@@ -334,33 +317,34 @@ on both vehicles.
 > wrong and would fire the starter when the front light is commanded. The firmware encodes this in
 > `RELAY_MASK_*` in `include/Constants.h`, never in per-relay bit indices.
 
-Each function is still addressed as a whole-port mask (no relay is paired on aztec):
+**Duplicate (paralleled) relays are intentional.** Two functions are split across two relay contacts
+that always energize together:
 
 | Function | Mask (`include/Constants.h`) | Value | Relays / IO |
 |----------|------------------------------|-------|-------------|
-| Ignition / ECU line | `RELAY_MASK_IGNITION` | `0b00010000` | Relay_1 (IO4) |
-| Starter | `RELAY_MASK_STARTER` | `0b00100000` | Relay_2 (IO5) |
-| Front light | `RELAY_MASK_FRONT_LIGHT` | `0b01000000` | Relay_3 (IO6) |
-| Reserved (3 locks + 2 spares) | `RELAY_MASK_RESERVED` | `0b10001111` | Relay_4 (IO7), Relay_5 (IO3), Relay_6 (IO2), Relay_7 (IO0), Relay_8 (IO1) — 0 except in the web relay test |
+| Ignition / ECU line | `RELAY_MASK_IGNITION` | `0b00110000` | Relay_1 (IO4) + Relay_2 (IO5) |
+| Starter | `RELAY_MASK_STARTER` | `0b01000000` | Relay_3 (IO6) |
+| Front light | `RELAY_MASK_FRONT_LIGHT` | `0b10000000` | Relay_4 (IO7) |
+| Front-wheel lock | `RELAY_MASK_WHEEL_LOCK` | `0b00001100` | Relay_5 (IO3) + Relay_6 (IO2) |
+| Spare | `RELAY_MASK_RESERVED` | `0b00000011` | Relay_7 (IO0) + Relay_8 (IO1) — 0 except in the web relay test |
 
-The quad bike's front-wheel lock is **not fitted** on aztec: there is no `RELAY_MASK_WHEEL_LOCK`
-(`RELAY_WHEEL_LOCK_FITTED = 0`). The MAVLink servo channel 7, the web `set_wheel_lock` command and
-telemetry bit0 are kept, but lock requests are rejected and the lock is always reported released /
-not fitted.
+The front-wheel lock is **fitted** (`RELAY_WHEEL_LOCK_FITTED = 1`): MAVLink servo channel 7, the web
+`set_wheel_lock` command and telemetry bit0 drive and report it. The fail-safe all-off leaves the
+lock in its last state.
 
-**Harness wiring note (aztec).** The ignition/ECU line is wired to **X4**, the starter solenoid to
-**X5**, and the front light to **X6**. **X7, X8 and X9** carry three separate locks whose functions
-are defined in a later change — the firmware drives them off until then. Nothing is landed on X10 or
-X11. The whole 8-bit port is written from a single shadow byte and read back for verification.
+**Harness wiring note.** The ignition/ECU load is wired to **X4 + X5**, the front-wheel lock to
+**X8 + X9**, the starter solenoid to **X6**, and the front light to **X7**. Nothing is landed on X10
+or X11. The whole 8-bit port is written from a single shadow byte and read back for verification,
+so a paired relay can never be left half-energized by firmware.
 
 **Web relay test (wiring check).** The web UI's *Relay Test* card has an on/off toggle for each of
-the eight relays (`set_relay_test`), so the harness — in particular the three lock relays Relay_4/5/6
-on X7/X8/X9, which have no function yet — can be checked with a multimeter. A relay can be switched
-ON only while the ignition is **OFF** and no function relay (ignition, starter, light) is energized.
-Each test relay switches off by itself after 30 s (`RELAY_TEST_TIMEOUT_MS`); the starter relay
-(Relay_2) after 2 s (`RELAY_TEST_STARTER_MAX_MS`). Any ignition / crank / light-on command, the
-fail-safe all-off and a relay-board fault switch every test relay off immediately. The test bits go
-through the same shadow byte and read-back as the functions; telemetry `relay_test` reports them
+the eight relays (`set_relay_test`), so the harness can be checked with a multimeter. A relay can be
+switched ON only while the ignition is **OFF**, the light is off and the wheel lock is released. Each
+relay of a pair is tested on its own (one contact drives the load, at most 30 s). Each test relay
+switches off by itself after 30 s (`RELAY_TEST_TIMEOUT_MS`); the starter relay (Relay_3) after 2 s
+(`RELAY_TEST_STARTER_MAX_MS`). Any ignition / crank / light-on / wheel-lock command, the fail-safe
+all-off and a relay-board fault switch every test relay off immediately. The test bits go through
+the same shadow byte and read-back as the functions; telemetry `relay_test` reports them
 (bit0 = Relay_1 … bit7 = Relay_8).
 
 ---
@@ -383,18 +367,17 @@ A separate 7s LiFePO4 battery also exists in the vehicle power system.
 
 ## 8. ⚠ Warnings & Bring-Up Checklist
 
-1. **GPIO43/44 (UART0) carry the steering VESC on X1.** *History:* they were shared copper between the
-   Prog connector and the CH9121T (CH9121T TXD1 through 100Ω wins over X1 through 510Ω). On the aztec
-   board **R63/R64 are removed**, so UART0 reaches only X1 — any board copy used with this firmware
-   needs the same rework. Consequences: the ROM bootloader still prints its banner on GPIO43 at reset
-   (the VESC ignores unframed bytes; runtime core/IDF logs are kept off UART0 by the firmware), and X1
-   can no longer be used for UART flashing — flash over USB-C (X1 RESET/BOOT still work).
+1. **GPIO43/44 are shared copper** between the Prog connector and the CH9121T. A device on the Prog
+   connector and an active LAN chip are mutually exclusive — CH9121T TXD1 through 100Ω wins over the
+   Prog header through 510Ω. Keep the LAN section unpopulated / held silent until UART0 is truly free.
+   The firmware keeps runtime core/IDF log output off UART0 (USB-CDC only). (On the aztec board
+   R63/R64 are removed and UART0 drives the steering VESC on X1.)
 2. **Strapping pins:** GPIO0 (boot / LED), GPIO45 (`CFG_CH9121T`), GPIO46 (boost enable — 100K pulldown
    keeps the boost off through reset; verify there is no enable glitch at boot), GPIO3 (JTAG source
    select strap — used as an ADC **input only**, which is fine).
-3. **PWM-header UART link (X9 MAVLink)** runs through BSS138 bidirectional level shifters with
+3. **PWM-header UART links (X6 VESC, X9 MAVLink)** run through BSS138 bidirectional level shifters with
    10K pull-ups to 5V, 1K series and 100pF. Verified workable at 115200: a logic low arrives at ~0.5V at
-   the ESP, highs reach ~5V through ~11K into the peripheral (Pixhawk TELEM pins are
+   the ESP, highs reach ~5V through ~11K into the peripheral (Pixhawk TELEM and VESC STM32 pins are
    5V-tolerant). **Do not raise the baud rate** (rise time ~1 µs) and keep cables short.
 4. **X9 pin 1 (5V) must NOT be wired to Pixhawk TELEM 5V** — both ends are supply outputs.
 5. **Hall inputs (X3/X4/X5) are scaled for 5V sensors** (×0.65 divider) and are all **spare**. A 12V
@@ -424,11 +407,11 @@ A separate 7s LiFePO4 battery also exists in the vehicle power system.
      Relay_4=IO7, Relay_5=IO3, Relay_6=IO2, Relay_7=IO0, Relay_8=IO1`, verified from the
      `Relay.PrjPcb` netlist. Never "simplify" the firmware back to `Relay_N = bit N` — that would
      command the starter when the front light is requested. Firmware uses `RELAY_MASK_*`.
-   - Aztec assignment (the quad bike's paired assignment lives on `master`): ignition/ECU line on
-     **X4** (Relay_1), starter on **X5** (Relay_2), front light on **X6** (Relay_3). X7/X8/X9
-     (Relay_4/5/6) are three separate locks, reserved and written off until a later change;
-     X10/X11 (Relay_7/Relay_8) stay unconnected and are written off. No front-wheel lock. The only
-     exception is the web relay test (§6), ignition OFF only and auto-off after 30 s.
+   - Two loads are deliberately split across **paired** relays that switch together: the
+     ignition/ECU line on **X4 + X5** (Relay_1 + Relay_2) and the front-wheel lock on **X8 + X9**
+     (Relay_5 + Relay_6). Starter is **X6** (Relay_3), front light **X7** (Relay_4). X10/X11
+     (Relay_7/Relay_8) stay unconnected and are written off, except in the web relay test (§6).
+     (Quad bike; the aztec assignment is documented on `aztec`.)
 9. **Driveline speed sensor is on GPIO8 — the X2 6N137 opto input, not a Hall channel.** The fitted
    sensor outputs **12V**; the Hall channels are scaled for 5V (warning 5), while the opto input is
    current-driven and galvanically isolated, so it takes 12V with a single external series resistor.
@@ -462,7 +445,7 @@ A separate 7s LiFePO4 battery also exists in the vehicle power system.
 | `PIN_CAN_MOSI` | GPIO 11 | **GPIO 42** |
 | `PIN_STEER_SDA` → `PIN_I2C1_SDA` | GPIO 41 | **GPIO 1** (renamed in 1.3.0; X14 empty, defined but unused) |
 | `PIN_STEER_SCL` → `PIN_I2C1_SCL` | GPIO 42 | **GPIO 2** (renamed in 1.3.0; X14 empty, defined but unused) |
-| `PIN_VESC_TX` / `PIN_VESC_RX` | GPIO 4 / 5 | **GPIO 43 / 44** (UART0, X1 — aztec) |
+| `PIN_VESC_TX` / `PIN_VESC_RX` | GPIO 4 / 5 | unchanged (UART2, X6; GPIO 43 / 44 on aztec) |
 | `PIN_BRAKE_LPWM` / `PIN_BRAKE_RPWM` | GPIO 6 / 7 | unchanged |
 
 ### New constants
@@ -484,10 +467,10 @@ A separate 7s LiFePO4 battery also exists in the vehicle power system.
 | `PIN_GEAR_NEUTRAL` | 20 | Opto input **bit 0** (see §5) |
 | `PIN_GEAR_LOW` | 21 | Opto input **bit 6** (see §5) |
 | `PIN_GEAR_HIGH` | 47 | Opto input **bit 7** (see §5) |
-| `PIN_RELAY1` | 36 | Relay board ignition/ECU line — **Relay_1** (IO4, `RELAY_MASK_IGNITION`; aztec) |
-| `PIN_RELAY2` | 37 | Relay board starter — **Relay_2** (IO5, `RELAY_MASK_STARTER`; aztec) |
-| `PIN_RELAY3` | 38 | Relay board front light — **Relay_3** (IO6, `RELAY_MASK_FRONT_LIGHT`; aztec) |
-| `PIN_WHEEL_LOCK` | 39 | No replacement on aztec — front-wheel lock not fitted (`RELAY_WHEEL_LOCK_FITTED = 0`) |
+| `PIN_RELAY1` | 36 | Relay board ignition/ECU line — **Relay_1 + Relay_2** (IO4+IO5, `RELAY_MASK_IGNITION`) |
+| `PIN_RELAY2` | 37 | Relay board starter — **Relay_3** (IO6, `RELAY_MASK_STARTER`) |
+| `PIN_RELAY3` | 38 | Relay board front light — **Relay_4** (IO7, `RELAY_MASK_FRONT_LIGHT`) |
+| `PIN_WHEEL_LOCK` | 39 | Relay board front-wheel lock — **Relay_5 + Relay_6** (IO3+IO2, `RELAY_MASK_WHEEL_LOCK`) |
 | `PIN_STEER_RPWM` / `PIN_STEER_LPWM` | 17 / 18 | Fully released — GPIO17/18 are now MAVLink UART1. The "RESERVED/FREED" placeholders (and `LEDC_CH_STEER_RPWM`/`LEDC_CH_STEER_LPWM`) must be deleted, not kept reserved |
 
 ### New / reworked drivers

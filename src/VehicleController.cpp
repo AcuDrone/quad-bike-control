@@ -343,9 +343,9 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
         processSetGearDefaultCommand(cmd.strValue, cmd.floatValue, webPortal);
         return;
     } else if (cmd.cmd == "set_gear_code" || cmd.cmd == "reset_gear_codes") {
-        // Gear code calibration (bench): not restricted by input source; refused while
-        // the engine is running, like throttle calibration
-        processGearCodeCommand(cmd.cmd, cmd.strValue, webPortal);
+        // Gear code calibration is aztec-only (3-bit gear code); the quad bike senses
+        // one line per gear. Answer explicitly so an old cached page gets a reply.
+        webPortal.sendResponse(false, "Gear codes not used on this vehicle");
         return;
     } else if (cmd.cmd == "move_to_position") {
         processMoveToPositionCommand(cmd.floatValue, webPortal);
@@ -1097,38 +1097,6 @@ void VehicleController::processSetGearDefaultCommand(const String& gearStr, floa
     String msg = "Default for " + gearStr + " set to " + String(positionPct, 1) + "%";
     Debug::printfFeature(DebugFeature::VEHICLE, "[WEB] %s\n", msg.c_str());
     webPortal.sendResponse(true, msg);
-}
-
-void VehicleController::processGearCodeCommand(const String& which, const String& gearStr, WebPortal& webPortal) {
-    const bool reset = (which == "reset_gear_codes");
-    if (isEngineRunning()) {
-        webPortal.sendResponse(false, reset ? "Gear code reset refused: engine is running"
-                                            : "Gear code capture refused: engine is running");
-        return;
-    }
-    if (reset) {
-        if (!transmission_.resetGearCodes()) {
-            webPortal.sendResponse(false, "Gear codes reset in RAM only: NVS unavailable");
-            return;
-        }
-        webPortal.sendResponse(true, "Gear codes reset to defaults");
-        return;
-    }
-
-    TransmissionController::Gear gear;
-    if      (gearStr == "R") gear = TransmissionController::Gear::GEAR_REVERSE;
-    else if (gearStr == "N") gear = TransmissionController::Gear::GEAR_NEUTRAL;
-    else if (gearStr == "L") gear = TransmissionController::Gear::GEAR_LOW;
-    else if (gearStr == "H") gear = TransmissionController::Gear::GEAR_HIGH;
-    else {
-        webPortal.sendResponse(false, "Gear code capture failed: invalid gear (use R/N/L/H)");
-        return;
-    }
-
-    String msg;
-    bool ok = transmission_.captureGearCode(gear, msg);
-    Debug::printfFeature(DebugFeature::VEHICLE, "[WEB] %s\n", msg.c_str());
-    webPortal.sendResponse(ok, msg);
 }
 
 void VehicleController::processMoveToPositionCommand(float positionPct, WebPortal& webPortal) {

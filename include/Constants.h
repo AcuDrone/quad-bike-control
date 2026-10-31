@@ -17,12 +17,13 @@
 //
 // Pins that deliberately have NO firmware function:
 //   GPIO19/20 — native USB D-/D+ (USB-CDC console, flashing). Never assign.
-//   GPIO45    — CFG_CH9121T (LAN config strap), untouched (the CH9121T is cut off
-//               from UART0 on the aztec board, see PIN_VESC_TX below).
-//   GPIO4/5   — FREE: X6 is reserved for a 4th BTS7960 driver (IS mux CH3/CH0).
+//   GPIO43/44 — UART0, shared copper between the Prog header and the future
+//               CH9121T wired-LAN chip (R63/R64 fitted on the quad board). RESERVED:
+//               no console, no UART and no log output on them (the console is
+//               USB-CDC, ARDUINO_USB_CDC_ON_BOOT=1).
+//   GPIO45    — CFG_CH9121T (LAN config strap), untouched until LAN is enabled.
 //   GPIO0/21, GPIO10-13 — spare (system LED, Hall_1 B, Hall_2/3).
-// GPIO43/44 (UART0) carry the steering VESC on the Prog header X1. The console is
-// USB-CDC (ARDUINO_USB_CDC_ON_BOOT=1), never UART0.
+// GPIO4/5 are NOT free: they carry the steering VESC on X6 (UART2, see PIN_VESC_TX).
 
 // MAVLink telemetry link (UART1 to Pixhawk TELEM, connector X9 via BSS138 shifters)
 // ⚠ Verified at 115200 only — do NOT raise the baud rate (pinout §8.3).
@@ -31,24 +32,20 @@
 #define MAVLINK_UART_NUM    UART_NUM_1   // UART1 for MAVLink
 #define MAVLINK_BAUD_RATE   115200       // Pixhawk TELEM baud
 
-// Transmission Servo (GXservo HS-1005SGT 150KG, aztec) — X8 pin 3
+// Transmission Servo (HappyModel Super400 Plus) — X8 pin 3
 #define PIN_TRANS_SERVO     GPIO_NUM_16  // LEDC Channel 2
 
-// Steering Actuator — driven by a Flipsky 75200 VESC over UART0 (brushed-DC mode).
+// Steering Actuator — driven by a Flipsky 75200 VESC over UART2 (brushed-DC mode).
 // See "VESC STEERING DRIVER CONFIGURATION" below. The former BTS7960 steering PWM
 // pins (GPIO17/18) and their LEDC channels (6/7) are fully released: GPIO17/18 are
 // now the MAVLink UART and LEDC 6/7 are free for future use.
 
-// VESC steering driver UART (UART_NUM_0; UART1 = MAVLink, UART2 unused).
-// Prog header X1 (TxD/RxD, 3.3V direct through 510R R13/R14, no level shifters).
-// HARDWARE PRECONDITION (aztec board): R63/R64 (100R links GPIO43/44 -> CH9121T)
-// are REMOVED, so UART0 reaches only X1. With them fitted the LAN chip would fight
-// the VESC on GPIO44. X6 (GPIO4/5) is freed for a 4th BTS7960.
-// The ROM bootloader still prints on GPIO43 at reset (the VESC ignores unframed
-// bytes); runtime core/IDF logging is kept off UART0 in setup() (main.cpp).
-#define PIN_VESC_TX         GPIO_NUM_43   // UART0 TX -> VESC RX (X1 TxD)
-#define PIN_VESC_RX         GPIO_NUM_44   // UART0 RX <- VESC TX (X1 RxD)
-#define VESC_UART_NUM       0             // UART_NUM_0
+// VESC steering driver UART (UART_NUM_2; UART0 reserved for LAN, UART1 = MAVLink)
+// Connector X6 via BSS138 shifters — 115200 only (pinout §8.3).
+// (The aztec buggy runs its VESC on UART0 / X1 instead — aztec branch.)
+#define PIN_VESC_TX         GPIO_NUM_4    // ESP TX -> VESC RX (X6 pin 2)
+#define PIN_VESC_RX         GPIO_NUM_5    // ESP RX <- VESC TX (X6 pin 3)
+#define VESC_UART_NUM       2             // UART_NUM_2
 #define VESC_UART_BAUD      115200        // VESC app default baud
 
 // I2C1 ("Wire") — the EXTERNAL header bus on X14: NO device fitted (the steering
@@ -138,46 +135,20 @@
 //
 // ⚠ The In1..In8 = bits 0..7 assumption taken from the schematic is WRONG for the
 //   gear channels — the routing is not 1:1, same story as the relay board above.
-//   Bench-verified 2026-08-21 (quad-bike lever sweep, live raw dump): the X16 gear
-//   lines land on port bits 0, 1, 6 and 7. Bits 2, 3 and 4 sat HIGH and bit 5 LOW
-//   throughout — none of them ever moved.
+//   Bench-verified 2026-08-21 by sweeping the gear lever with a live raw dump:
+//     NEUTRAL = bit 0   REVERSE = bit 1   LOW = bit 6   HIGH = bit 7
+//   Observed port bytes: between positions 0x1C, R 0x1E, N 0x1D, L 0x5C, H 0x9C.
+//   Bits 2, 3 and 4 sat HIGH and bit 5 LOW throughout — none of them ever moved.
 //
-// AZTEC GEAR SENSING — 3-bit CODE, not one-hot. The aztec buggy's gear selector
-// drives three of those lines as a binary code (the quad bike's one-hot four-line
-// assignment — NEUTRAL=0 REVERSE=1 LOW=6 HIGH=7 — lives on `master`). Bit 7 (the
-// quad bike's HIGH line) is NOT wired on aztec and is ignored completely: it may
-// float HIGH.
-//
-// Same opto polarity as before: a line reads HIGH ("1") when it is engaged (the
-// opto conducts at rest → pin LOW; engaging the line opens it → pin HIGH).
-// BOARD_INPUT_ACTIVE_LOW below therefore describes the brake input only — do NOT
-// apply it to the gear code bits.
-//
-// Code bit order, written left to right as [A B C] = [bit 0, bit 1, bit 6]:
-//   code = (A << 2) | (B << 1) | C, so the literal 0b101 reads A=1 B=0 C=1.
-#define BOARD_IN_BIT_GEAR_CODE_A   0     // X16 — code MSB (quad-bike NEUTRAL line), engaged = HIGH
-#define BOARD_IN_BIT_GEAR_CODE_B   1     // X16 — code middle (quad-bike REVERSE line), engaged = HIGH
-#define BOARD_IN_BIT_GEAR_CODE_C   6     // X16 — code LSB (quad-bike LOW line), engaged = HIGH
-
-// DEFAULT gear codes ([bit0 bit1 bit6]); the web gear code calibration may override them at
-// runtime (NVS "transmission" code_r/n/h/l). Every other code — 000, 100, 110, 111 — decodes to
-// GEAR_UNKNOWN: 000 (all lines open, e.g. mid-shift) and 111 (opto feed lost, all
-// float HIGH) both land there, keeping the fail-safe of the old one-hot decode.
-#define GEAR_CODE_LOW              0b101
-#define GEAR_CODE_HIGH             0b001
-#define GEAR_CODE_NEUTRAL          0b011
-#define GEAR_CODE_REVERSE          0b010
-static_assert(GEAR_CODE_LOW != GEAR_CODE_HIGH && GEAR_CODE_LOW != GEAR_CODE_NEUTRAL &&
-              GEAR_CODE_LOW != GEAR_CODE_REVERSE && GEAR_CODE_HIGH != GEAR_CODE_NEUTRAL &&
-              GEAR_CODE_HIGH != GEAR_CODE_REVERSE && GEAR_CODE_NEUTRAL != GEAR_CODE_REVERSE,
-              "gear codes must be distinct");
-static_assert(GEAR_CODE_LOW <= 0b111 && GEAR_CODE_HIGH <= 0b111 &&
-              GEAR_CODE_NEUTRAL <= 0b111 && GEAR_CODE_REVERSE <= 0b111,
-              "gear codes are 3-bit");
-static_assert(GEAR_CODE_LOW != 0b000 && GEAR_CODE_HIGH != 0b000 && GEAR_CODE_NEUTRAL != 0b000 &&
-              GEAR_CODE_REVERSE != 0b000 && GEAR_CODE_LOW != 0b111 && GEAR_CODE_HIGH != 0b111 &&
-              GEAR_CODE_NEUTRAL != 0b111 && GEAR_CODE_REVERSE != 0b111,
-              "000 (mid-shift) and 111 (lost opto feed) must stay UNKNOWN");
+// Quad bike: one line per gear (the aztec buggy's 3-bit gear code lives on aztec).
+// ⚠ The gear channels are engaged-HIGH: every wired gear opto CONDUCTS at rest
+//   (pin LOW) and selecting a position OPENS exactly that one channel, so its pin
+//   goes HIGH. BOARD_INPUT_ACTIVE_LOW below therefore describes the brake input
+//   only — do NOT apply it to the four gear bits.
+#define BOARD_IN_BIT_GEAR_NEUTRAL  0     // X16 — engaged = HIGH
+#define BOARD_IN_BIT_GEAR_REVERSE  1     // X16 — engaged = HIGH
+#define BOARD_IN_BIT_GEAR_LOW      6     // X16 — engaged = HIGH
+#define BOARD_IN_BIT_GEAR_HIGH     7     // X16 — engaged = HIGH
 #define BOARD_IN_BIT_BRAKE_LIMIT   4     // In5 (X17) — brake "released" endstop
 
 // Brake input bit polarity. A PC817 that is conducting pulls its PCA9557 input
@@ -192,36 +163,33 @@ static_assert(GEAR_CODE_LOW != 0b000 && GEAR_CODE_HIGH != 0b000 && GEAR_CODE_NEU
 //     Relay_1=IO4  Relay_2=IO5  Relay_3=IO6  Relay_4=IO7
 //     Relay_5=IO3  Relay_6=IO2  Relay_7=IO0  Relay_8=IO1
 //
-// AZTEC BUGGY assignment (this branch). The quad bike's assignment — ignition on the
-// paralleled pair Relay_1+Relay_2 and the front-wheel lock on Relay_5+Relay_6 — lives
-// on master; the aztec harness is wired differently. Every function is still a
-// whole-port MASK (not a bare bit) so a future paired load needs no driver change.
-#define RELAY_MASK_IGNITION     0b00010000  // Relay_1 (IO4, X4) — ignition/ECU line (single relay)
-#define RELAY_MASK_STARTER      0b00100000  // Relay_2 (IO5, X5) — starter solenoid
-#define RELAY_MASK_FRONT_LIGHT  0b01000000  // Relay_3 (IO6, X6) — front light
-// Relay_4 (IO7, X7), Relay_5 (IO3, X8) and Relay_6 (IO2, X9) are wired to three
-// SEPARATE locks whose functions are specified in a later change; until then they
-// are reserved and always driven OFF. Relay_7 (IO0, X10) and Relay_8 (IO1, X11) are
-// spare. Outside the web relay test (below) RELAY_MASK_RESERVED is never set by the
-// driver — every port write leaves these bits 0. Connectors X4..X11 here are the RELAY BOARD's connectors, not the
+// QUAD BIKE assignment (master; the aztec buggy's single-relay assignment lives on
+// aztec). Two functions drive a PAIR of relays that always energize together (the
+// load is split across two contacts in the harness), so each function is a
+// whole-port MASK, not a single bit.
+#define RELAY_MASK_IGNITION     0b00110000  // Relay_1 (IO4, X4) + Relay_2 (IO5, X5) — ignition/ECU line, paralleled pair
+#define RELAY_MASK_STARTER      0b01000000  // Relay_3 (IO6, X6) — starter solenoid
+#define RELAY_MASK_FRONT_LIGHT  0b10000000  // Relay_4 (IO7, X7) — front light
+#define RELAY_MASK_WHEEL_LOCK   0b00001100  // Relay_5 (IO3, X8) + Relay_6 (IO2, X9) — front-wheel lock, paralleled pair
+// Relay_7 (IO0, X10) and Relay_8 (IO1, X11) are spare: outside the web relay test
+// (below) RELAY_MASK_RESERVED is never set by the driver — every port write leaves
+// these bits 0. Connectors X4..X11 above are the RELAY BOARD's connectors, not the
 // main board's X4/X5 Hall headers.
-#define RELAY_MASK_RESERVED     0b10001111  // Relay_4 (IO7) | Relay_5 (IO3) | Relay_6 (IO2) | Relay_7 (IO0) | Relay_8 (IO1)
+#define RELAY_MASK_RESERVED     0b00000011  // Relay_7 (IO0) | Relay_8 (IO1) — spare
 
 // Web relay test (bench wiring check). Any of the eight relays can be toggled from the
-// web UI, but ONLY while the ignition is OFF and no real function relay is energized;
-// the per-relay number -> IO bit lookup lives in RelayController (relayIoMask()). A
-// test relay is the only way a RELAY_MASK_RESERVED bit is ever written 1. Every test
-// bit auto-releases after RELAY_TEST_TIMEOUT_MS; the starter relay (Relay_2) is capped
-// much shorter so a test cannot crank the engine for long.
+// web UI, but ONLY while the ignition is OFF and no real function relay is energized
+// (light off, wheel lock released); the per-relay number -> IO bit lookup lives in
+// RelayController (relayIoMask()). A test relay is the only way a RELAY_MASK_RESERVED
+// bit is ever written 1, and each relay of a paralleled pair is tested on its own.
+// Every test bit auto-releases after RELAY_TEST_TIMEOUT_MS; the starter relay
+// (Relay_3) is capped much shorter so a test cannot crank the engine for long.
 #define RELAY_TEST_TIMEOUT_MS      30000UL  // ms a test relay stays on before auto-off
-#define RELAY_TEST_STARTER_MAX_MS  2000UL   // ms cap for a Relay_2 (starter) test
+#define RELAY_TEST_STARTER_MAX_MS  2000UL   // ms cap for a starter-relay (Relay_3) test
 
-// The quad bike's front-wheel lock is NOT fitted on the aztec buggy, so there is
-// deliberately no RELAY_MASK_WHEEL_LOCK. The MAVLink servo channel
-// (ServoChannelConfig::WHEEL_LOCK), the web `set_wheel_lock` command and the
-// EFI_DIGITAL_FLAG_WHEEL_LOCK telemetry bit stay in place, but RelayController
-// rejects lock commands and reports the lock as released + not fitted.
-#define RELAY_WHEEL_LOCK_FITTED 0           // 0 = no relay behind the wheel-lock function
+// The front-wheel lock is fitted on the quad bike (RELAY_MASK_WHEEL_LOCK above);
+// RelayController drives it from MAVLink channel 7 and the web `set_wheel_lock`.
+#define RELAY_WHEEL_LOCK_FITTED 1           // 1 = relays behind the wheel-lock function
 
 // Expander timing / fault policy
 #define BOARD_INPUT_POLL_MS        25    // ms between opto-input polls
@@ -290,7 +258,7 @@ struct ServoChannelConfig {
     static constexpr uint8_t TRANSMISSION = 3;  // Gear selector (3 positions: R/N/L)
     static constexpr uint8_t IGNITION = 4;      // Ignition state (OFF/ACC/IGNITION)
     static constexpr uint8_t FRONT_LIGHT = 6;   // Front light (on/off)
-    static constexpr uint8_t WHEEL_LOCK  = 7;   // Front-wheel lock (on/off) — decoded but NOT fitted on aztec (RELAY_WHEEL_LOCK_FITTED)
+    static constexpr uint8_t WHEEL_LOCK  = 7;   // Front-wheel lock (on/off)
 };
 
 // MAVLink transport / link parameters
@@ -383,7 +351,7 @@ struct ServoChannelConfig {
 // Digital output states reported back to the GCS as a bitmask carried in
 // EFI_STATUS.pt_compensation (float). MUST stay in sync with the MP plugin decode.
 // bit2+ reserved for future digital outputs.
-#define EFI_DIGITAL_FLAG_WHEEL_LOCK  0x01  // bit0 — front-wheel lock engaged (always 0 on aztec: not fitted)
+#define EFI_DIGITAL_FLAG_WHEEL_LOCK  0x01  // bit0 — front-wheel lock engaged
 #define EFI_DIGITAL_FLAG_FRONT_LIGHT 0x02  // bit1 — front light on
 
 // ============================================================================
@@ -450,7 +418,7 @@ struct ServoChannelConfig {
 #define STEER_NUDGE_DUTY          150   // PWM duty for a precision nudge pulse (just above friction)
 #define STEER_NUDGE_MS            70    // ms - nudge pulse length (a degree or two per tap)
 
-// Sensorless rate mode (aztec, include/SteerRate.h): with the LWS unhealthy, the source MAVLink
+// Sensorless rate mode (include/SteerRate.h): with the LWS unhealthy, the source MAVLink
 // and the autopilot in MANUAL/unknown, the stick is a rotation-rate command. It adds NO tunable:
 // it reuses RC_STEERING_DEADBAND (stop zone), STEER_PWM_MIN_DUTY / STEER_PWM_MAX_DUTY (duty =
 // MIN + (MAX − MIN)·d²) and STEER_JOG_TIMEOUT_MS (stop without a fresh SERVO_OUTPUT_RAW).
@@ -498,13 +466,11 @@ struct ServoChannelConfig {
 // TRANSMISSION SYSTEM CONFIGURATION
 // ============================================================================
 
-// Transmission Servo Parameters (GXservo HS-1005SGT 150KG, 180° range, 500–2500 µs capable).
-// 800–2200 µs below is the verified working range on this servo — do not widen it.
-// ⚠ Supply limit 16.8 V — the servo must never be fed from the 24V boost rail.
+// Transmission Servo Parameters (HappyModel Super400 Plus @ 24V, 180° range)
 #define LEDC_CH_TRANS_SERVO                 2
 #define TRANS_SERVO_MIN_US                  800
 #define TRANS_SERVO_MAX_US                  2200
-#define TRANS_SERVO_MS_PER_PCT              35      // ms per 1% travel — conservative for the HS-1005SGT, bench-tunable
+#define TRANS_SERVO_MS_PER_PCT              35      // ms per 1% travel (180° @ 24V: 1110ms/100%)
 #define TRANS_SERVO_SETTLE_MIN_MS           300     // minimum settle time for short moves
 #define TRANS_GEAR_OVERSHOOT_R_PCT          4.5f
 #define TRANS_GEAR_OVERSHOOT_N_PCT          1.0f
@@ -524,7 +490,7 @@ struct ServoChannelConfig {
 #define TRANS_UNKNOWN_GEAR_THROTTLE_MAX     (float)8.5   // % - max throttle when physical gear UNKNOWN
 #define TRANS_GEAR_CHECK_INTERVAL           500        // ms - physical gear verification period
 #define TRANS_GEAR_READ_INTERVAL_MS         100        // ms - GPIO debounce cache for getPhysicalGear()
-#define TRANS_GEAR_READ_RETRY_COUNT         3          // extra snapshot reads while the gear code is UNKNOWN and the servo is idle
+#define TRANS_GEAR_READ_RETRY_COUNT         3          // extra reads when all switches read inactive while servo is idle
 
 // ============================================================================
 // BRAKE SYSTEM CONFIGURATION
@@ -643,8 +609,9 @@ struct ServoChannelConfig {
 // ============================================================================
 
 // The console is the ESP32-S3 native USB CDC device on the board's USB-C connector
-// (build flag ARDUINO_USB_CDC_ON_BOOT=1). UART0 (GPIO43/44) is the steering VESC
-// link (X1) and must never be reclaimed for a console.
+// (build flag ARDUINO_USB_CDC_ON_BOOT=1). UART0 (GPIO43/44) is RESERVED for the
+// CH9121T wired LAN on the quad bike (the steering VESC link on aztec) and must
+// never be reclaimed for a console.
 // Baud is irrelevant for CDC but harmless; the firmware never waits for a host.
 #define SERIAL_BAUD_RATE      115200 // Serial monitor baud rate (ignored by USB-CDC)
 #define DEBUG_ENABLED         true   // Default debug output state (runtime-toggleable via Debug utility or web portal)
@@ -772,7 +739,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.1"
+#define FIRMWARE_VERSION "1.5.2"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

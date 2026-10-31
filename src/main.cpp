@@ -52,10 +52,10 @@ MavlinkInterface mavlinkInterface;
 // (change the RelayController argument below from Wire1 to Wire, and start Wire on
 // PIN_I2C1_SDA/PIN_I2C1_SCL in setup()).
 
-// Opto-isolated board inputs (3-bit gear code on port bits 0/1/6, brake endstop bit 4) on I2C2
+// Opto-isolated board inputs (gear switches In1-In4, brake endstop In5) on I2C2
 BoardInputs boardInputs(Wire1);
 
-// Relay Controller for ignition, starter and front light (aztec; wheel lock not fitted) — I2C2 @0x1F via X15
+// Relay Controller for ignition, starter, lights and wheel lock — I2C2 @0x1F via X15
 RelayController relayController(Wire1);
 
 // Driveline speed sensor (12V hall via the X2 opto input, PCNT on GPIO8)
@@ -185,7 +185,7 @@ void setup() {
         scanI2CBus(Wire1, "I2C2 (Wire1, expect 0x1A 0x1C 0x1F)");
     }
 
-    // Opto-isolated inputs (gear code lines + brake limit sensor)
+    // Opto-isolated inputs (gear switches + brake limit sensor)
     if (!boardInputs.begin()) {
         Debug::println("[INIT] ERROR: Board input expander failed — gear will report UNKNOWN");
     }
@@ -318,7 +318,6 @@ void loop() {
     report.gearMoving   = vehicleController.getTransmission().isGearChangeActive();
     report.ignition     = getRelayIgnitionStateName(vehicleController.getIgnitionState());
     report.failsafe     = (vehicleController.getInputSource() == InputSource::FAILSAFE);
-    // bit0 (wheel lock) is always 0 on aztec: not fitted, getWheelLock() is always false.
     report.digitalFlags = (vehicleController.getWheelLock()  ? EFI_DIGITAL_FLAG_WHEEL_LOCK  : 0)
                         | (vehicleController.getFrontLight() ? EFI_DIGITAL_FLAG_FRONT_LIGHT : 0);
     report.speedValid   = vehicleController.isVehicleSpeedValid();
