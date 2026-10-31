@@ -285,7 +285,7 @@ unchanged. The aztec gear-code feature is simply not built on master:
 - **AP address change** 4.1 → 10.1 (user decision): bookmarks and any companion configured for
   192.168.4.1 need updating.
 - **Bench-tune values** (`STEER_KP`, tolerances, `STEER_LWS_SAFE_RANGE` 550°) were tuned on the
-  buggy's steering column. The quad's lock-to-lock angle may differ. `STEER_CAL_MIN_SPAN` = 30°
+  buggy's steering column. The quad's lock-to-lock angle may differ. `STEER_CAL_MIN_SPAN` = 20°
   must be smaller than the quad's half travel.
 - **Divergent files** between the branches until `unify-vehicle-builds`: the gear files,
   `Constants.h` vehicle blocks, the gear telemetry plumbing and the pinout doc sections.

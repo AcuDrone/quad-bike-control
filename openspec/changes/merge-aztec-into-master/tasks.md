@@ -126,7 +126,7 @@
   - percent steering from the web slider and the stick tracks within tolerance;
   - boot centring works after a power cycle.
 
-  Note the quad's lock-to-lock angle against `STEER_CAL_MIN_SPAN` (30°) and `STEER_LWS_SAFE_RANGE` (550°).
+  Note the quad's lock-to-lock angle against `STEER_CAL_MIN_SPAN` (20°) and `STEER_LWS_SAFE_RANGE` (550°).
 - [ ] 8.9 [USER/MANUAL] Rate mode: in MANUAL with the stick centred, unplug the LWS. `steer_mode` = rate, the "Увага" line is shown and `STEER_MODE` = 1. Centre the stick to arm it. Deflection = rotation, release = stop within 500 ms. In HOLD the mode is blocked. Reconnect → position.
 - [ ] 8.10 [USER/MANUAL] MAVLink channels unchanged: steering, throttle, brake, transmission (ch 3), ignition (ch 4), light (ch 6), wheel lock (ch 7). Mission Planner shows the `STEER_*` named values and the `STEER_MODE` int.
 - [ ] 8.11 [USER/MANUAL] Throttle: the existing idle/full calibration is still valid. Full throttle and idle are as on 1.1.0.

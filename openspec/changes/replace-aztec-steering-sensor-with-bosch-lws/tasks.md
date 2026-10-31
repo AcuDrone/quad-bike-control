@@ -66,7 +66,7 @@
 - [ ] 9.4 [USER/MANUAL] Sign: turn the wheel right by hand → `steer_angle` increases (positive); left → negative
 - [ ] 9.5 [USER/MANUAL] Fresh flash: steering reports not calibrated, old keys gone (log), percent commands rejected, jog and nudge work
 - [ ] 9.6 [USER/MANUAL] Sensorless centring: unplug the sensor CAN or 12 V → token `timeout`, jog/nudge still drive and stop on button release (≤ 500 ms) and at nudge end; reconnect, jog to straight-ahead, restart the vehicle, press "Set sensor zero" → state `ok`, `steer_angle` ≈ 0.0, limits shown as `--`
-- [ ] 9.7 [USER/MANUAL] Capture Left and Right at the locks: values saved immediately, `steer_calibrated` true; a Left capture right of zero and one closer than 30° are each refused with the named reason; a capture beyond 550° is saved, the response warns and `steer_range_warning` is true with the UI note shown
+- [ ] 9.7 [USER/MANUAL] Capture Left and Right at the locks: values saved immediately, `steer_calibrated` true; a Left capture right of zero and one closer than 20° are each refused with the named reason; a capture beyond 550° is saved, the response warns and `steer_range_warning` is true with the UI note shown
 - [ ] 9.8 [USER/MANUAL] Restart the vehicle at several wheel angles: boot centering moves to 0.0 ± tolerance without homing
 - [ ] 9.9 [USER/MANUAL] MAVLink at 25 Hz: smooth tracking, re-command guard holds, stall detection and move timeout still fire; `STEER_POS` matches `steering_pct` and goes `NaN` on a sensor fault
 - [ ] 9.10 [USER/MANUAL] Fault injection during a closed-loop move: pull the sensor CAN → move stops within ~100 ms, token `timeout`, percent rejected; reconnect → healthy again without reboot

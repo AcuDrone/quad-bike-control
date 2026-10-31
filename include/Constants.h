@@ -387,7 +387,7 @@ struct ServoChannelConfig {
 #define STEER_MOVE_TIMEOUT        7500  // ms - maximum time for any movement — bench-check a full lock-to-lock move
 #define STEER_STALL_THRESHOLD     5     // 0.1° (0.5°) - progress below this over STEER_STALL_TIMEOUT = stall — bench-tune
 #define STEER_STALL_TIMEOUT       500   // ms - time without position change = stall
-#define STEER_CAL_MIN_SPAN        300   // 0.1° (30.0°) - min |limit| from the sensor zero accepted at capture, also the min |angle| that may toggle the sensor direction — bench-tune
+#define STEER_CAL_MIN_SPAN        200   // 0.1° (20.0°) - min |limit| from the sensor zero accepted at capture, also the min |angle| that may toggle the sensor direction — bench-tune
 #define STEER_BOOT_CENTER_TIMEOUT_MS  5000  // ms - a pending boot centering (waits for sensor + VESC link) is dropped after this
 
 // Bosch LWS sensor health, range guard and zero-set
