@@ -22,7 +22,8 @@ static const char CHANGELOG_JSON[] = R"JSON({"releases":[
 "Перевірка реле у веб-панелі (лише при вимкненому запалюванні та відпущеному блокуванні колеса)",
 "Калібрування газу приймає дзеркальний серво",
 "Блокування переднього колеса, реле, датчики передач і VESC на X6 — без змін",
-"Потрібне повторне калібрування керма: нуль датчика, потім «ліво» та «право»"
+"Потрібне повторне калібрування керма: нуль датчика, потім «ліво» та «право»",
+"Мінімальний кут ліміту керма від нуля датчика зменшено з 30° до 20°"
 ],"en":[
 "Quad: steering angle now comes from the Bosch sensor on the CAN bus; the AS5600 is no longer used",
 "New \"Set sensor zero\" button; only the left and right limits are calibrated",
@@ -31,7 +32,8 @@ static const char CHANGELOG_JSON[] = R"JSON({"releases":[
 "Relay test in the web portal (ignition off and wheel lock released only)",
 "Throttle calibration accepts a mirrored servo",
 "Front-wheel lock, relays, gear sensors and the VESC on X6 are unchanged",
-"Steering recalibration required: sensor zero, then left and right"
+"Steering recalibration required: sensor zero, then left and right",
+"Minimum steering limit angle from the sensor zero lowered from 30° to 20°"
 ]},
 {"version":"1.5.1","date":"2026-10-29","uk":[
 "Напрямок датчика кута визначається автоматично при калібруванні лімітів; дзеркальний монтаж більше не потребує перемонтажу",
