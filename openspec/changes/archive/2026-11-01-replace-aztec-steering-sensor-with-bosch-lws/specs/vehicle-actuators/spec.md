@@ -55,6 +55,13 @@ supported; there SHALL be exactly one pin map and no board-selection build flag.
 - **THEN** the steering angle SHALL be received through the existing MCP2515 CAN controller
 - **AND** no GPIO and no I2C bus SHALL be allocated to steering position feedback
 
+#### Scenario: Steering sensors share the pins of their buses
+- **WHEN** the steering controller is initialized
+- **THEN** the Bosch LWS steering-angle sensor SHALL share the CAN bus (MCP2515 on SPI,
+  `PIN_CAN_*`) with the ECU OBD-II traffic
+- **AND** no dedicated steering GPIO SHALL be allocated
+- **AND** the former steering I2C pins (`Wire` / `Wire1`) SHALL NOT be used for steering
+
 #### Scenario: Wiring document is authoritative
 - **WHEN** `Constants.h` and `GPIO_PINOUT_CUSTOM_BOARD_S3.md` disagree about a pin
 - **THEN** the document SHALL be treated as authoritative for what the board is physically wired to

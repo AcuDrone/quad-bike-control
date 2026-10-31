@@ -422,7 +422,7 @@ as the primary control source.
 
 ### Requirement: Relay Controller for Ignition and Lights
 The system SHALL provide a `RelayController` class to manage relay outputs for ignition
-states, front light and front-wheel lock control, driven by commands decoded from the MAVLink
+states and front light control, driven by commands decoded from the MAVLink
 interface or the web portal. The relays SHALL be driven through the external relay board's PCA9557
 expander at address `0x1F` rather than through direct ESP32 GPIO, with the public API unchanged for
 callers. The bus is supplied by the owner at construction: `Wire1` (I2C2), the relay board's home on
@@ -430,61 +430,66 @@ header X15.
 
 The relay board's PCA9557 IO routing is NOT 1:1 with the relay numbers (`Relay_1=IO4,
 Relay_2=IO5, Relay_3=IO6, Relay_4=IO7, Relay_5=IO3, Relay_6=IO2, Relay_7=IO0, Relay_8=IO1`,
-per the `Relay.PrjPcb` netlist), and two functions drive a PAIR of relays that always energize
-together. Each function is therefore addressed as a whole-port MASK, not a single bit:
+per the `Relay.PrjPcb` netlist). Each function is therefore addressed as a whole-port MASK, not a
+relay number. Aztec buggy assignment (no relay is paired):
 
 | Function | Mask constant | Value | Relays (IO / relay-board connector) |
 |----------|---------------|-------|--------------------------------------|
-| Ignition / ECU line | `RELAY_MASK_IGNITION` | `0b00110000` | Relay_1 (IO4, X4) + Relay_2 (IO5, X5) |
-| Starter | `RELAY_MASK_STARTER` | `0b01000000` | Relay_3 (IO6, X6) |
-| Front light | `RELAY_MASK_FRONT_LIGHT` | `0b10000000` | Relay_4 (IO7, X7) |
-| Front-wheel lock | `RELAY_MASK_WHEEL_LOCK` | `0b00001100` | Relay_5 (IO3, X8) + Relay_6 (IO2, X9) |
-| Spare | — | `0b00000011` | Relay_7 (IO0, X10) + Relay_8 (IO1, X11) — always off |
+| Ignition / ECU line | `RELAY_MASK_IGNITION` | `0b00010000` | Relay_1 (IO4, X4) |
+| Starter | `RELAY_MASK_STARTER` | `0b00100000` | Relay_2 (IO5, X5) |
+| Front light | `RELAY_MASK_FRONT_LIGHT` | `0b01000000` | Relay_3 (IO6, X6) |
+| Reserved | `RELAY_MASK_RESERVED` | `0b10001111` | Relay_4 (IO7, X7), Relay_5 (IO3, X8), Relay_6 (IO2, X9) — three locks specified in a later change; Relay_7 (IO0, X10), Relay_8 (IO1, X11) — spare; off except in the web relay test |
 
-The duplicated relays are intentional: both relays of a pair are set and cleared as one mask, so a
-pair can never be left half-energized by firmware.
+The front-wheel lock is not fitted on the aztec buggy. The MAVLink servo channel
+`ServoChannelConfig::WHEEL_LOCK` (7) SHALL still be decoded and the `EFI_STATUS` digital-output
+bitmask layout SHALL be unchanged, but no relay SHALL be driven by that channel.
 
 #### Scenario: Initialize relay controller
 - **WHEN** `RelayController.begin()` is called with the I2C bus the relay board is wired to
 - **THEN** the PCA9557 at `0x1F` SHALL be detected and all eight pins configured as outputs
 - **AND** the output port SHALL be written to `0x00` (all relays OFF) and verified by read-back
-- **AND** internal state tracking is initialized to OFF / light off / lock off
+- **AND** internal state tracking is initialized to OFF / light off
 - **AND** true is returned if initialization succeeds, false if the expander does not answer or the
   all-off write does not verify
 
 #### Scenario: Set ignition state
-- **WHEN** `setIgnitionState(OFF)` is called, `RELAY_MASK_IGNITION` (Relay_1 + Relay_2) and
-  `RELAY_MASK_STARTER` (Relay_3) are LOW
+- **WHEN** `setIgnitionState(OFF)` is called, `RELAY_MASK_IGNITION` (Relay_1) and
+  `RELAY_MASK_STARTER` (Relay_2) are LOW
 - **WHEN** `setIgnitionState(ACC)` is called, `RELAY_MASK_IGNITION` is HIGH and `RELAY_MASK_STARTER`
   is LOW
 - **WHEN** `setIgnitionState(IGNITION)` is called, `RELAY_MASK_IGNITION` is HIGH and
   `RELAY_MASK_STARTER` is LOW
 - **WHEN** `setIgnitionState(CRANKING)` is called, `RELAY_MASK_IGNITION` and `RELAY_MASK_STARTER` are
   both HIGH
-- **AND** every bit of a mask moves together, so Relay_1 and Relay_2 are always in the same state
 - **AND** internal state is updated to match in each case
 - **AND** each change is applied as a single whole-port write from the output shadow byte
 
 #### Scenario: Control front light
-- **WHEN** `setFrontLight(true)` is called, `RELAY_MASK_FRONT_LIGHT` (Relay_4, IO7) is set HIGH and
+- **WHEN** `setFrontLight(true)` is called, `RELAY_MASK_FRONT_LIGHT` (Relay_3, IO6) is set HIGH and
   state is updated
 - **WHEN** `setFrontLight(false)` is called, `RELAY_MASK_FRONT_LIGHT` is set LOW and state is updated
 
 #### Scenario: Control front-wheel lock
-- **WHEN** `setWheelLock(true)` is called, `RELAY_MASK_WHEEL_LOCK` (Relay_5 + Relay_6) is set HIGH
-  and state is updated
-- **WHEN** `setWheelLock(false)` is called, `RELAY_MASK_WHEEL_LOCK` is set LOW and state is updated
-- **AND** both relays of the pair change together in the same whole-port write
+- **WHEN** servo channel 7 (`WHEEL_LOCK`) is above `RC_WHEEL_LOCK_THRESHOLD` and `setWheelLock(true)`
+  is called
+- **THEN** `setWheelLock()` SHALL return `false` and no port write SHALL be made
+- **AND** the rejection SHALL be logged once per boot, not on every control loop
+- **AND** `getWheelLock()` SHALL return `false`
+- **AND** bit0 (`EFI_DIGITAL_FLAG_WHEEL_LOCK`) of the `EFI_STATUS` digital-output bitmask SHALL be 0
 
 #### Scenario: Spare relays are never energized
-- **WHEN** any relay state changes
-- **THEN** `Relay_7` (IO0) and `Relay_8` (IO1) SHALL be written LOW in every port write
+- **WHEN** any relay state changes through a MAVLink- or web-decoded vehicle function
+- **THEN** every `RELAY_MASK_RESERVED` bit — Relay_4 (IO7), Relay_5 (IO3), Relay_6 (IO2), Relay_7
+  (IO0) and Relay_8 (IO1) — SHALL be written LOW unless the web relay test (ignition OFF only)
+  energizes that relay
+- **AND** a MAVLink ignition command that leaves `OFF`, or a front-light ON, SHALL clear every web
+  test relay first
 
 #### Scenario: Fail-safe all relays off
 - **WHEN** `allOff()` is called (fail-safe trigger)
 - **THEN** `RELAY_MASK_IGNITION`, `RELAY_MASK_STARTER` and `RELAY_MASK_FRONT_LIGHT` are set LOW
 - **AND** internal state is reset to safe defaults (OFF, lights off)
-- **AND** the front-wheel lock pair (`RELAY_MASK_WHEEL_LOCK`) is intentionally left in its last state
+- **AND** every web test relay is released, so all eight relays are LOW
 - **AND** the fail-safe write is verified by read-back like any other relay write
 
 #### Scenario: Relay commands are no-ops when the expander is unavailable
@@ -828,8 +833,9 @@ input.
   component id (system 1, component 25): `STEER_POS`, `STEER_A`, `VESC_V`, `VESC_TEMP`,
   `VESC_OK` and `STEER_SCA`
 - **AND** `STEER_POS` SHALL carry the MEASURED steering position as a percentage of the CALIBRATED
-  lock-to-lock range, −100 at the left limit, 0 at centre, +100 at the right limit — percent of
-  calibrated travel, NOT degrees, because the firmware holds no counts-to-degrees calibration
+  lock-to-lock range, −100 at the left limit, 0 at centre (the steering sensor's zero), +100 at the
+  right limit — percent of calibrated travel, NOT degrees, so that the autopilot sees the same
+  scale it commands on `SERVO_OUTPUT_RAW` even though the sensor itself reports degrees
 - **AND** a negative `STEER_POS` SHALL mean LEFT of centre and a positive value SHALL mean RIGHT of
   centre, matching the sign convention of the steering-percent accessor
 - **AND** `STEER_A` SHALL carry the VESC's average MOTOR current in amperes, which is the steering
@@ -879,8 +885,11 @@ input.
 
 #### Scenario: Steering position validity is the sensor's, independent of the driver link
 - **WHEN** `STEER_POS` is sent
-- **THEN** its validity gate SHALL be the position sensor's own — the sensor reading healthy AND the
-  steering calibrated — and SHALL NOT be the steering driver's link health
+- **THEN** its validity gate SHALL be the position sensor's own — the CAN steering-angle sensor
+  healthy (fault token `none`) AND both steering limits stored — and SHALL NOT be the steering
+  driver's link health
+- **AND** `STEER_POS` SHALL be `NaN` while the sensor reports `range_latched`, `timeout`, `zeroing`
+  or any other non-`none` token, even if a jog is driving the steering sensorless
 - **AND** `STEER_POS` SHALL carry a live position while `STEER_A`, `VESC_V` and `VESC_TEMP` are
   `NaN` and `VESC_OK` is `0.0`, because a silent driver does not blind the shaft sensor
 - **AND** `STEER_POS` SHALL be `NaN` while those same values are live, whenever the sensor is
@@ -1065,4 +1074,42 @@ values SHALL continue to be carried in distinct fields of the single `EFI_STATUS
 - **THEN** `STEER_SCA` SHALL be `1.0`, matching the fact that the web steering path is never scaled
 - **AND** the message SHALL keep being sent regardless of the command source, so the record has no
   holes
+
+### Requirement: Steering Control Mode Reporting
+The system SHALL report the current steering mode (`position`, `rate` or `blocked`, see "Sensorless Steering Rate Mode") to the MAVLink network as a `NAMED_VALUE_INT` (id 252) named `STEER_MODE` sent from this component, and SHALL announce every change with a `STATUSTEXT`. This reporting SHALL NOT be a control input, and it SHALL NOT change the set of `NAMED_VALUE_FLOAT` names this component sends.
+
+#### Scenario: Periodic and on-change STEER_MODE
+- **WHEN** the slow steering telemetry interval elapses (`MAVLINK_STEER_SLOW_TX_MS`, default 1000 ms)
+- **THEN** a `NAMED_VALUE_INT` named `STEER_MODE` SHALL be sent from the ESP32's own system and component id (system 1, component 25), with value 0 = `position`, 1 = `rate`, 2 = `blocked`
+- **AND** its `time_boot_ms` SHALL carry the milliseconds-since-boot value of that tick
+- **WHEN** the steering mode changes
+- **THEN** one additional `STEER_MODE` SHALL be sent on the next report opportunity, without waiting for the slow interval
+- **AND** `STEER_MODE` SHALL keep being sent whatever the sensor, VESC or link state, and SHALL never carry any value other than 0, 1 or 2
+
+#### Scenario: Mode change status text
+- **WHEN** the steering mode changes
+- **THEN** a `STATUSTEXT` SHALL be sent: `Steer: RATE mode (no sensor)` with severity WARNING on entry into `rate`, `Steer: blocked (no sensor)` with severity WARNING on entry into `blocked`, and `Steer: position mode` with severity INFO on entry into `position`
+- **AND** it SHALL obey the existing `STATUSTEXT` rate limit, and a change that is suppressed by the rate limit SHALL still be visible through `STEER_MODE`
+
+#### Scenario: Separate from the NAMED_VALUE_FLOAT exception
+- **WHEN** steering telemetry is reported
+- **THEN** the six `NAMED_VALUE_FLOAT` names (`STEER_POS`, `STEER_A`, `VESC_V`, `VESC_TEMP`, `VESC_OK`, `STEER_SCA`) SHALL remain the only `NAMED_VALUE_FLOAT` this component sends, unchanged in meaning and gating
+- **AND** `STEER_POS` SHALL remain `NaN` in `rate` and `blocked` mode, because the sensor is unhealthy
+- **AND** `STEER_MODE` SHALL be the only `NAMED_VALUE_INT` this component sends
+
+#### Scenario: Reporting only
+- **WHEN** `STEER_MODE` or the mode status text is sent with any value
+- **THEN** no steering stop, interlock or other control action SHALL be triggered by the act of reporting it
+
+### Requirement: Servo Command Frame Counter
+The MAVLink interface SHALL expose a monotonically increasing count of accepted `SERVO_OUTPUT_RAW` command frames, so that a consumer can tell a freshly received command from a re-read of the last decoded channels.
+
+#### Scenario: Count accepted frames
+- **WHEN** a `SERVO_OUTPUT_RAW` frame from the learned autopilot is accepted as a command
+- **THEN** the counter SHALL increase by one
+- **AND** frames that are not accepted as commands SHALL NOT change it
+
+#### Scenario: Detect a fresh command
+- **WHEN** the vehicle layer compares the counter with the value it saw on its previous iteration
+- **THEN** an unchanged counter SHALL mean that no new steering command has arrived, and the rate drive SHALL NOT be refreshed from the stale channel value
 

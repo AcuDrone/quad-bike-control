@@ -101,8 +101,7 @@ All existing Serial.print/println calls SHALL be systematically migrated to Debu
 
 ### Requirement: USB-CDC Serial Console
 The debug console SHALL be carried over the ESP32-S3 native USB CDC device on the board's USB-C
-connector, not over UART0, because UART0 (GPIO43/44) is shared copper between the programming header
-and the future CH9121T wired-LAN chip and is reserved.
+connector, not over UART0, because UART0 (GPIO43/44, Prog header X1) carries the steering VESC link.
 
 #### Scenario: Console routed to native USB
 - **WHEN** the firmware is built
@@ -123,8 +122,9 @@ and the future CH9121T wired-LAN chip and is reserved.
 
 #### Scenario: UART0 remains reserved
 - **WHEN** the pin map is read
-- **THEN** GPIO43 and GPIO44 SHALL have no firmware function assigned
+- **THEN** GPIO43 and GPIO44 SHALL be reserved for the steering VESC driver and used by nothing else
 - **AND** no `Serial0` / UART0 console SHALL be initialized by the firmware
-- **AND** the reservation SHALL be documented in `platformio.ini` and `Constants.h` so UART0 is not
-  reclaimed before the LAN section is populated
+- **AND** ESP-IDF `esp_log` output SHALL be redirected to the USB-CDC console before the VESC UART is
+  opened, and the ROM putc output on UART0 SHALL be closed
+- **AND** this SHALL be documented in `platformio.ini` and `Constants.h`
 

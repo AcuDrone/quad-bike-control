@@ -4,60 +4,78 @@
 TBD - created by archiving change add-vehicle-control-system. Update Purpose after archive.
 ## Requirements
 ### Requirement: Steering Control System
-The system SHALL provide steering control through a BTS7960 H-bridge motor driver with proportional PWM speed control and absolute position feedback from an AS5600 magnetic angle sensor (I2C, magnet on the steering shaft, travel < 360° lock-to-lock), with software position limits.
+The system SHALL provide steering control through the steering motor driver (`IMotorDriver`, a VESC on the `aztec` branch) with proportional speed control and absolute multi-turn position feedback from a Bosch LWS steering-angle sensor (0 265 005 486) mounted directly on the steering shaft and read over the shared CAN bus (see "Bosch LWS Steering Angle Sensor"). Software position limits SHALL apply. All positions SHALL be expressed in 0.1° of steering-shaft angle (int32) relative to the sensor's own stored zero, with positive = right: the sensor's angle negated for a normal mount, or taken unchanged when the stored sensor-direction flag says the sensor is mounted mirrored (see "Steering Sensor Direction Inference"). While the sensor is not healthy, the autopilot steering channel SHALL be interpreted as a rate command under the conditions of "Sensorless Steering Rate Mode", and every other percent command SHALL be rejected.
 
 #### Scenario: Set steering position by percentage
 - **WHEN** SteeringController.setSteeringPercent() is called with value from -100 to +100
-- **THEN** the steering actuator moves toward the corresponding AS5600 angle with proportional speed (duty scales with remaining error, clamped between minimum and maximum duty)
+- **THEN** the steering actuator moves toward the corresponding angle with proportional speed (duty scales with remaining error, clamped between minimum and maximum duty)
 - **AND** -100% maps to the calibrated left limit angle
-- **AND** 0% maps to the calibrated center angle
+- **AND** 0% maps to the sensor zero (angle 0.0)
 - **AND** +100% maps to the calibrated right limit angle (left and right ranges may be asymmetric)
-- **AND** movement stops when the target angle is reached (within tolerance)
-- **AND** the command is rejected if calibration is missing or the sensor is invalid
+- **AND** movement stops when the target angle is reached (within `STEER_POSITION_TOLERANCE`)
+- **AND** the command is rejected if either limit is missing or the steering angle sensor is not healthy
+- **AND** a rejected autopilot percent command SHALL NOT itself drive the motor; only the rate path of "Sensorless Steering Rate Mode" MAY then use the same channel
 
 #### Scenario: Absolute position on startup
 - **WHEN** the system initializes
-- **THEN** the AS5600 sensor SHALL be initialized over I2C and magnet presence verified
-- **AND** no homing procedure SHALL be performed (position is absolute)
-- **AND** if calibration exists and the magnet is detected, the actuator SHALL move to the calibrated center angle
-- **AND** if calibration is missing or the magnet is not detected, the actuator SHALL remain stopped
+- **THEN** no I2C steering sensor SHALL be probed and no homing procedure SHALL be performed (the angle is absolute)
+- **AND** the stored limits SHALL be loaded whether or not sensor frames are already arriving
+- **AND** if both limits are stored, a boot centering SHALL be requested
+- **AND** the requested centering SHALL be issued once, from the control loop, as soon as the sensor is healthy and the steering motor driver link is healthy, and SHALL be logged when issued
+- **AND** if it cannot be issued within `STEER_BOOT_CENTER_TIMEOUT_MS`, the request SHALL be dropped and the actuator SHALL NOT move by itself afterwards
+- **AND** an accepted steering, jog or nudge command, a limit capture or a sensor zero-set made before it is issued SHALL cancel the request
+- **AND** if the limits are missing, the actuator SHALL remain stopped
+- **AND** boot centering SHALL NOT be attempted in rate mode or in any other way without a healthy sensor
 
 #### Scenario: Enforce software steering limits
 - **WHEN** a steering command would move beyond the calibrated left or right limit angle
 - **THEN** the target SHALL be clamped to the limit
-- **AND** the actuator SHALL NOT move past the software limit
+- **AND** the actuator SHALL NOT move past the software limit under closed-loop control
+
+#### Scenario: Closed-loop target clamped to the safe range
+- **WHEN** a percent command (MAVLink, web slider or test buttons, boot centering or failsafe centre) maps to a target beyond `±STEER_LWS_SAFE_RANGE` (550.0°), because a stored limit lies beyond it
+- **THEN** the command SHALL be accepted and its target clamped to ±`STEER_LWS_SAFE_RANGE`
+- **AND** a closed-loop move that would drive further outward while the absolute angle is at or beyond the safe range SHALL be stopped
 
 #### Scenario: Calibrate steering positions
-- **WHEN** steering calibration is triggered via web portal
-- **THEN** the system SHALL allow jogging the actuator left/right and capturing the current AS5600 angle as center, left limit, or right limit
-- **AND** captured angles SHALL be validated (left and right on opposite sides of center, minimum span)
-- **AND** calibrated angles SHALL be saved to NVS
+- **WHEN** steering calibration is performed via the web portal
+- **THEN** the system SHALL allow jogging and nudging the actuator left/right with or without a healthy sensor
+- **AND** the center SHALL be set by the sensor zero-set sequence, not by a capture
+- **AND** the left and right limits SHALL be captured separately, each validated and saved to NVS immediately
+- **AND** the sensor direction (normal or mirrored) SHALL be inferred from the limit captures, never configured by hand
 - **AND** calibration SHALL persist across reboots
 
 #### Scenario: Steering position wrap handling
-- **WHEN** the AS5600 raw angle range crosses the 0/4095 wrap point within the steering travel
-- **THEN** relative position SHALL be computed as the signed shortest delta from the calibrated center
-- **AND** position control and limit enforcement SHALL behave identically to non-wrapping travel
+- **WHEN** the steering travels through any number of shaft turns within the sensor range
+- **THEN** the position SHALL be taken directly from the sensor's absolute multi-turn angle, with no wrap carry and no turn counter in the firmware
+- **AND** position control and limit enforcement SHALL behave identically across the whole travel
 
 #### Scenario: Steering sensor failure
-- **WHEN** an AS5600 I2C read fails or the magnet is no longer detected
-- **THEN** the steering motor SHALL be stopped immediately
-- **AND** steering position commands SHALL be ignored while the sensor is invalid
-- **AND** the fault SHALL be logged and reported in telemetry
-- **AND** normal operation SHALL resume automatically when valid readings return
+- **WHEN** the steering angle sensor is not healthy (frame timeout, invalid angle, sensor fault bits, sensor not calibrated, latched range fault, CAN controller down, or a zero-set in progress)
+- **THEN** a closed-loop position move SHALL be stopped immediately
+- **AND** steering percent commands SHALL be rejected while the sensor is not healthy
+- **AND** the autopilot steering channel SHALL drive the motor as a rate command only while the conditions of "Sensorless Steering Rate Mode" hold (input source MAVLink and the autopilot in MANUAL or its mode unknown)
+- **AND** jog and nudge commands SHALL remain available open-loop (see "Sensorless Manual Steering")
+- **AND** the fault and its reason SHALL be logged and reported in telemetry
+- **AND** normal operation SHALL resume automatically once the sensor is healthy again, except that a latched range fault clears only when the sensor is power-cycled by restarting the vehicle
 
 #### Scenario: Steering movement backstops
-- **WHEN** a movement exceeds the move timeout, or the sensed position changes less than the stall threshold over the stall window while driving
+- **WHEN** a movement with a healthy sensor exceeds the move timeout, or the sensed angle changes less than `STEER_STALL_THRESHOLD` over the stall window while driving
 - **THEN** the steering motor SHALL be stopped
 - **AND** the event SHALL be logged
+- **AND** these position backstops SHALL NOT apply to a rate-mode drive, which has no position
 
 #### Scenario: Steering failsafe
 - **WHEN** signal loss is detected or failsafe is activated
-- **THEN** the steering actuator SHALL move to the calibrated center position
-- **AND** if not calibrated, the actuator SHALL stop immediately
+- **THEN** the steering actuator SHALL move to the sensor zero (center)
+- **AND** if the limits are missing or the sensor is not healthy, the actuator SHALL stop immediately
+- **AND** a rate-mode drive in progress SHALL be stopped (duty 0) in the same control-loop iteration, and the steering SHALL NOT be centred
 
 ### Requirement: Throttle Control System
-The system SHALL provide throttle control through a servo-driven acceleration mechanism.
+The system SHALL provide throttle control through a servo-driven acceleration mechanism. Throttle
+percent SHALL map linearly from the calibrated idle pulse width (0 %) to the calibrated full pulse
+width (100 %); the two endpoints MAY be in either order so that a mirrored servo mount (full below
+idle) is supported.
 
 #### Scenario: Set throttle position by percentage
 - **WHEN** ThrottleSystem.setPosition() is called with value from 0 to 100
@@ -75,6 +93,23 @@ The system SHALL provide throttle control through a servo-driven acceleration me
 - **THEN** throttle is automatically reduced to idle
 - **AND** throttle commands are ignored until brakes release
 
+#### Scenario: Inverted servo calibration accepted
+- **WHEN** a throttle calibration is saved with idle = 2200 µs and full = 800 µs
+- **THEN** the calibration SHALL be accepted and persisted to NVS
+- **AND** 0 % SHALL command 2200 µs, 50 % 1500 µs and 100 % 800 µs
+- **AND** the reported throttle percent SHALL be 0..100 for pulse widths between the endpoints and
+  clamped to 0 / 100 outside them
+- **AND** the save log SHALL mark the pair as inverted
+- **AND** after a reboot the stored inverted pair SHALL be loaded, not replaced by the defaults
+
+#### Scenario: Span check applies to absolute difference
+- **WHEN** a throttle calibration is saved or loaded from NVS
+- **THEN** it SHALL be accepted only if both endpoints lie within `THROTTLE_SERVO_MIN_US` ..
+  `THROTTLE_SERVO_MAX_US` and `|full - idle| >= THROTTLE_MIN_SPAN_US`, regardless of which endpoint
+  is larger
+- **AND** a rejected save SHALL report "Idle and full must differ by >= 100us"
+- **AND** an invalid stored pair SHALL fall back to the default endpoints
+
 ### Requirement: Transmission Control System
 The transmission control system SHALL enforce the physical gear sequence `[R, N, H, L]` and SHALL govern overshoot and rollback dwell timing via constants in `Constants.h`.
 
@@ -88,6 +123,67 @@ The transmission control system SHALL enforce the physical gear sequence `[R, N,
 #### Scenario: Constants govern dwell timing
 - **WHEN** `TRANS_OVERSHOOT_DWELL_MS` or `TRANS_ROLLBACK_DWELL_MS` are modified in `Constants.h`
 - **THEN** the corresponding dwell durations in the transmission state machine SHALL reflect the updated values without additional code changes
+
+#### Scenario: Physical gear is decoded from the 3-bit gear code
+- **WHEN** `TransmissionController::getPhysicalGear()` reads a valid opto-input snapshot
+- **THEN** it SHALL decode the gear code `[bit0 bit1 bit6]` only through
+  `TransmissionController::decodeGearCode()`, using the runtime code table
+- **AND** the runtime table SHALL default to `GEAR_CODE_LOW` = `101`, `GEAR_CODE_HIGH` = `001`,
+  `GEAR_CODE_NEUTRAL` = `011`, `GEAR_CODE_REVERSE` = `010`, overridden by codes captured through the
+  web gear code calibration (NVS `"transmission"` `code_r/n/h/l`, loaded at `begin()`)
+- **AND** the four default codes SHALL be checked distinct at compile time
+- **AND** in the runtime table every assigned code SHALL be distinct and never `000` or `111`; a gear
+  may be UNSET (after another gear took its code over) and SHALL then never be decoded
+
+#### Scenario: Captured code takes effect immediately
+- **WHEN** a gear code is captured or the table is reset to defaults
+- **THEN** the gear read cache SHALL be invalidated so the next `getPhysicalGear()` decodes with the
+  new table
+- **AND** the next gear code SHALL be logged again
+
+#### Scenario: Code 101 is LOW
+- **WHEN** the gear code reads `101` with the default table
+- **THEN** the physical gear SHALL be `GEAR_LOW`
+
+#### Scenario: Code 001 is HIGH
+- **WHEN** the gear code reads `001` with the default table
+- **THEN** the physical gear SHALL be `GEAR_HIGH`
+
+#### Scenario: Code 011 is NEUTRAL
+- **WHEN** the gear code reads `011` with the default table
+- **THEN** the physical gear SHALL be `GEAR_NEUTRAL`
+
+#### Scenario: Code 010 is REVERSE
+- **WHEN** the gear code reads `010` with the default table
+- **THEN** the physical gear SHALL be `GEAR_REVERSE`
+
+#### Scenario: All lines open reads UNKNOWN
+- **WHEN** the gear code reads `000` (e.g. mid-shift, every line open)
+- **THEN** the physical gear SHALL be `GEAR_UNKNOWN`
+- **AND** the unknown-gear behavior SHALL apply (throttle capped at `TRANS_UNKNOWN_GEAR_THROTTLE_MAX`)
+
+#### Scenario: Lost opto feed reads UNKNOWN
+- **WHEN** the gear code reads `111` (opto feed lost, every line floats HIGH)
+- **THEN** the physical gear SHALL be `GEAR_UNKNOWN`
+
+#### Scenario: Unassigned codes read UNKNOWN
+- **WHEN** the gear code reads `100` or `110` with the default table (in general: any code not in
+  the runtime table)
+- **THEN** the physical gear SHALL be `GEAR_UNKNOWN`
+
+#### Scenario: Bit 7 does not affect the gear
+- **WHEN** port bit 7 changes level while bits 0, 1 and 6 are unchanged
+- **THEN** the physical gear SHALL be unchanged
+
+#### Scenario: UNKNOWN code while idle is re-read from later snapshots
+- **WHEN** the gear code decodes to `GEAR_UNKNOWN` and no gear change is in progress
+- **THEN** `getPhysicalGear()` SHALL keep the previous cached gear and consume the next expander
+  poll instead, at most `TRANS_GEAR_READ_RETRY_COUNT` times, without issuing I2C reads of its own
+- **AND** once the retries are spent it SHALL report `GEAR_UNKNOWN`
+
+#### Scenario: Gear code changes are logged
+- **WHEN** the gear code differs from the last logged code
+- **THEN** a TRANSMISSION debug line `[TRANS] gear code=0bXYZ -> <L|H|N|R|UNKNOWN>` SHALL be logged
 
 ### Requirement: Brake Control System
 The system SHALL control braking force through a linear actuator-driven brake mechanism. The
@@ -325,7 +421,7 @@ The system SHALL integrate front light control with vehicle systems.
 #### Scenario: Query current light state
 - **WHEN** VehicleController.getFrontLight() is called
 - **THEN** current light state is returned from RelayController (true/false)
-- **AND** state reflects actual RELAY3 output
+- **AND** state reflects the actual `RELAY_MASK_FRONT_LIGHT` output (Relay_3, IO6, on the aztec buggy)
 
 ### Requirement: Ignition Safety Interlocks
 The system SHALL enforce safety interlocks for ignition state changes to prevent unsafe operations.
@@ -945,4 +1041,244 @@ The override SHALL be volatile, SHALL expire on its own, and SHALL be visible wh
 - **WHEN** a test speed override is active
 - **THEN** the steering scale log line SHALL mark the speed as `TEST`
 - **AND** the telemetry stream SHALL report that an override is in force and what its value is
+
+### Requirement: Front-Wheel Lock Not Fitted
+The aztec buggy SHALL have no relay behind the front-wheel lock function (`RELAY_WHEEL_LOCK_FITTED =
+0`). The wheel-lock plumbing (MAVLink servo channel 7, web `set_wheel_lock` command, telemetry fields)
+SHALL be kept so a later change can replace it with the buggy's three locks, but a lock request SHALL
+never be reported as applied.
+
+#### Scenario: Lock request is rejected
+- **WHEN** `VehicleController::setWheelLock(true)` is called from the MAVLink or the web path
+- **THEN** `RelayController::setWheelLock()` SHALL return `false` without writing the relay port
+- **AND** the first rejection after boot SHALL be logged; later ones SHALL NOT flood the log
+- **AND** `getWheelLock()` SHALL return `false`
+
+#### Scenario: Release request is a no-op
+- **WHEN** `setWheelLock(false)` is called (every control loop while MAVLink channel 7 is low)
+- **THEN** it SHALL return `true` without writing the relay port and without logging
+
+#### Scenario: Fitted state is queryable
+- **WHEN** `VehicleController::isWheelLockFitted()` or `RelayController::isWheelLockFitted()` is called
+- **THEN** it SHALL return `false`
+
+### Requirement: Steering Limit Calibration Around the Sensor Zero
+The steering controller SHALL use the Bosch LWS sensor's stored zero as the steering center and SHALL persist only the left and right limits, in 0.1° with positive = right, together with the sensor-direction flag, in NVS namespace `"steering"` under layout version 4, migrating away from every earlier steering layout.
+
+#### Scenario: Capture a limit
+- **WHEN** the left or right limit is captured while the sensor is healthy
+- **THEN** the current position, in firmware sign under the sensor-direction flag that results from the capture (see "Steering Sensor Direction Inference"), SHALL be stored as that limit only, and saved to NVS immediately
+- **AND** the steering motor SHALL be stopped
+- **AND** the steering SHALL be calibrated whenever both limits are stored and valid
+
+#### Scenario: Limit validation
+- **WHEN** a limit capture is attempted
+- **THEN** it SHALL be refused with "sensor fault" while the sensor is not healthy
+- **AND** a capture whose absolute position is below `STEER_CAL_MIN_SPAN` SHALL be refused as too close to zero, whatever its sign
+- **AND** a capture on the wrong side of zero for its button SHALL either flip the sensor-direction flag or be refused, as defined in "Steering Sensor Direction Inference"
+- **AND** every stored left limit SHALL be at most `−STEER_CAL_MIN_SPAN` and every stored right limit at least `+STEER_CAL_MIN_SPAN`
+- **AND** a limit beyond `±STEER_LWS_SAFE_RANGE` SHALL NOT be refused for that reason
+- **AND** a refused capture SHALL leave the stored limits unchanged
+
+#### Scenario: Limit captured beyond the safe range
+- **WHEN** a valid left or right limit is captured with an absolute angle beyond `STEER_LWS_SAFE_RANGE` (550.0°)
+- **THEN** it SHALL be stored and saved like any other limit
+- **AND** the capture response SHALL carry a warning that the sensor's latched-fault threshold (~600°) is near
+- **AND** telemetry `steer_range_warning` SHALL be `true` while either stored limit is beyond the safe range
+
+#### Scenario: Mirrored sensor caught at calibration
+- **WHEN** the sensor is mounted so that its angle increases toward the right
+- **THEN** the first limit capture SHALL detect it and set the sensor-direction flag to mirrored, as defined in "Steering Sensor Direction Inference"
+- **AND** the steering SHALL be calibrated only after both limits are captured under the same flag, so the closed loop SHALL never run with an inverted sign
+
+#### Scenario: Zero-set invalidates the limits
+- **WHEN** the sensor zero-set sequence has sent its reset frame, whatever its outcome
+- **THEN** both stored limits SHALL be erased from NVS and the steering SHALL be not calibrated
+- **AND** the limits SHALL have to be captured again against the new zero
+
+#### Scenario: NVS layout and migration
+- **WHEN** calibration or the sensor-direction flag is saved
+- **THEN** it SHALL be stored under `cal_ver` = 4, `lim_l`, `lim_r` and `inv` (bool, `true` = mirrored) in namespace `"steering"`
+- **WHEN** calibration is loaded and `cal_ver` is 3
+- **THEN** `lim_l` and `lim_r` SHALL be kept, `inv` SHALL be written as `false` (v3 limits were captured with the fixed negation), and `cal_ver` SHALL be written as 4
+- **AND** a steering that was calibrated under v3 SHALL stay calibrated with no recalibration
+- **WHEN** calibration is loaded and `cal_ver` is neither 3 nor 4
+- **THEN** the obsolete keys `fc_raw`, `cc_raw`, `fl_pos`, `cl_raw`, `fr_pos`, `cr_raw`, `c_ang`, `l_ang` and `r_ang`, and any `lim_l`, `lim_r` and `inv`, SHALL be removed individually where present
+- **AND** `cal_ver` SHALL be written as 4 with no limits and `inv` = `false`, and the steering SHALL be not calibrated and SHALL require recalibration
+- **AND** other keys in the namespace (e.g. `steer_sca_base`) SHALL be preserved, and the namespace SHALL never be cleared as a whole
+- **WHEN** `inv` is missing under `cal_ver` = 4
+- **THEN** it SHALL be read as `false`
+
+#### Scenario: Firmware downgrade
+- **WHEN** a firmware that only knows layout 3 boots with `cal_ver` = 4
+- **THEN** its own migration SHALL erase the limits, so a mirrored calibration SHALL NOT be used by a firmware that would ignore the flag
+
+### Requirement: Sensorless Steering Rate Mode
+The system SHALL select one steering mode on every control-loop iteration from the steering sensor health, the active input source and the autopilot flight mode, and SHALL report it as `position`, `rate` or `blocked`. The selection SHALL be automatic, with no operator switch and no parameter. In `rate` mode the autopilot steering channel SHALL command the direction and speed of steering rotation rather than a position.
+
+#### Scenario: Mode selection
+- **WHEN** the steering mode is evaluated
+- **THEN** it SHALL be `position` while the steering angle sensor is healthy (the existing debounced health flag), whatever the input source or autopilot mode
+- **AND** it SHALL be `rate` while the sensor is not healthy AND the active input source is MAVLink AND the autopilot's flight mode is Rover MANUAL (`custom_mode` = `ROVER_CUSTOM_MODE_MANUAL`) or unavailable (never received or stale)
+- **AND** it SHALL be `blocked` in every other case (sensor not healthy with the web or failsafe as input source, or with a known autopilot mode other than MANUAL)
+- **AND** a healthy sensor with missing limits SHALL be `position` (percent commands are then rejected as uncalibrated), so that `rate` never activates while the sensor is healthy
+
+#### Scenario: Rate command from the autopilot stick
+- **WHEN** the mode is `rate` and a new `SERVO_OUTPUT_RAW` frame has arrived since the last rate command
+- **THEN** the steering percentage the autopilot path already computes (decoded channel, `RC_STEERING_DEADBAND` applied, speed scale applied) SHALL be passed to the steering controller's rate command
+- **AND** inside the deadband the commanded duty SHALL be zero and the motor SHALL stop
+- **AND** outside the deadband the duty SHALL be `STEER_PWM_MIN_DUTY + (STEER_PWM_MAX_DUTY − STEER_PWM_MIN_DUTY) × d²`, where `d = (|pct| − RC_STEERING_DEADBAND) / (100 − RC_STEERING_DEADBAND)` clamped to at most 1, so that full deflection gives duty 255
+- **AND** a positive percentage SHALL turn the wheels right and a negative one left
+- **AND** full deflection SHALL give duty 255 only while the applied steering speed scale is 1 (at or below the scaling base speed, or scaling inactive); above the base speed the scaled deflection, and therefore the rate, SHALL be reduced by the same factor as in position mode
+- **AND** the reported steering scale (`STEER_SCA`, `steer_scale`) SHALL keep reporting the scale actually applied, with its existing meaning
+- **AND** when no new frame has arrived, no rate command SHALL be issued, so that a stale decoded channel never keeps the motor running
+
+#### Scenario: Release or frame loss stops the motor
+- **WHEN** the mode is `rate` and no new `SERVO_OUTPUT_RAW` frame has refreshed the rate command for `STEER_JOG_TIMEOUT_MS` (500 ms)
+- **THEN** the motor SHALL be stopped
+- **AND** a centred stick SHALL stop the motor on the next frame
+
+#### Scenario: Centre the stick to arm
+- **WHEN** the mode changes to `rate` from `position` or from `blocked`
+- **THEN** rate commands outside the deadband SHALL be refused until one fresh frame has shown the stick inside the deadband
+- **AND** the waiting state SHALL be logged once on the serial console
+
+#### Scenario: Autonomous modes stay blocked
+- **WHEN** the sensor is not healthy and the autopilot reports a known flight mode other than MANUAL
+- **THEN** the mode SHALL be `blocked` and the autopilot steering channel SHALL NOT drive the motor
+- **AND** a rate drive in progress SHALL be stopped in the same control-loop iteration
+
+#### Scenario: Leaving rate mode for blocked
+- **WHEN** the mode changes from `rate` to `blocked` (input source changes away from MAVLink, including web takeover and failsafe, or the autopilot leaves MANUAL)
+- **THEN** a drive started by a rate command SHALL be stopped immediately rather than after the refresh timeout
+- **AND** a web jog or nudge in progress SHALL NOT be stopped by this transition
+
+#### Scenario: Sensor recovers during rate mode
+- **WHEN** the mode changes from `rate` to `position` because the sensor became healthy again (the existing `STEER_LWS_RECOVER_FRAMES` streak)
+- **THEN** a drive started by a rate command SHALL be stopped and the wheels SHALL hold where they are
+- **AND** no position target SHALL be set and no move SHALL be started by the transition itself, and boot centering SHALL NOT be requested again
+- **AND** the next percent command SHALL be accepted and executed as a normal closed-loop move
+
+#### Scenario: No debounce beyond the sensor's own
+- **WHEN** the sensor health flag changes
+- **THEN** the mode SHALL follow it with the existing fault timing (immediate fault, `STEER_LWS_TIMEOUT_MS` timeout, `STEER_LWS_RECOVER_FRAMES` recovery) and no additional timer
+- **AND** every mode change SHALL stop a rate-owned drive and require the stick to be centred again before rate motion resumes
+
+#### Scenario: Mode transitions are logged
+- **WHEN** the steering mode changes
+- **THEN** one serial console line SHALL name the old mode, the new mode and the reason (sensor fault token, sensor OK, input source or autopilot mode)
+
+### Requirement: Steering Sensor Direction Inference
+The steering controller SHALL keep a persistent sensor-direction flag (`inv`: `false` = normal mount, sensor angle positive = left; `true` = mirrored mount, sensor angle positive = right) and SHALL derive the firmware position as `−angle` when the flag is `false` and `+angle` when it is `true`, and the signed rotation rate likewise. The flag SHALL be inferred from the Left/Right limit captures, so that a mirrored mount needs no re-fitting and no manual setting. All consumers of the position and rate (closed-loop control, limits, percent mapping, telemetry `steer_angle` / `steer_rate`, MAVLink `STEER_POS`) SHALL use the firmware sign and SHALL be unaware of the flag.
+
+#### Scenario: Capture on the expected side
+- **WHEN** "Set Left" is pressed and the position under the current flag is at most `−STEER_CAL_MIN_SPAN`, or "Set Right" is pressed and it is at least `+STEER_CAL_MIN_SPAN`
+- **THEN** the limit SHALL be stored and the flag SHALL be unchanged
+
+#### Scenario: Wrong side with the opposite limit unset
+- **WHEN** "Set Left" is pressed and the position under the current flag is at least `+STEER_CAL_MIN_SPAN`, or "Set Right" is pressed and it is at most `−STEER_CAL_MIN_SPAN`
+- **AND** the opposite limit is not stored
+- **THEN** the flag SHALL be toggled and saved to NVS, the position SHALL be recomputed under the new flag, and the limit SHALL be stored
+- **AND** the opposite limit SHALL be cleared, so the steering SHALL be not calibrated until the other limit is captured under the new flag
+- **AND** the stall and progress baselines SHALL be reset to the recomputed position
+- **AND** the serial console SHALL log `[STEER] sensor direction: mirrored` or `[STEER] sensor direction: normal` (feature SERVO), naming the capture that decided it
+- **AND** the capture response SHALL say that the sensor direction was detected as mirrored (or normal) and that the other limit must be captured
+
+#### Scenario: Wrong side with the opposite limit stored
+- **WHEN** a capture is on the wrong side of zero by at least `STEER_CAL_MIN_SPAN` under the current flag
+- **AND** the opposite limit is stored
+- **THEN** the capture SHALL be refused, the flag SHALL NOT be toggled and the stored limits SHALL be unchanged
+- **AND** the refusal SHALL say that the reading contradicts the stored opposite limit, that the sensor zero is probably off-centre or the sensor was re-mounted, and that the fix is to jog straight ahead, press "Set sensor zero" (which erases the limits) and capture both limits again
+
+#### Scenario: No ping-pong between captures
+- **WHEN** a capture has toggled the flag and the other limit is then captured on the wrong side again
+- **THEN** that capture SHALL be refused as contradicting the limit just stored, and the flag SHALL NOT be toggled back
+
+#### Scenario: Too close to zero
+- **WHEN** a capture's absolute position is below `STEER_CAL_MIN_SPAN`
+- **THEN** it SHALL be refused as too close to zero and the flag SHALL NOT be toggled, whatever the sign
+
+#### Scenario: Commands that do not depend on the direction
+- **WHEN** the flag is wrong or not yet inferred (before the first capture after a re-mount)
+- **THEN** jog, nudge, rate mode and "Set sensor zero" SHALL work unchanged, because they do not use the position sign
+- **AND** percent commands SHALL stay refused until both limits are stored, because the calibration is incomplete
+
+#### Scenario: Flag survives a zero-set
+- **WHEN** the sensor zero-set sequence runs
+- **THEN** it SHALL erase the limits as before but SHALL NOT change the flag; the next capture re-confirms or toggles it
+
+#### Scenario: Flag reported at boot
+- **WHEN** the calibration is loaded at boot
+- **THEN** the calibration log line SHALL include the sensor direction (normal or mirrored)
+- **AND** the first-frame log line SHALL still show the raw sensor angle in the sensor's own sign, together with the resulting firmware position and the flag
+
+### Requirement: Quad Bike Relay Assignment With Fitted Front-Wheel Lock
+On the quad bike (`master`) build the relay board SHALL use the quad assignment:
+- ignition/ECU line = Relay_1 + Relay_2, paralleled (`RELAY_MASK_IGNITION` `0b00110000`);
+- starter = Relay_3 (`0b01000000`);
+- front light = Relay_4 (`0b10000000`);
+- front-wheel lock = Relay_5 + Relay_6, paralleled (`RELAY_MASK_WHEEL_LOCK` `0b00001100`);
+- Relay_7 / Relay_8 spare (`RELAY_MASK_RESERVED` `0b00000011`).
+
+The front-wheel lock SHALL be fitted (`RELAY_WHEEL_LOCK_FITTED` = 1). It replaces, for this build
+only, the aztec buggy's "Front-Wheel Lock Not Fitted" behaviour.
+
+#### Scenario: Wheel lock from MAVLink channel 7
+- **WHEN** MAVLink servo channel 7 is above 1520 µs (e.g. 2000)
+- **THEN** Relay_5 and Relay_6 SHALL both be energized, `getWheelLock()` SHALL return `true`,
+  telemetry `wheel_lock_on` SHALL be `true` and `EFI_DIGITAL_FLAG_WHEEL_LOCK` SHALL be set
+- **AND WHEN** channel 7 returns to 1000 µs
+- **THEN** both relays SHALL be released and the lock SHALL report unlocked
+
+#### Scenario: Wheel lock reported as fitted
+- **WHEN** telemetry is formatted on the quad build
+- **THEN** `wheel_lock_fitted` SHALL be `true` and the web wheel-lock toggle SHALL be usable
+
+#### Scenario: Fail-safe all-off keeps the wheel lock
+- **WHEN** `RelayController::allOff()` runs
+- **THEN** ignition, starter and light SHALL be switched off
+- **AND** the wheel lock SHALL hold its last commanded state
+
+#### Scenario: Relay test respects the wheel lock
+- **WHEN** a web relay test asks to energize any relay while the wheel lock is engaged
+- **THEN** the request SHALL be refused with a reason naming the wheel lock
+- **AND WHEN** a lock command arrives while test relays are on
+- **THEN** all test relays SHALL be switched off before the lock is applied
+- **AND** the 2 s starter test cap SHALL apply to Relay_3
+
+### Requirement: Quad Bike One-Line-Per-Gear Sensing
+On the quad bike (`master`) build each gear SHALL be sensed on its own opto input line on the
+input expander: NEUTRAL = port bit 0, REVERSE = bit 1, LOW = bit 6, HIGH = bit 7, engaged = HIGH.
+Exactly one engaged line SHALL decode to its gear. No engaged line, or more than one, SHALL decode
+to `GEAR_UNKNOWN`. The aztec 3-bit gear code table SHALL NOT be built on this build.
+
+#### Scenario: Single line engaged
+- **WHEN** only port bit 6 reads HIGH among bits 0, 1, 6 and 7
+- **THEN** the physical gear SHALL be LOW
+
+#### Scenario: Ambiguous or empty reading
+- **WHEN** none of bits 0, 1, 6, 7 reads HIGH, or two or more do
+- **THEN** the physical gear SHALL be `GEAR_UNKNOWN`
+
+#### Scenario: No gear-code calibration on the quad
+- **WHEN** telemetry is formatted on the quad build
+- **THEN** `gear_code`, `gear_sensed`, `gear_codes` and `gear_codes_custom` SHALL be absent
+- **AND** the web "Gear Sensor Codes" card SHALL be hidden
+- **AND** a `set_gear_code` or `reset_gear_codes` command SHALL be answered with failure
+  "Gear codes not used on this vehicle"
+
+### Requirement: Quad Bike Steering VESC on UART2
+On the quad bike (`master`) build the steering VESC SHALL be driven over UART2 on connector X6
+(GPIO4 TX → VESC RX, GPIO5 RX ← VESC TX, via the BSS138 level shifters, 115200 baud). UART0
+(GPIO43/44) SHALL stay connected to the CH9121T and SHALL carry no console and no runtime log
+output.
+
+#### Scenario: VESC link on X6
+- **WHEN** the firmware starts on the quad build
+- **THEN** the VESC driver SHALL open `UART_NUM_2` on GPIO5 (RX) / GPIO4 (TX)
+- **AND** a valid `COMM_GET_VALUES` reply SHALL set the steering driver healthy
+
+#### Scenario: No log output on UART0
+- **WHEN** an ESP-IDF component or the Arduino core logs at runtime
+- **THEN** the output SHALL go to the USB-CDC console only, never to UART0
 

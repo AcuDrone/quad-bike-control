@@ -5,6 +5,7 @@
 - [x] 1.4 Docs: `GPIO_PINOUT_CUSTOM_BOARD_S3.md`, `openspec/project.md`, `include/Changelog.h` (1.2.0, uk + en)
 
 ## 2. Verification
+Bench: confirmed working by the user on the buggy, 2026-11-01.
 - [x] 2.1 `pio run -e esp32-s3-devkitc-1` builds with no new warnings in project code
 - [x] 2.2 `openspec validate update-aztec-vesc-uart0 --strict` passes
-- [ ] 2.3 Bench: R63/R64 removed; VESC on X1 TxD/RxD/GND; `VESC_OK` = 1, steering moves both ways, no CRC errors over a few minutes with WiFi active
+- [x] 2.3 Bench: R63/R64 removed; VESC on X1 TxD/RxD/GND; `VESC_OK` = 1, steering moves both ways, no CRC errors over a few minutes with WiFi active

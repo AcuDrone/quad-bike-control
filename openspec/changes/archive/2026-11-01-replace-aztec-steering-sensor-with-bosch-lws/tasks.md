@@ -60,17 +60,18 @@
 - [x] 8.3 `openspec validate replace-aztec-steering-sensor-with-bosch-lws --strict` passes
 
 ## 9. Verification (hardware-in-loop)
-- [ ] 9.1 [USER/MANUAL] Fit the LWS directly on the steering shaft; wire CAN-H/CAN-L to the MCP2515 bus beside the ECU, 12 V from the ignition key; measure ≈ 60 Ω between CAN-H and CAN-L with power off (exactly two terminators)
-- [ ] 9.2 [USER/MANUAL] Boot: `steer_lws_fps` ≈ 100, `steer_lws_crc_err` stays 0, engine RPM/coolant/etc. still update at their normal cadence with the engine running; `[CAN]` log shows the two-path filter line
-- [ ] 9.3 [USER/MANUAL] Gear change with the engine running: RPM polling at `CAN_POLL_INTERVAL_RPM_BOOST`, no `dataValid` loss, steering stays healthy
-- [ ] 9.4 [USER/MANUAL] Sign: turn the wheel right by hand → `steer_angle` increases (positive); left → negative
-- [ ] 9.5 [USER/MANUAL] Fresh flash: steering reports not calibrated, old keys gone (log), percent commands rejected, jog and nudge work
-- [ ] 9.6 [USER/MANUAL] Sensorless centring: unplug the sensor CAN or 12 V → token `timeout`, jog/nudge still drive and stop on button release (≤ 500 ms) and at nudge end; reconnect, jog to straight-ahead, restart the vehicle, press "Set sensor zero" → state `ok`, `steer_angle` ≈ 0.0, limits shown as `--`
-- [ ] 9.7 [USER/MANUAL] Capture Left and Right at the locks: values saved immediately, `steer_calibrated` true; a Left capture right of zero and one closer than 20° are each refused with the named reason; a capture beyond 550° is saved, the response warns and `steer_range_warning` is true with the UI note shown
-- [ ] 9.8 [USER/MANUAL] Restart the vehicle at several wheel angles: boot centering moves to 0.0 ± tolerance without homing
-- [ ] 9.9 [USER/MANUAL] MAVLink at 25 Hz: smooth tracking, re-command guard holds, stall detection and move timeout still fire; `STEER_POS` matches `steering_pct` and goes `NaN` on a sensor fault
-- [ ] 9.10 [USER/MANUAL] Fault injection during a closed-loop move: pull the sensor CAN → move stops within ~100 ms, token `timeout`, percent rejected; reconnect → healthy again without reboot
-- [ ] 9.11 [USER/MANUAL] Range guard: with a zero deliberately set near one lock and the far limit captured beyond 550°, a +/−100 % percent command (web slider, MAVLink) stops at 550° (no `range_latched`), while jog toward the far lock is not stopped by the guard; then re-zero at centre and re-capture. Only if the latch is ever reached: token `range_latched`, restart clears it, zero preserved
-- [ ] 9.12 [USER/MANUAL] Zero-set while the engine runs and while an OBD request is in flight: sequence completes, OBD resumes, no stale-data loss; zero-set during an ECU probe is refused as `busy`
-- [ ] 9.13 [USER/MANUAL] Measure the LWS gap during a forced MCP2515 re-init (ECU unpowered, ignition on, ≥ 15 s): note whether `timeout` appears; record the gap for the follow-up decision in design Risks
-- [ ] 9.14 [USER/MANUAL] Bench-tune and record final values of the D10 constants (`STEER_KP`, tolerances, `STEER_CAL_MIN_SPAN`, `STEER_RETARGET_TOLERANCE`, `STEER_MOVE_TIMEOUT`)
+Bench: confirmed working by the user on the buggy, 2026-11-01.
+- [x] 9.1 [USER/MANUAL] Fit the LWS directly on the steering shaft; wire CAN-H/CAN-L to the MCP2515 bus beside the ECU, 12 V from the ignition key; measure ≈ 60 Ω between CAN-H and CAN-L with power off (exactly two terminators)
+- [x] 9.2 [USER/MANUAL] Boot: `steer_lws_fps` ≈ 100, `steer_lws_crc_err` stays 0, engine RPM/coolant/etc. still update at their normal cadence with the engine running; `[CAN]` log shows the two-path filter line
+- [x] 9.3 [USER/MANUAL] Gear change with the engine running: RPM polling at `CAN_POLL_INTERVAL_RPM_BOOST`, no `dataValid` loss, steering stays healthy
+- [x] 9.4 [USER/MANUAL] Sign: turn the wheel right by hand → `steer_angle` increases (positive); left → negative
+- [x] 9.5 [USER/MANUAL] Fresh flash: steering reports not calibrated, old keys gone (log), percent commands rejected, jog and nudge work
+- [x] 9.6 [USER/MANUAL] Sensorless centring: unplug the sensor CAN or 12 V → token `timeout`, jog/nudge still drive and stop on button release (≤ 500 ms) and at nudge end; reconnect, jog to straight-ahead, restart the vehicle, press "Set sensor zero" → state `ok`, `steer_angle` ≈ 0.0, limits shown as `--`
+- [x] 9.7 [USER/MANUAL] Capture Left and Right at the locks: values saved immediately, `steer_calibrated` true; a Left capture right of zero and one closer than 20° are each refused with the named reason; a capture beyond 550° is saved, the response warns and `steer_range_warning` is true with the UI note shown
+- [x] 9.8 [USER/MANUAL] Restart the vehicle at several wheel angles: boot centering moves to 0.0 ± tolerance without homing
+- [x] 9.9 [USER/MANUAL] MAVLink at 25 Hz: smooth tracking, re-command guard holds, stall detection and move timeout still fire; `STEER_POS` matches `steering_pct` and goes `NaN` on a sensor fault
+- [x] 9.10 [USER/MANUAL] Fault injection during a closed-loop move: pull the sensor CAN → move stops within ~100 ms, token `timeout`, percent rejected; reconnect → healthy again without reboot
+- [x] 9.11 [USER/MANUAL] Range guard: with a zero deliberately set near one lock and the far limit captured beyond 550°, a +/−100 % percent command (web slider, MAVLink) stops at 550° (no `range_latched`), while jog toward the far lock is not stopped by the guard; then re-zero at centre and re-capture. Only if the latch is ever reached: token `range_latched`, restart clears it, zero preserved
+- [x] 9.12 [USER/MANUAL] Zero-set while the engine runs and while an OBD request is in flight: sequence completes, OBD resumes, no stale-data loss; zero-set during an ECU probe is refused as `busy`
+- [x] 9.13 [USER/MANUAL] Measure the LWS gap during a forced MCP2515 re-init (ECU unpowered, ignition on, ≥ 15 s): note whether `timeout` appears; record the gap for the follow-up decision in design Risks
+- [x] 9.14 [USER/MANUAL] Bench-tune and record final values of the D10 constants (`STEER_KP`, tolerances, `STEER_CAL_MIN_SPAN`, `STEER_RETARGET_TOLERANCE`, `STEER_MOVE_TIMEOUT`)

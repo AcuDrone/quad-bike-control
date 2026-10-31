@@ -91,7 +91,7 @@ The steering controller SHALL use the Bosch LWS sensor's stored zero as the stee
 - **AND** the capture response SHALL carry a warning that the sensor's latched-fault threshold (~600°) is near
 - **AND** telemetry `steer_range_warning` SHALL be `true` while either stored limit is beyond the safe range
 
-#### Scenario: Mirrored sensor handled at calibration
+#### Scenario: Mirrored sensor caught at calibration
 - **WHEN** the sensor is mounted so that its angle increases toward the right
 - **THEN** the first limit capture SHALL detect it and set the sensor-direction flag to mirrored, as defined in "Steering Sensor Direction Inference"
 - **AND** the steering SHALL be calibrated only after both limits are captured under the same flag, so the closed loop SHALL never run with an inverted sign

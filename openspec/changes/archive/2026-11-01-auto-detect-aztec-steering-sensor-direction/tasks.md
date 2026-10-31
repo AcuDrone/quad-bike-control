@@ -80,15 +80,16 @@
 - [x] 8.4 `openspec validate auto-detect-aztec-steering-sensor-direction --strict`.
 
 ## 9. Bench verification [USER/MANUAL]
-- [ ] 9.1 [USER/MANUAL] v3 → v4: flash 1.5.1 on a vehicle calibrated under 1.5.0 (normal mount). The serial log shows `v3 -> v4: limits kept`, the steering is still calibrated, `steer_sensor_inv` = false, and percent steering works as before.
-- [ ] 9.2 [USER/MANUAL] Mirrored sensor:
+Bench: confirmed working by the user on the buggy, 2026-11-01.
+- [x] 9.1 [USER/MANUAL] v3 → v4: flash 1.5.1 on a vehicle calibrated under 1.5.0 (normal mount). The serial log shows `v3 -> v4: limits kept`, the steering is still calibrated, `steer_sensor_inv` = false, and percent steering works as before.
+- [x] 9.2 [USER/MANUAL] Mirrored sensor:
   - jog straight ahead, Set sensor zero, jog to the left lock, Set Left;
   - the log shows `[STEER] sensor direction: mirrored`, and the reply says "sensor direction detected: mirrored — capture the right limit again";
   - the left limit is negative.
-- [ ] 9.3 [USER/MANUAL] After 9.2, Jog ▶: `steer_angle` grows (and `steer_rate` > 0) while the wheels turn right.
-- [ ] 9.4 [USER/MANUAL] Jog to the right lock, Set Right → calibration complete. Percent steering (web slider / test buttons, then the MAVLink stick) drives the correct way and stops on target. `steering_pct` / `STEER_POS` are + to the right.
-- [ ] 9.5 [USER/MANUAL] Діагностика → "Кермо: стан": the Sensor tile shows "дзеркально" (uk) / "mirrored" (en), and the calibration status line shows it too. Reboot: the flag and both limits persist.
-- [ ] 9.6 [USER/MANUAL] Contradiction: with both limits set, jog toward the right lock past the span and press Set Left → refused with the "contradicting the stored right limit … Set sensor zero" text. Limits and flag are unchanged.
-- [ ] 9.7 [USER/MANUAL] Re-mount the sensor normally, then Set sensor zero → limits erased, flag still mirrored. Set Left → the log shows `sensor direction: normal`. Set Right completes. `steer_sensor_inv` = false and the marker is gone.
-- [ ] 9.8 [USER/MANUAL] Jog / Nudge and Set sensor zero work before any capture on a mirrored mount, and rate mode (sensor unplugged, MANUAL) is unaffected.
-- [ ] 9.9 [USER/MANUAL] The web "What's new" shows 1.5.1, and the sidebar shows firmware 1.5.1.
+- [x] 9.3 [USER/MANUAL] After 9.2, Jog ▶: `steer_angle` grows (and `steer_rate` > 0) while the wheels turn right.
+- [x] 9.4 [USER/MANUAL] Jog to the right lock, Set Right → calibration complete. Percent steering (web slider / test buttons, then the MAVLink stick) drives the correct way and stops on target. `steering_pct` / `STEER_POS` are + to the right.
+- [x] 9.5 [USER/MANUAL] Діагностика → "Кермо: стан": the Sensor tile shows "дзеркально" (uk) / "mirrored" (en), and the calibration status line shows it too. Reboot: the flag and both limits persist.
+- [x] 9.6 [USER/MANUAL] Contradiction: with both limits set, jog toward the right lock past the span and press Set Left → refused with the "contradicting the stored right limit … Set sensor zero" text. Limits and flag are unchanged.
+- [x] 9.7 [USER/MANUAL] Re-mount the sensor normally, then Set sensor zero → limits erased, flag still mirrored. Set Left → the log shows `sensor direction: normal`. Set Right completes. `steer_sensor_inv` = false and the marker is gone.
+- [x] 9.8 [USER/MANUAL] Jog / Nudge and Set sensor zero work before any capture on a mirrored mount, and rate mode (sensor unplugged, MANUAL) is unaffected.
+- [x] 9.9 [USER/MANUAL] The web "What's new" shows 1.5.1, and the sidebar shows firmware 1.5.1.

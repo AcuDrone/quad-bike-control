@@ -11,7 +11,7 @@ Bus assignment:
 
 | Bus | Arduino instance | SDA | SCL | Speed | Devices |
 |-----|------------------|-----|-----|-------|---------|
-| I2C1 | `Wire` | GPIO1 | GPIO2 | 100 kHz | External header X14 only: AS5600 steering sensor `0x36` |
+| I2C1 | `Wire` | GPIO1 | GPIO2 | 100 kHz | External header X14 only: **no device fitted** (the steering angle sensor is on CAN); `Wire` is not started |
 | I2C2 | `Wire1` | GPIO48 | GPIO47 | 100 kHz | Both on-board expanders — opto-input PCA9557 U10 `0x1A`, mux PCA9557 U2 `0x1C` — plus the relay-board PCA9557 `0x1F` on header X15 |
 
 This assignment is **empirical** — established by live bus scans on the assembled board, which
@@ -21,27 +21,24 @@ on-board answers on I2C1.
 The relay board keeps its as-shipped `A2A1A0 = 111` → `0x1F` strap, which collides with neither
 `0x1A` nor `0x1C`, and runs on header X15 / `Wire1`. (On the first assembled board X15 passed no
 signals until rework in the `FB3`/`FB4` ferrite area; because the strap is bus-agnostic, moving the
-board to X14 / `Wire` is a change of the bus passed to `RelayController` only — a contingency.)
+board to X14 / `Wire` is a change of the bus passed to `RelayController`, plus starting `Wire` on
+`PIN_I2C1_SDA`/`PIN_I2C1_SCL` — a contingency.)
 
-Both buses SHALL run at 100 kHz (`I2C_BUS_FREQ_HZ`): the AS5600 is reached over a long cable run to
-the steering column (X14), where signal-integrity margin is worth more than bus speed.
+A boot scan of I2C2 SHALL show `0x1A`, `0x1C` and `0x1F`. `Wire1` SHALL run at 100 kHz
+(`I2C_BUS_FREQ_HZ`).
 
 #### Scenario: Initialize both buses before any I2C consumer
 - **WHEN** `setup()` runs
-- **THEN** `Wire` SHALL be started on `PIN_STEER_SDA` (GPIO1) / `PIN_STEER_SCL` (GPIO2) at
+- **THEN** `Wire1` SHALL be started on `PIN_RELAY_SDA` (GPIO48) / `PIN_RELAY_SCL` (GPIO47) at
   `I2C_BUS_FREQ_HZ`
-- **AND** `Wire1` SHALL be started on `PIN_RELAY_SDA` (GPIO48) / `PIN_RELAY_SCL` (GPIO47) at
-  `I2C_BUS_FREQ_HZ`
-- **AND** both buses SHALL be up before the AS5600 sensor, the opto-input reader, or the relay
-  controller are initialized
-- **AND** initialization of one bus SHALL NOT depend on a device on the other bus responding
+- **AND** it SHALL be up before the opto-input reader or the relay controller are initialized
+- **AND** `Wire` SHALL NOT be started while no device is fitted on X14
 
 #### Scenario: Drivers never re-open a bus they do not own
-- **WHEN** the AS5600 on `Wire` or an expander driver on `Wire1` initializes
+- **WHEN** an expander driver on `Wire1` initializes
 - **THEN** it SHALL use the bus `main.cpp` already opened without calling `begin()` itself
 - **AND** a failure of one device SHALL NOT prevent any other device from being read
-- **AND** an AS5600 wedged-bus recovery SHALL restore the exact bus parameters `main.cpp` opened, so
-  any other device on that bus is not left at different parameters
+- **AND** no driver and no coordinator SHALL call `end()` or `begin()` on `Wire1` after `setup()`
 
 #### Scenario: Driver bound to a single address
 - **WHEN** a PCA9557 driver instance is constructed
@@ -87,16 +84,21 @@ The system SHALL read the eight 5V opto-isolated (PC817) digital inputs through 
 U10 at address `0x1A` on `Wire1` (I2C2 — scan-verified; the schematic's port names implied I2C1),
 replacing direct GPIO reads for the gear selector and the brake limit sensor.
 
-Input assignment:
+Input assignment (aztec buggy; the quad bike's one-hot four-line gear assignment is kept on
+`master`):
 
-| Input | Connector | Function |
-|-------|-----------|----------|
-| In1 | X16 | Gear REVERSE |
-| In2 | X16 | Gear NEUTRAL |
-| In3 | X16 | Gear LOW |
-| In4 | X16 | Gear HIGH |
-| In5 | X17 | Brake limit sensor ("released" endstop) |
-| In6-In8 | X17 | Spare — no firmware function |
+| Port bit | Connector | Function |
+|----------|-----------|----------|
+| 0 | X16 | Gear code bit A — left / MSB (engaged = HIGH) |
+| 1 | X16 | Gear code bit B — middle (engaged = HIGH) |
+| 6 | X16 | Gear code bit C — right / LSB (engaged = HIGH) |
+| 7 | X16 | Not wired on aztec — SHALL be ignored |
+| 4 | X17 | Brake limit sensor ("released" endstop) |
+| 2, 3, 5 | X17 | Spare — no firmware function |
+
+The gear code SHALL be formed from the raw levels of bits 0, 1 and 6 in the order `[bit0 bit1 bit6]`,
+i.e. `(bit0 << 2) | (bit1 << 1) | bit6`. `BOARD_INPUT_ACTIVE_LOW` SHALL NOT be applied to the gear
+code bits.
 
 #### Scenario: Initialize the input expander
 - **WHEN** `BoardInputs::begin()` is called with the `Wire1` bus
@@ -114,8 +116,17 @@ Input assignment:
 
 #### Scenario: Snapshot exposes gear and brake state with validity
 - **WHEN** `getSnapshot()` is called
-- **THEN** it SHALL return the four gear-input states, the brake-released state, a `valid` flag, and
-  the age in milliseconds of the last successful read
+- **THEN** it SHALL return the undecoded 3-bit gear code (0..7), the brake-released state, a `valid`
+  flag, and the age in milliseconds of the last successful read
+- **AND** `BoardInputs` SHALL NOT decode the code into a gear
+
+#### Scenario: Gear code extraction
+- **WHEN** the raw port byte has bit 0 = 1, bit 1 = 0 and bit 6 = 1
+- **THEN** the published gear code SHALL be `0b101`
+
+#### Scenario: Bit 7 is ignored
+- **WHEN** two raw port bytes differ only in bit 7
+- **THEN** they SHALL produce the same gear code
 
 ### Requirement: Opto Input Polling and Fault Policy
 The system SHALL poll the input expander non-blocking from the cooperative `loop()` and SHALL define
@@ -164,20 +175,25 @@ The system SHALL drive the external relay board's eight relays through its PCA95
 outputs, while preserving the existing `RelayController` public API and ignition semantics. The bus
 is supplied by the owner at construction: `Wire1` (I2C2), the board's home on header X15.
 
-Relay assignment. The board's IO routing is **not** 1:1 with the relay numbers (verified from the
-`Relay.PrjPcb` netlist), and two functions drive a paralleled PAIR of relays that always energize
-together, so the firmware SHALL address each function by a whole-port mask:
+Relay assignment (aztec buggy). The board's IO routing is **not** 1:1 with the relay numbers
+(verified from the `Relay.PrjPcb` netlist), so the firmware SHALL address each function by a
+whole-port mask. On the aztec buggy no function is paired, and the relays not assigned below are
+reserved and SHALL be driven off except while the web relay test (see "Web Relay Test") energizes
+one:
 
 | Relay | PCA9557 IO | Relay-board connector | Function | Mask constant |
 |-------|-----------|-----------------------|----------|---------------|
-| Relay_1 | IO4 | X4 | Ignition / ECU line | `RELAY_MASK_IGNITION` (`0b00110000`) |
-| Relay_2 | IO5 | X5 | Ignition / ECU line (paired duplicate) | `RELAY_MASK_IGNITION` |
-| Relay_3 | IO6 | X6 | Starter solenoid | `RELAY_MASK_STARTER` (`0b01000000`) |
-| Relay_4 | IO7 | X7 | Front light | `RELAY_MASK_FRONT_LIGHT` (`0b10000000`) |
-| Relay_5 | IO3 | X8 | Front-wheel lock | `RELAY_MASK_WHEEL_LOCK` (`0b00001100`) |
-| Relay_6 | IO2 | X9 | Front-wheel lock (paired duplicate) | `RELAY_MASK_WHEEL_LOCK` |
-| Relay_7 | IO0 | X10 | Spare — always driven off | — |
-| Relay_8 | IO1 | X11 | Spare — always driven off | — |
+| Relay_1 | IO4 | X4 | Ignition / ECU line (single relay) | `RELAY_MASK_IGNITION` (`0b00010000`) |
+| Relay_2 | IO5 | X5 | Starter solenoid | `RELAY_MASK_STARTER` (`0b00100000`) |
+| Relay_3 | IO6 | X6 | Front light | `RELAY_MASK_FRONT_LIGHT` (`0b01000000`) |
+| Relay_4 | IO7 | X7 | Lock (specified in a later change) — reserved, off outside the relay test | `RELAY_MASK_RESERVED` |
+| Relay_5 | IO3 | X8 | Lock (specified in a later change) — reserved, off outside the relay test | `RELAY_MASK_RESERVED` |
+| Relay_6 | IO2 | X9 | Lock (specified in a later change) — reserved, off outside the relay test | `RELAY_MASK_RESERVED` |
+| Relay_7 | IO0 | X10 | Spare — off outside the relay test | `RELAY_MASK_RESERVED` |
+| Relay_8 | IO1 | X11 | Spare — off outside the relay test | `RELAY_MASK_RESERVED` |
+
+`RELAY_MASK_RESERVED` is `0b10001111`. The quad bike's front-wheel lock is not fitted on the aztec
+buggy: there SHALL be no `RELAY_MASK_WHEEL_LOCK`, and `RELAY_WHEEL_LOCK_FITTED` SHALL be `0`.
 
 #### Scenario: Initialize relays to the safe state
 - **WHEN** `RelayController::begin()` is called with the bus the relay board is wired to
@@ -198,9 +214,11 @@ together, so the firmware SHALL address each function by a whole-port mask:
 #### Scenario: Whole-port writes from a shadow byte
 - **WHEN** any relay state changes
 - **THEN** the driver SHALL update an 8-bit output shadow byte and write the entire output port
-- **AND** each function SHALL be set or cleared as a whole `RELAY_MASK_*` mask, so both relays of a
-  paired function (ignition Relay_1+Relay_2, wheel lock Relay_5+Relay_6) always change together
-- **AND** the spare relays Relay_7 (IO0) and Relay_8 (IO1) SHALL always be written as off
+- **AND** each function SHALL be set or cleared as a whole `RELAY_MASK_*` mask
+- **AND** every `RELAY_MASK_RESERVED` bit (Relay_4..Relay_8) SHALL be written as off unless the web
+  relay test energizes that relay
+- **AND** the function masks and `RELAY_MASK_RESERVED` SHALL be disjoint and together cover all eight
+  port bits, checked at compile time
 - **AND** no read-modify-write of the output register SHALL be used
 
 #### Scenario: The non-1:1 IO routing is honored
@@ -212,13 +230,25 @@ together, so the firmware SHALL address each function by a whole-port mask:
 - **AND** the routing SHALL be recorded in `Constants.h` and `GPIO_PINOUT_CUSTOM_BOARD_S3.md` §6 with
   an explicit warning against "correcting" it
 
+#### Scenario: Aztec relay functions
+- **WHEN** the ignition state is `ACC` or `IGNITION`
+- **THEN** only Relay_1 (IO4) SHALL be energized and the port SHALL read back `0x10`
+- **WHEN** the ignition state is `CRANKING`
+- **THEN** Relay_1 (IO4) and Relay_2 (IO5) SHALL be energized and the port SHALL read back `0x30`
+- **WHEN** the front light is on
+- **THEN** Relay_3 (IO6) SHALL be energized
+- **AND** outside the web relay test no function or ignition state SHALL energize Relay_4, Relay_5,
+  Relay_6, Relay_7 or Relay_8
+
 #### Scenario: Public API is unchanged for callers
 - **WHEN** existing callers use `setIgnitionState()`, `requestCrank()`, `setFrontLight()`,
   `setWheelLock()`, `update()`, `allOff()` or the state getters
 - **THEN** their signatures and observable behavior SHALL be identical to the GPIO implementation
 - **AND** the `ACC_PRECRANK_DWELL_MS` pre-crank dwell, `CRANKING_TIMEOUT`, and RPM-based crank exit
   SHALL be unchanged
-- **AND** `allOff()` SHALL continue to leave the front-wheel lock in its last state
+- **AND** `setWheelLock()` SHALL remain callable, but SHALL reject a lock request because the
+  front-wheel lock is not fitted (see the "Front-Wheel Lock Not Fitted" requirement in
+  `vehicle-systems`)
 
 ### Requirement: Relay Write Verification and Fault Policy
 The system SHALL verify every relay output write by reading the PCA9557 output register back, and
@@ -277,4 +307,57 @@ address sweep in `RelayController::begin()`.
 - **AND** `0x1A` (U10) SHALL likewise be recorded as `PCA9557_ADDR_INPUTS`
 - **AND** the relay board SHALL be strapped to any PCA9557 address other than `0x1A` or `0x1C` — the
   as-shipped `A2A1A0 = 111` → `0x1F` satisfies this and SHALL be kept
+
+### Requirement: Web Relay Test
+The system SHALL let the operator energize any single relay of the relay board (Relay_1..Relay_8)
+for a wiring check, through `RelayController::setRelayTest(relayNumber, on, reason)`. Relay numbers
+SHALL be mapped to port bits through the `Relay.PrjPcb` routing (`relayIoMask()`: Relay_1=IO4,
+Relay_2=IO5, Relay_3=IO6, Relay_4=IO7, Relay_5=IO3, Relay_6=IO2, Relay_7=IO0, Relay_8=IO1), checked at
+compile time against `RELAY_MASK_IGNITION`, `RELAY_MASK_STARTER`, `RELAY_MASK_FRONT_LIGHT` and
+`RELAY_MASK_RESERVED`. Test bits SHALL be part of the same output shadow byte and the same verified
+whole-port write as the vehicle functions. Every change of a test relay SHALL be logged under the
+`RELAY` debug feature.
+
+#### Scenario: Toggle a relay on
+- **WHEN** a relay test ON request names a relay 1..8
+- **AND** the ignition state is `OFF`, no crank is armed, the front light is off and the expander is
+  available
+- **THEN** that relay's IO bit SHALL be set in the shadow byte and written with read-back verification
+- **AND** the request SHALL succeed and the relay SHALL be reported in the `relay_test` bitfield
+
+#### Scenario: Toggle a relay off
+- **WHEN** a relay test OFF request names a relay that is test-energized
+- **THEN** its bit SHALL be cleared and the port rewritten
+- **AND** an OFF request for a relay that is not test-energized SHALL succeed without a port write
+
+#### Scenario: Auto-off after the test timeout
+- **WHEN** a test relay other than Relay_2 has been on for `RELAY_TEST_TIMEOUT_MS` (30000 ms)
+- **THEN** `update()` SHALL clear it and rewrite the port, and log the auto-off
+
+#### Scenario: Starter relay test is capped
+- **WHEN** Relay_2 (the starter relay) has been test-energized for `RELAY_TEST_STARTER_MAX_MS`
+  (2000 ms)
+- **THEN** `update()` SHALL clear it and rewrite the port
+
+#### Scenario: Test refused while the ignition is not OFF
+- **WHEN** a relay test ON request arrives while the ignition state is `ACC`, `IGNITION` or
+  `CRANKING`, a crank is armed, or the front light is on
+- **THEN** the request SHALL be refused with an error text (e.g. "Relay test only allowed with
+  ignition OFF") and no port write SHALL be made
+
+#### Scenario: Relay number outside 1..8 is rejected
+- **WHEN** a relay test request names relay 0, 9 or any other number outside 1..8
+- **THEN** it SHALL be refused with the error text "Relay number must be 1-8" and no relay SHALL change
+
+#### Scenario: A real function command takes over
+- **WHEN** an ignition command to `ACC`, `IGNITION` or `CRANKING`, a crank request, or a front-light
+  ON command arrives from the web or MAVLink path while any test relay is on
+- **THEN** every test bit SHALL be cleared before the function relays are written, in the same port
+  write, and the forced-off SHALL be logged
+
+#### Scenario: Test relays forced off on fault or fail-safe
+- **WHEN** `allOff()` runs (fail-safe), or a relay port write does not verify (including the starter
+  escalation)
+- **THEN** every test bit SHALL be cleared immediately and the reduced shadow byte written
+- **AND** a test ON request SHALL be refused while the expander is unavailable
 

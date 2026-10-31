@@ -84,6 +84,7 @@
 - [x] 8.4 `openspec validate add-aztec-steering-rate-mode --strict`.
 
 ## 9. Bench verification [USER/MANUAL]
+Archived 2026-11-01 at the user's request before bench verification; bugs found later come back as new changes.
 - [ ] 9.1 [USER/MANUAL] Sensor healthy, MANUAL: the stick steers by position exactly as before. `steer_mode` = position, `STEER_MODE` = 0.
 - [ ] 9.2 [USER/MANUAL] Unplug the LWS (or its CAN) while in MANUAL with the stick centred. Expected:
   - `steer_mode` = rate, the "Увага" rate line appears, the Mode tile shows "Rate (no sensor)";

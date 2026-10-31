@@ -27,9 +27,10 @@
 - [x] 3b.8 `pio run` clean, `openspec validate --strict` passes
 
 ## 4. Bench verification
-- [ ] 4.1 Sweep the lever: verify `gear_code` per position (L `101`, H `001`, N `011`, R `010`) and that `gear` / `gear_sensed` match
-- [ ] 4.2 Between positions, confirm the code reads UNKNOWN (or settles within one retry window) and never latches a wrong gear
-- [ ] 4.3 Disconnect X16 (opto feed lost) → `gear_code` = 7, `gear` = `?` (UNKNOWN), throttle capped
-- [ ] 4.4 Confirm bit 7 floating HIGH or LOW does not change the decoded gear
-- [ ] 4.5 Capture each gear on the vehicle (lever in R/N/L/H → "Save as"), reboot, verify the table persists and `gear` matches the lever in every position
-- [ ] 4.6 Verify a capture is rejected at `000`/`111` (between positions / X16 unplugged), and with the engine running; capturing a code owned by another gear takes it over and that gear shows "not set" and reads `?` until captured; "Reset to defaults" restores `R 010, N 011, H 001, L 101`
+Bench: confirmed working by the user on the buggy, 2026-11-01.
+- [x] 4.1 Sweep the lever: verify `gear_code` per position (L `101`, H `001`, N `011`, R `010`) and that `gear` / `gear_sensed` match
+- [x] 4.2 Between positions, confirm the code reads UNKNOWN (or settles within one retry window) and never latches a wrong gear
+- [x] 4.3 Disconnect X16 (opto feed lost) → `gear_code` = 7, `gear` = `?` (UNKNOWN), throttle capped
+- [x] 4.4 Confirm bit 7 floating HIGH or LOW does not change the decoded gear
+- [x] 4.5 Capture each gear on the vehicle (lever in R/N/L/H → "Save as"), reboot, verify the table persists and `gear` matches the lever in every position
+- [x] 4.6 Verify a capture is rejected at `000`/`111` (between positions / X16 unplugged), and with the engine running; capturing a code owned by another gear takes it over and that gear shows "not set" and reads `?` until captured; "Reset to defaults" restores `R 010, N 011, H 001, L 101`
