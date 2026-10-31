@@ -96,47 +96,48 @@
       document carries screenshots; otherwise add a short section-by-section description
 
 ## 9. Build and verification
+Bench: confirmed working by the user on the buggy, 2026-11-01.
 - [x] 9.1 `pio run` builds without new warnings
 - [x] 9.2 `pio run -t buildfs` succeeds; note the LittleFS image size vs 1.3.0
 - [x] 9.3 Open `data/index.html` from disk in a browser: no console errors with no WebSocket;
       all four sections switch; reload restores the last section; private window (no storage) still
       works and starts on Діагностика
-- [ ] 9.4 [USER/MANUAL] Flash firmware 1.4.0 (`pio run -t upload`) and `pio run -t uploadfs`; connect
+- [x] 9.4 [USER/MANUAL] Flash firmware 1.4.0 (`pio run -t upload`) and `pio run -t uploadfs`; connect
       to `http://192.168.10.1`; sidebar shows WebSocket connected and "1.4.0 · aztec"; changelog modal
       shows the 1.4.0 entry
-- [ ] 9.5 [USER/MANUAL] Діагностика: tiles update at 5 Hz; unplug the LWS CAN → "Увага" lists
+- [x] 9.5 [USER/MANUAL] Діагностика: tiles update at 5 Hz; unplug the LWS CAN → "Увага" lists
       sensorless steering and the tile shows the fault; reconnect → item clears; MAVLink inactive item
       present on the bench and gone with the autopilot streaming
-- [ ] 9.6 [USER/MANUAL] Калібрування / steering: jog, nudge, Set left/right, Set sensor zero behave as
+- [x] 9.6 [USER/MANUAL] Калібрування / steering: jog, nudge, Set left/right, Set sensor zero behave as
       in 1.3.0; angle and limits match the Діагностика tiles
-- [ ] 9.7 [USER/MANUAL] Калібрування / throttle: sliders show saved values and are locked; Почати →
+- [x] 9.7 [USER/MANUAL] Калібрування / throttle: sliders show saved values and are locked; Почати →
       sliders move the servo; Зберегти persists (reload shows new values); Скасувати restores
-- [ ] 9.8 [USER/MANUAL] Калібрування / gear defaults: slider locked until Почати; dragging moves the
+- [x] 9.8 [USER/MANUAL] Калібрування / gear defaults: slider locked until Почати; dragging moves the
       transmission servo smoothly; "Зберегти як N" stores the position and highlights N; ▶ buttons
       move to saved positions and are disabled after Готово
-- [ ] 9.9 [USER/MANUAL] Калібрування / gear codes: put the lever in each gear, "Зберегти як" assigns
+- [x] 9.9 [USER/MANUAL] Калібрування / gear codes: put the lever in each gear, "Зберегти як" assigns
       the code, the matching button highlights; take-over shows "не задано" on the other gear;
       reset restores "(типовий)"
-- [ ] 9.10 [USER/MANUAL] Калібрування / speed sensor: save PPR and circumference, scaling base,
+- [x] 9.10 [USER/MANUAL] Калібрування / speed sensor: save PPR and circumference, scaling base,
       bench test speed; the read-only Швидкість card reflects them
-- [ ] 9.11 [USER/MANUAL] Тести: manual control, ignition/light/boost rail, relay buttons energise
+- [x] 9.11 [USER/MANUAL] Тести: manual control, ignition/light/boost rail, relay buttons energise
       and highlight; button disabled with ignition on; auto-off clears the highlight
-- [ ] 9.12 [USER/MANUAL] Система: debug toggle, boost test, OTA upload of the same 1.4.0 binary,
+- [x] 9.12 [USER/MANUAL] Система: debug toggle, boost test, OTA upload of the same 1.4.0 binary,
       "Що нового" opens the changelog
-- [ ] 9.12a [USER/MANUAL] Telemetry frame (browser devtools → WS messages) contains
+- [x] 9.12a [USER/MANUAL] Telemetry frame (browser devtools → WS messages) contains
       `"wifi_ssid":"QuadBike-Control"` and `"wifi_ip":"192.168.10.1"`; the Мережа card shows the same
       values read-only; the telemetry document does not overflow (no missing trailing keys)
-- [ ] 9.12b [USER/MANUAL] Voltages: `steer_vin` matches a multimeter on the VESC input (±0.2 V) and
+- [x] 9.12b [USER/MANUAL] Voltages: `steer_vin` matches a multimeter on the VESC input (±0.2 V) and
       the "Напруга VESC" tile shows it; lower the bench supply below 21.5 V (or temporarily build with
       a higher `STEER_VIN_LOW_V`) → "Напруга VESC низька" appears and clears when restored; with the
       VESC unplugged no voltage item appears (driver-down item only)
-- [ ] 9.12c [USER/MANUAL] ECU: unplug CAN → "Немає зв'язку з ЕБК" appears, 12 V item absent; with
+- [x] 9.12c [USER/MANUAL] ECU: unplug CAN → "Немає зв'язку з ЕБК" appears, 12 V item absent; with
       CAN connected and the battery below 12.0 V (bench supply) → "Напруга 12 В низька" appears
-- [ ] 9.12d [USER/MANUAL] Gear defaults: press Почати, then stop the WebSocket (switch WiFi off) →
+- [x] 9.12d [USER/MANUAL] Gear defaults: press Почати, then stop the WebSocket (switch WiFi off) →
       slider and ▶ row lock and Почати returns; "Зберегти як" stays enabled while connected and locked
-- [ ] 9.12e [USER/MANUAL] Mobile dot: green when connected, turns red within a few seconds of WiFi loss
-- [ ] 9.13 [USER/MANUAL] Help: every ⓘ opens the right text; Escape/overlay/✕ close; switch language
+- [x] 9.12e [USER/MANUAL] Mobile dot: green when connected, turns red within a few seconds of WiFi loss
+- [x] 9.13 [USER/MANUAL] Help: every ⓘ opens the right text; Escape/overlay/✕ close; switch language
       with the modal open → text re-renders
-- [ ] 9.14 [USER/MANUAL] Mobile at 375 px (phone or devtools): top bar + ☰, no horizontal scroll,
+- [x] 9.14 [USER/MANUAL] Mobile at 375 px (phone or devtools): top bar + ☰, no horizontal scroll,
       relay grid one column, gear 2×2 grids usable, modals fit the screen
 - [x] 9.15 `openspec validate redesign-web-ui-service-console --strict` passes

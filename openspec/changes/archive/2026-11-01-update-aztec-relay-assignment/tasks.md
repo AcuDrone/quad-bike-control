@@ -26,10 +26,11 @@
 - [x] 4.7 Docs: `GPIO_PINOUT_CUSTOM_BOARD_S3.md` §6 relay test note; changelog 1.2.0 line (uk + en)
 
 ## 5. Verification
+Bench: confirmed working by the user on the buggy, 2026-11-01.
 - [x] 5.1 `pio run` builds with no new warnings in project code
 - [x] 5.2 `openspec validate update-aztec-relay-assignment --strict` passes
-- [ ] 5.3 Bench: ignition request energises Relay_1 (X4) only; port reads back `0x10`
-- [ ] 5.4 Bench: crank energises Relay_2 (X5) after the pre-crank dwell and drops it on RPM / timeout; port reads back `0x30` while cranking
-- [ ] 5.5 Bench: front light energises Relay_3 (X6) only; Relay_4..Relay_8 never click in any ignition / light state
-- [ ] 5.6 Bench: wheel-lock button shows "not fitted" and is disabled; MAVLink channel 7 high does not energise any relay and EFI bit0 stays 0
-- [ ] 5.7 Bench: with ignition OFF toggle each relay 1..8 from the Relay Test card, verify with a multimeter on X4..X11 (especially the locks on X7/X8/X9), verify the 30 s auto-off (Relay_2: 2 s), that ON is refused with ignition ACC, and that selecting ACC / light ON drops every test relay
+- [x] 5.3 Bench: ignition request energises Relay_1 (X4) only; port reads back `0x10`
+- [x] 5.4 Bench: crank energises Relay_2 (X5) after the pre-crank dwell and drops it on RPM / timeout; port reads back `0x30` while cranking
+- [x] 5.5 Bench: front light energises Relay_3 (X6) only; Relay_4..Relay_8 never click in any ignition / light state
+- [x] 5.6 Bench: wheel-lock button shows "not fitted" and is disabled; MAVLink channel 7 high does not energise any relay and EFI bit0 stays 0
+- [x] 5.7 Bench: with ignition OFF toggle each relay 1..8 from the Relay Test card, verify with a multimeter on X4..X11 (especially the locks on X7/X8/X9), verify the 30 s auto-off (Relay_2: 2 s), that ON is refused with ignition ACC, and that selecting ACC / light ON drops every test relay

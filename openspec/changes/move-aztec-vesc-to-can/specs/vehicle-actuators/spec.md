@@ -52,12 +52,20 @@ supported; there SHALL be exactly one pin map and no board-selection build flag.
 - **AND** LEDC channels 1 (throttle), 2 (transmission), 4 (brake RPWM) and 5 (brake LPWM) SHALL be
   the only channels allocated; channels 3, 6 and 7 SHALL be free
 
-#### Scenario: Steering sensor and steering driver need no GPIO
+#### Scenario: Steering sensor needs no GPIO
 - **WHEN** the steering controller is initialized
 - **THEN** the steering angle SHALL be received through the existing MCP2515 CAN controller
 - **AND** the steering VESC SHALL be commanded and monitored through the same MCP2515 CAN controller
 - **AND** no GPIO, no UART and no I2C bus SHALL be allocated to steering position feedback or to the
   steering motor driver
+
+#### Scenario: Steering sensors share the pins of their buses
+- **WHEN** the steering controller is initialized
+- **THEN** the Bosch LWS steering-angle sensor and the steering VESC SHALL share the CAN bus (MCP2515
+  on SPI, `PIN_CAN_*`) with the ECU OBD-II traffic
+- **AND** no dedicated steering GPIO SHALL be allocated
+- **AND** the former steering I2C pins (`Wire` / `Wire1`) and the former VESC UART pins (GPIO43/44)
+  SHALL NOT be used for steering
 
 #### Scenario: Wiring document is authoritative
 - **WHEN** `Constants.h` and `GPIO_PINOUT_CUSTOM_BOARD_S3.md` disagree about a pin
@@ -92,6 +100,13 @@ The steering `IMotorDriver` SHALL be implemented by a VESC driver that commands 
 #### Scenario: Dedicated UART, isolated from MAVLink
 - **WHEN** the firmware initializes
 - **THEN** no UART SHALL be opened for the steering VESC (the former dedicated UART0 link is replaced by CAN), and `UART_NUM_1` SHALL remain the MAVLink link only
+
+#### Scenario: No log output on the VESC UART
+- **WHEN** the firmware is running
+- **THEN** no Arduino core, ROM `ets_printf` or ESP-IDF `esp_log` output SHALL be written to UART0, even
+  though UART0 (Prog header X1) no longer carries the steering VESC link
+- **AND** `platformio.ini` SHALL pin `CORE_DEBUG_LEVEL=0`
+- **AND** ESP-IDF `esp_log` output SHALL be routed to the USB-CDC console only
 
 #### Scenario: Minimal in-repo protocol layer
 - **WHEN** the driver encodes or decodes a VESC CAN frame

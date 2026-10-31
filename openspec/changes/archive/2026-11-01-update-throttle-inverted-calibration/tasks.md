@@ -8,6 +8,7 @@
 - [x] 1.7 `include/Changelog.h`: one line in 1.2.0 (uk + en)
 
 ## 2. Verification
+Bench: confirmed working by the user on the buggy, 2026-11-01.
 - [x] 2.1 `pio run` builds with no new warnings in project code
 - [x] 2.2 `openspec validate update-throttle-inverted-calibration --strict` passes
-- [ ] 2.3 Bench: calibrate idle=2200/full=800 on the buggy, verify 0/50/100 % positions and that RC throttle moves the right way
+- [x] 2.3 Bench: calibrate idle=2200/full=800 on the buggy, verify 0/50/100 % positions and that RC throttle moves the right way

@@ -81,8 +81,9 @@ supported; there SHALL be exactly one pin map and no board-selection build flag.
 - **THEN** all pin assignments are loaded from `Constants.h`
 - **AND** pins are validated against ESP32-S3 available GPIO (not ESP32-C6)
 - **AND** GPIO19/20 SHALL NOT be assigned any firmware function — they are the native USB data lines
-- **AND** GPIO43/44 (UART0) SHALL NOT be assigned any firmware function — they are reserved for the
-  future CH9121T wired LAN
+- **AND** GPIO43/44 (UART0) SHALL be assigned only to the steering VESC link on the Prog header X1
+  (the aztec board has R63/R64 to the CH9121T removed); GPIO4/5 (X6) SHALL be left free for a
+  fourth BTS7960
 - **AND** pin conflicts are checked and reported
 
 #### Scenario: Control_v0 pin assignments
@@ -91,14 +92,15 @@ supported; there SHALL be exactly one pin map and no board-selection build flag.
   - `PIN_THROTTLE_PWM` = GPIO15 (LEDC channel 1, 50 Hz, X8 pin 2)
   - `PIN_TRANS_SERVO` = GPIO16 (LEDC channel 2, 50 Hz, X8 pin 3)
   - `PIN_MAVLINK_TX` = GPIO17, `PIN_MAVLINK_RX` = GPIO18 (UART1, X9)
-  - `PIN_VESC_TX` = GPIO4, `PIN_VESC_RX` = GPIO5 (UART2, X6) — unchanged
+  - `PIN_VESC_TX` = GPIO43, `PIN_VESC_RX` = GPIO44 (UART0, Prog header X1)
   - `PIN_BRAKE_LPWM` = GPIO6, `PIN_BRAKE_RPWM` = GPIO7 (LEDC channels 5/4, X7) — unchanged
   - `PIN_CAN_CS` = GPIO39, `PIN_CAN_SCK` = GPIO40, `PIN_CAN_MISO` = GPIO41, `PIN_CAN_MOSI` = GPIO42
-  - `PIN_STEER_SDA` = GPIO1, `PIN_STEER_SCL` = GPIO2 (I2C1 — external header X14, AS5600 only)
-  - `PIN_RELAY_SDA` = GPIO48, `PIN_RELAY_SCL` = GPIO47 (I2C2 — on-board expanders U10/U2 + the relay
-    board `0x1F` on header X15)
+    (MCP2515 — engine ECU and the Bosch LWS steering-angle sensor on the same bus)
+  - `PIN_RELAY_SDA` = GPIO48, `PIN_RELAY_SCL` = GPIO47 (I2C2 — on-board expanders U10/U2 and the
+    relay board `0x1F` on header X15)
   - `PIN_BOOST_EN` = GPIO46, `PIN_ADC_24V` = GPIO9 (X10)
-  - `PIN_CAN_INT` = GPIO38 and `PIN_ADC_IS_MUX` = GPIO3 SHALL be defined but unused
+  - `PIN_I2C1_SDA` = GPIO1, `PIN_I2C1_SCL` = GPIO2 (I2C1 — external header X14, no device fitted),
+    `PIN_CAN_INT` = GPIO38 and `PIN_ADC_IS_MUX` = GPIO3 SHALL be defined but unused
 
 #### Scenario: Functions with no GPIO
 - **WHEN** `Constants.h` is read
@@ -108,6 +110,7 @@ supported; there SHALL be exactly one pin map and no board-selection build flag.
   outputs are driven by the relay-board expander
 - **AND** `PIN_STEER_RPWM`, `PIN_STEER_LPWM`, `LEDC_CH_STEER_RPWM` and `LEDC_CH_STEER_LPWM` SHALL NOT
   be defined — GPIO17/18 are now the MAVLink UART
+- **AND** `PIN_STEER_SDA` and `PIN_STEER_SCL` SHALL NOT be defined — the steering sensor is on CAN
 - **AND** no reference to any of these symbols SHALL remain in `src/` or `include/`
 
 #### Scenario: Configure PWM parameters
@@ -117,6 +120,18 @@ supported; there SHALL be exactly one pin map and no board-selection build flag.
 - **AND** PWM resolution is set to 12-16 bits based on frequency
 - **AND** LEDC channels 1 (throttle), 2 (transmission), 4 (brake RPWM) and 5 (brake LPWM) SHALL be
   the only channels allocated; channels 3, 6 and 7 SHALL be free
+
+#### Scenario: Steering sensor needs no GPIO
+- **WHEN** the steering controller is initialized
+- **THEN** the steering angle SHALL be received through the existing MCP2515 CAN controller
+- **AND** no GPIO and no I2C bus SHALL be allocated to steering position feedback
+
+#### Scenario: Steering sensors share the pins of their buses
+- **WHEN** the steering controller is initialized
+- **THEN** the Bosch LWS steering-angle sensor SHALL share the CAN bus (MCP2515 on SPI,
+  `PIN_CAN_*`) with the ECU OBD-II traffic
+- **AND** no dedicated steering GPIO SHALL be allocated
+- **AND** the former steering I2C pins (`Wire` / `Wire1`) SHALL NOT be used for steering
 
 #### Scenario: Wiring document is authoritative
 - **WHEN** `Constants.h` and `GPIO_PINOUT_CUSTOM_BOARD_S3.md` disagree about a pin
@@ -191,7 +206,7 @@ The steering controller SHALL command its motor through an `IMotorDriver` abstra
 #### Scenario: Position loop drives through the abstraction
 - **WHEN** the steering position control loop computes a drive effort
 - **THEN** it SHALL call `IMotorDriver::setSpeed()` with a value in `-255..+255` (positive = wheel right)
-- **AND** the existing AS5600 proportional position loop (error → clamped duty) SHALL be unchanged by the driver substitution
+- **AND** the proportional position loop (angle error in 0.1° → clamped duty, `STEER_KP` duty per 0.1°) SHALL be unchanged in structure by the driver substitution
 
 #### Scenario: Coast on stop
 - **WHEN** the steering controller calls `IMotorDriver::stop()`
@@ -207,8 +222,15 @@ The steering `IMotorDriver` SHALL be implemented by a VESC driver that commands 
 
 #### Scenario: Dedicated UART, isolated from MAVLink
 - **WHEN** the VESC driver initializes
-- **THEN** it SHALL use `UART_NUM_2` on `PIN_VESC_TX` (GPIO4) and `PIN_VESC_RX` (GPIO5) at `VESC_UART_BAUD`
-- **AND** it SHALL NOT use `UART_NUM_1` (MAVLink) or `UART_NUM_0` (debug console)
+- **THEN** it SHALL use `UART_NUM_0` on `PIN_VESC_TX` (GPIO43) and `PIN_VESC_RX` (GPIO44) at `VESC_UART_BAUD`,
+  passing both pins explicitly
+- **AND** it SHALL NOT use `UART_NUM_1` (MAVLink)
+
+#### Scenario: No log output on the VESC UART
+- **WHEN** the firmware is running
+- **THEN** no Arduino core, ROM `ets_printf` or ESP-IDF `esp_log` output SHALL be written to UART0
+- **AND** `platformio.ini` SHALL pin `CORE_DEBUG_LEVEL=0`
+- **AND** ESP-IDF `esp_log` output SHALL be routed to the USB-CDC console only
 
 #### Scenario: Minimal in-repo protocol layer
 - **WHEN** the driver frames or parses a VESC packet
@@ -216,22 +238,22 @@ The steering `IMotorDriver` SHALL be implemented by a VESC driver that commands 
 - **AND** it SHALL implement only `COMM_SET_DUTY` and `COMM_GET_VALUES`
 
 ### Requirement: Steering Re-command Guard and Stall Latch
-The steering controller SHALL NOT restart its move and stall timers when re-commanded to the current target, and SHALL latch out further motion in a stalled direction for a cooldown of `STEER_STALL_COOLDOWN_MS` (700 ms), so that stall detection and move timeout function under the continuous MAVLink command stream.
+The steering controller SHALL NOT restart its move and stall timers when re-commanded to the current target, and SHALL latch out further motion in a stalled direction for a cooldown of `STEER_STALL_COOLDOWN_MS` (700 ms), so that stall detection and move timeout function under the continuous MAVLink command stream. Target and tolerance values SHALL be in 0.1° of steering angle.
 
 #### Scenario: Re-command within tolerance is a no-op
 - **WHEN** `setSteeringPercent()` is called while a move is in progress
-- **AND** the new target is within `STEER_RETARGET_TOLERANCE` counts of the current target
+- **AND** the new target is within `STEER_RETARGET_TOLERANCE` (0.1° units) of the current target
 - **THEN** `moveStartTime_`, the stall-check timers, and `dutyBoost_` SHALL NOT be reset
 - **AND** the in-flight move SHALL continue so the stall window and move timeout can elapse
 
 #### Scenario: Target change beyond tolerance resets the move
-- **WHEN** `setSteeringPercent()` is called with a target differing from the current target by more than `STEER_RETARGET_TOLERANCE` counts
+- **WHEN** `setSteeringPercent()` is called with a target differing from the current target by more than `STEER_RETARGET_TOLERANCE` (0.1° units)
 - **THEN** a fresh move SHALL start with the move/stall timers reset
 
 #### Scenario: Stall latches out the stalled direction
-- **WHEN** a stall-stop occurs (position loop stall or a nonzero VESC fault code)
+- **WHEN** a stall-stop occurs (position loop stall with a healthy sensor, or a nonzero VESC fault code)
 - **THEN** the controller SHALL record the stalled direction and latch time and stop the motor
-- **AND** a subsequent move that would push further in the stalled direction SHALL be refused while less than `STEER_STALL_COOLDOWN_MS` (700 ms) has elapsed
+- **AND** a subsequent move, jog or nudge that would push further in the stalled direction SHALL be refused while less than `STEER_STALL_COOLDOWN_MS` (700 ms) has elapsed
 
 #### Scenario: Opposite-direction escape and post-cooldown retry
 - **WHEN** the controller is stall-latched
@@ -241,7 +263,7 @@ The steering controller SHALL NOT restart its move and stall timers when re-comm
 - **THEN** the move SHALL be accepted and the latch cleared
 
 ### Requirement: VESC Fault Monitoring and Communication Failsafe
-The steering controller SHALL poll VESC telemetry to enforce a firmware-level fault backstop, and SHALL fail safe when the VESC is unresponsive. Over-current protection SHALL be left to the VESC itself (its *Motor Current Max* clamp, its *Absolute Max Current* fault, and its MOSFET temperature limiting), and mechanical jams SHALL be left to the AS5600 position stall detector; the firmware SHALL NOT run its own sustained-over-current timer.
+The steering controller SHALL poll VESC telemetry to enforce a firmware-level fault backstop, and SHALL fail safe when the VESC is unresponsive. Over-current protection SHALL be left to the VESC itself (its *Motor Current Max* clamp, its *Absolute Max Current* fault, and its MOSFET temperature limiting), and mechanical jams SHALL be left to the steering-angle stall detector while the angle sensor is healthy, and to the VESC current clamp and fault stop while steering is driven sensorless; the firmware SHALL NOT run its own sustained-over-current timer.
 
 #### Scenario: Poll VESC telemetry periodically
 - **WHEN** the steering driver is active
@@ -256,12 +278,132 @@ The steering controller SHALL poll VESC telemetry to enforce a firmware-level fa
 #### Scenario: VESC fault code stops the motor
 - **WHEN** `COMM_GET_VALUES` reports a nonzero VESC fault code
 - **THEN** the controller SHALL stop the motor and raise a fault flag in telemetry
-- **AND** if a move or jog was in progress it SHALL take the stall-stop path (stop + stall latch in the current drive direction)
+- **AND** if a move, jog or nudge was in progress — including a sensorless jog — it SHALL take the stall-stop path (stop + stall latch in the current drive direction)
 
 #### Scenario: Unresponsive VESC fails safe
 - **WHEN** no valid `COMM_GET_VALUES` reply is received for `STEER_VESC_COMM_TIMEOUT_MS`
 - **THEN** the driver-ok flag SHALL be set false
-- **AND** the motor SHALL be stopped and steering commands (position and jog) SHALL be rejected, mirroring the sensor-fault path
+- **AND** the motor SHALL be stopped and all steering commands (position, jog and nudge) SHALL be rejected
 - **AND** normal operation SHALL resume automatically once valid replies return
 - **AND** a VESC that is silent at boot SHALL NOT block startup
+
+### Requirement: Bosch LWS Steering Angle Sensor
+The steering position SHALL be read from a Bosch LWS steering-angle sensor 0 265 005 486 (PSA 9650236180) mounted directly on the steering shaft, which transmits standard CAN frame `0x305` (DLC 6, 100 Hz, 500 kbit/s) by itself after 12 V power-up from the ignition key. The decoder SHALL be free of Arduino dependencies and SHALL reproduce the bench-verified `lws305.h` logic.
+
+#### Scenario: Decode an accepted frame
+- **WHEN** a standard-ID `0x305` frame with DLC ≥ 6 is received
+- **AND** the high nibble of byte 4 equals the XOR of the eight nibbles of bytes 0..3 and the counter (low nibble of byte 4)
+- **AND** the counter differs from that of the last accepted frame
+- **THEN** the frame SHALL be accepted
+- **AND** the angle SHALL be bytes 0–1 as big-endian int16 in 0.1°, with `0x7FFF` meaning invalid
+- **AND** the rotation speed SHALL be byte 2 × 4 °/s, with `0xFF` meaning invalid, and the direction SHALL be byte 3 bit 7 (1 = clockwise)
+- **AND** the status SHALL be byte 3: bits 6..3 fault code (0 = none), bit 2 adjusted, bit 1 calibrated, bit 0 sensor OK
+- **AND** the firmware position SHALL be the negated angle for a normal mount (sensor positive = left; firmware positive = right), or the angle unchanged when the sensor-direction flag says the sensor is mounted mirrored (see "Steering Sensor Direction Inference" in vehicle-systems)
+- **AND** the signed rotation rate SHALL follow the same rule, so that a positive rate always means turning right
+- **AND** the decoder itself SHALL stay sign-neutral: the raw angle and direction bit SHALL remain available in the sensor's own sign for logs
+
+#### Scenario: Reject corrupt or repeated frames
+- **WHEN** a `0x305` frame fails the checksum
+- **THEN** it SHALL be dropped and a checksum-error counter incremented
+- **WHEN** a `0x305` frame carries the same counter as the last accepted frame
+- **THEN** it SHALL be dropped and a counter-error counter incremented
+- **WHEN** the counter advanced by more than one since the last accepted frame
+- **THEN** the frame SHALL be accepted and the number of missed frames added to a miss counter, since every frame is absolute
+
+#### Scenario: Sensor health
+- **WHEN** the steering controller evaluates the sensor
+- **THEN** it SHALL report exactly one fault token, in this priority order: `zeroing` (zero-set sequence running), `can_down` (CAN controller not initialized), `timeout` (no accepted frame for `STEER_LWS_TIMEOUT_MS`), `range_latched` (fault code 9), `sensor_fault` (OK bit clear or any other nonzero fault code), `not_calibrated` (calibrated bit clear), `angle_invalid` (angle `0x7FFF`), otherwise `none`
+- **AND** a fault SHALL take effect on the first frame or timeout that shows it
+- **AND** the sensor SHALL be healthy only when the token is `none` for at least `STEER_LWS_RECOVER_FRAMES` consecutive accepted frames
+
+#### Scenario: Latched out-of-range fault
+- **WHEN** the sensor reports fault code 9 (it was turned beyond its ~±600° range)
+- **THEN** the token SHALL be `range_latched` and telemetry SHALL tell the operator to restart the vehicle
+- **AND** the firmware SHALL take no other action to clear it (the sensor is powered from the ignition key and clears only on a power cycle)
+
+#### Scenario: Range guard for closed-loop moves only
+- **WHEN** the sensor is healthy and a closed-loop position move driven by a percent command (MAVLink, web slider or test buttons, boot centering, failsafe centre) would reach or pass `STEER_LWS_SAFE_RANGE` (550.0°)
+- **THEN** its target SHALL be clamped to ±`STEER_LWS_SAFE_RANGE`, and the move SHALL be stopped rather than drive further outward at or beyond it
+- **AND** driving back toward zero SHALL remain allowed
+- **AND** jog, nudge and limit captures SHALL NOT be limited by the range guard
+
+### Requirement: Sensorless Manual Steering
+Jog and nudge commands SHALL drive the steering motor whenever the steering motor driver link is healthy, regardless of the steering angle sensor state, so that the steering can be centred and the sensor zeroed without a working sensor. Percent position commands SHALL still require a healthy sensor and both limits. Without a healthy sensor, the autopilot steering channel SHALL reach the motor only through the rate drive (see "Steering Rate Drive").
+
+#### Scenario: Jog without a sensor
+- **WHEN** a jog or nudge command is received while the sensor is faulted, absent or invalid
+- **AND** the VESC link is healthy and the direction is not stall-latched
+- **THEN** the motor SHALL be driven open-loop at the jog or nudge duty
+- **AND** it SHALL stop when the jog is not refreshed within `STEER_JOG_TIMEOUT_MS`, when the nudge pulse of `STEER_NUDGE_MS` ends, or on a VESC fault code
+- **AND** no position stall detection SHALL apply, because there is no position
+
+#### Scenario: Sensor fault during a jog
+- **WHEN** the sensor becomes unhealthy while a jog or nudge is in progress
+- **THEN** the jog or nudge SHALL continue open-loop under the same refresh and pulse bounds
+- **AND** a closed-loop position move in progress SHALL be stopped instead
+
+#### Scenario: Jog with a healthy sensor
+- **WHEN** a jog or nudge command is received while the sensor is healthy
+- **THEN** position stall detection and the stall latch SHALL apply as for closed-loop moves
+- **AND** the range guard SHALL NOT apply, so the operator may jog past `STEER_LWS_SAFE_RANGE`
+
+#### Scenario: Percent commands still gated
+- **WHEN** a percent steering command arrives from MAVLink, the web slider or test buttons, boot centering or the failsafe
+- **AND** the sensor is not healthy or either limit is missing
+- **THEN** the command SHALL be rejected and the motor SHALL NOT be driven by it
+- **AND** only the separate rate command of "Steering Rate Drive", issued by the vehicle layer in rate mode, MAY drive the motor from the autopilot steering channel
+
+#### Scenario: Web jog has priority over the rate drive
+- **WHEN** a web jog or nudge is active (refreshed within `STEER_JOG_TIMEOUT_MS`, or its pulse not yet ended)
+- **THEN** rate commands SHALL neither stop nor override it
+- **AND** rate commands SHALL take effect again once that jog or nudge has ended
+- **AND** a web jog stop command SHALL stop whatever jog is active, including a rate drive
+
+### Requirement: Steering Rate Drive
+The steering controller SHALL provide a rate command, `setRateCommand(percent)`, that drives the motor open-loop with a duty derived from the stick deflection, for use only while the steering angle sensor is unhealthy. It SHALL be implemented as a continuous jog with variable duty, owned by the rate path, and SHALL reuse the jog refresh timeout. The deflection-to-duty mapping SHALL be a pure function without Arduino dependencies, covered by a host-side unit test.
+
+#### Scenario: Deflection to duty mapping
+- **WHEN** the mapping is evaluated for a percentage `pct` in −100..+100 with deadband `RC_STEERING_DEADBAND`, minimum duty `STEER_PWM_MIN_DUTY` and maximum duty `STEER_PWM_MAX_DUTY`
+- **THEN** `|pct|` below the deadband SHALL give duty 0
+- **AND** otherwise the duty magnitude SHALL be `round(min + (max − min) × d²)` with `d = (|pct| − deadband) / (100 − deadband)` clamped to at most 1, and `|pct|` clamped to 100
+- **AND** the result SHALL carry the sign of `pct` (positive = wheel right = positive motor speed)
+- **AND** with the default constants, 100 % SHALL give 255, 50 % SHALL give 168 and a value just outside the deadband SHALL give 140
+
+#### Scenario: Rate command drives a jog
+- **WHEN** `setRateCommand()` is called with a nonzero resulting duty
+- **AND** the sensor is not healthy, the VESC link is healthy, the rate path is armed and no web jog or nudge is active
+- **THEN** the motor SHALL be driven at that signed duty through the jog path, marked as owned by the rate path
+- **AND** the jog refresh time SHALL be renewed, so that the drive stops after `STEER_JOG_TIMEOUT_MS` without a further call
+- **AND** the range guard and the software limits SHALL NOT apply, because there is no position
+
+#### Scenario: Zero duty stops only the rate drive
+- **WHEN** `setRateCommand()` yields duty 0
+- **THEN** an active rate-owned drive SHALL be stopped
+- **AND** a web jog or nudge SHALL NOT be stopped by it
+
+#### Scenario: Refused with a healthy sensor
+- **WHEN** `setRateCommand()` is called while the sensor is healthy
+- **THEN** it SHALL be refused and the motor SHALL NOT be driven by it, so that rate driving is impossible while a position is available
+
+#### Scenario: Refused while the VESC is down or the direction is latched
+- **WHEN** `setRateCommand()` is called while the VESC link is down
+- **THEN** it SHALL be refused
+- **WHEN** it is called in a direction that is stall-latched and less than `STEER_STALL_COOLDOWN_MS` has passed
+- **THEN** it SHALL be refused; an opposite-direction command SHALL be accepted and clear the latch, as for jog
+
+#### Scenario: Stall detection bypassed, VESC protections kept
+- **WHEN** a rate-owned drive is running
+- **THEN** position stall detection, the anti-stall boost, the move timeout and the position tolerance SHALL NOT be evaluated for it, and SHALL NOT trigger a stall-stop or latch
+- **AND** a nonzero VESC fault code SHALL still stop it through the stall-stop path (stop + latch in the drive direction)
+- **AND** the VESC communication failsafe SHALL still stop it
+- **AND** the firmware SHALL NOT add any current-based stop; at the mechanical end stops the VESC's own current limit is the only protection
+
+#### Scenario: Explicit stop of the rate drive
+- **WHEN** the vehicle layer calls `stopRate()`
+- **THEN** a rate-owned drive SHALL be stopped at once (duty 0)
+- **AND** a web-owned jog or nudge and a closed-loop move SHALL NOT be affected
+
+#### Scenario: Arming
+- **WHEN** the vehicle layer disarms the rate path on entry into rate mode
+- **THEN** nonzero rate commands SHALL be refused until a call yields duty 0, which SHALL arm the path
 

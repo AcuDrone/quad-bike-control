@@ -96,9 +96,10 @@
 ## 7. Aztec bookkeeping [USER approval] (design D6)
 - [ ] 7.1 On aztec: `git merge --ff-only <G>`. Then `pio run` with the aztec config (done 2026-10-31: G = `ca0d900`, aztec build passes; bench part pending), and on the bench: wheel-lock toggle disabled "not fitted", aztec relay labels, gear-code card visible.
 - [x] 7.2 On aztec: `git merge -s ours <Q> -m "Record quad configuration (master) as merged; aztec keeps its vehicle config"`. Check `git diff <G> aztec` is empty.
-- [ ] 7.3 Push master and aztec.
+- [x] 7.3 Push master and aztec (done 2026-10-31).
 
 ## 8. Bench verification on the quad [USER/MANUAL] (after the LWS is fitted)
+Archived 2026-11-01 at the user's request before bench verification; bugs found later come back as new changes.
 - [ ] 8.1 [USER/MANUAL] Boot log: I2C2 scan shows 0x1A 0x1C 0x1F, no `Wire` start, and `[TRANS] Gear sensors bound to opto input bits N:0 R:1 L:6 H:7`. Version label reads `1.5.2 · Control_v0`, and "What's new" shows 1.5.2 first.
 - [ ] 8.2 [USER/MANUAL] Web at `http://192.168.10.1` (SSID `QuadBike-Control`). The sidebar shows "Service console / QuadBike". The "Gear Sensor Codes" card is absent, and there is no sensor-code line under the current gear.
 - [ ] 8.3 [USER/MANUAL] CAN: with the LWS unplugged and the ECU on, confirm that no 0x305 / 0x7C0 frames come from the quad ECU (`steer_lws_seen` stays false). Plug in the LWS: `steer_lws_fps` ≈ 100, and the OBD data still updates.

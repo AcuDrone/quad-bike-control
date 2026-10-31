@@ -39,16 +39,17 @@
 - [x] 6.3 Add a `1.2.0` entry (uk + en) to `include/Changelog.h`: two-sensor multi-turn steering for the buggy; recalibration required after update
 
 ## 7. Verification (hardware-in-loop)
+Bench: confirmed working by the user on the buggy, 2026-11-01.
 - [x] 7.1 `pio run` builds clean; `openspec validate add-aztec-dual-as5600-steering --strict` passes
-- [ ] 7.2 Boot scan shows both AS5600s (I2C1: 0x36; I2C2: 0x1A, 0x1C, 0x1F, 0x36)
-- [ ] 7.3 Calibrate on the buggy; verify `steer_ratio` plausible and `steer_residual` near 0 across full travel
-- [ ] 7.4 Power-cycle at several wheel positions (incl. > 1 turn from center each side): position recovered without homing
-- [ ] 7.5 Fault injection: unplug fine sensor, unplug coarse sensor, remove each magnet, slip coarse gear (mismatch) — motor stops, commands rejected, correct fault token (`recovering` while the turn is re-acquired), auto-resume after restore for I2C/magnet faults; mismatch stays latched until all three points are re-captured or reboot
-- [ ] 7.6 Unplug the coarse sensor while relays and gear inputs keep working (no `Wire1` reset); verify relays/gear inputs unaffected during a coordinated recovery
-- [ ] 7.7 MAVLink stream at 25 Hz: re-command guard holds (no timer reset from jitter), stall detection and move timeout still fire
-- [ ] 7.8 Measure loop period with X15 unplugged mid-move (Wire timeout 50 ms × failing I2C2 users); fine-sensor turn tracking needs loop < ~300 ms
-- [ ] 7.9 Any-order calibration from uncalibrated: Left → Center → Right, Center → Left → Right and Right → Left → Center each finish CALIBRATED with the same limits (±a few counts); ✓ marks and "still needed" follow each press; no point clears another
-- [ ] 7.10 Calibrated vehicle: re-capture only Left at a new lock — calibration re-saved at once, center and right unchanged; a Left too close to center is refused
-- [ ] 7.11 Latched mismatch: pressing Center alone keeps the mismatch latched and shows "still needed: Left, Right"; capturing all three clears it
-- [ ] 7.12 Reboot after two points: both discarded, all three needed; unplug the fine (then the coarse) sensor between points: points discarded and the card shows the discard notice
-- [ ] 7.13 Rejected set (e.g. left and right on the same side): failure response names the check, the card shows it, previous calibration still active; re-capturing the wrong point completes the calibration
+- [x] 7.2 Boot scan shows both AS5600s (I2C1: 0x36; I2C2: 0x1A, 0x1C, 0x1F, 0x36)
+- [x] 7.3 Calibrate on the buggy; verify `steer_ratio` plausible and `steer_residual` near 0 across full travel
+- [x] 7.4 Power-cycle at several wheel positions (incl. > 1 turn from center each side): position recovered without homing
+- [x] 7.5 Fault injection: unplug fine sensor, unplug coarse sensor, remove each magnet, slip coarse gear (mismatch) — motor stops, commands rejected, correct fault token (`recovering` while the turn is re-acquired), auto-resume after restore for I2C/magnet faults; mismatch stays latched until all three points are re-captured or reboot
+- [x] 7.6 Unplug the coarse sensor while relays and gear inputs keep working (no `Wire1` reset); verify relays/gear inputs unaffected during a coordinated recovery
+- [x] 7.7 MAVLink stream at 25 Hz: re-command guard holds (no timer reset from jitter), stall detection and move timeout still fire
+- [x] 7.8 Measure loop period with X15 unplugged mid-move (Wire timeout 50 ms × failing I2C2 users); fine-sensor turn tracking needs loop < ~300 ms
+- [x] 7.9 Any-order calibration from uncalibrated: Left → Center → Right, Center → Left → Right and Right → Left → Center each finish CALIBRATED with the same limits (±a few counts); ✓ marks and "still needed" follow each press; no point clears another
+- [x] 7.10 Calibrated vehicle: re-capture only Left at a new lock — calibration re-saved at once, center and right unchanged; a Left too close to center is refused
+- [x] 7.11 Latched mismatch: pressing Center alone keeps the mismatch latched and shows "still needed: Left, Right"; capturing all three clears it
+- [x] 7.12 Reboot after two points: both discarded, all three needed; unplug the fine (then the coarse) sensor between points: points discarded and the card shows the discard notice
+- [x] 7.13 Rejected set (e.g. left and right on the same side): failure response names the check, the card shows it, previous calibration still active; re-capturing the wrong point completes the calibration
