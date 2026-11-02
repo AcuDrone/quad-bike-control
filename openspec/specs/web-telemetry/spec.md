@@ -301,9 +301,9 @@ metres per second and converted to km/h only at serialisation.
   label when `speed_limit_kmh` is zero
 - **AND** the current throttle ceiling SHALL be shown only while the limiter is actually
   withdrawing authority (`speed_limit_ceil` below 100)
-- **AND** the help of the Speed sensor card (its ⓘ button) SHALL state that the limit comes only
-  from the autopilot's `SPEED_MAX`, that zero means no limit, and that the limiter does not act
-  without a valid sensor reading
+- **AND** the help of the "Обмеження швидкості та кермо" / "Speed limit and steering" card (its ⓘ
+  button) SHALL state that the limit comes only from the autopilot's `SPEED_MAX`, that zero means
+  no limit, and that the limiter does not act without a valid sensor reading
 - **AND** every label SHALL be present in both the English and the Ukrainian dictionary
 
 ### Requirement: ECU Electrical and Air Telemetry
@@ -661,8 +661,9 @@ page never needs a copy of either threshold.
 
 ### Requirement: Speed State Card
 The Diagnostics section SHALL contain a read-only "Швидкість" / "Speed" card, separate from the
-Speed sensor settings card in the Calibration section, showing the speed sensor state and the
-limiter and steering-scaling state without any input or command.
+two speed settings cards in the Calibration section ("Датчик швидкості" / "Speed sensor" and
+"Обмеження швидкості та кермо" / "Speed limit and steering"), showing the speed sensor state and
+the limiter and steering-scaling state without any input or command.
 
 #### Scenario: Read-only speed readout
 - **WHEN** the Diagnostics section renders a telemetry frame
@@ -673,7 +674,7 @@ limiter and steering-scaling state without any input or command.
 - **AND** the card SHALL contain no input field, button or other control that sends a command
 
 #### Scenario: Same values in both places
-- **WHEN** a value is shown both in this card and in the Speed sensor settings card
+- **WHEN** a value is shown both in this card and in one of the two speed settings cards
 - **THEN** both SHALL be rendered from the same telemetry frame by one rendering path, so they never
   disagree
 
@@ -720,4 +721,118 @@ The telemetry broadcast SHALL include the current steering mode as `steer_mode`,
 #### Scenario: Help text
 - **WHEN** the help (ⓘ) of the "Кермо: стан" card is opened
 - **THEN** it SHALL explain that without the angle sensor the autopilot stick steers by rate in MANUAL only (deflection = rotation, centre = stop, centre the stick once to arm), that there are no end-stop limits except the VESC current limit, and that other modes and the web slider are blocked
+
+### Requirement: Speed-Limiter Floor Telemetry
+The telemetry stream SHALL report the speed-limiter throttle floor currently in use, so the web
+portal can show the stored setting and recognise a limiter sitting on its floor. The existing
+`speed_limit_ceil` key SHALL keep carrying the final applied ceiling: the proportional taper plus
+the integral trim, after clamping and the rate limit. No key SHALL be added for the integral trim
+itself.
+
+#### Scenario: Report the floor
+- **WHEN** a telemetry frame is produced
+- **THEN** it SHALL include `speed_limit_floor`, the floor in percent to one decimal
+- **AND** the key SHALL be present whether or not a limit is in force
+
+#### Scenario: The ceiling key carries the final ceiling
+- **WHEN** a telemetry frame is produced while a limit is in force
+- **THEN** `speed_limit_ceil` SHALL be the ceiling actually applied to the throttle demand, after
+  the taper, the integral trim, the floor and 100 % clamps and the ceiling rate limit
+- **AND** it SHALL be 100 whenever no limit is in force or the speed reading is invalid
+
+#### Scenario: The portal shows a limiter at its floor
+- **WHEN** the portal renders a telemetry frame in which a limit is in force and
+  `speed_limit_ceil` equals `speed_limit_floor`
+- **THEN** the limiting row SHALL mark the ceiling as being at the floor
+- **AND** the marker SHALL be present in both the English and the Ukrainian dictionary
+
+### Requirement: Speed-Limiter Saturation Indicator
+The system SHALL detect when the maximum-speed limiter has run out of authority, that is when
+the applied ceiling is at the floor and the vehicle nevertheless stays above the limit. It SHALL
+report this in the telemetry stream, and the web portal SHALL show it as a warning on the limiter
+row. Because the operator cannot read the serial log in the field, the indicator SHALL be carried
+by telemetry and the web portal and not by a serial log line. The firmware SHALL hold the
+indicator for a fixed time after the condition clears, so the operator can still see it after the
+event and every client shows the same state.
+
+#### Scenario: Saturation is detected
+- **WHEN** a limit is in force, the speed reading is valid, the applied ceiling is within 0.5 %
+  of the floor, and the measured speed exceeds the limit by more than `SPEED_LIMIT_SAT_MARGIN_MS`
+  (0.3 m/s), continuously for `SPEED_LIMIT_SAT_HOLD_MS` (2000 ms)
+- **THEN** telemetry SHALL report `speed_limit_sat` as `true`
+- **AND** `speed_limit_sat_held` SHALL be `true`
+
+#### Scenario: Saturation clears immediately
+- **WHEN** `speed_limit_sat` is `true` and, on any evaluation, the ceiling is no longer within
+  0.5 % of the floor, the speed no longer exceeds the limit by more than
+  `SPEED_LIMIT_SAT_MARGIN_MS`, the limit becomes zero, or the speed reading becomes invalid
+- **THEN** `speed_limit_sat` SHALL become `false` at once, without a release delay
+- **AND** a later entry SHALL again require the full `SPEED_LIMIT_SAT_HOLD_MS` of the condition
+
+#### Scenario: The firmware holds the indicator after it clears
+- **WHEN** `speed_limit_sat` changes from `true` to `false`
+- **THEN** `speed_limit_sat_held` SHALL stay `true` for `SPEED_LIMIT_SAT_UI_HOLD_MS` (10 000 ms)
+  measured on the firmware clock, and then become `false`
+- **AND** a new saturation during the hold SHALL keep it `true` and restart the hold when that
+  saturation clears
+- **AND** the hold SHALL expire on time even if the limiter is no longer being evaluated
+- **AND** a web client that connects or reconnects during the hold SHALL receive
+  `speed_limit_sat_held` = `true`
+
+#### Scenario: Report the saturation keys
+- **WHEN** a telemetry frame is produced
+- **THEN** it SHALL include `speed_limit_sat` and `speed_limit_sat_held` as JSON booleans
+- **AND** both keys SHALL be present whether or not a limit is in force
+- **AND** both SHALL be `false` on a unit that has not saturated within the last
+  `SPEED_LIMIT_SAT_UI_HOLD_MS`
+
+#### Scenario: The portal shows saturation as a warning on the limiter row
+- **WHEN** the portal renders a telemetry frame in which `speed_limit_sat_held` is `true`
+- **THEN** the limiter row SHALL be shown even if `speed_limit_ceil` is 100
+- **AND** it SHALL be drawn as a warning badge in the console's standard warning styling
+- **AND** it SHALL read "Limiter at floor, speed above limit" while `speed_limit_sat` is `true`,
+  and "Limiter was at floor, speed above limit" while only `speed_limit_sat_held` is `true`
+- **AND** the portal SHALL NOT keep its own hold timer, but SHALL render what the firmware reports
+- **AND** both texts SHALL be present in both the English and the Ukrainian dictionary
+
+#### Scenario: The portal without saturation keys behaves as before
+- **WHEN** the portal renders a frame in which `speed_limit_sat_held` is absent or `false`
+- **THEN** the limiter row SHALL be shown and labelled exactly as "Speed-Limit and
+  Limiter-Ceiling Telemetry" requires, with the "at floor" marker of "Speed-Limiter Floor
+  Telemetry"
+
+#### Scenario: No serial log line for saturation
+- **WHEN** saturation is entered or cleared
+- **THEN** no serial debug line SHALL be emitted for it, and no MAVLink message SHALL be sent for it
+- **AND** the existing rate-limited log of limit changes SHALL be unaffected
+
+### Requirement: Speed Sensor Pulse Total Telemetry
+The telemetry stream SHALL report the speed sensor's running pulse total since boot, so the web
+portal can measure pulses per revolution by itself. The firmware SHALL keep no measurement state
+and SHALL offer no command for it: the value is read-only and is the same total that speed and
+distance are derived from.
+
+#### Scenario: Report the pulse total
+- **WHEN** a telemetry frame is produced
+- **THEN** it SHALL include `speed_pulse_total`, the value of `SpeedSensor::getPulseTotal()` as an
+  unsigned 32-bit JSON integer
+- **AND** the key SHALL be present in every frame, whether or not the speed reading is valid, and
+  whatever the CAN status
+
+#### Scenario: The total only increases
+- **WHEN** the wheel turns in either direction
+- **THEN** every counted falling edge of the sensor signal SHALL increase `speed_pulse_total` by one,
+  because the single-channel sensor carries no direction
+- **AND** the total SHALL never decrease except by wrapping modulo 2³² or by a reboot, which
+  resets it to 0
+
+#### Scenario: The total is independent of speed validity
+- **WHEN** pulses are counted while `speed_valid` is false, the reading has decayed to 0 after the
+  stale timeout, or a sample is discarded by the per-sample glitch guard
+- **THEN** `speed_pulse_total` SHALL still include those pulses
+
+#### Scenario: The firmware stays stateless
+- **WHEN** the portal measures pulses per revolution
+- **THEN** no web command, NVS key or firmware state SHALL be involved until the operator saves a
+  result through the existing `speed_cal_ppr` command
 
