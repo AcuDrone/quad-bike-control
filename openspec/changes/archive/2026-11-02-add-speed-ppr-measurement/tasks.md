@@ -8,8 +8,8 @@ lists below are authoritative.
 ## 0. Preconditions
 - [x] 0.1 The proposal is approved (user decisions 2026-11-02: variant A page-side measurement, a number input for the limiter floor, the card split as in the mockup).
 - [x] 0.2 Version slot: `master` is at 1.5.3. At apply time take the next free version on `master`: **1.5.4** (patch per `openspec/project.md`: service-console convenience, no recalibration or wiring change), unless `move-can-rx-to-interrupt` (1.6.0) lands first, in which case 1.6.1. Do not take 1.6.0 or 1.7.0, which `move-can-rx-to-interrupt` and `move-aztec-vesc-to-can` claim.
-- [ ] 0.3 Branch: implement on `master` (quad), then merge `master` into `aztec` (task 8).
-- [ ] 0.4 Archive order: `add-speed-limiter-integral-floor` is archived before this change, because this change MODIFIES "Speed-Limiter Floor Configuration via Web Interface", which only that change adds. Whichever applies second re-checks that its MODIFIED block still quotes the other's text in full.
+- [x] 0.3 Branch: implement on `master` (quad), then merge `master` into `aztec` (task 8). Done 2026-11-02 (merge 020e9dd, both branches pushed).
+- [x] 0.4 Archive order (done 2026-11-02: `add-speed-limiter-integral-floor` archived first): `add-speed-limiter-integral-floor` is archived before this change, because this change MODIFIES "Speed-Limiter Floor Configuration via Web Interface", which only that change adds. Whichever applies second re-checks that its MODIFIED block still quotes the other's text in full.
 
 ## 1. Firmware telemetry
 - [x] 1.1 `include/VehicleController.h`: add `uint32_t getSpeedPulseTotal() const { return speedSensor_.getPulseTotal(); }` next to `getSpeedPulsesPerRev()`, with a one-line Doxygen comment: "running pulse total since boot, for the web ppr measurement; counts up in either rotation direction".
@@ -85,9 +85,10 @@ lists below are authoritative.
 - [x] 7.6 `openspec validate add-speed-ppr-measurement --strict`.
 
 ## 8. Merge
-- [ ] 8.1 Merge `master` into `aztec` (buggy) and check that `pio run` and `pio run -t buildfs` build there without new warnings. The change is vehicle-neutral; resolve only branch-specific context (Changelog / version line, aztec-only cards such as Gear sensor codes around the split).
+- [x] 8.1 (done 2026-11-02, merge 020e9dd on `aztec`) Merge `master` into `aztec` (buggy) and check that `pio run` and `pio run -t buildfs` build there without new warnings. The change is vehicle-neutral; resolve only branch-specific context (Changelog / version line, aztec-only cards such as Gear sensor codes around the split).
 
 ## 9. Bench verification [USER/MANUAL]
+Archived 2026-11-02 at the user's request before bench verification; bugs found later come back as new changes.
 - [ ] 9.1 [USER/MANUAL] Quad, wheel off the ground, neutral: Start with 5 turns, turn the wheel by hand exactly 5 turns in one direction, Stop. The live count rises during the turns. Wait until it stops changing, then press Stop: the result freezes at once. The result is 350 / 5 = 70.0 → 70, with no warning. Repeat at a very slow hand speed: same result (confirms the sensor switches at hand speed).
 - [ ] 9.2 [USER/MANUAL] Deliberately turn 4.5 or 5.5 turns with 5 entered: the fractional-part warning is shown.
 - [ ] 9.3 [USER/MANUAL] Reverse rotation: turn 5 turns backwards → still ≈ 350 (counts up). Turn 5 forward then 1 back: the count is ≈ 420, not 280. Confirm the behaviour matches design D2; if it does not, stop and report before saving anything.

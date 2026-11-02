@@ -1,7 +1,7 @@
 ## 0. Preconditions
 - [x] 0.1 The proposal is approved. Braking stays out of scope.
 - [x] 0.2 Version slot (taken: **1.5.3**, `move-can-rx-to-interrupt` had not landed): `master` is at 1.5.2. At apply time take the next free version on `master`: **1.5.3** (patch per `openspec/project.md`: behaviour fix, no recalibration or wiring change), unless the pending `move-can-rx-to-interrupt` (1.6.0) lands first, in which case 1.6.1. Do not take 1.6.0 or 1.7.0, which `move-can-rx-to-interrupt` and `move-aztec-vesc-to-can` claim.
-- [ ] 0.4 Branch: implement on `master` (quad) — done 2026-11-02; then merge `master` into `aztec` (pending, a later step) (the branches were merged on 2026-11-01; all work is done on `master`).
+- [x] 0.4 Branch: implement on `master` (quad) — done 2026-11-02; then merge `master` into `aztec` (done 2026-11-02, merge 79de92c, both branches pushed) (the branches were merged on 2026-11-01; all work is done on `master`).
 - [x] 0.3 No other pending change modifies "Autopilot-Sourced Maximum-Speed Limit" or "Proportional Speed-Limiter Throttle Taper". The web deltas are ADDED only, so there is no archive-order constraint (the `redesign-web-ui-service-console` "Speed-Limit and Limiter-Ceiling Telemetry" delta is untouched).
 
 ## 1. Pure law (host-testable)
@@ -75,9 +75,10 @@
 - [x] 7.2 `pio test -e native` passes every listed suite, including `test_speed_limiter`, and all of them are reported as run.
 - [x] 7.3 `pio run -t buildfs` (LittleFS image with the updated `index.html`).
 - [x] 7.4 `openspec validate add-speed-limiter-integral-floor --strict`.
-- [ ] 7.5 Merge `master` into `aztec` (buggy) and check that `pio run` builds there without new warnings. The law, constants and setting are vehicle-neutral. Resolve only branch-specific context (Changelog / version line).
+- [x] 7.5 (done 2026-11-02, merge 79de92c on `aztec`) Merge `master` into `aztec` (buggy) and check that `pio run` builds there without new warnings. The law, constants and setting are vehicle-neutral. Resolve only branch-specific context (Changelog / version line).
 
 ## 8. Bench verification [USER/MANUAL]
+Archived 2026-11-02 at the user's request before bench verification; bugs found later come back as new changes.
 - [ ] 8.1 [USER/MANUAL] First boot on the new firmware: the log shows `[SPEED] Limiter floor: 0.0 %`, and telemetry shows `speed_limit_floor` = 0. Set 5 % from the portal, reboot: 5 % is restored. Set 25 %: refused locally and by the firmware.
 - [ ] 8.2 [USER/MANUAL] Wheels off the ground, `SPEED_MAX` = 2.78 (10 km/h), full demand: the ceiling (`speed_limit_ceil`) starts falling only above ≈ 8 km/h, and the wheel speed settles at 10 ± 0.5 km/h with the ceiling at a steady value above the floor. No servo snap is audible or visible.
 - [ ] 8.3 [USER/MANUAL] Drive above the limit with the floor forced to 20 % (wheels off the ground or on flat ground, `SPEED_MAX` = 2.78, full demand, 20 % alone holding the speed above 10 km/h): confirm the "Limiter at floor, speed above limit" badge appears on the limiter row in the console's warning styling within ≈ 2 s, and that `speed_limit_sat` is true. Then slow down below the limit: the badge switches to "was at floor" and stays ≥ 10 s after slowing down, then disappears (`speed_limit_sat_held` false). Reload the page during the hold: the badge is still shown. No saturation line appears in the serial log; the `[SPEED] Speed limit: ...` change line still does when `SPEED_MAX` is changed.
