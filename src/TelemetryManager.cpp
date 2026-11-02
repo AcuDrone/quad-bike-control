@@ -120,6 +120,7 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.vehicle_speed_ms = vehicleController_.getVehicleSpeedMs();
     telemetry.speed_valid = vehicleController_.isVehicleSpeedValid();
     telemetry.speed_ppr = vehicleController_.getSpeedPulsesPerRev();
+    telemetry.speed_pulse_total = vehicleController_.getSpeedPulseTotal();
     telemetry.speed_circ_mm = vehicleController_.getSpeedWheelCircumferenceMm();
     // Distance counters — the exact millimetre counters scaled to km at this point, not a
     // separately maintained total. Never gated: distance already driven stays true.

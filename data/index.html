@@ -1001,14 +1001,36 @@
                 <button onclick="resetGearCodes()" data-i18n="btn_reset_gear_codes" style="margin-top: 10px; width: 100%; padding:8px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer;">Reset to defaults</button>
                 <div id="gear-codes-status" style="margin-top: 10px; font-size: 0.8em; color: var(--muted-foreground); min-height: 1.2em;"></div>
             </div>
-            <!-- Speed sensor settings (hall pulses, wheel, steering scaling base, bench test speed) -->
-            <div class="card">
-                <h2 class="card-title"><span data-i18n="card_speed_sensor">🛞 Speed Sensor</span><button type="button" class="help-btn" onclick="openHelp('speed_sensor_help,speed_limiter_hint,speed_limit_floor_hint,steer_scale_hint,steer_test_speed_hint', 'card_speed_sensor')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+            <!-- Speed sensor calibration (pulses per revolution with the measurement, wheel circumference) -->
+            <div class="card" id="speed-sensor-card">
+                <h2 class="card-title"><span data-i18n="card_speed_sensor">🛞 Speed Sensor</span><button type="button" class="help-btn" onclick="openHelp('speed_sensor_help', 'card_speed_sensor')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
                 <div style="margin-top: 14px;">
                     <label data-i18n="lbl_speed_ppr" style="font-size: 0.8em; color: var(--muted-foreground);">Pulses per revolution</label>
                     <div style="display: flex; gap: 6px; margin-top: 4px;">
                         <input type="number" id="speed-ppr-input" min="1" max="1000" step="1" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
                         <button onclick="saveSpeedPpr()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                    </div>
+                </div>
+
+                <div id="ppr-meas" style="margin-top: 10px; border: 1px dashed var(--border); border-radius: 6px; padding: 8px 10px;">
+                    <div data-i18n="ppr_meas_title" style="font-size: 0.8em; color: var(--muted-foreground); font-weight: bold;">Measure pulses per revolution</div>
+                    <label data-i18n="ppr_meas_turns" style="font-size: 0.8em; color: var(--muted-foreground); display:block; margin-top: 6px;">Wheel turns</label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px;">
+                        <input type="number" id="ppr-meas-turns" value="5" min="1" max="20" step="1" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button id="ppr-meas-start" type="button" disabled onclick="pprMeasToggle()" data-i18n="ppr_meas_start" style="padding:6px 10px; border-radius:4px; border:none; color:var(--foreground); cursor:pointer; background:color-mix(in srgb, var(--info) 65%, black);">Start</button>
+                        <button id="ppr-meas-cancel" type="button" onclick="pprMeasCancel()" data-i18n="ppr_meas_cancel" style="display:none; padding:6px 10px; border-radius:4px; border:none; color:var(--foreground); cursor:pointer; background:var(--secondary);">Cancel</button>
+                    </div>
+                    <div id="ppr-meas-live" style="display:none; margin-top: 6px; font-size: 0.85em;">
+                        <div id="ppr-meas-count" style="font-weight: bold;"></div>
+                        <div id="ppr-meas-hint" style="font-size: 0.8em; color: var(--muted-foreground); margin-top: 2px;"></div>
+                    </div>
+                    <div id="ppr-meas-result-box" style="display:none; margin-top: 6px;">
+                        <div id="ppr-meas-result" style="font-size: 0.85em; font-weight: bold;"></div>
+                        <div id="ppr-meas-warn" data-i18n="ppr_meas_frac_warn" style="display:none; font-size: 0.8em; color: var(--warning); margin-top: 2px;">Large fractional part: inexact turns or missed pulses. Repeat.</div>
+                        <div style="display: flex; gap: 6px; margin-top: 6px;">
+                            <button id="ppr-meas-save" type="button" onclick="pprMeasSave()" data-i18n="ppr_meas_save" style="flex:1; padding:6px 10px; border-radius:4px; border:none; color:var(--foreground); cursor:pointer; background:color-mix(in srgb, var(--info) 65%, black);">Save as pulses/rev</button>
+                            <button id="ppr-meas-again" type="button" onclick="pprMeasAgain()" data-i18n="ppr_meas_again" style="flex:1; padding:6px 10px; border-radius:4px; border:none; color:var(--foreground); cursor:pointer; background:var(--secondary);">Measure again</button>
+                        </div>
                     </div>
                 </div>
                 <div style="margin-top: 10px;">
@@ -1018,7 +1040,12 @@
                         <button onclick="saveSpeedCirc()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
                     </div>
                 </div>
-                <div style="margin-top: 10px;">
+                <div id="speed-status-msg" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
+            </div>
+            <!-- Speed limit and steering (limiter floor, speed-limit readout, steering authority, scaling base, bench test speed) -->
+            <div class="card" id="speed-limit-card">
+                <h2 class="card-title"><span data-i18n="card_speed_limit_steer">🚦 Speed limit and steering</span><button type="button" class="help-btn" onclick="openHelp('speed_limit_help,speed_limiter_hint,speed_limit_floor_hint,steer_scale_hint,steer_test_speed_hint', 'card_speed_limit_steer')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <div style="margin-top: 14px;">
                     <label data-i18n="lbl_speed_limit_floor" style="font-size: 0.8em; color: var(--muted-foreground);">Limiter floor (%)</label>
                     <div style="display: flex; gap: 6px; margin-top: 4px;">
                         <input type="number" id="speed-limit-floor-input" min="0" max="20" step="0.5" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
@@ -1065,7 +1092,7 @@
                         </div>
                     </div>
                 </div>
-                <div id="speed-status-msg" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
+                <div id="speed-limit-status-msg" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
             </div>
             </div>
             </section>
@@ -1485,12 +1512,26 @@
 
                 // Speed sensor card (hall pulse input — independent of CAN)
                 card_speed_sensor: '🛞 Speed Sensor',
-                speed_sensor_help: 'Speed is measured by the driveline hall sensor, not the CAN bus. Set pulses per revolution and the fitted tyre circumference to calibrate it.',
+                card_speed_limit_steer: '🚦 Speed limit and steering',
+                speed_limit_help: 'This card uses the speed from the sensor card: the speed limiter and the speed-based steering authority both need a valid pulses-per-revolution and wheel circumference.',
+                speed_sensor_help: 'Speed is measured by the driveline hall sensor, not the CAN bus. Set pulses per revolution and the fitted tyre circumference to calibrate it. To measure pulses per revolution, put a chalk mark on the tyre, set the number of turns and press Start. Lift the wheel and select neutral, then turn it by hand exactly that many turns in one direction; wait until the count stops changing, then press Stop. Turning back also adds pulses. A whole-number result is reliable; a large fractional part means the turns were inexact or pulses were missed, so repeat.',
                 lbl_speed: 'Speed',
                 lbl_speed_status: 'Sensor',
                 speed_ok: 'OK',
                 speed_no_signal: 'No signal',
                 lbl_speed_ppr: 'Pulses per revolution',
+                ppr_meas_title: 'Measure pulses per revolution',
+                ppr_meas_turns: 'Wheel turns',
+                ppr_meas_start: 'Start',
+                ppr_meas_stop: 'Stop',
+                ppr_meas_cancel: 'Cancel',
+                ppr_meas_live: 'Pulses: %s · turns: %s',
+                ppr_meas_hint: 'Lift the wheel, select neutral; turn it by hand exactly %s turns in one direction (mark on the tyre). Wait until the count stops changing, then press Stop.',
+                ppr_meas_result: 'Result: %s / %s = %s → %s pulses/rev',
+                ppr_meas_frac_warn: 'Large fractional part: inexact turns or missed pulses. Repeat.',
+                ppr_meas_save: 'Save as pulses/rev',
+                ppr_meas_again: 'Measure again',
+                ppr_meas_no_pulses: 'No pulses counted. Repeat.',
                 lbl_speed_circ: 'Wheel circumference (mm)',
                 lbl_speed_limit: 'Speed limit',
                 lbl_speed_limit_ceil: 'Limiting',
@@ -1873,12 +1914,26 @@
 
                 // Speed sensor card (hall pulse input — independent of CAN)
                 card_speed_sensor: '🛞 Датчик швидкості',
-                speed_sensor_help: 'Швидкість вимірює датчик Холла на трансмісії, а не шина CAN. Задайте кількість імпульсів на оберт та довжину кола встановленої шини для калібрування.',
+                card_speed_limit_steer: '🚦 Обмеження швидкості та кермо',
+                speed_limit_help: 'Ця картка використовує швидкість із картки датчика: обмежувач швидкості та залежна від швидкості чутливість керма потребують правильних імпульсів на оберт і довжини кола колеса.',
+                speed_sensor_help: 'Швидкість вимірює датчик Холла на трансмісії, а не шина CAN. Задайте кількість імпульсів на оберт та довжину кола встановленої шини для калібрування. Щоб виміряти імпульси на оберт, поставте крейдою мітку на шині, задайте кількість обертів і натисніть «Почати». Підніміть колесо й увімкніть нейтраль, потім прокрутіть його рукою рівно стільки обертів в один бік; дочекайтеся, поки лічильник перестане змінюватися, і натисніть «Зупинити». Оберт назад теж додає імпульси. Ціле число в результаті надійне; велика дробова частина означає неточні оберти або пропущені імпульси, тож повторіть.',
                 lbl_speed: 'Швидкість',
                 lbl_speed_status: 'Датчик',
                 speed_ok: 'Справний',
                 speed_no_signal: 'Немає сигналу',
                 lbl_speed_ppr: 'Імпульсів на оберт',
+                ppr_meas_title: 'Вимірювання імпульсів на оберт',
+                ppr_meas_turns: 'Обертів колеса',
+                ppr_meas_start: 'Почати',
+                ppr_meas_stop: 'Зупинити',
+                ppr_meas_cancel: 'Скасувати',
+                ppr_meas_live: 'Імпульсів: %s · обертів: %s',
+                ppr_meas_hint: 'Підніміть колесо, нейтраль; крутіть рукою рівно %s обертів в один бік (мітка на шині). Дочекайтеся, поки лічильник перестане змінюватися, і натисніть «Зупинити».',
+                ppr_meas_result: 'Результат: %s / %s = %s → %s імпульсів/оберт',
+                ppr_meas_frac_warn: 'Дробова частина велика: оберти неточні або пропущені імпульси. Повторіть.',
+                ppr_meas_save: 'Зберегти як імпульсів/оберт',
+                ppr_meas_again: 'Виміряти знову',
+                ppr_meas_no_pulses: 'Імпульсів не зафіксовано. Повторіть.',
                 lbl_speed_circ: 'Довжина кола колеса (мм)',
                 lbl_speed_limit: 'Обмеження швидкості',
                 lbl_speed_limit_ceil: 'Обмежується',
@@ -2089,6 +2144,7 @@
             }
             if (lastTelemetry) updateTelemetry(lastTelemetry);
             if (changelogOpen) renderChangelog();
+            pprMeasRender();
         }
 
         function updateLangToggle() {
@@ -2161,6 +2217,8 @@
                 updateConnectionStatus(false);
                 renderRelayTest();   // no link → relay test toggles disabled
                 gdSetActive(false);  // gear-defaults slider / ▶ row lock until Start is pressed again
+                pprMeas.lastTotal = null;   // a reboot restarts the total: wait for a fresh frame
+                pprMeasReset();      // a disconnect (or reboot) drops a running ppr measurement
                 // Reconnect after 3 seconds
                 setTimeout(connectWebSocket, 3000);
             };
@@ -2194,6 +2252,7 @@
                 statusElem.classList.add('disconnected');
                 statusText.textContent = t('ws_disconnected');
             }
+            pprMeasRender();   // Start follows the connection
         }
 
         // Legacy hook: its shared status panel is gone (d287082); every response is routed to the
@@ -2245,7 +2304,8 @@
                 // Speed sensor calibration / limiter status
                 if (data.message && (data.message.includes('Pulses/rev') ||
                     data.message.includes('Wheel circumference') || data.message.includes('Speed limit') ||
-                    data.message.includes('Speed limiter'))) {
+                    data.message.includes('Speed limiter') ||
+                    data.message.startsWith('Steering scale base') || data.message.startsWith('Test speed'))) {
                     speedStatusMsg(data.success ? data.message : t('error_prefix') + data.message,
                                    data.success ? 'var(--success)' : 'var(--danger)');
                 }
@@ -2312,6 +2372,7 @@
             // Update hall-sensor speed — deliberately independent of can_status. An
             // invalid reading shows "--" rather than a misleading 0.
             updateSpeedDisplay(data);
+            pprMeasOnTelemetry(data);
 
             // Update MAVLink link status
             document.getElementById('telemetry-mav').textContent = data.mav_active ? t('mav_active') : t('mav_inactive');
@@ -3123,8 +3184,11 @@
         }
 
         // ── Speed sensor (hall pulse input, independent of CAN) ─────────────
+        // Two cards share this helper: each save sets the target to its own card's status line
+        // first, and the firmware reply goes to the card whose control was used last.
+        let speedStatusTarget = 'speed-status-msg';
         function speedStatusMsg(text, color) {
-            const el = document.getElementById('speed-status-msg');
+            const el = document.getElementById(speedStatusTarget);
             if (!el) return;
             el.textContent = text;
             el.style.color = color;
@@ -3219,6 +3283,7 @@
         }
 
         function saveSpeedLimitFloor() {
+            speedStatusTarget = 'speed-limit-status-msg';
             const val = parseFloat(document.getElementById('speed-limit-floor-input').value);
             if (isNaN(val) || val < 0 || val > 20) {
                 speedStatusMsg(t('invalid_speed_limit_floor'), 'var(--danger)');
@@ -3229,6 +3294,7 @@
         }
 
         function saveSpeedPpr() {
+            speedStatusTarget = 'speed-status-msg';
             const val = parseInt(document.getElementById('speed-ppr-input').value, 10);
             if (isNaN(val) || val < 1 || val > 1000) {
                 speedStatusMsg(t('invalid_speed_ppr'), 'var(--danger)');
@@ -3239,6 +3305,7 @@
         }
 
         function saveSpeedCirc() {
+            speedStatusTarget = 'speed-status-msg';
             const val = parseFloat(document.getElementById('speed-circ-input').value);
             if (isNaN(val) || val < 100 || val > 10000) {
                 speedStatusMsg(t('invalid_speed_circ'), 'var(--danger)');
@@ -3298,6 +3365,7 @@
         }
 
         function saveSteerScaBase() {
+            speedStatusTarget = 'speed-limit-status-msg';
             const val = parseFloat(document.getElementById('steer-sca-base-input').value);
             if (isNaN(val) || val < 0 || val > 10) {
                 speedStatusMsg(t('invalid_steer_sca_base'), 'var(--danger)');
@@ -3308,6 +3376,7 @@
         }
 
         function sendSteerTestSpeed() {
+            speedStatusTarget = 'speed-limit-status-msg';
             const val = parseFloat(document.getElementById('steer-test-speed-input').value);
             if (isNaN(val) || val < 0 || val > 30) {
                 speedStatusMsg(t('invalid_steer_test_speed'), 'var(--danger)');
@@ -3895,6 +3964,108 @@
                 list.appendChild(li);
             });
             box.style.display = items.length ? 'block' : 'none';
+        }
+
+
+        // ── Pulses-per-revolution measurement (page-side, over telemetry speed_pulse_total) ──
+        // The firmware only exports its running pulse total; Start snapshots it, the delta is
+        // (now − start) >>> 0 (correct across the uint32 wrap) and Stop freezes it at once.
+        // Nothing is sent until "Save as pulses/rev", which goes through saveSpeedPpr().
+        // State lives only here: a reload or a WebSocket disconnect returns to idle.
+        const PPR_MIN = 1;      // mirrors SPEED_PPR_MIN in Constants.h
+        const PPR_MAX = 1000;   // mirrors SPEED_PPR_MAX in Constants.h
+        const pprMeas = { state: 'idle', startTotal: 0, delta: 0, turns: 5, lastTotal: null };
+
+        // Pure result rule. Warning when |ppr − rounded| ≥ 0.2, in exact integer arithmetic.
+        function pprMeasCompute(delta, turns) {
+            if (delta === 0) return { kind: 'none', ppr: 0, rounded: 0, warn: false };
+            const ppr = delta / turns;
+            const rounded = Math.round(ppr);
+            if (rounded < PPR_MIN || rounded > PPR_MAX) return { kind: 'range', ppr: ppr, rounded: rounded, warn: false };
+            return { kind: 'ok', ppr: ppr, rounded: rounded, warn: 5 * Math.abs(delta - rounded * turns) >= turns };
+        }
+        function pprFmt(x) {
+            const s = x.toFixed(1);
+            return currentLang === 'uk' ? s.replace('.', ',') : s;
+        }
+        function pprMeasTurns() {
+            let n = parseInt(document.getElementById('ppr-meas-turns').value, 10);
+            if (!Number.isFinite(n)) n = 5;
+            return Math.min(20, Math.max(1, n));
+        }
+        function pprMeasOnTelemetry(data) {
+            const v = data.speed_pulse_total;
+            pprMeas.lastTotal = (typeof v === 'number' && Number.isFinite(v)) ? v : null;
+            if (pprMeas.state === 'measuring') {
+                if (pprMeas.lastTotal !== null) pprMeas.delta = (pprMeas.lastTotal - pprMeas.startTotal) >>> 0;
+                pprMeasRender();
+            } else if (pprMeas.state === 'idle') {
+                pprMeasRender();   // Start follows the availability of the total
+            }
+        }
+        function pprMeasRender() {
+            const st = pprMeas.state;
+            const startBtn = document.getElementById('ppr-meas-start');
+            if (!startBtn) return;
+            startBtn.textContent = t(st === 'measuring' ? 'ppr_meas_stop' : 'ppr_meas_start');
+            startBtn.style.background = st === 'measuring'
+                ? 'color-mix(in srgb, var(--warning) 60%, black)'
+                : 'color-mix(in srgb, var(--info) 65%, black)';
+            startBtn.style.display = st === 'done' ? 'none' : '';
+            startBtn.disabled = (st === 'idle') && !(wsConnected && pprMeas.lastTotal !== null);
+            document.getElementById('ppr-meas-cancel').style.display = st === 'measuring' ? '' : 'none';
+            document.getElementById('ppr-meas-turns').disabled = st !== 'idle';
+            document.getElementById('ppr-meas-live').style.display = st === 'measuring' ? 'block' : 'none';
+            document.getElementById('ppr-meas-count').textContent = t('ppr_meas_live', pprMeas.delta, pprMeas.turns);
+            document.getElementById('ppr-meas-hint').textContent = t('ppr_meas_hint', pprMeas.turns);
+            const box = document.getElementById('ppr-meas-result-box');
+            box.style.display = st === 'done' ? 'block' : 'none';
+            if (st !== 'done') return;
+            const res = document.getElementById('ppr-meas-result');
+            const warn = document.getElementById('ppr-meas-warn');
+            const save = document.getElementById('ppr-meas-save');
+            const r = pprMeasCompute(pprMeas.delta, pprMeas.turns);
+            if (r.kind === 'none') {
+                res.textContent = t('ppr_meas_no_pulses');
+                res.style.color = 'var(--danger)';
+            } else {
+                const line = t('ppr_meas_result', pprMeas.delta, pprMeas.turns, pprFmt(r.ppr), r.rounded);
+                res.textContent = r.kind === 'range' ? line + ' ' + t('invalid_speed_ppr') : line;
+                res.style.color = r.kind === 'range' ? 'var(--danger)' : '';
+            }
+            warn.style.display = (r.kind === 'ok' && r.warn) ? 'block' : 'none';
+            save.style.display = r.kind === 'ok' ? '' : 'none';
+        }
+        function pprMeasToggle() {
+            if (pprMeas.state === 'measuring') { pprMeasStop(); return; }
+            if (pprMeas.state !== 'idle' || !wsConnected || pprMeas.lastTotal === null) return;
+            pprMeas.turns = pprMeasTurns();
+            document.getElementById('ppr-meas-turns').value = pprMeas.turns;
+            pprMeas.startTotal = pprMeas.lastTotal;
+            pprMeas.delta = 0;
+            pprMeas.state = 'measuring';
+            pprMeasRender();
+        }
+        function pprMeasStop() {
+            // Freeze at once from the last received total (no settle delay; the hint says to
+            // wait until the count stops changing before pressing Stop).
+            if (pprMeas.lastTotal !== null) pprMeas.delta = (pprMeas.lastTotal - pprMeas.startTotal) >>> 0;
+            pprMeas.state = 'done';
+            pprMeasRender();
+        }
+        function pprMeasReset() {
+            pprMeas.state = 'idle';
+            pprMeas.delta = 0;
+            pprMeasRender();
+        }
+        function pprMeasCancel() { pprMeasReset(); }
+        function pprMeasAgain() { pprMeasReset(); }
+        function pprMeasSave() {
+            const r = pprMeasCompute(pprMeas.delta, pprMeas.turns);
+            if (pprMeas.state !== 'done' || r.kind !== 'ok') return;
+            document.getElementById('speed-ppr-input').value = r.rounded;
+            speedStatusTarget = 'speed-status-msg';
+            saveSpeedPpr();   // shared validation, sendCommand('speed_cal_ppr', …) and "Saving…"
         }
 
         // Initialize on page load: language → last section → WebSocket (D1)

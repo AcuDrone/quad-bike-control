@@ -551,11 +551,12 @@ bool WebPortal::parseWebCommand(uint8_t* data, size_t len) {
 // ============================================================================
 
 String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
-    // Capacity headroom: ~82 top-level fields (incl. 4 steering-VESC fields, 20 steering
+    // Capacity headroom: ~83 top-level fields (incl. 4 steering-VESC fields, 20 steering
     // angle-sensor / mode fields (steer_mode: one more slot, static token stored by pointer;
     // steer_sensor_inv: one bool slot, ~25 B of JSON), wheel_lock_fitted, the relay_test bitfield, the
-    // 5 rail / board-I/O fields, the 15 hall-speed / limiter / distance fields (incl. speed_limit_floor /
-    // speed_limit_sat / speed_limit_sat_held: 3 slots + one ~4 B copied string) and the
+    // 5 rail / board-I/O fields, the 16 hall-speed / limiter / distance fields (incl. speed_limit_floor /
+    // speed_limit_sat / speed_limit_sat_held: 3 slots + one ~4 B copied string; speed_pulse_total: one
+    // more slot, key stored by pointer, ~30 B of JSON) and the
     // 4 steering speed-scaling fields, gear_code / gear_sensed / gear_codes_custom, steer_vin /
     // steer_vin_low / ecu_voltage_low, wifi_ssid / wifi_ip) + a 16-element
     // array + the nested probe / po / bm / dtc / gearDefaults / gear_codes objects, plus copied
@@ -637,6 +638,8 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["vehicle_speed"] = serialized(String(telemetry.vehicle_speed_ms * MS_TO_KMH, 1));
     doc["speed_valid"] = telemetry.speed_valid;
     doc["speed_ppr"] = telemetry.speed_ppr;
+    // Running pulse total since boot (uint32, plain integer): the page measures ppr from its delta.
+    doc["speed_pulse_total"] = telemetry.speed_pulse_total;
     doc["speed_circ_mm"] = serialized(String(telemetry.speed_circ_mm, 0));
     // The enforced ceiling, from the autopilot's SPEED_MAX alone. 0 = no limit.
     doc["speed_limit_kmh"] = serialized(String(telemetry.speed_limit_ms * MS_TO_KMH, 1));

@@ -110,8 +110,10 @@ it. Cards are shown in one column.
   quad bike, which senses one line per gear): live bits A/B/C and the decoded gear; **Save as
   R/N/H/L** assigns the live code to a gear (each button shows the stored code, "(default)", or
   "not set"); "Reset to defaults".
-- **Speed sensor**: pulses per revolution, wheel circumference, speed-limiter floor, speed-limit
-  readout, steering scaling base and bench test speed.
+- **Speed sensor**: pulses per revolution (with the measurement block, see below) and wheel
+  circumference.
+- **Speed limit and steering**: speed-limiter floor, speed-limit readout, steering authority,
+  steering scaling base and bench test speed.
 
 **Тести / Tests** (bench checks):
 - **Manual control**: Take / Release control, gear buttons, steering, throttle and brake sliders.
@@ -148,7 +150,7 @@ clears the trip distance.
 portal has no maximum-speed box and no limiter on/off button.
 See `MAVLINK_SETUP.md` → "Autopilot speed limit (`SPEED_MAX`)".
 
-**Limiter floor (Speed sensor card):** the one limiter setting — the lowest throttle the speed
+**Limiter floor (Speed limit and steering card):** the one limiter setting — the lowest throttle the speed
 limiter may leave at and above the limit, 0–20 % (default **0 %** = the calibrated idle position,
 which holds the limit most tightly). A higher floor softens engine braking at the cost of a limit
 that may not hold. Saved with `set_speed_limit_floor` to NVS `"speed"` / `thr_floor`, reported as
@@ -159,6 +161,18 @@ floor, speed above limit"** when the ceiling has been at the floor for 2 s while
 above the limit (`speed_limit_sat`), and reads "Limiter was at floor…" for 10 s after it clears
 (`speed_limit_sat_held`, held by the firmware so every client shows it). It means the floor is too
 high or the vehicle is going downhill — the limiter does not brake.
+
+**Measuring pulses per revolution (Speed sensor card):** lift the wheel off the ground, put the
+transmission in neutral and put a chalk mark on the tyre. Enter the number of turns (1–20, default
+5), press **Start**, turn the wheel by hand exactly that many turns in one direction, wait until the
+live count stops changing and press **Stop**. The page computes the result from the firmware's
+running pulse total (`speed_pulse_total` in telemetry; the firmware keeps no measurement state) and
+shows "N / turns = x.x → R". A fractional part of 0.2 or more is flagged: the turns were inexact or
+pulses were missed, so repeat. The sensor has no direction channel, so turning back also **adds**
+pulses: on an overshoot, Cancel and start again. The hand-turned distance is added to the odometer
+and trip like any pushed distance (about 2 m per turn). Nothing is stored until **Save as
+pulses/rev**, which sends the usual `speed_cal_ppr`; a disconnect or a page reload drops the
+measurement.
 
 **OTA Firmware Update** (Система → System maintenance):
 1. Build new firmware: `pio run`
