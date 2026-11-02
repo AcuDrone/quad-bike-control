@@ -103,7 +103,10 @@ public:
         uint16_t speed_ppr;       // Calibration: pulses per revolution
         float speed_circ_mm;      // Calibration: wheel circumference (mm)
         float speed_limit_ms;     // Enforced ceiling (m/s) from SPEED_MAX, 0 = no limit — km/h in JSON
-        float speed_limit_ceil;   // Throttle ceiling the taper is applying (%, 100 = inactive)
+        float speed_limit_ceil;   // Throttle ceiling the limiter is applying (taper + trim, %, 100 = inactive)
+        float speed_limit_floor;  // Limiter throttle floor in use (%, 0 = calibrated idle)
+        bool speed_limit_sat;     // Limiter saturated: ceiling at the floor, speed still above the limit
+        bool speed_limit_sat_held; // speed_limit_sat, or within SPEED_LIMIT_SAT_UI_HOLD_MS after it cleared
         // Steering speed scaling — so "the steering feels weak" is diagnosable from the portal.
         float steer_scale;        // Applied scale after rate limiting, 0..1 (1 = not scaling)
         float steer_sca_base_ms;  // Base in use (m/s), 0 = none — serialised in m/s, not km/h

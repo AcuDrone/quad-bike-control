@@ -851,7 +851,7 @@
                         <span data-bind="speed-limit-value">--</span>
                     </div>
                     <div data-bind="speed-limit-ceil-row" style="display: none; justify-content: space-between; align-items: baseline; margin-top: 4px; font-size: 0.85em; color: var(--warning);">
-                        <span data-i18n="lbl_speed_limit_ceil">Limiting</span>
+                        <span data-bind="speed-limit-ceil-label">Limiting</span>
                         <span data-bind="speed-limit-ceil">--</span>
                     </div>
                 </div>
@@ -1003,7 +1003,7 @@
             </div>
             <!-- Speed sensor settings (hall pulses, wheel, steering scaling base, bench test speed) -->
             <div class="card">
-                <h2 class="card-title"><span data-i18n="card_speed_sensor">🛞 Speed Sensor</span><button type="button" class="help-btn" onclick="openHelp('speed_sensor_help,speed_limiter_hint,steer_scale_hint,steer_test_speed_hint', 'card_speed_sensor')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <h2 class="card-title"><span data-i18n="card_speed_sensor">🛞 Speed Sensor</span><button type="button" class="help-btn" onclick="openHelp('speed_sensor_help,speed_limiter_hint,speed_limit_floor_hint,steer_scale_hint,steer_test_speed_hint', 'card_speed_sensor')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
                 <div style="margin-top: 14px;">
                     <label data-i18n="lbl_speed_ppr" style="font-size: 0.8em; color: var(--muted-foreground);">Pulses per revolution</label>
                     <div style="display: flex; gap: 6px; margin-top: 4px;">
@@ -1018,13 +1018,20 @@
                         <button onclick="saveSpeedCirc()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
                     </div>
                 </div>
+                <div style="margin-top: 10px;">
+                    <label data-i18n="lbl_speed_limit_floor" style="font-size: 0.8em; color: var(--muted-foreground);">Limiter floor (%)</label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px;">
+                        <input type="number" id="speed-limit-floor-input" min="0" max="20" step="0.5" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button onclick="saveSpeedLimitFloor()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                    </div>
+                </div>
                 <div style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px;">
                     <div style="display: flex; justify-content: space-between; align-items: baseline; font-size: 0.85em;">
                         <span data-i18n="lbl_speed_limit" style="color: var(--muted-foreground);">Speed limit</span>
                         <span data-bind="speed-limit-value">--</span>
                     </div>
                     <div data-bind="speed-limit-ceil-row" style="display: none; justify-content: space-between; align-items: baseline; margin-top: 4px; font-size: 0.85em; color: var(--warning);">
-                        <span data-i18n="lbl_speed_limit_ceil">Limiting</span>
+                        <span data-bind="speed-limit-ceil-label">Limiting</span>
                         <span data-bind="speed-limit-ceil">--</span>
                     </div>
                 </div>
@@ -1494,7 +1501,13 @@
                 lbl_odo: 'Odometer',
                 lbl_trip: 'Trip',
                 unit_km: 'km',
-                speed_limiter_hint: "The limit comes only from the autopilot's SPEED_MAX parameter; 0 (or no link) means no limit. Approaching it the throttle ceiling is tapered down smoothly instead of being stepped. With no valid sensor reading the limiter does not act.",
+                speed_limiter_hint: "The limit comes only from the autopilot's SPEED_MAX parameter; 0 (or no link) means no limit. Approaching it the throttle ceiling is tapered down smoothly instead of being stepped. The limiter then holds the limit itself: above it the throttle keeps closing, down to the floor, and below it authority is returned gradually until the speed sits at the limit. With no valid sensor reading the limiter does not act.",
+                speed_limit_floor_hint: 'Limiter floor: the lowest throttle the speed limiter may leave at and above the limit. 0 % means idle and holds the limit most tightly; a higher floor (up to 20 %) softens engine braking at the cost of a limit that may not hold. The "Limiter at floor, speed above limit" badge (kept for 10 s after it clears) means the floor is too high or the vehicle is going downhill — the limiter does not brake.',
+                lbl_speed_limit_floor: 'Limiter floor (%)',
+                invalid_speed_limit_floor: 'Limiter floor must be 0-20 %',
+                speed_limit_at_floor: 'at floor',
+                speed_limit_sat: 'Limiter at floor, speed above limit',
+                speed_limit_sat_held: 'Limiter was at floor, speed above limit',
                 speed_saving: 'Saving speed settings...',
                 invalid_speed_ppr: 'Pulses/rev must be 1-1000',
                 invalid_speed_circ: 'Circumference must be 100-10000 mm',
@@ -1876,7 +1889,13 @@
                 lbl_odo: 'Одометр',
                 lbl_trip: 'Пробіг',
                 unit_km: 'км',
-                speed_limiter_hint: 'Обмеження береться лише з параметра SPEED_MAX автопілота; 0 (або відсутній зв\'язок) означає, що обмеження немає. При наближенні до нього стеля дроселя плавно знижується, а не падає стрибком. Без достовірних показань датчика обмежувач не діє.',
+                speed_limiter_hint: 'Обмеження береться лише з параметра SPEED_MAX автопілота; 0 (або відсутній зв\'язок) означає, що обмеження немає. При наближенні до нього стеля дроселя плавно знижується, а не падає стрибком. Далі обмежувач сам утримує ліміт: вище нього газ продовжує зменшуватися аж до мінімуму, а нижче — поступово повертається, доки швидкість не стане рівною ліміту. Без достовірних показань датчика обмежувач не діє.',
+                speed_limit_floor_hint: 'Мінімальний газ обмежувача: найменший газ, який обмежувач швидкості може залишити на ліміті й вище нього. 0 % — це холостий хід, і ліміт утримується найточніше; вищий мінімум (до 20 %) пом\'якшує гальмування двигуном, але ліміт може не втриматися. Позначка «Обмежувач на мінімумі, швидкість вища за ліміт» (лишається ще 10 с після зникнення умови) означає, що мінімум зависокий або машина їде з гори — обмежувач не гальмує.',
+                lbl_speed_limit_floor: 'Мінімальний газ обмежувача (%)',
+                invalid_speed_limit_floor: 'Мінімальний газ обмежувача має бути 0-20 %',
+                speed_limit_at_floor: 'на мінімумі',
+                speed_limit_sat: 'Обмежувач на мінімумі, швидкість вища за ліміт',
+                speed_limit_sat_held: 'Обмежувач був на мінімумі, швидкість була вища за ліміт',
                 speed_saving: 'Збереження налаштувань швидкості...',
                 invalid_speed_ppr: 'Імпульсів на оберт має бути 1-1000',
                 invalid_speed_circ: 'Довжина кола має бути 100-10000 мм',
@@ -3151,10 +3170,9 @@
                     { color: (lim > 0) ? 'var(--foreground)' : 'var(--muted-foreground)' });
             }
 
-            // The taper ceiling is only interesting while it is actually holding throttle back.
-            const ceil = (typeof data.speed_limit_ceil === 'number') ? data.speed_limit_ceil : 100;
-            setBound('speed-limit-ceil-row', null, { display: (ceil < 100) ? 'flex' : 'none' });
-            if (ceil < 100) setBound('speed-limit-ceil', ceil.toFixed(0) + ' %');
+            syncSpeedInput('speed-limit-floor-input',
+                Number.isFinite(data.speed_limit_floor) ? data.speed_limit_floor.toFixed(1) : undefined);
+            updateSpeedLimitRow(data);
 
             updateSteerScaleDisplay(data);
 
@@ -3170,6 +3188,44 @@
                     ? pair[1].toFixed(3) + ' ' + t('unit_km')
                     : '--';
             });
+        }
+
+        // Limiter row, shared by the Diagnostics Speed card and the Speed sensor settings card
+        // (data-bind copies). The ceiling is only interesting while it holds throttle back, or
+        // while the firmware reports saturation (speed_limit_sat_held — the firmware owns the
+        // 10 s hold; the page keeps no timer). A missing key (older firmware) reads as false.
+        function updateSpeedLimitRow(data) {
+            const ceil = (typeof data.speed_limit_ceil === 'number') ? data.speed_limit_ceil : 100;
+            const lim = (typeof data.speed_limit_kmh === 'number') ? data.speed_limit_kmh : 0;
+            const floor = Number.isFinite(data.speed_limit_floor) ? data.speed_limit_floor : null;
+            const sat = data.speed_limit_sat === true;
+            const held = data.speed_limit_sat_held === true;
+            const show = (ceil < 100) || held;
+            setBound('speed-limit-ceil-row', null, { display: show ? 'flex' : 'none' });
+            if (!show) return;
+            const atFloor = (lim > 0) && (floor !== null) && (ceil <= floor + 0.5);
+            setBound('speed-limit-ceil-label',
+                held ? t(sat ? 'speed_limit_sat' : 'speed_limit_sat_held') : t('lbl_speed_limit_ceil'));
+            setBound('speed-limit-ceil', ceil.toFixed(0) + ' %' + (atFloor ? ' · ' + t('speed_limit_at_floor') : ''));
+            // Saturation badge: the console's standard warning styling (the attention box's
+            // --warning border and tint), applied to the row itself.
+            document.querySelectorAll('[data-bind="speed-limit-ceil-row"]').forEach(function (el) {
+                el.style.background = held ? 'color-mix(in srgb, var(--warning) 12%, var(--card))' : '';
+                el.style.border = held ? '1px solid var(--warning)' : '';
+                el.style.borderRadius = held ? '8px' : '';
+                el.style.padding = held ? '6px 10px' : '';
+                el.style.fontWeight = held ? 'bold' : '';
+            });
+        }
+
+        function saveSpeedLimitFloor() {
+            const val = parseFloat(document.getElementById('speed-limit-floor-input').value);
+            if (isNaN(val) || val < 0 || val > 20) {
+                speedStatusMsg(t('invalid_speed_limit_floor'), 'var(--danger)');
+                return;
+            }
+            sendCommand('set_speed_limit_floor', val);
+            speedStatusMsg(t('speed_saving'), 'var(--muted-foreground)');
         }
 
         function saveSpeedPpr() {

@@ -14,6 +14,17 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.3","date":"2026-11-02","uk":[
+"Обмежувач швидкості тепер сам утримує ліміт: якщо швидкість вища — газ зменшується далі, аж до холостого ходу",
+"Мінімальний газ обмежувача налаштовується в картці «Датчик швидкості» (0–20 %, типово 0 %)",
+"На низьких лімітах газ знімається ближче до ліміту, а не з половини",
+"Повторне калібрування не потрібне"
+],"en":[
+"The speed limiter now holds the limit itself: above it, throttle keeps closing down to idle",
+"The limiter's minimum throttle is set in the Speed sensor card (0–20 %, default 0 %)",
+"At low limits, throttle is withdrawn close to the limit instead of from half of it",
+"No recalibration required"
+]},
 {"version":"1.5.2","date":"2026-10-31","uk":[
 "Квадроцикл: кут керма тепер читається з датчика Bosch на шині CAN; AS5600 більше не використовується",
 "Нова кнопка «Задати нуль датчика»; калібруються лише межі «ліво» та «право»",

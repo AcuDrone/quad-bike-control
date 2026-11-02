@@ -1,16 +1,16 @@
 # Change: Speed limiter — configurable floor, proportional taper band and integral trim
 
 ## Why
-On the buggy (ODES 800 EFI, CVT) the pilot set a 10 km/h limit (`SPEED_MAX` = 2.78 m/s) and the
+On the quad bike (`master` vehicle) the pilot set a 10 km/h limit (`SPEED_MAX` = 2.78 m/s) and the
 vehicle drove at 30 km/h with a valid speed reading. The limiter is proportional only. Its ceiling
-falls to `SPEED_LIMIT_FLOOR_PCT` (7.5 %) at the limit and stays there. On this engine and CVT, 7.5 %
+falls to `SPEED_LIMIT_FLOOR_PCT` (7.5 %) at the limit and stays there. On the quad's engine and CVT, 7.5 %
 throttle is enough to hold about 30 km/h. Once the ceiling sits on the floor, the limiter has
 nowhere further to go.
 
 There is a second defect. The taper band is a fixed 1.4 m/s. At a 10 km/h limit the limiter
 starts withdrawing authority at 5 km/h, half the limit. At a high limit the same band is fine.
 
-Neither defect is vehicle-specific. The quad (`master`) runs the same code.
+Neither defect is vehicle-specific. The buggy (`aztec`, ODES 800 EFI) runs the same code.
 
 ## What Changes
 - **Floor default 0 % (calibrated idle) and configurable.** `SPEED_LIMIT_FLOOR_PCT` becomes the
@@ -64,10 +64,12 @@ Neither defect is vehicle-specific. The quad (`master`) runs the same code.
   is narrowed to "no persisted *ceiling*": the floor is the one persisted limiter parameter, and
   the ceiling still has exactly one source (`SPEED_MAX`). "The throttle SHALL NOT be cut to zero" is replaced by "the ceiling SHALL never
   step; it reaches the floor only gradually".
-- **Version.** `FIRMWARE_VERSION` gets a minor bump. The brief says **1.6.0**, but 1.6.0 and 1.7.0
-  are already claimed by the pending `move-can-rx-to-interrupt` and `move-aztec-vesc-to-can`. The
-  release number is the next free minor at implementation time (see tasks 0.2 / 8.1). A
-  `Changelog.h` entry (uk/en) is added.
+- **Version.** `FIRMWARE_VERSION` (currently 1.5.2 on `master`) gets the next free version on
+  `master` at apply time: **1.5.3** (patch per `openspec/project.md`: behaviour fix, no
+  recalibration or wiring change), unless the pending `move-can-rx-to-interrupt` (1.6.0) lands
+  first, in which case 1.6.1 (see task 0.2). A `Changelog.h` entry (uk/en) is added.
+- **Branch.** Implemented on `master`, then `master` is merged into `aztec` (the branches were
+  merged on 2026-11-01; work is done on `master`).
 
 ## Impact
 - Affected specs:
