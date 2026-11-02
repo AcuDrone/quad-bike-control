@@ -14,6 +14,11 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.4","date":"2026-11-02","uk":[
+"Імпульси на оберт колеса тепер можна виміряти з веб-панелі (прокрутити колесо N обертів); картка датчика швидкості розділена на «Датчик швидкості» та «Обмеження швидкості та кермо»"
+],"en":[
+"Wheel pulses per revolution can now be measured from the web portal (turn the wheel N times); the speed sensor card is split into “Speed sensor” and “Speed limit and steering”"
+]},
 {"version":"1.5.3","date":"2026-11-02","uk":[
 "Обмежувач швидкості тепер сам утримує ліміт: якщо швидкість вища — газ зменшується далі, аж до холостого ходу",
 "Мінімальний газ обмежувача налаштовується в картці «Датчик швидкості» (0–20 %, типово 0 %)",

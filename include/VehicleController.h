@@ -212,6 +212,8 @@ public:
 
     /** @brief Speed-sensor calibration (telemetry / web UI) */
     uint16_t getSpeedPulsesPerRev() const { return speedSensor_.getPulsesPerRev(); }
+    /** @brief Running pulse total since boot, for the web ppr measurement; counts up in either rotation direction */
+    uint32_t getSpeedPulseTotal() const { return speedSensor_.getPulseTotal(); }
     float getSpeedWheelCircumferenceMm() const { return speedSensor_.getWheelCircumferenceMm(); }
 
     /**

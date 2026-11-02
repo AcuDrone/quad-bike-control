@@ -101,6 +101,7 @@ public:
         float vehicle_speed_ms;   // Vehicle speed (m/s) from the hall sensor — serialised as km/h
         bool speed_valid;         // Sensor health: false = reading unknown, NOT "stopped"
         uint16_t speed_ppr;       // Calibration: pulses per revolution
+        uint32_t speed_pulse_total; // Running pulse total since boot (web ppr measurement; counts up either way)
         float speed_circ_mm;      // Calibration: wheel circumference (mm)
         float speed_limit_ms;     // Enforced ceiling (m/s) from SPEED_MAX, 0 = no limit — km/h in JSON
         float speed_limit_ceil;   // Throttle ceiling the limiter is applying (taper + trim, %, 100 = inactive)
