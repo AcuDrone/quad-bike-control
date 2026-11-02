@@ -567,7 +567,9 @@ struct ServoChannelConfig {
 
 // Calibration defaults (NVS namespace "speed", keys "ppr" / "circ_mm"), both
 // bench-measured on the vehicle and both settable at runtime from the web UI
-// (speed_cal_ppr / speed_cal_circ) — no reflash needed to change them.
+// (speed_cal_ppr / speed_cal_circ) — no reflash needed to change them. The same namespace also
+// holds the speed-limiter floor `thr_floor` (SPEED_LIMIT_FLOOR_NVS_KEY), owned and written by
+// VehicleController, not SpeedSensor — never clear() the namespace.
 // The fitted pickup reads a 70-tooth ring, NOT discrete magnets.
 #define SPEED_DEFAULT_PULSES_PER_REV       70      // pulses per wheel revolution (toothed ring)
 #define SPEED_DEFAULT_WHEEL_CIRCUMFERENCE_MM 1990.0f  // mm (25" ATV tyre, measured roll-out)
@@ -586,20 +588,43 @@ struct ServoChannelConfig {
 #define SPEED_MAX_PLAUSIBLE_DECEL_MS2    2.2f   // m/s² (≈8 km/h per second)
 
 // Maximum-speed throttle limiter. The ceiling has exactly ONE source: the autopilot's SPEED_MAX
-// parameter (m/s), held in RAM only. There is no local ceiling, no NVS key and no master switch —
+// parameter (m/s), held in RAM only. There is no local ceiling, no ceiling NVS key and no master
+// switch (the persisted floor below shapes HOW the limit is enforced, it never imposes one) —
 // the limiter is always armed, and "no usable SPEED_MAX" (link down, stale, never received) or
 // SPEED_MAX = 0 simply means NO LIMITING, exactly as ArduPilot itself reads a zero.
 #define SPEED_LIMIT_WARN_MS           5000   // ms between "limiter armed but speed invalid" warnings
 
-// Proportional taper. Authority is withdrawn GRADUALLY as the ceiling is approached rather than
-// in one step at the limit: a step lurches a heavy vehicle, invites hunting around the threshold,
-// and does both exactly where it hurts most — mid-corner.
-#define SPEED_LIMIT_TAPER_BAND_MS      1.4f   // m/s (≈5 km/h) - the ceiling starts falling this far BELOW
-                                              // the limit
-#define SPEED_LIMIT_FLOOR_PCT          7.5f  // % - throttle ceiling at/above the limit; never a hard cut
+// Proportional taper + integral trim. Authority is withdrawn GRADUALLY as the limit is approached
+// rather than in one step at the limit: a step lurches a heavy vehicle, invites hunting around the
+// threshold, and does both exactly where it hurts most — mid-corner. The pure law lives in
+// include/SpeedLimiterLaw.h (host-tested by test/test_speed_limiter).
+//  - The taper band is proportional to the limit: band = clamp(0.20 × L, 0.5, 1.4) m/s, so a low
+//    limit withdraws authority close to the limit, not from half of it.
+//  - The ceiling is taper + an integral trim, clamped to [floor, 100]: above the limit the trim
+//    keeps closing the throttle; below it, while the limiter binds, the trim gives back exactly the
+//    authority that holds the limit — no proportional droop, whatever the engine, CVT or grade.
+//  - The floor defaults to 0 % = the CALIBRATED IDLE position (ThrottleController::percentToUs(0)),
+//    persisted per vehicle (0–20 %). That is not a hard cut: the ceiling only reaches the floor
+//    through the taper, the trim and the 80 %/s slew (100 → 0 takes ≥ 1.25 s), never as a step.
+#define SPEED_LIMIT_TAPER_FRACTION     0.20f  // band = 0.20 × limit — the limiter takes the last fifth
+#define SPEED_LIMIT_TAPER_MIN_MS       0.5f   // m/s - ≈3.5 speed quanta (0.142 m/s); narrower hunts
+#define SPEED_LIMIT_TAPER_MAX_MS       1.4f   // m/s (≈5 km/h) - the old fixed band, proven at road limits
+#define SPEED_LIMIT_FLOOR_DEFAULT_PCT  0.0f   // % - default floor = calibrated idle; below any holding throttle
+#define SPEED_LIMIT_FLOOR_MIN_PCT      0.0f   // % - accepted floor range (web command / NVS validation)
+#define SPEED_LIMIT_FLOOR_MAX_PCT      20.0f  // % - above this the floor itself becomes a hidden speed floor
+#define SPEED_LIMIT_FLOOR_NVS_KEY      "thr_floor"  // NVS "speed" namespace, float % (owned by VehicleController)
+#define SPEED_LIMIT_TRIM_KI_PCT_S_PER_MS 30.0f // %/s per m/s - 1.4 m/s over takes the trim 100 → 0 in ≈2.4 s
+#define SPEED_LIMIT_TRIM_RISE_PCT_S    10.0f  // %/s - trim recovery cap; far below the slew, never a surge
+#define SPEED_LIMIT_BIND_MARGIN_PCT    1.0f   // % - demand within this of the ceiling = limiter binding
+                                              // (the trim only rises while binding: anti-windup)
 #define SPEED_LIMIT_CEILING_SLEW_PCT_S 80.0f // %/s - max ceiling movement (both directions) — no servo snap.
                                               // Applied to the CEILING, not the demand: the driver's own
                                               // stick moves are never slowed by the limiter.
+// Saturation indicator (web console only — no serial log line, no MAVLink message): the ceiling is
+// at the floor yet the vehicle stays above the limit, i.e. the floor is too high or it is downhill.
+#define SPEED_LIMIT_SAT_MARGIN_MS      0.3f   // m/s (≈1 km/h, ~2 speed quanta) above the limit to count
+#define SPEED_LIMIT_SAT_HOLD_MS        2000   // ms the condition must hold before speed_limit_sat (entry debounce)
+#define SPEED_LIMIT_SAT_UI_HOLD_MS     10000  // ms speed_limit_sat_held stays true after it clears (display hold)
 #define SPEED_LIMIT_LOG_MIN_MS         1000   // ms hold-off between "speed limit" logs
 #define SPEED_LIMIT_LOG_EPSILON_MS     0.015f // m/s (≈0.05 km/h) - smaller ceiling moves are not worth a log
 
@@ -772,7 +797,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.1"
+#define FIRMWARE_VERSION "1.5.3"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

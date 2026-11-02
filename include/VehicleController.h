@@ -15,6 +15,7 @@
 #include "CANController.h"
 #include "SpeedSensor.h"
 #include "EngineHourMeter.h"
+#include "SpeedLimiterLaw.h"
 
 /**
  * @brief Vehicle control coordination layer
@@ -246,9 +247,31 @@ public:
     float getSpeedLimitMs() const;
 
     /**
-     * @brief Throttle ceiling the proportional taper is currently applying (%, 100 = inactive)
+     * @brief Throttle ceiling the limiter is currently applying (%, 100 = inactive): the
+     * proportional taper plus the integral trim, after the floor/100 clamps and the slew.
      */
-    float getSpeedLimitCeilingPct() const { return limiterCeilingPct_; }
+    float getSpeedLimitCeilingPct() const { return limiter_.ceilPct; }
+
+    /**
+     * @brief Speed-limiter throttle floor in use (%, 0 = calibrated idle), NVS "speed"/thr_floor
+     */
+    float getSpeedLimitFloorPct() const { return limiterFloorPct_; }
+
+    /**
+     * @brief Live saturation: ceiling at the floor while the speed stays more than
+     * SPEED_LIMIT_SAT_MARGIN_MS above the limit, continuously for SPEED_LIMIT_SAT_HOLD_MS.
+     */
+    bool isSpeedLimitSaturated() const { return satActive_; }
+
+    /**
+     * @brief Saturation display hold: true while saturated and for SPEED_LIMIT_SAT_UI_HOLD_MS
+     * after it last cleared. Evaluated from millis() at call time, so the hold expires on time
+     * even while applySpeedLimit() is not being called.
+     */
+    bool isSpeedLimitSatHeld() const {
+        return satActive_ ||
+               (satClearedMs_ != 0 && (millis() - satClearedMs_) < SPEED_LIMIT_SAT_UI_HOLD_MS);
+    }
 
     /**
      * @brief Where the steering speed-scaling base in use came from.
@@ -419,9 +442,16 @@ private:
     float    lastSpeedLimitMs_;     // NAN sentinel = nothing logged yet
     uint32_t lastSpeedLimitLogMs_;
 
-    // Proportional taper state. The ceiling is what gets rate-limited, never the demand.
-    float    limiterCeilingPct_;    // currently applied throttle ceiling (%, 100 = inactive)
-    uint32_t limiterLastMs_;        // millis() of the last taper evaluation (0 = first call)
+    // Limiter law state (include/SpeedLimiterLaw.h). The ceiling is what gets rate-limited,
+    // never the demand.
+    SpeedLimiterState limiter_;     // applied ceiling (%, 100 = inactive), integral trim, primed
+    uint32_t limiterLastMs_;        // millis() of the last limiter evaluation (0 = first call)
+    float    limiterFloorPct_;      // floor in use (%), from NVS "speed"/thr_floor or the default
+
+    // Saturation indicator (web console only — no log line, no MAVLink message)
+    uint32_t satSinceMs_;           // millis() the raw condition started holding (0 = not holding)
+    bool     satActive_;            // live flag: raw condition held for SPEED_LIMIT_SAT_HOLD_MS
+    uint32_t satClearedMs_;         // millis() satActive_ last cleared (0 = never) — display hold
 
     // Steering speed scaling. `steerScaBaseMs_` is the LOCAL (NVS-backed) base in m/s; 0 means
     // "not set", which falls through to the autopilot's MOT_SPD_SCA_BASE and then to no scaling
@@ -615,12 +645,17 @@ private:
     void processCanProbeCommand(WebPortal& webPortal);
 
     /**
-     * @brief Speed-sensor calibration commands (`speed_cal_ppr`, `speed_cal_circ`).
+     * @brief Speed-sensor calibration commands (`speed_cal_ppr`, `speed_cal_circ`) and the
+     * speed-limiter floor (`set_speed_limit_floor`).
      * Accepted regardless of the active input source, like the other calibration commands.
-     * There is deliberately no limiter command: the ceiling is the autopilot's alone.
+     * There is deliberately no limiter CEILING command: the ceiling is the autopilot's alone.
+     * The floor is the one limiter setting: it shapes how the limit is enforced and never
+     * imposes a limit by itself.
      */
     void processSpeedCalPprCommand(float value, WebPortal& webPortal);
     void processSpeedCalCircCommand(float value, WebPortal& webPortal);
+    /** @brief Validate (NaN, 0–20 %), persist to NVS "speed"/thr_floor, then apply in RAM. */
+    void processSetSpeedLimitFloorCommand(float value, WebPortal& webPortal);
 
     /**
      * @brief Steering speed-scaling commands (`set_steer_sca_base`, `set_test_speed`).
@@ -665,11 +700,24 @@ private:
      * throttle command only (the gear-boost PID owns throttle during a shift and is
      * never touched here). Fails OPEN: an invalid/stale speed reading does not clamp.
      *
-     * A PROPORTIONAL taper, not a step: the ceiling is 100 % at
-     * `limit - SPEED_LIMIT_TAPER_BAND_MS`, falls linearly to SPEED_LIMIT_FLOOR_PCT at the
-     * limit, and holds the floor above it — never a hard cut mid-corner. The ceiling itself
-     * is slew-limited so engagement cannot snap the servo. With no limit (0 m/s) the demand
-     * passes through untouched.
+     * The law (include/SpeedLimiterLaw.h, design D2/D3): a PROPORTIONAL taper over a band of
+     * clamp(SPEED_LIMIT_TAPER_FRACTION × limit, SPEED_LIMIT_TAPER_MIN_MS, SPEED_LIMIT_TAPER_MAX_MS)
+     * — 100 % at `limit - band`, linear down to the floor at the limit — plus an INTEGRAL TRIM.
+     * The trim falls at SPEED_LIMIT_TRIM_KI_PCT_S_PER_MS × excess above the limit (step capped at
+     * the slew), so the throttle keeps closing toward the floor; below the limit it rises at
+     * Ki × deficit, capped at SPEED_LIMIT_TRIM_RISE_PCT_S, so the speed settles AT the limit
+     * instead of drooping inside the band. The ceiling clamp(taper + trim, floor, 100) is then
+     * slew-limited at SPEED_LIMIT_CEILING_SLEW_PCT_S (dt capped at 1 s), so it never steps —
+     * it reaches the floor (default 0 % = calibrated idle) only gradually.
+     *
+     * Anti-windup: the trim is clamped to [0, 100 − floor]; it rises only while the limiter
+     * binds (demand ≥ ceiling − SPEED_LIMIT_BIND_MARGIN_PCT) and is held otherwise; it is reset
+     * below the band, on "no limit", on an invalid sensor and on the first evaluation.
+     *
+     * Fail-open: with no limit (0 m/s) or an invalid speed reading the state is reset (ceiling
+     * 100 %, trim 0) and the demand passes through untouched.
+     *
+     * Also updates the saturation indicator (design D6) after each step.
      * @return the throttle percentage to command
      */
     float applySpeedLimit(float throttlePct);
@@ -680,6 +728,9 @@ private:
      * is logged on the next opportunity rather than being lost.
      */
     void logSpeedLimitChange(float limitMs);
+
+    /** @brief End the live saturation (no-limit / fail-open paths); starts the display hold. */
+    void clearSpeedLimitSaturation(uint32_t now);
 
     // Returns true when throttle should be clamped to TRANS_UNKNOWN_GEAR_THROTTLE_MAX.
     // Clips when gear position is invalid and physical gear is not neutral

@@ -43,7 +43,7 @@
 - `SPEED_LIMIT_FLOOR_DEFAULT_PCT` = 0.0, `SPEED_LIMIT_FLOOR_MIN_PCT` = 0.0,
   `SPEED_LIMIT_FLOOR_MAX_PCT` = 20.0.
 - **Why 0 %:** a floor above the throttle that holds the limit makes the limit unreachable. The
-  field case proves that 7.5 % is already above it on the buggy. 0 % is the only value that is
+  field case proves that 7.5 % is already above it on the quad. 0 % is the only value that is
   below that throttle on every vehicle and gradient where the limit is physically enforceable
   without brakes.
 - **Why still configurable:** the floor is the one thing that depends on the vehicle and the
@@ -301,7 +301,7 @@ appeared within about 2 s and stayed up for 10 s after the driver slowed down.
   configurable up to 20 %, and the approach is slew-limited.
 - **Speed-quantum jitter at the limit** makes `T` integrate up and down by a few %/s. → It
   averages to zero. The 1 % binding margin and the slew keep the servo calm. Bench check 9.4.
-- **Hypothesis not confirmed.** If 0 % still holds above 10 km/h on the buggy (fast idle cold,
+- **Hypothesis not confirmed.** If 0 % still holds above 10 km/h on the quad (fast idle cold,
   CVT engaged at idle), the saturation badge appears in the console. The remedy is then
   mechanical (idle speed, CVT engagement) or braking, which is a separate change.
 - **Only visible while someone is watching the console.** The indicator is not logged and not sent
@@ -319,7 +319,8 @@ appeared within about 2 s and stayed up for 10 s after the driver slowed down.
   7.5 % and the proportional-only law.
 
 ## Open Questions
-- Should the quad ship with a non-zero stored floor (e.g. 5 %) after its own bench test? Not
-  decided here; the default is 0 % on both vehicles.
+- ~~Should the quad ship with a non-zero stored floor (e.g. 5 %) after its own bench test?~~
+  **Decided (user, 2026-11-02):** no. The default stored floor stays 0 % (calibrated idle) on the
+  quad, as on both vehicles; the operator can still raise it per vehicle from the portal.
 - Should saturation also be reported to the ground station (MAVLink `STATUSTEXT`)? Deliberately
   not part of this change. It is a separate question for the user.

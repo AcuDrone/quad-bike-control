@@ -770,8 +770,9 @@ stored value and no enable toggle — the limiter is always armed and does nothi
 (the poll above, plus unsolicited `PARAM_VALUE` frames are accepted), with no reboot.
 
 > **The parameter is never written and never persisted.** The ESP32 sends no `PARAM_SET` — it only
-> ever reads, the value lives in RAM and dies with the link, and nothing about the limiter is stored
-> in NVS.
+> ever reads, and the value lives in RAM and dies with the link. The only limiter setting stored in
+> NVS is the throttle *floor* (set in the web portal, see below), which shapes how the limit is
+> enforced and never imposes a limit by itself.
 
 ### When the limit applies
 
@@ -792,19 +793,32 @@ firmware are **m/s**; km/h appears only in the web JSON and in human-readable de
 
 ### What the limiter then does
 
-The throttle ceiling is **tapered**, not stepped: 100 % at `limit − SPEED_LIMIT_TAPER_BAND_MS`
-(1.4 m/s ≈ 5 km/h), falling linearly to `SPEED_LIMIT_FLOOR_PCT` (10 %) at the limit and holding that
-floor above it. The ceiling is slew-limited to `SPEED_LIMIT_CEILING_SLEW_PCT_S` (200 %/s) so
-engagement cannot snap the servo — the rate limit applies to the *ceiling*, never to the driver's own
-throttle movements. There is no hard cut (removing all drive mid-corner is a stability event, not a
-safety measure); an invalid speed reading **fails open**, and the gear-change throttle boost is
-outside the limiter entirely.
+The throttle ceiling is **tapered**, not stepped, and then **held at the limit** by an integral trim:
+
+- **Taper band** proportional to the limit: 20 % of it, but at least 0.5 m/s and at most 1.4 m/s
+  (`SPEED_LIMIT_TAPER_*`). At 10 km/h the ceiling starts falling at 8 km/h, at 20 km/h at 16 km/h,
+  and from 35 km/h up the band is the full 1.4 m/s ≈ 5 km/h. The proportional term falls linearly
+  from 100 % to the floor across the band and stays at the floor above the limit.
+- **Integral trim** on top of it: above the limit it keeps closing the throttle in proportion to
+  the excess (30 %/s per m/s); below the limit, while the limiter is actually restricting the
+  demand, it returns authority at most 10 %/s, so the speed settles **at** the limit rather than
+  somewhere inside the band, whatever the engine, CVT or grade needs.
+- **Floor**: the lowest ceiling, an operator setting in the web portal's Speed sensor card,
+  0–20 %, default **0 % = the calibrated idle position** (NVS `"speed"` / `thr_floor`). A higher
+  floor softens engine braking at the cost of a limit that may not hold.
+- The ceiling is slew-limited to `SPEED_LIMIT_CEILING_SLEW_PCT_S` (80 %/s) so engagement cannot snap
+  the servo — the rate limit applies to the *ceiling*, never to the driver's own throttle movements.
+  The ceiling never steps down to the floor, it only reaches it gradually (100 → 0 takes ≥ 1.25 s).
+
+An invalid speed reading **fails open** (ceiling 100 %, trim reset), and the gear-change throttle
+boost is outside the limiter entirely.
 
 This is a **throttle limiter, not a speed governor**: it only withholds throttle and **never applies
-the brake**. Total reaction latency is about **0.65 s** (a 200 ms speed sample plus the 0.45 s the
-ceiling needs to slew from 100 % to the floor) — roughly **5 m past the limit at 30 km/h** and
-**11 m at 60 km/h**. On a descent it cannot hold the ceiling at all: gravity, not the engine, is
-doing the accelerating.
+the brake**. Reaction latency is a 200 ms speed sample plus the time the ceiling needs to slew down.
+On a descent, or with a floor that is itself enough to exceed the limit, it cannot hold the limit:
+the web console then shows the **"Limiter at floor, speed above limit"** warning on the limiter row
+(after 2 s of the ceiling sitting at the floor with the speed > 0.3 m/s over the limit; kept for
+10 s after it clears). That indicator is web-only — there is no log line and no MAVLink message.
 
 The 1 Hz `[MAV]` debug line reports `spdmax:<m/s> age:<ms> valid:<Y|N>`, separating "never received"
 (`nan`), "answered and fresh" (a 0 → 5000 ms age sawtooth) and "stale/link down" (`valid:N`). The

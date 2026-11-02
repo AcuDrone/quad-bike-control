@@ -50,8 +50,12 @@ VehicleController::VehicleController(SteeringController& steering,
       lastSpeedLimitWarnMs_(0),
       lastSpeedLimitMs_(NAN),
       lastSpeedLimitLogMs_(0),
-      limiterCeilingPct_(100.0f),
+      limiter_(),
       limiterLastMs_(0),
+      limiterFloorPct_(SPEED_LIMIT_FLOOR_DEFAULT_PCT),
+      satSinceMs_(0),
+      satActive_(false),
+      satClearedMs_(0),
       steerScaBaseMs_(0.0f),
       steerScaleApplied_(1.0f),
       steerScaleLastMs_(0),
@@ -154,6 +158,23 @@ bool VehicleController::initCAN() {
         "[STEER] Speed-scaling base (local): %.2f m/s%s\n",
         steerScaBaseMs_,
         (steerScaBaseMs_ > 0.0f) ? "" : " — not set, will use the autopilot's MOT_SPD_SCA_BASE");
+
+    // The speed-limiter throttle floor, from the "speed" namespace (beside the speed-sensor
+    // calibration, which SpeedSensor owns; this key is VehicleController's). An absent key reads as
+    // the default; NaN or anything outside 0–20 % is ignored (and never rewritten).
+    if (prefs.begin("speed", true)) {
+        float floorPct = prefs.getFloat(SPEED_LIMIT_FLOOR_NVS_KEY, SPEED_LIMIT_FLOOR_DEFAULT_PCT);
+        prefs.end();
+        if (isnan(floorPct) || floorPct < SPEED_LIMIT_FLOOR_MIN_PCT ||
+            floorPct > SPEED_LIMIT_FLOOR_MAX_PCT) {
+            Debug::printfFeature(DebugFeature::VEHICLE,
+                "[SPEED] Stored limiter floor %.1f out of range (%.0f-%.0f %%) — ignored\n",
+                floorPct, SPEED_LIMIT_FLOOR_MIN_PCT, SPEED_LIMIT_FLOOR_MAX_PCT);
+            floorPct = SPEED_LIMIT_FLOOR_DEFAULT_PCT;
+        }
+        limiterFloorPct_ = floorPct;
+    }
+    Debug::printfFeature(DebugFeature::VEHICLE, "[SPEED] Limiter floor: %.1f %%\n", limiterFloorPct_);
 
     bool result = canController_.begin();
     canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM);
@@ -413,6 +434,9 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
         return;
     } else if (cmd.cmd == "speed_cal_circ") {
         processSpeedCalCircCommand(cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_speed_limit_floor") {
+        processSetSpeedLimitFloorCommand(cmd.floatValue, webPortal);
         return;
     } else if (cmd.cmd == "set_steer_sca_base") {
         processSetSteerScaBaseCommand(cmd.floatValue, webPortal);
@@ -720,7 +744,7 @@ void VehicleController::processThrottleCommand(float value, WebPortal& webPortal
 }
 
 // ============================================================================
-// MAX-SPEED LIMITER — SPEED_MAX ceiling and proportional taper
+// MAX-SPEED LIMITER — SPEED_MAX ceiling, proportional taper and integral trim
 // ============================================================================
 
 float VehicleController::getSpeedLimitMs() const {
@@ -758,15 +782,25 @@ void VehicleController::logSpeedLimitChange(float limitMs) {
     }
 }
 
+void VehicleController::clearSpeedLimitSaturation(uint32_t now) {
+    satSinceMs_ = 0;
+    if (satActive_) {
+        satActive_ = false;
+        satClearedMs_ = now ? now : 1;   // starts the display hold; 0 is the "never" sentinel
+    }
+}
+
 float VehicleController::applySpeedLimit(float throttlePct) {
     float limitMs = getSpeedLimitMs();
     logSpeedLimitChange(limitMs);
+    uint32_t now = millis();
 
     if (limitMs <= 0.0f) {
-        // No usable SPEED_MAX => no limiting at all. Reset the taper so the next limit that
-        // arrives never resumes from a stale low ceiling.
-        limiterCeilingPct_ = 100.0f;
+        // No usable SPEED_MAX => no limiting at all. Reset the law (ceiling 100 %, trim 0) so the
+        // next limit that arrives never resumes from a stale ceiling or a stale trim.
+        limiter_.reset();
         limiterLastMs_ = 0;
+        clearSpeedLimitSaturation(now);
         return throttlePct;
     }
 
@@ -774,48 +808,58 @@ float VehicleController::applySpeedLimit(float throttlePct) {
     // lost sensor reads 0 m/s — clamping throttle on a reading we do not trust, mid-manoeuvre,
     // is the more dangerous failure. Over-speed protection assumes a working sensor.
     if (!speedSensor_.isValid()) {
-        uint32_t now = millis();
         if (lastSpeedLimitWarnMs_ == 0 || (now - lastSpeedLimitWarnMs_) >= SPEED_LIMIT_WARN_MS) {
             lastSpeedLimitWarnMs_ = now;
             Debug::printlnFeature(DebugFeature::VEHICLE,
                 "[SPEED] WARNING: speed limit active but speed reading is invalid — not clamping (fail open)");
         }
-        limiterCeilingPct_ = 100.0f;
+        limiter_.reset();
         limiterLastMs_ = 0;
+        clearSpeedLimitSaturation(now);
         return throttlePct;
     }
     lastSpeedLimitWarnMs_ = 0;
 
-    // Proportional taper: full authority up to `limit - band`, falling linearly to the floor at
-    // the limit, floor above it. A floor rather than zero — cutting all drive mid-corner is a
-    // stability event, not a safety feature.
-    float over = speedSensor_.getSpeedMs() - (limitMs - SPEED_LIMIT_TAPER_BAND_MS);
-    float targetPct;
-    if (over <= 0.0f) {
-        targetPct = 100.0f;
-    } else if (over >= SPEED_LIMIT_TAPER_BAND_MS) {
-        targetPct = SPEED_LIMIT_FLOOR_PCT;
-    } else {
-        targetPct = 100.0f - (100.0f - SPEED_LIMIT_FLOOR_PCT) * (over / SPEED_LIMIT_TAPER_BAND_MS);
-    }
-
-    // Slew-limit the CEILING (not the demand — the driver's own stick moves must pass through at
-    // full rate). dt is capped at 1 s and the first evaluation adopts the target directly, so a
+    // Taper + integral trim + ceiling slew (include/SpeedLimiterLaw.h). dt is capped at 1 s and
+    // ignored on the first evaluation, which adopts the taper directly with a zero trim, so a
     // stalled or just-restarted loop cannot integrate an unknown interval into a step change.
-    uint32_t now = millis();
-    if (limiterLastMs_ == 0) {
-        limiterCeilingPct_ = targetPct;
-    } else {
-        float dt = (now - limiterLastMs_) / 1000.0f;
-        if (dt > 1.0f) dt = 1.0f;
-        float maxStep = SPEED_LIMIT_CEILING_SLEW_PCT_S * dt;
-        float delta = constrain(targetPct - limiterCeilingPct_, -maxStep, maxStep);
-        limiterCeilingPct_ += delta;
-    }
-    limiterLastMs_ = now;
-    limiterCeilingPct_ = constrain(limiterCeilingPct_, SPEED_LIMIT_FLOOR_PCT, 100.0f);
+    SpeedLimiterParams params;
+    params.taperFraction = SPEED_LIMIT_TAPER_FRACTION;
+    params.taperMinMs = SPEED_LIMIT_TAPER_MIN_MS;
+    params.taperMaxMs = SPEED_LIMIT_TAPER_MAX_MS;
+    params.floorPct = limiterFloorPct_;
+    params.kiPctSPerMs = SPEED_LIMIT_TRIM_KI_PCT_S_PER_MS;
+    params.risePctS = SPEED_LIMIT_TRIM_RISE_PCT_S;
+    params.slewPctS = SPEED_LIMIT_CEILING_SLEW_PCT_S;
+    params.bindMarginPct = SPEED_LIMIT_BIND_MARGIN_PCT;
 
-    return min(throttlePct, limiterCeilingPct_);
+    float dt = 0.0f;
+    if (limiterLastMs_ != 0) {
+        dt = (now - limiterLastMs_) / 1000.0f;
+        if (dt > 1.0f) dt = 1.0f;
+    }
+    limiterLastMs_ = now ? now : 1;   // 0 is the "first call" sentinel
+
+    const float speedMs = speedSensor_.getSpeedMs();
+    const float out = speedLimiterStep(limiter_, params, throttlePct, speedMs, limitMs, dt);
+
+    // Saturation (design D6): the ceiling has run out of authority — at the floor — while the
+    // vehicle stays clearly above the limit. Entry needs SPEED_LIMIT_SAT_HOLD_MS of the raw
+    // condition; it clears on the first evaluation where any part fails (no release debounce).
+    // Shown in the web console only: deliberately no Debug line and no MAVLink message.
+    const bool raw = (limiter_.ceilPct <= limiterFloorPct_ + 0.5f) &&
+                     (speedMs > limitMs + SPEED_LIMIT_SAT_MARGIN_MS);
+    if (raw) {
+        if (satSinceMs_ == 0) {
+            satSinceMs_ = now ? now : 1;
+        } else if (!satActive_ && (now - satSinceMs_) >= SPEED_LIMIT_SAT_HOLD_MS) {
+            satActive_ = true;
+        }
+    } else {
+        clearSpeedLimitSaturation(now);
+    }
+
+    return out;
 }
 
 void VehicleController::processSpeedCalPprCommand(float value, WebPortal& webPortal) {
@@ -974,6 +1018,33 @@ float VehicleController::applySteeringScale(float steeringPct) {
     // steeringPct is already signed about a centre of ZERO, so multiplying scales the DEVIATION
     // FROM CENTRE and leaves a centred command centred: a driver going straight feels nothing.
     return steeringPct * steerScaleApplied_;
+}
+
+void VehicleController::processSetSpeedLimitFloorCommand(float value, WebPortal& webPortal) {
+    if (isnan(value) || value < SPEED_LIMIT_FLOOR_MIN_PCT || value > SPEED_LIMIT_FLOOR_MAX_PCT) {
+        webPortal.sendResponse(false, "Speed-limiter floor out of range (" +
+                                      String(SPEED_LIMIT_FLOOR_MIN_PCT, 0) + "-" +
+                                      String(SPEED_LIMIT_FLOOR_MAX_PCT, 0) + " %)");
+        return;
+    }
+
+    // Persist first: if the write fails, the RAM value is left as it was, so what runs is always
+    // what the next boot will load. The "speed" namespace is shared with the speed-sensor
+    // calibration and odometer — write the one key, never clear() it.
+    Preferences prefs;
+    bool ok = false;
+    if (prefs.begin("speed", false)) {
+        ok = prefs.putFloat(SPEED_LIMIT_FLOOR_NVS_KEY, value) == sizeof(float);
+        prefs.end();
+    }
+    if (!ok) {
+        webPortal.sendResponse(false, "Failed to save the speed-limiter floor");
+        return;
+    }
+
+    limiterFloorPct_ = value;   // the law re-clamps trim and ceiling on its next evaluation
+    webPortal.sendResponse(true, "Speed-limiter floor set to " + String(value, 1) + " %");
+    Debug::printfFeature(DebugFeature::VEHICLE, "[SPEED] Limiter floor set to %.1f %%\n", value);
 }
 
 void VehicleController::processSetSteerScaBaseCommand(float value, WebPortal& webPortal) {

@@ -110,8 +110,8 @@ it. Cards are shown in one column.
   quad bike, which senses one line per gear): live bits A/B/C and the decoded gear; **Save as
   R/N/H/L** assigns the live code to a gear (each button shows the stored code, "(default)", or
   "not set"); "Reset to defaults".
-- **Speed sensor**: pulses per revolution, wheel circumference, speed-limit readout, steering
-  scaling base and bench test speed.
+- **Speed sensor**: pulses per revolution, wheel circumference, speed-limiter floor, speed-limit
+  readout, steering scaling base and bench test speed.
 
 **Тести / Tests** (bench checks):
 - **Manual control**: Take / Release control, gear buttons, steering, throttle and brake sliders.
@@ -145,8 +145,20 @@ clears the trip distance.
 
 **Speed limit (read-only):** the throttle limiter's ceiling comes **only** from the autopilot's
 `SPEED_MAX` parameter (`speed_limit_kmh` in telemetry; `0` / "none" means no limit). The web
-portal has no maximum-speed box and no limiter on/off button — there is nothing to set here.
+portal has no maximum-speed box and no limiter on/off button.
 See `MAVLINK_SETUP.md` → "Autopilot speed limit (`SPEED_MAX`)".
+
+**Limiter floor (Speed sensor card):** the one limiter setting — the lowest throttle the speed
+limiter may leave at and above the limit, 0–20 % (default **0 %** = the calibrated idle position,
+which holds the limit most tightly). A higher floor softens engine braking at the cost of a limit
+that may not hold. Saved with `set_speed_limit_floor` to NVS `"speed"` / `thr_floor`, reported as
+`speed_limit_floor`; out-of-range values are refused by the page and by the firmware. The floor
+alone never limits: with no `SPEED_MAX` the throttle passes through. The limiter row ("Limiting
+X %", with "at floor" when the ceiling sits on the floor) turns into a warning badge **"Limiter at
+floor, speed above limit"** when the ceiling has been at the floor for 2 s while the speed stays
+above the limit (`speed_limit_sat`), and reads "Limiter was at floor…" for 10 s after it clears
+(`speed_limit_sat_held`, held by the firmware so every client shows it). It means the floor is too
+high or the vehicle is going downhill — the limiter does not brake.
 
 **OTA Firmware Update** (Система → System maintenance):
 1. Build new firmware: `pio run`
