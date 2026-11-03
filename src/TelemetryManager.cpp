@@ -178,6 +178,14 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
         (telemetry.probe.complete &&
          (millis() - telemetry.probe.completedAtMs) < PROBE_RESULT_TTL);
 
+    // CAN sniffer: same idea, by reference (no copy of the table).
+    {
+        const CANController::SniffResults& sn = vehicleController_.getSniffResults();
+        bool fresh = sn.running ||
+            (sn.complete && (millis() - sn.completedAtMs) < SNIFF_RESULT_TTL);
+        telemetry.sniff = fresh ? &sn : nullptr;
+    }
+
     mavlink_.getRawChannels(telemetry.mav_channels);
     MavlinkInterface::LinkQuality linkQuality = mavlink_.getLinkQuality();
     telemetry.mav_cmd_rate = linkQuality.commandRate;

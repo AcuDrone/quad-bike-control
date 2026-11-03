@@ -183,6 +183,11 @@ public:
         // ECU capability probe results (emitted transiently while fresh)
         bool probe_present;                 // true when the probe object should be serialized
         CANController::ProbeResults probe;  // latest probe snapshot
+
+        // CAN sniffer results: points into the CAN controller (which outlives the broadcast)
+        // while running or fresh, nullptr otherwise. A pointer, not a copy: the table is
+        // ~800 bytes and this struct lives on the loop stack.
+        const CANController::SniffResults* sniff;
     };
 
     WebPortal();

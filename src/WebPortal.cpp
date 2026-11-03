@@ -563,8 +563,10 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // String values. Sized to 4096 to leave room for the transient `probe` object (only present
     // while probe results are fresh). 4608 since 1.5.6: each answered candidate PID also
     // carries its whole reply frame ("frm", ~31 B copied string) and the list grew to 11 PIDs.
+    // 8192 since 1.5.7: the transient `sniff` object (CAN sniffer) adds up to 32 rows of
+    // 5 slots + a 17 B copied data string (~115 B each, ~3.8 KB) and can coexist with `probe`.
     // Static (single caller: the main-loop broadcast) so the larger document is off the stack.
-    static StaticJsonDocument<4608> doc;
+    static StaticJsonDocument<8192> doc;
     doc.clear();
 
     doc["timestamp"] = telemetry.timestamp;
@@ -807,6 +809,39 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
         }
     }
 
+    // CAN sniffer results — emitted only while running or freshly completed.
+    if (telemetry.sniff != nullptr) {
+        const CANController::SniffResults& sn = *telemetry.sniff;
+        static const char hexd[] = "0123456789ABCDEF";
+        JsonObject so = doc.createNestedObject("sniff");
+        so["run"] = sn.running;
+        so["done"] = sn.complete;
+        so["win"] = sn.windowMs;
+        so["el"] = sn.running ? (uint32_t)(millis() - sn.startedAtMs) : sn.windowMs;
+        so["fr"] = sn.frames;
+        so["ovf"] = sn.overflows;
+        so["xid"] = sn.overflowIds;
+        so["xsat"] = sn.overflowIdsSaturated;
+        so["rfail"] = sn.restoreFailed;
+        JsonArray ids = so.createNestedArray("ids");
+        for (uint8_t i = 0; i < sn.idCount; i++) {
+            const CANController::SniffEntry& e = sn.entries[i];
+            JsonObject r = ids.createNestedObject();
+            r["id"] = e.id;
+            r["x"] = e.ext ? 1 : 0;
+            r["n"] = e.count;
+            char d[17];   // DLC bytes as hex, no separators ("0441" + ...)
+            uint8_t k = 0;
+            for (uint8_t j = 0; j < e.dlc && j < 8; j++) {
+                d[k++] = hexd[(e.data[j] >> 4) & 0x0F];
+                d[k++] = hexd[e.data[j] & 0x0F];
+            }
+            d[k] = '\0';
+            r["d"] = d;
+            r["c"] = e.changed;
+        }
+    }
+
     if (doc.overflowed()) {
         Debug::printlnFeature(DebugFeature::WEB, "[WEB] WARNING: telemetry JSON overflowed — increase capacity");
     }
@@ -821,9 +856,10 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     if (doc.memoryUsage() > peakUsage) {
         peakUsage = doc.memoryUsage();
         Debug::printfFeature(DebugFeature::WEB,
-            "[WEB] telemetry JSON peak: mem=%u/%u bytes, serialized=%u bytes%s\n",
+            "[WEB] telemetry JSON peak: mem=%u/%u bytes, serialized=%u bytes%s%s\n",
             (unsigned)peakUsage, (unsigned)doc.capacity(), (unsigned)json.length(),
-            telemetry.probe_present ? " (probe present)" : "");
+            telemetry.probe_present ? " (probe present)" : "",
+            telemetry.sniff != nullptr ? " (sniff present)" : "");
     }
 
     return json;

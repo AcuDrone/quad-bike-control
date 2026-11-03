@@ -204,6 +204,11 @@ public:
     CANController::ProbeResults getProbeResults() const { return canController_.getProbeResults(); }
 
     /**
+     * @brief Latest CAN sniffer snapshot (reference into the CAN controller, for telemetry)
+     */
+    const CANController::SniffResults& getSniffResults() const { return canController_.getSniffResults(); }
+
+    /**
      * @brief Hall-sensor vehicle speed (m/s) and its health flag.
      * Independent of CAN status — a CAN outage does not blank these.
      */
@@ -645,6 +650,13 @@ private:
      * CAN data is invalid.
      */
     void processCanProbeCommand(WebPortal& webPortal);
+
+    /**
+     * @brief Process can_sniff command — accept every CAN ID for CAN_SNIFF_WINDOW_MS and
+     * record a per-ID table. Standstill diagnostic; refused while the ECU probe or the LWS
+     * zero-set runs, or during a gear change.
+     */
+    void processCanSniffCommand(WebPortal& webPortal);
 
     /**
      * @brief Speed-sensor calibration commands (`speed_cal_ppr`, `speed_cal_circ`) and the

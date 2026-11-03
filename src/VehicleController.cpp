@@ -448,6 +448,10 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
         // ECU capability probe — available regardless of input source (diagnostic)
         processCanProbeCommand(webPortal);
         return;
+    } else if (cmd.cmd == "can_sniff") {
+        // CAN bus sniffer — diagnostic, available regardless of input source
+        processCanSniffCommand(webPortal);
+        return;
     }
 
     Debug::printfFeature(DebugFeature::VEHICLE, "[WEB] Command end %s\n", cmd.cmd);
@@ -1257,11 +1261,34 @@ void VehicleController::processCanProbeCommand(WebPortal& webPortal) {
             break;
         case CANController::ProbeStart::BUSY:
             Debug::printlnFeature(DebugFeature::VEHICLE, "[WEB] ECU probe deferred (busy)");
-            webPortal.sendResponse(false, "ECU probe busy (gear change or probe in progress)");
+            webPortal.sendResponse(false, "ECU probe busy (gear change, probe or CAN sniffer in progress)");
             break;
         case CANController::ProbeStart::NO_ECU:
             Debug::printlnFeature(DebugFeature::VEHICLE, "[WEB] ECU probe: no ECU / disconnected");
             webPortal.sendResponse(false, "No ECU / CAN disconnected");
+            break;
+    }
+}
+
+void VehicleController::processCanSniffCommand(WebPortal& webPortal) {
+    bool gearChangeActive = transmission_.isGearChangeActive() || transmission_.needsThrottleBoost();
+    switch (canController_.startSniff(CAN_SNIFF_WINDOW_MS, gearChangeActive)) {
+        case CANController::SniffStart::STARTED:
+            Debug::printlnFeature(DebugFeature::VEHICLE, "[WEB] CAN sniffer started");
+            webPortal.sendResponse(true, "CAN sniffer started");
+            break;
+        case CANController::SniffStart::BUSY_PROBE:
+            webPortal.sendResponse(false, "CAN sniffer refused: ECU probe active");
+            break;
+        case CANController::SniffStart::BUSY_LWS_ZERO:
+            webPortal.sendResponse(false, "CAN sniffer refused: sensor zero-set active");
+            break;
+        case CANController::SniffStart::NOT_INITIALIZED:
+            webPortal.sendResponse(false, "CAN sniffer refused: CAN not initialized");
+            break;
+        case CANController::SniffStart::BUSY:
+        default:
+            webPortal.sendResponse(false, "CAN sniffer refused: busy (gear change or already running)");
             break;
     }
 }

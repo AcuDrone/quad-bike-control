@@ -88,6 +88,36 @@ public:
     // Outcome of a startProbe() request
     enum class ProbeStart : uint8_t { STARTED, BUSY, NO_ECU };
 
+    // ---- CAN bus sniffer (on-demand, all IDs for a fixed window) ---------------
+    // One row per distinct ID seen during the window
+    struct SniffEntry {
+        uint32_t id;        // 11- or 29-bit identifier (flags stripped)
+        bool ext;           // extended (29-bit) frame
+        uint8_t dlc;        // DLC of the last frame
+        uint32_t count;     // frames received with this ID
+        uint8_t data[8];    // last data bytes (zero-padded past dlc)
+        uint8_t changed;    // bit n set once byte n differed from the previous frame of this ID
+    };
+
+    // Sniffer snapshot (fixed-size, no heap)
+    struct SniffResults {
+        bool running;               // window in progress
+        bool complete;              // a sniff has completed at least once
+        bool restoreFailed;         // applyRxFilters() failed at the end (chip was re-initialised)
+        uint32_t startedAtMs;       // millis() at start
+        uint32_t completedAtMs;     // millis() at the end of the last window
+        uint32_t windowMs;          // requested window length
+        uint32_t frames;            // all frames read during the window
+        uint32_t overflows;         // RX0OVR/RX1OVR flags seen (each = at least one frame lost)
+        uint16_t overflowIds;       // distinct IDs that did not fit the table
+        bool overflowIdsSaturated;  // the dedup list for overflowIds filled up (count is a minimum)
+        uint8_t idCount;            // rows used in entries[]
+        SniffEntry entries[CAN_SNIFF_MAX_IDS];
+    };
+
+    // Outcome of a startSniff() request
+    enum class SniffStart : uint8_t { STARTED, NOT_INITIALIZED, BUSY_PROBE, BUSY_LWS_ZERO, BUSY };
+
     // Outcome of a startLwsZero() request
     enum class LwsZeroStart : uint8_t { STARTED, NOT_INITIALIZED, BUSY_PROBE, BUSY };
 
@@ -141,6 +171,23 @@ public:
      */
     ProbeResults getProbeResults() const { return probeResults_; }
 
+    /**
+     * @brief Start the CAN bus sniffer: pause OBD-II polling, accept every standard and
+     * extended ID for `ms` milliseconds, record a per-ID table, then restore the normal
+     * filters (applyRxFilters()) and resume polling. 0x305 frames still reach the LWS sink.
+     * Standstill diagnostic: with every ID accepted the two RX buffers can overflow and drop
+     * LWS frames; the steering loop then takes its sensor-unhealthy path until frames return.
+     * @param ms window length (clamped to 1..CAN_SNIFF_MAX_WINDOW_MS)
+     * @param gearChangeActive true if a gear change is in progress (refused as BUSY)
+     */
+    SniffStart startSniff(uint32_t ms, bool gearChangeActive = false);
+
+    /** @brief True while the sniffer window is running */
+    bool sniffActive() const { return mode_ == Mode::SNIFFING; }
+
+    /** @brief Latest sniffer snapshot (reference: no copy of the ~800-byte table) */
+    const SniffResults& getSniffResults() const { return sniffResults_; }
+
     /** @brief True once the MCP2515 is initialised and on the bus */
     bool isInitialized() const { return initialized_; }
 
@@ -182,7 +229,8 @@ private:
     // Coarse controller mode: normal polling vs. one-shot capability probe
     enum class Mode : uint8_t {
         NORMAL,
-        PROBING
+        PROBING,
+        SNIFFING
     };
 
     // LWS zero-set sub-state machine (runs next to the OBD-II one, polling paused)
@@ -260,6 +308,11 @@ private:
     uint32_t probeRequestSentTime_; // millis() when current probe request was sent
     uint8_t probeRetryCount_;       // retries used on the current probe request
 
+    // ---- Sniffer state ------------------------------------------------------------
+    SniffResults sniffResults_;
+    uint32_t sniffExtraIds_[CAN_SNIFF_MAX_IDS];   // dedup list for IDs beyond the table
+    uint8_t sniffExtraCount_;
+
     // ---- LWS steering sensor state --------------------------------------------
     LwsSensor* lwsSink_;            // steering-angle frame sink (nullptr = none attached)
     LwsZeroPhase lwsZeroPhase_;
@@ -304,6 +357,13 @@ private:
     // 0x305 only. Must run after begin() and before setMode(MCP_NORMAL) — init_Mask()/
     // init_Filt() drop the chip into CONFIG mode and restore the library's cached mode.
     bool applyRxFilters();
+
+    // Sniffer: accept every standard and extended ID in both buffers (masks 0, one std and
+    // one ext filter per buffer). Same CONFIG-mode round trip as applyRxFilters().
+    bool applySniffFilters();
+    void updateSniff();
+    void recordSniffFrame(unsigned long canId, uint8_t len, const uint8_t* buf);
+    void finishSniff();
 
     // While IDLE: pull any queued frames out of the MCP2515 RX buffers so they
     // never sit full between polls; unmatched frames go through logUnmatchedFrame()
