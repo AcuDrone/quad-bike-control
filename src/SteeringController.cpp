@@ -11,6 +11,22 @@ static const char* const KEY_LIM_L = "lim_l";
 static const char* const KEY_LIM_R = "lim_r";
 static const char* const KEY_INV = "inv";
 
+// Closed-loop position law tunables (include/SteerPositionLaw.h, design D7)
+static const SteerPosParams POS_PARAMS = {
+    STEER_POSITION_TOLERANCE,
+    STEER_RESTART_TOLERANCE,
+    STEER_KP,
+    STEER_PWM_MIN_DUTY,
+    STEER_PWM_TRACK_MIN_DUTY,
+    STEER_PWM_MAX_DUTY,
+    STEER_STALL_THRESHOLD,
+    STEER_STALL_TIMEOUT,
+    STEER_MOVE_TIMEOUT,
+    STEER_BOOST_CHECK_MS,
+    STEER_BOOST_MIN_PROGRESS,
+    STEER_BOOST_STEP,
+};
+
 SteeringController::SteeringController(IMotorDriver& motor)
     : motor_(motor),
       can_(nullptr),
@@ -32,11 +48,8 @@ SteeringController::SteeringController(IMotorDriver& motor)
       zeroRefusal_(nullptr),
       zeroLimitsErased_(false),
       targetRel_(0),
-      isMoving_(false),
-      moveStartTime_(0),
-      dutyBoost_(0),
-      lastProgressPos_(0),
-      lastProgressTime_(0),
+      posState_(SteerPosState::IDLE),
+      posTimers_(),
       jogDir_(0),
       lastJogRefresh_(0),
       jogPulseUntil_(0),
@@ -126,20 +139,14 @@ void SteeringController::refreshSensor(uint32_t now) {
     if (prevOk && !sensorOk_) {
         // Faults take effect at once: a closed-loop move is stopped, but an active
         // jog or nudge continues open loop under its own refresh / pulse bounds.
-        if (isMoving_) {
-            motor_.stop();
-            isMoving_ = false;
-            dutyBoost_ = 0;
-        }
+        loopToIdle();
         logState(fault_ == SensorFault::RANGE_LATCHED
                      ? " — SENSOR FAULT: out-of-range latch, restart the vehicle (closed-loop stopped, jog/nudge available)"
                      : " — SENSOR FAULT (closed-loop stopped, jog/nudge available sensorless)");
     } else if (!prevOk && sensorOk_) {
-        // Fresh stall baseline: a jog started sensorless has no valid one.
+        // Fresh jog stall baseline: a jog started sensorless has no valid one.
         lastStallPosition_ = getPosition();
         lastStallCheckTime_ = now;
-        lastProgressPos_ = getPosition();
-        lastProgressTime_ = now;
         logState(" — sensor OK");
     } else if (fault_ != prevFault) {
         logState(nullptr);
@@ -148,9 +155,15 @@ void SteeringController::refreshSensor(uint32_t now) {
 
 // === Movement ===
 
+void SteeringController::loopToIdle() {
+    if (posState_ == SteerPosState::IDLE) return;
+    motor_.stop();
+    posState_ = SteerPosState::IDLE;
+}
+
 void SteeringController::stop() {
     motor_.stop();
-    isMoving_ = false;
+    posState_ = SteerPosState::IDLE;
     jogDir_ = 0;
     jogPulseUntil_ = 0;
     jogOwner_ = JogOwner::NONE;
@@ -175,7 +188,7 @@ bool SteeringController::driveJog(int8_t d, uint8_t duty, JogOwner owner, uint32
 
     if (duty < STEER_PWM_MIN_DUTY) duty = STEER_PWM_MIN_DUTY;   // below this the actuator stalls
 
-    isMoving_ = false;   // jog overrides position control
+    loopToIdle();   // jog overrides position control (coast, then the jog duty below)
     if (jogDir_ != d) {
         lastStallPosition_ = getPosition();
         lastStallCheckTime_ = now;
@@ -248,24 +261,20 @@ void SteeringController::update() {
 
     now = millis();
 
-    // Stall detection — any active drive (position move or jog), ONLY with a healthy
-    // sensor. Sensorless jogs rely on the refresh timeout, the nudge pulse length and
-    // the VESC current clamp / fault stop.
+    // Jog stall detection, ONLY with a healthy sensor (the closed loop has its own in
+    // steerPosStep()). Sensorless jogs rely on the refresh timeout, the nudge pulse length
+    // and the VESC current clamp / fault stop.
     // Rate mode: stall detection is bypassed BY DESIGN. A RATE-owned drive exists only
     // while the sensor is unhealthy (setRateCommand() refuses otherwise, and
-    // refreshSensor() stops it on recovery), so this check, the anti-stall boost, the
-    // move timeout and the range guard below (closed loop only, isMoving_) never run
-    // for it. End stops are left to the VESC current limit; the VESC fault / comm stops
-    // in serviceDriver(), the stall latch and the jog refresh timeout still apply.
-    if (sensorOk_ && (isMoving_ || (jogDir_ != 0 && jogOwner_ != JogOwner::RATE))) {
+    // refreshSensor() stops it on recovery), so this check and the closed-loop stall,
+    // boost, move timeout and range guard never run for it. End stops are left to the
+    // VESC current limit; the VESC fault / comm stops in serviceDriver(), the stall latch
+    // and the jog refresh timeout still apply.
+    if (sensorOk_ && jogDir_ != 0 && jogOwner_ != JogOwner::RATE) {
         int32_t currentPos = getPosition();
         if (now - lastStallCheckTime_ >= STEER_STALL_TIMEOUT) {
             if (abs(currentPos - lastStallPosition_) < STEER_STALL_THRESHOLD) {
-                // Direction that was being driven into the jam (jog dir, else
-                // the sign of the remaining position error).
-                int8_t dir = (jogDir_ != 0) ? jogDir_
-                             : ((targetRel_ - currentPos) > 0 ? 1 : -1);
-                triggerStallStop(dir, "position");
+                triggerStallStop(jogDir_, "position");
                 return;
             }
             lastStallPosition_ = currentPos;
@@ -294,64 +303,62 @@ void SteeringController::update() {
         return;
     }
 
-    if (!isMoving_) return;
-    if (!sensorOk_) {   // refreshSensor() already stopped it; never drive closed loop blind
+    if (!loopActive()) return;
+    if (!sensorOk_ || !calibrated_) {   // never drive closed loop blind or with erased limits
         stop();
         return;
     }
 
-    // Closed-loop proportional position control (0.1°, positive = right)
-    int32_t rel = getPosition();
-    int32_t error = targetRel_ - rel;
-
-    if (abs(error) <= STEER_POSITION_TOLERANCE) {
-        stop();
-        return;
-    }
+    // Closed-loop position control (0.1°, positive = right): IDLE / DRIVING / PARKED,
+    // continuous tracking, stop hysteresis, break-away / tracking floors (SteerPositionLaw.h).
+    const int32_t rel = getPosition();
+    const int32_t error = targetRel_ - rel;
 
     // Range guard: never drive further outward at or beyond the safe range (e.g. after
     // an overshoot) — keeps automatic steering out of the sensor's ~600° latch.
     // Driving back toward zero is always allowed.
-    if (abs(rel) >= STEER_LWS_SAFE_RANGE && ((rel > 0) == (error > 0))) {
+    if (posState_ == SteerPosState::DRIVING && abs(error) > STEER_POSITION_TOLERANCE &&
+        abs(rel) >= STEER_LWS_SAFE_RANGE && ((rel > 0) == (error > 0))) {
         logState(" — range guard: outward move stopped at the safe range");
         stop();
         return;
     }
 
-    if (now - moveStartTime_ >= STEER_MOVE_TIMEOUT) {
-        Debug::printlnFeature(DebugFeature::SERVO, "[STEER] Movement timeout — stopping");
-        stop();
-        return;
+    int16_t duty = 0;
+    const SteerPosEvent ev = steerPosStep(posState_, posTimers_, POS_PARAMS, targetRel_, rel, now, &duty);
+    switch (ev) {
+        case SteerPosEvent::PARKED:
+            motor_.stop();   // coast once; the self-locking worm holds the shaft
+            Debug::printfFeature(DebugFeature::SERVO, "[STEER] parked err=%ld\n", (long)error);
+            return;
+        case SteerPosEvent::STALL:
+            // Direction that was being driven into the jam: the sign of the remaining error.
+            triggerStallStop(error > 0 ? 1 : -1, "position");
+            return;
+        case SteerPosEvent::TIMEOUT:
+            Debug::printlnFeature(DebugFeature::SERVO, "[STEER] Movement timeout — stopping");
+            stop();
+            return;
+        case SteerPosEvent::RESTARTED:
+            Debug::printfFeature(DebugFeature::SERVO, "[STEER] parked -> drive err=%ld\n", (long)error);
+            break;
+        case SteerPosEvent::NONE:
+            break;
     }
-
-    // Anti-stall boost: load rises toward the locks; if commanded motion makes
-    // no progress, escalate duty above the P term until movement resumes.
-    if (now - lastProgressTime_ >= STEER_BOOST_CHECK_MS) {
-        if (abs(rel - lastProgressPos_) < STEER_BOOST_MIN_PROGRESS) {
-            if (dutyBoost_ < STEER_PWM_MAX_DUTY) dutyBoost_ += STEER_BOOST_STEP;
-        } else if (dutyBoost_ > 0) {
-            dutyBoost_ -= (dutyBoost_ < STEER_BOOST_STEP) ? dutyBoost_ : STEER_BOOST_STEP;
-        }
-        lastProgressPos_ = rel;
-        lastProgressTime_ = now;
-    }
-
-    float duty = fabsf((float)error) * STEER_KP + dutyBoost_;
-    if (duty < STEER_PWM_MIN_DUTY) duty = STEER_PWM_MIN_DUTY;
-    if (duty > STEER_PWM_MAX_DUTY) duty = STEER_PWM_MAX_DUTY;
+    if (posState_ != SteerPosState::DRIVING) return;   // PARKED: no motor commands
 
     // Motor positive = wheel right = position increasing. THE sign-critical spot: this relies
     // on the sensor sign (direction flag inv_) matching the motor sign. It is gated by
     // calibrated_, i.e. both limits captured under the same flag (SteerSensorDir.h).
-    int16_t speed = (int16_t)duty;
-    lastDriveDir_ = (error > 0) ? 1 : -1;
-    motor_.setSpeed(error > 0 ? speed : (int16_t)-speed);
+    lastDriveDir_ = (duty > 0) ? 1 : -1;
+    motor_.setSpeed(duty);
 
     if (now - lastStateLogMs_ >= 100) {
         lastStateLogMs_ = now;
-        char extra[64];
-        snprintf(extra, sizeof(extra), " target=%ld err=%ld duty=%d boost=%d",
-                 (long)targetRel_, (long)error, (int)(error > 0 ? speed : -speed), (int)dutyBoost_);
+        char extra[80];
+        snprintf(extra, sizeof(extra), " target=%ld err=%ld duty=%d boost=%d floor=%u",
+                 (long)targetRel_, (long)error, (int)duty, (int)posTimers_.boost,
+                 (unsigned)steerPosFloor(posTimers_, POS_PARAMS));
         logState(extra);
     }
 }
@@ -365,10 +372,9 @@ bool SteeringController::latchBlocks(int8_t d, uint32_t now) const {
 
 void SteeringController::triggerStallStop(int8_t dir, const char* reason) {
     motor_.stop();
-    isMoving_ = false;
+    posState_ = SteerPosState::IDLE;
     jogDir_ = 0;
     jogPulseUntil_ = 0;
-    dutyBoost_ = 0;
     stallLatched_ = true;
     stallLatchDir_ = dir;
     stallLatchTime_ = millis();
@@ -391,7 +397,7 @@ bool SteeringController::serviceDriver(uint32_t now) {
         }
         steerDriverOk_ = false;
         motor_.stop();
-        isMoving_ = false;
+        posState_ = SteerPosState::IDLE;
         jogDir_ = 0;
         jogPulseUntil_ = 0;
         return false;
@@ -406,10 +412,11 @@ bool SteeringController::serviceDriver(uint32_t now) {
     // fault on Absolute Max Current (and on over-temperature), and clamps at Motor
     // Current Max below that.
     if (motor_.hasFault()) {
-        if (isMoving_ || jogDir_ != 0) {
+        if (posState_ == SteerPosState::DRIVING || jogDir_ != 0) {
             triggerStallStop(lastDriveDir_, "vesc-fault");
         } else {
-            motor_.stop();
+            motor_.stop();   // idle or parked: coast, no latch (no drive was in progress)
+            posState_ = SteerPosState::IDLE;
         }
         return false;
     }
@@ -443,19 +450,19 @@ bool SteeringController::setSteeringPercent(float percent) {
     if (target < -STEER_LWS_SAFE_RANGE) target = -STEER_LWS_SAFE_RANGE;
     if (target > STEER_LWS_SAFE_RANGE) target = STEER_LWS_SAFE_RANGE;
 
-    // Re-command no-op guard: if a move is already in progress and the new
-    // target is within tolerance of the current target, keep the in-flight move
-    // untouched (do NOT reset moveStartTime_/stall timers/dutyBoost_). This lets
-    // the 500 ms stall window and 7500 ms move timeout actually elapse under the
-    // continuous ~25 Hz MAVLink command stream (the fixed re-command bug). Not a
-    // rejection — the command is honored as a no-op.
-    if (isMoving_ && abs(target - targetRel_) <= STEER_RETARGET_TOLERANCE) {
+    // Continuous tracking: while driving or parked a command only replaces the target —
+    // no timer, boost or break-away reset, so the 500 ms stall window and the move timeout
+    // elapse under the ~25 Hz MAVLink stream. Whether a parked loop drives is decided in
+    // update() by the stop hysteresis. The latch is never set while tracking (a stall ends
+    // in IDLE), so it is not checked here.
+    if (loopActive()) {
+        targetRel_ = target;
         return true;
     }
 
-    // Stall latch: refuse a fresh move that would push further into a recent jam
-    // (same direction, within cooldown). Opposite-direction and post-cooldown
-    // moves are accepted and clear the latch.
+    // From idle. Stall latch: refuse a fresh move that would push further into a recent
+    // jam (same direction, within cooldown). Opposite-direction and post-cooldown moves
+    // are accepted and clear the latch.
     uint32_t now = millis();
     int32_t rel = getPosition();
     int8_t d = (target > rel) ? 1 : (target < rel ? -1 : 0);
@@ -467,13 +474,10 @@ bool SteeringController::setSteeringPercent(float percent) {
     targetRel_ = target;
     jogDir_ = 0;
     jogPulseUntil_ = 0;
-    isMoving_ = true;
-    moveStartTime_ = now;
-    lastStallPosition_ = rel;
-    lastStallCheckTime_ = now;
-    dutyBoost_ = 0;
-    lastProgressPos_ = rel;
-    lastProgressTime_ = now;
+    if (steerPosStart(posState_, posTimers_, POS_PARAMS, target, rel, now) == SteerPosState::PARKED) {
+        motor_.stop();   // already there: coast (also ends a cancelled jog's drive)
+        Debug::printfFeature(DebugFeature::SERVO, "[STEER] parked err=%ld\n", (long)(target - rel));
+    }
     return true;
 }
 
@@ -565,12 +569,10 @@ bool SteeringController::captureLimit(bool left) {
             if (left) limRight_ = POS_UNSET; else limLeft_ = POS_UNSET;
             oppositeKey = left ? KEY_LIM_R : KEY_LIM_L;
         }
-        // Baselines holding old-sign values would fake progress / a stall.
-        const uint32_t now = millis();
+        // A jog stall baseline holding an old-sign value would fake progress / a stall
+        // (the closed loop is IDLE after stop() and restarts its own from rest).
         lastStallPosition_ = getPosition();
-        lastStallCheckTime_ = now;
-        lastProgressPos_ = getPosition();
-        lastProgressTime_ = now;
+        lastStallCheckTime_ = millis();
         lastCaptureToggled_ = true;
         Debug::printfFeature(DebugFeature::SERVO,
                              "[STEER] sensor direction: %s (inferred from the %s limit capture) — "

@@ -5,6 +5,7 @@
 #include "Constants.h"
 #include "IMotorDriver.h"
 #include "LwsSensor.h"
+#include "SteerPositionLaw.h"
 #include "SteerRate.h"
 #include "SteerSensorDir.h"
 
@@ -34,6 +35,13 @@ class CANController;
  *    "steering" v4 keeps lim_l / lim_r (0.1°, firmware sign) and inv (bool). v3 limits
  *    are kept with inv = false. Each capture is saved at once; calibrated = both limits
  *    stored and valid (always under one flag).
+ *  - Closed loop (SteerPositionLaw.h): states IDLE / DRIVING / PARKED. Continuous target
+ *    tracking — while driving or parked a percent command only replaces the target (the
+ *    former 5° re-command guard, STEER_RETARGET_TOLERANCE, is removed). Stop hysteresis —
+ *    park (one coast; the self-locking 1:40 worm holds) within STEER_POSITION_TOLERANCE,
+ *    drive again only beyond STEER_RESTART_TOLERANCE. Two duty floors — STEER_PWM_MIN_DUTY
+ *    (break-away) from rest / after a reversal until 0.3° of progress, then
+ *    STEER_PWM_TRACK_MIN_DUTY. Every stop / fault path coasts and goes to IDLE.
  *  - Range guard: percent-driven (closed-loop) targets are clamped to the limits, then to
  *    ±STEER_LWS_SAFE_RANGE, and a closed-loop move driving outward at |pos| ≥ that range
  *    is stopped. Jog, nudge and captures are not guarded.
@@ -91,6 +99,14 @@ public:
     /**
      * @brief Sensor health, zero-set and position control — call every loop
      * iteration, after CANController::update().
+     *
+     * Closed loop (steerPosStep()): DRIVING applies duty = clamp(|err| × STEER_KP + boost,
+     * floor, STEER_PWM_MAX_DUTY), floor = STEER_PWM_MIN_DUTY until the wheel has moved 0.3°
+     * since the drive started or last reversed, then STEER_PWM_TRACK_MIN_DUTY. At
+     * |err| ≤ STEER_POSITION_TOLERANCE it parks (one stop(), no further commands); a parked
+     * loop restarts only at |err| > STEER_RESTART_TOLERANCE. Stall (DRIVING only; window
+     * restarts from rest or on a direction flip), move timeout (time continuously behind by
+     * more than STEER_RESTART_TOLERANCE) and the range guard end in a coast and IDLE.
      */
     void update();
 
@@ -104,7 +120,14 @@ public:
     /**
      * @brief Set steering by percentage: -100 (left limit) .. 0 (sensor zero) .. +100
      * (right limit), then clamped to ±STEER_LWS_SAFE_RANGE.
-     * @return false if rejected (limits missing, sensor unhealthy, VESC down, stall latch)
+     *
+     * Continuous tracking: while the loop is DRIVING or PARKED the call only replaces the
+     * target (any delta) — the move timer, stall window, progress baseline, boost and
+     * break-away state keep running, so the stall and timeout checks work under the 25 Hz
+     * MAVLink stream (there is no re-command guard any more). From IDLE the stall latch is
+     * checked; an accepted command cancels a jog and starts a drive from rest, or parks at
+     * once (coast) when already within STEER_POSITION_TOLERANCE.
+     * @return false if rejected (limits missing, sensor unhealthy, VESC down, stall latch from idle)
      */
     bool setSteeringPercent(float percent);
     float getSteeringPercent() const;
@@ -271,15 +294,11 @@ private:
     const char* zeroRefusal_;    // reason of the last refused requestSensorZero()
     bool zeroLimitsErased_;      // limits erased for the running sequence
 
-    // Position control state (0.1°, firmware sign)
+    // Position control state (0.1°, firmware sign). The loop "owns the target" while
+    // posState_ is DRIVING or PARKED (loopActive()).
     int32_t targetRel_;
-    bool isMoving_;
-    uint32_t moveStartTime_;
-
-    // Anti-stall boost (extra duty above the P term while progress stalls under load)
-    int16_t dutyBoost_;
-    int32_t lastProgressPos_;
-    uint32_t lastProgressTime_;
+    SteerPosState posState_;
+    SteerPosTimers posTimers_;   // move timer, stall window, boost, break-away (reset only from rest)
 
     // Jog state
     int8_t jogDir_;
@@ -288,7 +307,7 @@ private:
     JogOwner jogOwner_;          // who started the active jog (WEB jog/nudge or RATE)
     bool rateArmed_;             // centre-to-arm: a zero rate command was seen since disarmRate()
 
-    // Stall detection (only while the sensor is healthy)
+    // Jog stall detection (only while the sensor is healthy; the closed loop keeps its own in posTimers_)
     int32_t lastStallPosition_;
     uint32_t lastStallCheckTime_;
     int8_t lastDriveDir_;        // sign of the last nonzero drive command (+1 right, -1 left)
@@ -316,6 +335,12 @@ private:
 
     /** @brief A WEB-owned jog (refreshed within STEER_JOG_TIMEOUT_MS) or nudge (pulse running) is active */
     bool webJogActive(uint32_t now) const;
+
+    /** @brief The closed loop owns the target (DRIVING or PARKED) */
+    bool loopActive() const { return posState_ != SteerPosState::IDLE; }
+
+    /** @brief Coast and drop the closed loop to IDLE (no-op when already idle) */
+    void loopToIdle();
 
     /** @brief True if a new move in direction d must be refused due to the stall latch */
     bool latchBlocks(int8_t d, uint32_t now) const;

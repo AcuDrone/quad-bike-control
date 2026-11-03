@@ -14,6 +14,15 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.5","date":"2026-11-03","uk":[
+"Кермо від автопілота тепер плавно стежить за стіком, без ривків",
+"Під час стеження мотор керма працює на нижчій потужності, повна потужність лише для зрушення з місця",
+"Повторне калібрування не потрібне"
+],"en":[
+"Autopilot steering now follows the stick smoothly, without jerks",
+"While tracking the steering motor runs at a lower minimum power; full break-away power only when starting from rest",
+"No recalibration required"
+]},
 {"version":"1.5.4","date":"2026-11-02","uk":[
 "Імпульси на оберт колеса тепер можна виміряти з веб-панелі (прокрутити колесо N обертів); картка датчика швидкості розділена на «Датчик швидкості» та «Обмеження швидкості та кермо»"
 ],"en":[

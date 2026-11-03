@@ -383,8 +383,10 @@ struct ServoChannelConfig {
 //  - Percent commands need a healthy sensor + both limits; jog/nudge only need the VESC link
 //    (sensorless open loop is allowed, with no stall backstop).
 // The values marked bench-tune were converted from AS5600 counts (1 count ≈ 0.88 × 0.1°).
-#define STEER_POSITION_TOLERANCE  10    // 0.1° (1.0°) - +/- position match — bench-tune
-#define STEER_MOVE_TIMEOUT        7500  // ms - maximum time for any movement — bench-check a full lock-to-lock move
+#define STEER_POSITION_TOLERANCE  10    // 0.1° (1.0°) - park window: driving stops (coast, the worm holds) within this — bench-tune
+#define STEER_RESTART_TOLERANCE   30    // 0.1° (3.0°) - a parked loop drives again only beyond this (stop hysteresis) — bench-tune 2–5°
+#define STEER_MOVE_TIMEOUT        7500  // ms - max time continuously behind the target by more than STEER_RESTART_TOLERANCE
+                                        //      (re-armed whenever within it) — bench-check a full lock-to-lock move
 #define STEER_STALL_THRESHOLD     5     // 0.1° (0.5°) - progress below this over STEER_STALL_TIMEOUT = stall — bench-tune
 #define STEER_STALL_TIMEOUT       500   // ms - time without position change = stall
 #define STEER_CAL_MIN_SPAN        200   // 0.1° (20.0°) - min |limit| from the sensor zero accepted at capture, also the min |angle| that may toggle the sensor direction — bench-tune
@@ -400,9 +402,13 @@ struct ServoChannelConfig {
 #define STEER_LWS_ZERO_CONFIRM_MS 1000  // ms - after [53 30], wait this long for OK=1 fault=0 cal=1 |angle| ≤ tolerance
 #define STEER_LWS_ZERO_TOLERANCE  10    // 0.1° (1.0°) - |angle| accepted as "zero confirmed"
 
-// Proportional PWM control: duty = clamp(|error| * STEER_KP + boost, MIN, MAX)
+// Proportional PWM control (include/SteerPositionLaw.h): duty = clamp(|error| * STEER_KP + boost, floor, MAX),
+// floor = STEER_PWM_MIN_DUTY (break-away) from rest / after a reversal until 0.3° of progress
+// (STEER_BOOST_MIN_PROGRESS), then STEER_PWM_TRACK_MIN_DUTY while tracking.
 #define STEER_KP                  1.15f // PWM duty (0-255) per 0.1° of error (saturates at ≈22°) — bench-tune
-#define STEER_PWM_MIN_DUTY        140   // enough to overcome static friction (bench: no movement at 70)
+#define STEER_PWM_MIN_DUTY        140   // break-away floor: overcomes the worm's static friction (bench: no movement at 70);
+                                        // used from rest until 0.3° of progress; also the rate-mode and jog floor
+#define STEER_PWM_TRACK_MIN_DUTY  100   // floor while driving after break-away; must exceed the worm's running friction — bench-tune 90–120
 #define STEER_PWM_MAX_DUTY        255   // full speed for large errors
 
 // Anti-stall boost: steering load rises toward the locks; when commanded motion
@@ -423,9 +429,12 @@ struct ServoChannelConfig {
 // it reuses RC_STEERING_DEADBAND (stop zone), STEER_PWM_MIN_DUTY / STEER_PWM_MAX_DUTY (duty =
 // MIN + (MAX − MIN)·d²) and STEER_JOG_TIMEOUT_MS (stop without a fresh SERVO_OUTPUT_RAW).
 
-// Re-command guard + stall latch (MAVLink streams steering at ~25 Hz; without
-// these the stall/move timers never elapse — the fixed re-command bug).
-#define STEER_RETARGET_TOLERANCE  50    // 0.1° (5.0°, ≈1% of a ~500° half-travel) — re-command within this of the current target is a no-op (timers keep running) — bench-tune
+// Continuous tracking + stall latch (MAVLink streams steering at ~25 Hz). While the loop is
+// driving or parked, every percent command only replaces the target: the move timer, the stall
+// window, the progress baseline, the boost and break-away are reset only by a start from rest
+// (idle → driving, or parked → driving beyond STEER_RESTART_TOLERANCE). The stall window also
+// restarts (boost → 0) on a drive-direction flip; the move timer is re-armed while the error is
+// within STEER_RESTART_TOLERANCE. The stall latch is checked only on a command from idle.
 #define STEER_STALL_COOLDOWN_MS   700   // ms — same-direction moves refused after a stall; opposite direction always allowed
 
 // VESC steering driver telemetry monitor + failsafe
@@ -764,7 +773,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.4"
+#define FIRMWARE_VERSION "1.5.5"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry
