@@ -778,13 +778,19 @@
                 </div>
 
                 <!-- ECU Capability Probe -->
-                <div class="slider-container" style="margin-top: 12px;">
-                    <button class="upload-btn" id="probe-btn" onclick="probeECU()" data-i18n="btn_probe_ecu" style="background: color-mix(in srgb, var(--info) 65%, black);">
+                <div class="slider-container" style="margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap;">
+                    <button class="upload-btn" id="probe-btn" onclick="probeECU()" data-i18n="btn_probe_ecu" style="flex: 1 1 140px; background: color-mix(in srgb, var(--info) 65%, black);">
                         🔍 Probe ECU
+                    </button>
+                    <button class="upload-btn" id="sniff-btn" onclick="sniffCAN()" data-i18n="btn_sniff_can" style="flex: 1 1 140px; background: color-mix(in srgb, var(--info) 45%, black);">
+                        📡 CAN sniffer (10 s)
                     </button>
                 </div>
                 <div id="probe-status" style="margin-top: 8px; font-size: 0.8em; color: var(--muted-foreground); min-height: 1.2em;"></div>
                 <div id="probe-results" style="display: none; margin-top: 10px; font-size: 0.82em;"></div>
+                <div id="sniff-hint" data-i18n="sniff_hint" style="margin-top: 8px; font-size: 0.75em; color: var(--muted-foreground);">Sniffer: standing still only. For 10 s OBD polling stops and every CAN ID is accepted; steering may report a sensor fault until it ends.</div>
+                <div id="sniff-status" style="margin-top: 4px; font-size: 0.8em; color: var(--muted-foreground); min-height: 1.2em;"></div>
+                <div id="sniff-results" style="display: none; margin-top: 6px; font-size: 0.82em;"></div>
             </div>
             <!-- MAVLink Command Channels -->
             <div class="card">
@@ -1592,6 +1598,23 @@
                 probe_no_dtcs: 'No stored DTCs',
                 probe_dtc_count: '%s DTC(s): ',
                 probe_truncated: '⚠ Additional codes truncated (multi-frame not read)',
+                // CAN sniffer
+                btn_sniff_can: '📡 CAN sniffer (10 s)',
+                sniff_running_btn: '📡 Sniffing…',
+                sniff_hint: 'Sniffer: standing still only. For 10 s OBD polling stops and every CAN ID is accepted; steering may report a sensor fault until it ends.',
+                sniff_requested: 'Sniffer requested…',
+                sniff_running: 'Sniffing CAN bus… %s / %s s',
+                sniff_done: 'Sniffer done: %s IDs',
+                sniff_refused_probe: 'Sniffer refused: ECU probe in progress',
+                sniff_refused_zero: 'Sniffer refused: sensor zero-set in progress',
+                sniff_refused_init: 'Sniffer refused: CAN not initialised',
+                sniff_refused_busy: 'Sniffer refused: gear change or sniffer already running',
+                sniff_restore_failed: '⚠ Filter restore failed, controller re-initialised',
+                sniff_col_id: 'ID',
+                sniff_col_n: 'Count',
+                sniff_col_hz: 'Hz',
+                sniff_col_data: 'Last data (changed bytes highlighted)',
+                sniff_summary: 'IDs beyond 32: %s, frames: %s, overflow: %s',
                 pid_calc_load: 'Calc Load',
                 pid_map: 'MAP',
                 pid_timing_adv: 'Timing Adv',
@@ -1996,6 +2019,23 @@
                 probe_no_dtcs: 'Немає збережених DTC',
                 probe_dtc_count: '%s DTC: ',
                 probe_truncated: '⚠ Додаткові коди обрізано (мультифрейм не зчитано)',
+                // CAN sniffer
+                btn_sniff_can: '📡 Сніфер CAN (10 с)',
+                sniff_running_btn: '📡 Прослуховування…',
+                sniff_hint: 'Сніфер: лише на місці. 10 с опитування OBD зупинене і приймаються всі ID CAN; кермо може показувати помилку датчика до завершення.',
+                sniff_requested: 'Запит на сніфер…',
+                sniff_running: 'Прослуховування CAN… %s / %s с',
+                sniff_done: 'Сніфер завершено: %s ID',
+                sniff_refused_probe: 'Сніфер відхилено: триває опитування ЕБК',
+                sniff_refused_zero: 'Сніфер відхилено: триває обнулення датчика',
+                sniff_refused_init: 'Сніфер відхилено: CAN не ініціалізовано',
+                sniff_refused_busy: 'Сніфер відхилено: перемикання передачі або сніфер уже працює',
+                sniff_restore_failed: '⚠ Фільтри не відновились, контролер переініціалізовано',
+                sniff_col_id: 'ID',
+                sniff_col_n: 'Кадрів',
+                sniff_col_hz: 'Гц',
+                sniff_col_data: 'Останні дані (змінні байти виділено)',
+                sniff_summary: 'ID понад 32: %s, кадрів: %s, переповнень: %s',
                 pid_calc_load: 'Розрах. навант.',
                 pid_map: 'MAP',
                 pid_timing_adv: 'Кут випередж.',
@@ -2300,6 +2340,10 @@
                     gearCodesStatus(data.success ? data.message : t('error_prefix') + data.message,
                                     data.success ? 'var(--success)' : 'var(--danger)');
                 }
+                // CAN sniffer refusal / start
+                if (data.message && data.message.startsWith('CAN sniffer')) {
+                    sniffReply(data.success, data.message);
+                }
                 // Relay test status
                 if (data.message && data.message.startsWith('Relay test')) {
                     relayTestStatus(data.success ? data.message : t('error_prefix') + data.message,
@@ -2469,6 +2513,10 @@
             // Update ECU probe results (present transiently while running / fresh)
             if (data.probe) {
                 renderProbe(data.probe);
+            }
+            // CAN sniffer results (present while running / fresh)
+            if (data.sniff) {
+                renderSniff(data.sniff);
             }
 
             // Update gear switching indicator
@@ -2937,6 +2985,76 @@
             }
 
             panel.innerHTML = html;
+            panel.style.display = 'block';
+        }
+
+        // CAN bus sniffer ------------------------------------------------------
+        function sniffCAN() {
+            if (!wsConnected) return;
+            const btn = document.getElementById('sniff-btn');
+            if (btn.disabled) return;  // already running
+            ws.send(JSON.stringify({ cmd: 'can_sniff' }));
+            const st = document.getElementById('sniff-status');
+            st.textContent = t('sniff_requested');
+            st.style.color = 'var(--info)';
+        }
+
+        function sniffReply(ok, msg) {
+            if (ok) return;   // running state comes with telemetry
+            const st = document.getElementById('sniff-status');
+            let key = 'sniff_refused_busy';
+            if (msg.includes('ECU probe')) key = 'sniff_refused_probe';
+            else if (msg.includes('zero-set')) key = 'sniff_refused_zero';
+            else if (msg.includes('not initialized')) key = 'sniff_refused_init';
+            st.textContent = t(key);
+            st.style.color = 'var(--danger)';
+        }
+
+        function renderSniff(s) {
+            const btn = document.getElementById('sniff-btn');
+            const st = document.getElementById('sniff-status');
+            const panel = document.getElementById('sniff-results');
+            btn.disabled = !!s.run;
+            btn.textContent = s.run ? t('sniff_running_btn') : t('btn_sniff_can');
+            const ids = (s.ids || []).slice().sort((a, b) => (a.x - b.x) || (a.id - b.id));
+            if (s.run) {
+                st.textContent = t('sniff_running', Math.floor(s.el / 1000), Math.round(s.win / 1000));
+                st.style.color = 'var(--info)';
+            } else if (s.done) {
+                st.textContent = t('sniff_done', ids.length);
+                st.style.color = 'var(--success)';
+            }
+            const secs = Math.max(s.el, 1) / 1000;
+            let html = '';
+            if (s.rfail) html += '<div style="color: var(--warning);">' + t('sniff_restore_failed') + '</div>';
+            html += '<table style="width:100%; border-collapse:collapse; font-family: var(--font-mono, monospace);">';
+            html += '<tr style="color: var(--muted-foreground); text-align:left;">' +
+                    '<th style="padding:2px 6px 2px 0; font-weight:normal;">' + t('sniff_col_id') + '</th>' +
+                    '<th style="padding:2px 6px; font-weight:normal; text-align:right;">' + t('sniff_col_n') + '</th>' +
+                    '<th style="padding:2px 6px; font-weight:normal; text-align:right;">' + t('sniff_col_hz') + '</th>' +
+                    '<th style="padding:2px 0 2px 6px; font-weight:normal;">' + t('sniff_col_data') + '</th></tr>';
+            ids.forEach(r => {
+                const idHex = r.x ? r.id.toString(16).toUpperCase().padStart(8, '0') + ' EXT'
+                                  : r.id.toString(16).toUpperCase().padStart(3, '0');
+                const hz = r.n / secs;
+                let bytes = '';
+                const d = r.d || '';
+                for (let j = 0; j * 2 < d.length; j++) {
+                    const b = d.substr(j * 2, 2);
+                    bytes += (j ? ' ' : '') + ((r.c >> j) & 1
+                        ? '<b style="color: var(--warning);">' + b + '</b>'
+                        : '<span style="color: var(--muted-foreground);">' + b + '</span>');
+                }
+                html += '<tr>' +
+                        '<td style="padding:2px 6px 2px 0; white-space:nowrap;">' + idHex + '</td>' +
+                        '<td style="padding:2px 6px; text-align:right;">' + r.n + '</td>' +
+                        '<td style="padding:2px 6px; text-align:right;">' + (hz >= 10 ? hz.toFixed(0) : hz.toFixed(1)) + '</td>' +
+                        '<td style="padding:2px 0 2px 6px; white-space:nowrap;">' + (bytes || '—') + '</td></tr>';
+            });
+            html += '</table>';
+            html += '<div style="margin-top:6px; color: var(--muted-foreground);">' +
+                    t('sniff_summary', s.xid + (s.xsat ? '+' : ''), s.fr, s.ovf) + '</div>';
+            panel.innerHTML = '<div style="overflow-x:auto;">' + html + '</div>';
             panel.style.display = 'block';
         }
 

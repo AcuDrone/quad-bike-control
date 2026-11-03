@@ -753,6 +753,13 @@ enum class InputSource {
 #define CAN_PROBE_RETRY_ATTEMPTS  1     // Retries per probe request (keeps worst-case sweep duration bounded)
 #define PROBE_RESULT_TTL          8000  // ms - window during which completed probe results are embedded in telemetry
 
+// CAN bus sniffer (on-demand, standstill diagnostic: all IDs accepted for a fixed window)
+#define CAN_SNIFF_WINDOW_MS        10000 // ms - window used by the web "CAN sniffer (10 s)" button
+#define CAN_SNIFF_MAX_WINDOW_MS    60000 // ms - upper clamp for startSniff()
+#define CAN_SNIFF_MAX_IDS          32    // distinct IDs kept in the results table
+#define CAN_SNIFF_DRAIN_PER_UPDATE 32    // frames read per update() while sniffing (5 in normal operation)
+#define SNIFF_RESULT_TTL           30000 // ms - completed sniffer results stay in telemetry this long
+
 // Transmission Safety (CAN-based)
 #define TRANS_SPEED_INTERLOCK_THRESHOLD_MS  1.4f  // m/s (≈5 km/h) - Block gear changes above this speed
 #define TRANS_CAN_TIMEOUT                5000  // ms - Allow gear change if CAN fails this long
@@ -773,7 +780,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.6"
+#define FIRMWARE_VERSION "1.5.7"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

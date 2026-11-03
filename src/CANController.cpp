@@ -48,6 +48,7 @@ CANController::CANController()
       probeRequestInFlight_(false),
       probeRequestSentTime_(0),
       probeRetryCount_(0),
+      sniffExtraCount_(0),
       lwsSink_(nullptr),
       lwsZeroPhase_(LwsZeroPhase::IDLE),
       lwsZeroPhaseMs_(0),
@@ -75,6 +76,7 @@ CANController::CANController()
         probeResults_.pids[i].pid = kProbeCandidates[i];
     }
     strncpy(probeResults_.status, "idle", sizeof(probeResults_.status) - 1);
+    sniffResults_ = {};
 
     // Initialize PID scheduling table (all PID_COUNT entries must be initialized)
     pidTable_[0] = {PID_ENGINE_RPM,   CAN_POLL_INTERVAL_RPM,  0, 0};
@@ -193,6 +195,15 @@ bool CANController::begin(gpio_num_t csPin, gpio_num_t sckPin, gpio_num_t mosiPi
 
 void CANController::update() {
     if (!initialized_) {
+        return;
+    }
+
+    // While sniffing, only the sniffer reads the bus (no OBD-II requests go out).
+    if (mode_ == Mode::SNIFFING) {
+        updateSniff();
+        if (isDataStale()) {
+            vehicleData_.dataValid = false;
+        }
         return;
     }
 
@@ -733,6 +744,9 @@ CANController::LwsZeroStart CANController::startLwsZero() {
     if (mode_ == Mode::PROBING) {
         return LwsZeroStart::BUSY_PROBE;   // short and bounded: the operator presses again
     }
+    if (mode_ == Mode::SNIFFING) {
+        return LwsZeroStart::BUSY;         // filters are open; zero-set waits for the window to end
+    }
     if (lwsZeroPhase_ != LwsZeroPhase::IDLE) {
         return LwsZeroStart::BUSY;
     }
@@ -880,8 +894,8 @@ bool CANController::tryReceiveProbeResponse(uint8_t expectedMode, uint8_t expect
 }
 
 CANController::ProbeStart CANController::startProbe(bool gearChangeActive) {
-    // Reject if a probe is already running, or an LWS zero-set holds the bus
-    if (mode_ == Mode::PROBING || lwsZeroPhase_ != LwsZeroPhase::IDLE) {
+    // Reject if a probe or the sniffer is already running, or an LWS zero-set holds the bus
+    if (mode_ != Mode::NORMAL || lwsZeroPhase_ != LwsZeroPhase::IDLE) {
         return ProbeStart::BUSY;
     }
 
@@ -1182,4 +1196,179 @@ void CANController::updateProbe() {
         }
     }
     // else: no response yet — return and poll again next loop
+}
+
+// ============================================================================
+// CAN BUS SNIFFER
+// ============================================================================
+
+// Open both receive buffers to everything. The filter's EXIDE bit decides whether it matches
+// standard or extended frames (the masks have no such bit), so each buffer gets one standard
+// and one extended filter, all ID bits "don't care" through mask 0. BUKT stays as begin() set it.
+bool CANController::applySniffFilters() {
+    if (mcp_can_ == nullptr) {
+        return false;
+    }
+    bool ok = true;
+    ok &= (mcp_can_->init_Mask(0, 0, 0) == MCP2515_OK);
+    ok &= (mcp_can_->init_Filt(0, 0, 0) == MCP2515_OK);   // RXB0: standard
+    ok &= (mcp_can_->init_Filt(1, 1, 0) == MCP2515_OK);   // RXB0: extended
+    ok &= (mcp_can_->init_Mask(1, 0, 0) == MCP2515_OK);
+    ok &= (mcp_can_->init_Filt(2, 0, 0) == MCP2515_OK);   // RXB1: standard
+    ok &= (mcp_can_->init_Filt(3, 1, 0) == MCP2515_OK);   // RXB1: extended
+    ok &= (mcp_can_->init_Filt(4, 0, 0) == MCP2515_OK);
+    ok &= (mcp_can_->init_Filt(5, 1, 0) == MCP2515_OK);
+    Debug::printfFeature(DebugFeature::CAN,
+        "[CAN][SNIFF] RX filters opened: all standard + extended IDs%s\n", ok ? "" : " [FAILED]");
+    return ok;
+}
+
+CANController::SniffStart CANController::startSniff(uint32_t ms, bool gearChangeActive) {
+    if (!initialized_ || mcp_can_ == nullptr) {
+        return SniffStart::NOT_INITIALIZED;
+    }
+    if (mode_ == Mode::PROBING) {
+        return SniffStart::BUSY_PROBE;
+    }
+    if (lwsZeroPhase_ != LwsZeroPhase::IDLE) {
+        return SniffStart::BUSY_LWS_ZERO;
+    }
+    if (mode_ == Mode::SNIFFING || gearChangeActive) {
+        return SniffStart::BUSY;
+    }
+    if (ms == 0) ms = 1;
+    if (ms > CAN_SNIFF_MAX_WINDOW_MS) ms = CAN_SNIFF_MAX_WINDOW_MS;
+
+    sniffResults_ = {};
+    sniffExtraCount_ = 0;
+    sniffResults_.windowMs = ms;
+
+    // An in-flight OBD-II request is abandoned; its reply (if any) lands in the table.
+    if (!applySniffFilters()) {
+        // Half-programmed filters: put the normal set back and refuse.
+        if (!applyRxFilters()) {
+            recoverFromBusOff();
+        }
+        return SniffStart::BUSY;
+    }
+    // Stale overflow flags from before the window must not be counted.
+    modifyRegister(MCP_EFLG, MCP_EFLG_RX0OVR | MCP_EFLG_RX1OVR, 0x00);
+
+    sniffResults_.running = true;
+    sniffResults_.startedAtMs = millis();
+    mode_ = Mode::SNIFFING;
+    Debug::printfFeature(DebugFeature::CAN,
+        "[CAN][SNIFF] Started (%lu ms) — OBD-II polling paused\n", (unsigned long)ms);
+    return SniffStart::STARTED;
+}
+
+void CANController::recordSniffFrame(unsigned long canId, uint8_t len, const uint8_t* buf) {
+    // readMsgBuf(): bit 31 = extended, bit 30 = remote request
+    bool ext = (canId & 0x80000000UL) != 0;
+    uint32_t id = (uint32_t)(canId & (ext ? 0x1FFFFFFFUL : 0x7FFUL));
+    uint8_t dlc = len > 8 ? 8 : len;
+    uint8_t data[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    if (!(canId & 0x40000000UL)) {   // a remote frame carries no data
+        for (uint8_t j = 0; j < dlc; j++) data[j] = buf[j];
+    }
+
+    sniffResults_.frames++;
+
+    for (uint8_t i = 0; i < sniffResults_.idCount; i++) {
+        SniffEntry& e = sniffResults_.entries[i];
+        if (e.id == id && e.ext == ext) {
+            for (uint8_t j = 0; j < 8; j++) {
+                if (e.data[j] != data[j]) e.changed |= (uint8_t)(1u << j);
+                e.data[j] = data[j];
+            }
+            e.dlc = dlc;
+            e.count++;
+            return;
+        }
+    }
+
+    if (sniffResults_.idCount < CAN_SNIFF_MAX_IDS) {
+        SniffEntry& e = sniffResults_.entries[sniffResults_.idCount++];
+        e.id = id;
+        e.ext = ext;
+        e.dlc = dlc;
+        e.count = 1;
+        e.changed = 0;
+        for (uint8_t j = 0; j < 8; j++) e.data[j] = data[j];
+        return;
+    }
+
+    // Table full: count distinct extra IDs (ext flag folded into bit 31 of the key)
+    uint32_t key = id | (ext ? 0x80000000UL : 0);
+    for (uint8_t i = 0; i < sniffExtraCount_; i++) {
+        if (sniffExtraIds_[i] == key) return;
+    }
+    if (sniffExtraCount_ < CAN_SNIFF_MAX_IDS) {
+        sniffExtraIds_[sniffExtraCount_++] = key;
+        sniffResults_.overflowIds++;
+    } else {
+        sniffResults_.overflowIdsSaturated = true;   // further extra IDs can no longer be told apart
+    }
+}
+
+void CANController::updateSniff() {
+    unsigned long canId;
+    uint8_t len = 0;
+    uint8_t rxBuf[8];
+
+    for (uint8_t i = 0; i < CAN_SNIFF_DRAIN_PER_UPDATE; i++) {
+        if (mcp_can_->checkReceive() != CAN_MSGAVAIL) {
+            break;
+        }
+        mcp_can_->readMsgBuf(&canId, &len, rxBuf);
+        dispatchSteeringFrame(canId, len, rxBuf);   // keep feeding the LWS decoder
+        recordSniffFrame(canId, len, rxBuf);
+    }
+
+    uint8_t eflg = mcp_can_->getError();
+    uint8_t ovr = eflg & (MCP_EFLG_RX0OVR | MCP_EFLG_RX1OVR);
+    if (ovr) {
+        if (ovr & MCP_EFLG_RX0OVR) sniffResults_.overflows++;
+        if (ovr & MCP_EFLG_RX1OVR) sniffResults_.overflows++;
+        modifyRegister(MCP_EFLG, ovr, 0x00);
+    }
+
+    if (millis() - sniffResults_.startedAtMs >= sniffResults_.windowMs) {
+        finishSniff();
+    }
+}
+
+void CANController::finishSniff() {
+    bool ok = applyRxFilters();
+    if (!ok) {
+        Debug::printlnFeature(DebugFeature::CAN,
+            "[CAN][SNIFF] Filter restore failed — re-initialising the controller");
+        recoverFromBusOff();   // full reset + applyRxFilters() + NORMAL
+    }
+    modifyRegister(MCP_EFLG, MCP_EFLG_RX0OVR | MCP_EFLG_RX1OVR, 0x00);
+
+    sniffResults_.running = false;
+    sniffResults_.complete = true;
+    sniffResults_.restoreFailed = !ok;
+    sniffResults_.completedAtMs = millis();
+    mode_ = Mode::NORMAL;
+    state_ = OBDState::IDLE;
+    // No replies came back during the window: keep the no-data watchdog from forcing a chip
+    // re-init on the first poll after it (it is rate-limited from lastReinitTime_).
+    lastReinitTime_ = millis();
+
+    Debug::printfFeature(DebugFeature::CAN,
+        "[CAN][SNIFF] Done: %u IDs (+%u beyond table%s), %lu frames, %lu overflows — OBD-II resumed\n",
+        sniffResults_.idCount, sniffResults_.overflowIds,
+        sniffResults_.overflowIdsSaturated ? "+" : "",
+        (unsigned long)sniffResults_.frames, (unsigned long)sniffResults_.overflows);
+    for (uint8_t i = 0; i < sniffResults_.idCount; i++) {
+        const SniffEntry& e = sniffResults_.entries[i];
+        Debug::printfFeature(DebugFeature::CAN,
+            "[CAN][SNIFF] %s%0*lX [%u] n=%lu chg=%02X data=%02X %02X %02X %02X %02X %02X %02X %02X\n",
+            e.ext ? "x" : "", e.ext ? 8 : 3, (unsigned long)e.id, e.dlc,
+            (unsigned long)e.count, e.changed,
+            e.data[0], e.data[1], e.data[2], e.data[3],
+            e.data[4], e.data[5], e.data[6], e.data[7]);
+    }
 }

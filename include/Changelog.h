@@ -14,6 +14,11 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.7","date":"2026-11-03","uk":[
+"Діагностика: кнопка «Сніфер CAN (10 с)» показує всі ID на шині CAN з лічильниками й даними (лише на місці)"
+],"en":[
+"Diagnostics: a “CAN sniffer (10 s)” button lists every ID on the CAN bus with counts and data (standing still only)"
+]},
 {"version":"1.5.6","date":"2026-11-03","uk":[
 "Проба ЕБК показує сирі байти відповідей PID"
 ],"en":[
