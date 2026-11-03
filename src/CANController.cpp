@@ -14,7 +14,9 @@ static const uint8_t kProbeCandidates[CANController::PROBE_CANDIDATE_COUNT] = {
     0x0D,  // vehicle speed
     0x2F,  // fuel tank level
     0x5C,  // engine oil temperature
-    0x14   // O2 sensor 1 (voltage + trim)
+    0x14,  // O2 sensor 1 (voltage + trim)
+    0x0C,  // engine RPM (raw reply shown for RPM diagnostics)
+    0x05   // coolant temperature (known-good reference)
 };
 
 // Supported-PID bitmap group request PIDs (Mode 01)
@@ -396,6 +398,20 @@ bool CANController::tryReceiveResponse() {
                 responseLen_ = len - 3;
                 for (uint8_t j = 0; j < responseLen_ && j < 5; j++) {
                     responseData_[j] = rxBuf[3 + j];
+                }
+                // RPM diagnostics: raw reply frame, rate-limited to 1 line per second
+                if (expectedPid == PID_ENGINE_RPM) {
+                    static uint32_t lastRpmRawLog = 0;
+                    if (millis() - lastRpmRawLog >= 1000) {
+                        lastRpmRawLog = millis();
+                        uint8_t d[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+                        for (uint8_t j = 0; j < len && j < 8; j++) {
+                            d[j] = rxBuf[j];
+                        }
+                        Debug::printfFeature(DebugFeature::CAN,
+                            "[CAN] RPM raw: id=0x%03lX len=%d data=%02X %02X %02X %02X %02X %02X %02X %02X\n",
+                            canId, len, d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
+                    }
                 }
                 return true;
             }
@@ -817,7 +833,7 @@ bool CANController::sendMode03Request() {
 }
 
 bool CANController::tryReceiveProbeResponse(uint8_t expectedMode, uint8_t expectedPid,
-                                            uint8_t* outBuf, uint8_t& outLen) {
+                                            uint8_t* outBuf, uint8_t& outLen, uint16_t& outCanId) {
     if (mcp_can_ == nullptr) {
         return false;
     }
@@ -848,6 +864,7 @@ bool CANController::tryReceiveProbeResponse(uint8_t expectedMode, uint8_t expect
                 match = (rxBuf[1] == 0x43);
             }
             if (match) {
+                outCanId = (uint16_t)canId;
                 outLen = len;
                 for (uint8_t j = 0; j < len && j < 8; j++) {
                     outBuf[j] = rxBuf[j];
@@ -950,7 +967,7 @@ void CANController::probeAdvanceCursor() {
     }
 }
 
-void CANController::recordProbeResponse(uint8_t mode, uint8_t pid, const uint8_t* buf, uint8_t len) {
+void CANController::recordProbeResponse(uint8_t mode, uint8_t pid, uint16_t canId, const uint8_t* buf, uint8_t len) {
     if (mode == 0x01 && pid <= 0x60 && (pid % 0x20) == 0) {
         // Supported-PID bitmap group response: buf = [len][0x41][pid][A][B][C][D]
         ProbeBitmap& bm = probeResults_.bitmaps[probeBitmapGroup_];
@@ -994,6 +1011,12 @@ void CANController::recordProbeResponse(uint8_t mode, uint8_t pid, const uint8_t
         for (uint8_t j = 0; j < pr.rawLen; j++) {
             pr.raw[j] = buf[3 + j];
         }
+        // Whole reply frame (ID, DLC, all 8 bytes) for diagnostics
+        pr.rxId = canId;
+        pr.rxDlc = len;
+        for (uint8_t j = 0; j < 8; j++) {
+            pr.rxFrame[j] = (j < len) ? buf[j] : 0;
+        }
 
         // Decode using standard OBD-II formulas for the PIDs we know.
         float A = (pr.rawLen >= 1) ? pr.raw[0] : 0.0f;
@@ -1009,13 +1032,18 @@ void CANController::recordProbeResponse(uint8_t mode, uint8_t pid, const uint8_t
             case 0x2F: pr.decoded = A * 100.0f / 255.0f; break;   // fuel level %
             case 0x5C: pr.decoded = A - 40.0f; break;             // oil temp °C
             case 0x14: pr.decoded = A / 200.0f; break;            // O2 S1 voltage V
+            case 0x0C: pr.decoded = ((A * 256.0f) + B) / 4.0f; break; // engine RPM
+            case 0x05: pr.decoded = A - 40.0f; break;             // coolant °C
             default:   pr.hasDecoded = false; break;
         }
 
         Debug::printfFeature(DebugFeature::CAN,
-            "[CAN][PROBE] PID 0x%02X answered (%u bytes)%s\n",
+            "[CAN][PROBE] PID 0x%02X answered (%u bytes)%s id=0x%03X len=%u data=%02X %02X %02X %02X %02X %02X %02X %02X\n",
             pid, pr.rawLen,
-            pr.hasDecoded ? "" : " [raw only]");
+            pr.hasDecoded ? "" : " [raw only]",
+            pr.rxId, pr.rxDlc,
+            pr.rxFrame[0], pr.rxFrame[1], pr.rxFrame[2], pr.rxFrame[3],
+            pr.rxFrame[4], pr.rxFrame[5], pr.rxFrame[6], pr.rxFrame[7]);
         return;
     }
 
@@ -1139,8 +1167,9 @@ void CANController::updateProbe() {
     // Waiting for a response
     uint8_t rxBuf[8];
     uint8_t rxLen = 0;
-    if (tryReceiveProbeResponse(mode, pid, rxBuf, rxLen)) {
-        recordProbeResponse(mode, pid, rxBuf, rxLen);
+    uint16_t rxId = 0;
+    if (tryReceiveProbeResponse(mode, pid, rxBuf, rxLen, rxId)) {
+        recordProbeResponse(mode, pid, rxId, rxBuf, rxLen);
         probeRequestInFlight_ = false;
         probeAdvanceCursor();
     } else if (millis() - probeRequestSentTime_ >= CAN_RESPONSE_TIMEOUT) {

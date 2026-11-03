@@ -561,8 +561,11 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // steer_vin_low / ecu_voltage_low, wifi_ssid / wifi_ip) + a 16-element
     // array + the nested probe / po / bm / dtc / gearDefaults / gear_codes objects, plus copied
     // String values. Sized to 4096 to leave room for the transient `probe` object (only present
-    // while probe results are fresh).
-    StaticJsonDocument<4096> doc;
+    // while probe results are fresh). 4608 since 1.5.6: each answered candidate PID also
+    // carries its whole reply frame ("frm", ~31 B copied string) and the list grew to 11 PIDs.
+    // Static (single caller: the main-loop broadcast) so the larger document is off the stack.
+    static StaticJsonDocument<4608> doc;
+    doc.clear();
 
     doc["timestamp"] = telemetry.timestamp;
     doc["gear"] = telemetry.gear;
@@ -770,6 +773,15 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
             }
             raw[pr.rawLen * 2] = '\0';
             po["raw"] = raw;
+            if (pr.answered) {
+                // Whole reply frame: "7E8 [8] 04 41 0C 12 34 00 00 00"
+                char frm[32];
+                snprintf(frm, sizeof(frm), "%03X [%u] %02X %02X %02X %02X %02X %02X %02X %02X",
+                         pr.rxId, pr.rxDlc,
+                         pr.rxFrame[0], pr.rxFrame[1], pr.rxFrame[2], pr.rxFrame[3],
+                         pr.rxFrame[4], pr.rxFrame[5], pr.rxFrame[6], pr.rxFrame[7]);
+                po["frm"] = frm;
+            }
             if (pr.hasDecoded) {
                 po["dec"] = pr.decoded;
             }
