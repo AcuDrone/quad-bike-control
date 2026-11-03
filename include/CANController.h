@@ -40,7 +40,7 @@ public:
     };
 
     // ---- ECU capability probe (on-demand diagnostic sweep) ------------------
-    static constexpr uint8_t PROBE_CANDIDATE_COUNT = 9;  // candidate PIDs test-requested
+    static constexpr uint8_t PROBE_CANDIDATE_COUNT = 11; // candidate PIDs test-requested
     static constexpr uint8_t PROBE_MAX_DTC = 2;          // DTCs that fit one classic 8-byte frame
 
     // Supported-PID bitmap group (Mode 01 PID 0x00 / 0x20 / 0x40 / 0x60)
@@ -59,6 +59,9 @@ public:
         uint8_t raw[4];            // raw data payload (after mode+PID)
         float decoded;             // decoded engineering value (valid iff hasDecoded)
         bool hasDecoded;           // true when a known formula produced `decoded`
+        uint16_t rxId;             // CAN ID of the matched reply frame (valid iff answered)
+        uint8_t rxDlc;             // DLC of the matched reply frame
+        uint8_t rxFrame[8];        // all 8 data bytes of the reply frame, as received
     };
 
     // Stored-DTC summary (Mode 03, single classic frame)
@@ -271,7 +274,7 @@ private:
     bool tryReceiveResponse();
     // Generalized probe receive: matches a Mode 01 (0x41+pid) or Mode 03 (0x43) response.
     bool tryReceiveProbeResponse(uint8_t expectedMode, uint8_t expectedPid,
-                                 uint8_t* outBuf, uint8_t& outLen);
+                                 uint8_t* outBuf, uint8_t& outLen, uint16_t& outCanId);
     int8_t selectNextPID();
     void parseAndStore(uint8_t index, const uint8_t* data, uint8_t len);
     bool isDataStale() const;
@@ -320,7 +323,7 @@ private:
     void updateProbe();
     bool probeCurrentRequest(uint8_t& mode, uint8_t& pid) const;
     void probeAdvanceCursor();
-    void recordProbeResponse(uint8_t mode, uint8_t pid, const uint8_t* buf, uint8_t len);
+    void recordProbeResponse(uint8_t mode, uint8_t pid, uint16_t canId, const uint8_t* buf, uint8_t len);
     void recordProbeTimeout(uint8_t mode, uint8_t pid);
     void finishProbe();
 };

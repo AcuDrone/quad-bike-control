@@ -1601,6 +1601,8 @@
                 pid_fuel_lvl: 'Fuel Lvl',
                 pid_oil_temp: 'Oil Temp',
                 pid_o2_s1: 'O2 S1',
+                pid_rpm: 'RPM',
+                pid_coolant: 'Coolant',
 
                 // System maintenance card
                 card_maintenance: '🔧 System Maintenance',
@@ -2003,6 +2005,8 @@
                 pid_fuel_lvl: 'Рівень пального',
                 pid_oil_temp: 'Темп. оливи',
                 pid_o2_s1: 'O2 S1',
+                pid_rpm: 'Оберти',
+                pid_coolant: 'Темп. охол.',
 
                 // System maintenance card
                 card_maintenance: '🔧 Обслуговування системи',
@@ -2844,7 +2848,9 @@
             0x0D: { nameKey: 'pid_speed',      unit: 'km/h' },
             0x2F: { nameKey: 'pid_fuel_lvl',   unit: '%' },
             0x5C: { nameKey: 'pid_oil_temp',   unit: '°C' },
-            0x14: { nameKey: 'pid_o2_s1',      unit: 'V' }
+            0x14: { nameKey: 'pid_o2_s1',      unit: 'V' },
+            0x0C: { nameKey: 'pid_rpm',        unit: 'rpm' },
+            0x05: { nameKey: 'pid_coolant',    unit: '°C' }
         };
 
         function probeECU() {
@@ -2906,6 +2912,10 @@
                     html += '<tr style="color:' + color + ';">' +
                             '<td style="padding:2px 6px 2px 0;">' + pidHex + ' ' + pidName + supMark + '</td>' +
                             '<td style="padding:2px 0; text-align:right;">' + val + '</td></tr>';
+                    if (pr.frm) {
+                        html += '<tr><td colspan="2" style="padding:0 0 3px 10px; color:var(--muted-foreground);">' +
+                                '<code style="font-size:0.95em;">' + pr.frm + '</code></td></tr>';
+                    }
                 });
                 html += '</table>';
             }

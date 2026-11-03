@@ -14,6 +14,11 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.6","date":"2026-11-03","uk":[
+"Проба ЕБК показує сирі байти відповідей PID"
+],"en":[
+"ECU probe shows raw PID reply bytes"
+]},
 {"version":"1.5.5","date":"2026-11-03","uk":[
 "Кермо від автопілота тепер плавно стежить за стіком, без ривків",
 "Під час стеження мотор керма працює на нижчій потужності, повна потужність лише для зрушення з місця",
