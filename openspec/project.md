@@ -3,6 +3,13 @@
 ## Purpose
 Electronic control system for a quad bike, receiving commands via MAVLink from an ArduPilot (Pixhawk) autopilot and controlling steering, throttle, transmission, and braking systems via an ESP32-S3 microcontroller on a hand-wired ESP32-S3-DevKitC-1.
 
+This is the `old-board` branch: master's firmware (same version line, same changelog) ported onto
+the hand-wired DevKitC-1. `master` targets the custom `Control_v0` board (quad bike) and `aztec` the
+ODES JUNGLECROSS 800 EFI/EPS buggy on the same `Control_v0` board. On this board the steering VESC is
+on UART2 (GPIO4/5), MAVLink on UART1 (GPIO8/15), the console on UART0 (GPIO43/44, the DevKit's
+USB-UART bridge), and the Bosch LWS steering-angle sensor on the shared MCP2515 CAN bus; the
+front-wheel lock is fitted (relay 4, GPIO39).
+
 ## Tech Stack
 - **Platform**: hand-wired ESP32-S3-DevKitC-1 (see `GPIO_PINOUT_S3.md`). Relays are driven directly from GPIO and the gear switches / brake endstop are read directly with `digitalRead()` — there are no I2C port expanders and no 24V boost rail on this board.
 - **Framework**: Arduino (via PlatformIO)
@@ -41,6 +48,13 @@ Electronic control system for a quad bike, receiving commands via MAVLink from a
 - Feature branches: individual implementations
 - Commit messages: Clear, imperative mood
 - Hardware testing required before merge
+
+### Versioning and Changelog
+- `FIRMWARE_VERSION` lives in `include/Constants.h`; the web UI reads it from telemetry (`firmware_version`), never from `data/index.html`
+- Every OpenSpec change that alters user-visible behaviour bumps `FIRMWARE_VERSION` (semver: breaking calibration or wiring = minor bump, fixes = patch) and adds a release entry to `include/Changelog.h`
+- Changelog entry: `{version, date, uk:[...], en:[...]}`, newest first, one short plain-language line per change in BOTH Ukrainian and English, written for the operator (served by `GET /api/changelog`, shown in the web UI "What's new")
+- Several changes shipped together may share one release entry (e.g. 1.2.0 bundled all aztec changes); the entry must say when recalibration is required
+- `tasks.md` of each change lists the version bump and the changelog line as explicit tasks
 
 ## Domain Context
 

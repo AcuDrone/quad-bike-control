@@ -9,11 +9,17 @@ On this board every relay is driven **directly from a GPIO** and the gear switch
 sensor are read **directly with `digitalRead()`**. There are no I2C port expanders and no 24V boost
 rail — those belong to the custom PCB, which this branch does not target.
 
+Steering angle feedback is the **Bosch LWS** steering-angle sensor on the shared **CAN** bus (frame
+`0x305`, 100 Hz) behind the MCP2515 — the same one master uses. The AS5600 magnetic sensor that used
+to sit on I2C GPIO 41/42 was physically removed; those two pins are now free/reserved and the
+firmware starts no I2C bus at all.
+
 ---
 
 ## Functional Pin Map
 
-Every `PIN_*` define in `include/Constants.h`, in GPIO order, plus the two console pins.
+Every `PIN_*` define in `include/Constants.h`, in GPIO order, plus the two console pins and the
+reserved pins 18, 41 and 42.
 
 | GPIO | Define | Dir | Peripheral | Connects to |
 |------|--------|-----|------------|-------------|
@@ -24,13 +30,13 @@ Every `PIN_*` define in `include/Constants.h`, in GPIO order, plus the two conso
 | **7** | `PIN_BRAKE_RPWM` | out | LEDC ch 4 | BTS7960 RPWM — brake actuator extend |
 | **8** | `PIN_MAVLINK_RX` | in | UART1 RX, 115200 | Pixhawk TELEM2 **TX** (non-inverted, no inverter) |
 | **9** | `PIN_TRANS_SERVO` | out | LEDC ch 2, 50 Hz | Transmission (gear selector) servo signal |
-| **10** | `PIN_CAN_CS` | out | SPI CS | MCP2515 CAN controller chip select |
+| **10** | `PIN_CAN_CS` | out | SPI CS | MCP2515 CAN controller chip select (CAN: engine ECU + Bosch LWS steering angle) |
 | **11** | `PIN_CAN_MOSI` | out | SPI MOSI | MCP2515 SI |
 | **12** | `PIN_CAN_SCK` | out | SPI SCK | MCP2515 SCK |
 | **13** | `PIN_CAN_MISO` | in | SPI MISO | MCP2515 SO |
 | **14** | `PIN_BRAKE_SENSOR` | in | plain GPIO (`INPUT`) | Brake "fully released" limit switch — **HIGH = released** |
 | **15** | `PIN_MAVLINK_TX` | out | UART1 TX, 115200 | Pixhawk TELEM2 **RX** (non-inverted) |
-| **17** | `PIN_SPEED_SENSOR` | in | PCNT unit, 12.5 µs glitch filter | Hall driveline speed pickup through a PC817 — **active LOW**, needs an external 1 kΩ pull-up |
+| **17** | `PIN_SPEED_SENSOR` | in | PCNT unit, 1 µs glitch filter | Hall driveline speed pickup through a PC817 — **active LOW**, needs an external 1 kΩ pull-up |
 | **18** | — | — | — | **FREE / RESERVED** (former `PIN_STEER_LPWM`) |
 | **19** | `PIN_GEAR_REVERSE` | in | plain GPIO (floating, external pull-up) | Gear switch **R** — active LOW |
 | **20** | `PIN_GEAR_NEUTRAL` | in | plain GPIO (floating, external pull-up) | Gear switch **N** — active LOW |
@@ -39,8 +45,8 @@ Every `PIN_*` define in `include/Constants.h`, in GPIO order, plus the two conso
 | **37** | `PIN_RELAY2` | out | plain GPIO | Relay 2 — starter solenoid (active HIGH) |
 | **38** | `PIN_RELAY3` | out | plain GPIO | Relay 3 — front light (active HIGH) |
 | **39** | `PIN_WHEEL_LOCK` | out | plain GPIO | Relay 4 — front-wheel lock (active HIGH) |
-| **41** | `PIN_STEER_SDA` | i/o | I2C (`Wire`), 100 kHz | AS5600 steering angle sensor, addr `0x36` |
-| **42** | `PIN_STEER_SCL` | out | I2C (`Wire`), 100 kHz | AS5600 steering angle sensor, addr `0x36` |
+| **41** | — | — | — | **FREE / RESERVED** (former AS5600 I2C SDA — sensor removed, steering angle is the LWS on CAN) |
+| **42** | — | — | — | **FREE / RESERVED** (former AS5600 I2C SCL — sensor removed, steering angle is the LWS on CAN) |
 | **43** | — (`Serial`) | out | UART0 TX, 115200 | **Debug console** — on-board USB-UART bridge, "COM" port |
 | **44** | — (`Serial`) | in | UART0 RX, 115200 | **Debug console** — on-board USB-UART bridge, "COM" port |
 | **47** | `PIN_GEAR_HIGH` | in | plain GPIO (floating, external pull-up) | Gear switch **H** — active LOW |
@@ -59,7 +65,8 @@ choice is a documentation matter, not a correctness one).
 
 ⚠ An **external 1 kΩ pull-up from GPIO 17 to 3.3V is mandatory.** Without it the node floats on the
 internal pull-up (~45 kΩ) alone and picks up ignition-coil interference as phantom pulses, which
-trips the gear interlock. With the 1 kΩ fitted the noise counters read 0 with the engine idling.
+trips the gear interlock. With the 1 kΩ fitted the pulse-noise counters of firmware 1.1.0 read 0
+with the engine idling.
 
 GPIO 18 stays **free/reserved** and LEDC channels 6 and 7 stay unallocated.
 
@@ -117,6 +124,8 @@ erase megabytes in one stretch, which is slow and fragile, and 1.5 MB is ample f
 | **18** | J1-11 | Reserved — former `PIN_STEER_LPWM` (LEDC ch 7) |
 | **35** | J3-13 | Was OPI PSRAM SPIIO6 — free with `qio_qspi` |
 | **40** | J3-8 | JTAG TDO |
+| **41** | J3-7 | Reserved — former AS5600 I2C SDA; JTAG TDI |
+| **42** | J3-6 | Reserved — former AS5600 I2C SCL; JTAG TMS |
 | **45** | J3-15 | ⚠ Strapping: VDD_SPI voltage level |
 | **46** | J1-14 | ⚠ Strapping: ROM log verbosity |
 | **48** | J3-16 | General I/O |
@@ -162,9 +171,9 @@ erase megabytes in one stretch, which is slow and fragile, and 1.5 MB is ample f
 
 | Peripheral | Pins | Details |
 |------------|------|---------|
-| I2C `Wire` | SDA 41 / SCL 42 | 100 kHz (`I2C_BUS_FREQ_HZ`). AS5600 `0x36` is the **only** device. Opened once in `main.cpp`; no driver re-opens it |
-| SPI (CAN) | MOSI 11 / MISO 13 / SCK 12 / CS 10 | MCP2515 + transceiver, 8 MHz crystal → `MCP_8MHZ` |
-| PCNT | 17 | Hall speed sensor, single falling edge, 12.5 µs hardware glitch filter, hardware overflow accumulation |
+| I2C | — | **None.** No I2C device is fitted and no bus is started (the AS5600 on 41/42 was removed) |
+| SPI (CAN) | MOSI 11 / MISO 13 / SCK 12 / CS 10 | MCP2515 + transceiver, 8 MHz crystal → `MCP_8MHZ`, 500 kbit/s. One shared bus: engine ECU (OBD-II `0x7DF`/`0x7E8`) and the Bosch LWS steering-angle sensor (`0x305`, 100 Hz; zero-set via `0x7C0`). INT not wired — the driver polls |
+| PCNT | 17 | Hall speed sensor, single falling edge, 1 µs hardware glitch filter (`SPEED_GLITCH_FILTER_NS`), hardware overflow accumulation |
 
 ---
 
@@ -176,6 +185,6 @@ erase megabytes in one stretch, which is slow and fragile, and 1.5 MB is ample f
 | **19, 20** | Native USB D−/D+ pins, used here as plain GPIO for the R/N gear switches — the native USB CDC console **MUST NOT** be enabled (never add `ARDUINO_USB_CDC_ON_BOOT`) |
 | **38** | Also drives the onboard WS2812B RGB LED — it will flicker when relay 3 toggles |
 | **39** | Also JTAG MTCK — hardware JTAG unused here |
-| **41, 42** | JTAG TDI/TMS — hardware JTAG unavailable while these are the AS5600 I2C bus |
+| **41, 42** | JTAG TDI/TMS — free/reserved since the AS5600 was removed; keep them unconnected if hardware JTAG is wanted |
 | **43, 44** | UART0 debug console — in use, do not reassign |
 | **45, 46** | Strapping pins — read at reset; safe after boot but initialize carefully |

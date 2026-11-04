@@ -39,6 +39,7 @@ public:
         String strValue;   // String value (for gear: "R", "N", "L", "H"; ignition: "OFF", "ACC", "IGNITION", "START")
         float floatValue;  // Float value (for steering: -100 to +100, throttle: 0 to 100, brake: 0 to 100)
         bool boolValue;    // Bool value (for light: true/false)
+        int32_t relay;     // Relay number for set_relay_test (JSON "relay", 1..8); 0 if absent
         bool hasCommand;   // True if valid command received
     };
 
@@ -55,18 +56,42 @@ public:
         uint16_t throttle_full_us;    // Calibrated full-throttle endpoint (µs)
         bool throttle_calibrating;    // True while a throttle calibration session is active
         int steering_pct;         // Steering percentage (-100 to +100)
-        int32_t steer_center;     // Calibrated steering center (AS5600 raw counts, -1 if unset)
-        int32_t steer_left;       // Calibrated left limit (AS5600 raw counts, -1 if unset)
-        int32_t steer_right;      // Calibrated right limit (AS5600 raw counts, -1 if unset)
-        int32_t steer_position;   // Current AS5600 raw angle (0-4095)
-        bool steer_sensor_ok;     // True if the AS5600 reads OK and the magnet is detected
-        bool steer_calibrated;    // True when center + both limits are valid
+        // Steering angle (Bosch LWS on CAN). Degrees, firmware sign (+ = right), relative to
+        // the sensor's stored zero. Every "_valid"/"_set"/"_seen" false is serialised as JSON
+        // null — never NaN, never a sentinel number.
+        float steer_angle;        // Current angle, deg (1 decimal), valid only if steer_angle_valid
+        bool steer_angle_valid;   // Fresh accepted frame with a valid angle
+        float steer_rate;         // Signed rotation rate, deg/s (+ = turning right), valid only if steer_rate_valid
+        bool steer_rate_valid;
+        float steer_left;         // Stored left limit, deg, valid only if steer_left_set
+        bool steer_left_set;
+        float steer_right;        // Stored right limit, deg, valid only if steer_right_set
+        bool steer_right_set;
+        bool steer_lws_seen;      // A frame has been accepted since boot (else the four below are null)
+        bool steer_lws_ok;        // Last accepted frame: sensor OK bit
+        bool steer_lws_cal;       // Last accepted frame: calibrated bit
+        bool steer_lws_adj;       // Last accepted frame: adjusted bit
+        uint8_t steer_lws_fault_code; // Last accepted frame: fault code 0-15 (9 = range latch)
+        const char* steer_sensor_fault; // none | zeroing | can_down | timeout | range_latched | sensor_fault | not_calibrated | angle_invalid
+        const char* steer_mode;   // position | rate | blocked (static token, SteerRate.h)
+        bool steer_sensor_ok;     // Sensor healthy (token none for STEER_LWS_RECOVER_FRAMES frames)
+        bool steer_calibrated;    // True when both limits are stored and valid
+        bool steer_range_warning; // Either stored limit beyond ±STEER_LWS_SAFE_RANGE (near the ~600° latch)
+        bool steer_sensor_inv;    // Sensor-direction flag: true = sensor mounted mirrored (inferred at limit capture)
+        uint16_t steer_lws_fps;   // Accepted frames in the last second (~100 when healthy)
+        uint32_t steer_lws_crc_err; // Cumulative checksum errors since boot
+        uint32_t steer_lws_cnt_err; // Cumulative repeated-counter errors since boot
+        uint32_t steer_lws_miss;    // Cumulative missed frames (counter jumps) since boot
+        const char* steer_zero_state; // idle | running | ok | failed
+        const char* steer_zero_error; // Reason token when failed, nullptr = null
 
         // Steering VESC driver telemetry
         float steer_motor_current; // Steering motor current (A) from the VESC
         float steer_fet_temp;      // VESC FET temperature (°C)
         uint8_t steer_vesc_fault;  // VESC fault code (0 = no fault)
         bool steer_driver_ok;      // True if the VESC telemetry link is healthy
+        float steer_vin;           // VESC input voltage (V) — meaningless while !steer_driver_ok
+        bool steer_vin_low;        // steer_driver_ok && steer_vin < STEER_VIN_LOW_V (warning only)
         String input_source;      // Current input source: "MAVLINK", "WEB", "FAILSAFE"
         bool mav_active;          // True if MAVLink command stream is valid
         bool web_control;         // True if latched web-control override is engaged
@@ -76,14 +101,13 @@ public:
         float vehicle_speed_ms;   // Vehicle speed (m/s) from the hall sensor — serialised as km/h
         bool speed_valid;         // Sensor health: false = reading unknown, NOT "stopped"
         uint16_t speed_ppr;       // Calibration: pulses per revolution
+        uint32_t speed_pulse_total; // Running pulse total since boot (web ppr measurement; counts up either way)
         float speed_circ_mm;      // Calibration: wheel circumference (mm)
-        // Noise diagnostics — how much ignition interference the PCNT filter still lets past.
-        // Display only: nothing downstream reads these.
-        uint32_t speed_raw_pulses;   // Raw PCNT pulses in the latest 200 ms window
-        uint32_t speed_stray_pulses; // Running total of isolated stray pulses since boot
-        uint32_t speed_rej_windows;  // Running count of windows discarded as noise bursts
         float speed_limit_ms;     // Enforced ceiling (m/s) from SPEED_MAX, 0 = no limit — km/h in JSON
-        float speed_limit_ceil;   // Throttle ceiling the taper is applying (%, 100 = inactive)
+        float speed_limit_ceil;   // Throttle ceiling the limiter is applying (taper + trim, %, 100 = inactive)
+        float speed_limit_floor;  // Limiter throttle floor in use (%, 0 = calibrated idle)
+        bool speed_limit_sat;     // Limiter saturated: ceiling at the floor, speed still above the limit
+        bool speed_limit_sat_held; // speed_limit_sat, or within SPEED_LIMIT_SAT_UI_HOLD_MS after it cleared
         // Steering speed scaling — so "the steering feels weak" is diagnosable from the portal.
         float steer_scale;        // Applied scale after rate limiting, 0..1 (1 = not scaling)
         float steer_sca_base_ms;  // Base in use (m/s), 0 = none — serialised in m/s, not km/h
@@ -104,6 +128,7 @@ public:
         uint16_t module_voltage_mv; // Control module supply voltage, mV
         int8_t intake_temp;       // Intake air temperature °C (-40 to +215)
         uint8_t engine_load;      // Calculated engine load % (0-100)
+        bool ecu_voltage_low;     // module voltage < ECU_VOLTAGE_LOW_V (only meaningful when connected)
         String can_status;        // CAN status: "connected", "disconnected"
 
         // MAVLink command channel + link data
@@ -119,11 +144,15 @@ public:
         String ignition_state;    // Ignition state: "OFF", "ACC", "IGNITION", "CRANKING"
         bool is_cranking;         // True if starter motor is cranking
         bool front_light_on;      // True if front light is on
-        bool wheel_lock_on;       // True if front-wheel lock is engaged
+        bool wheel_lock_on;       // True if front-wheel lock is engaged (always false when not fitted)
+        bool wheel_lock_fitted;   // False on aztec: no relay behind the wheel-lock function
+        uint8_t relay_test;       // Web relay test bits, bit0 = Relay 1 … bit3 = Relay 4
 
         // Firmware information
         String firmware_version;  // Firmware version string (e.g., "1.0.0")
-        String board;             // Target board name (BOARD_NAME, e.g. "Control_v0")
+        String board;             // Target board name (BOARD_NAME, e.g. "DevKitC-1")
+        const char* wifi_ssid;    // WIFI_AP_SSID (static string, stored by pointer)
+        char wifi_ip[16];         // WIFI_AP_IP as a dotted string, e.g. "192.168.10.1"
 
         // Gear default positions (user-configurable NVS values, 0.0–100.0 %)
         float gear_default_r;     // Default servo % for REVERSE
@@ -137,6 +166,11 @@ public:
         // ECU capability probe results (emitted transiently while fresh)
         bool probe_present;                 // true when the probe object should be serialized
         CANController::ProbeResults probe;  // latest probe snapshot
+
+        // CAN sniffer results: points into the CAN controller (which outlives the broadcast)
+        // while running or fresh, nullptr otherwise. A pointer, not a copy: the table is
+        // ~800 bytes and this struct lives on the loop stack.
+        const CANController::SniffResults* sniff;
     };
 
     WebPortal();

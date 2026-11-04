@@ -14,15 +14,17 @@
 #include "RelayController.h"
 #include "SpeedSensor.h"
 #include "nvs_flash.h"
-#include <Wire.h>
 
 // ============================================================================
 // ACTUATOR INSTANCES
 // ============================================================================
 
-// Steering Actuator (Flipsky 75200 VESC over UART2 + AS5600 absolute angle sensor).
+// Steering Actuator (Flipsky 75200 VESC over VESC_UART_NUM — UART2 on GPIO4/5 —
+// + Bosch LWS steering-angle sensor on the shared MCP2515 CAN bus — absolute
+// multi-turn angle, frame 0x305).
 // The VESC driver MUST be constructed before the steering controller that
-// references it (global init order is top-to-bottom within this file).
+// references it (global init order is top-to-bottom within this file). The LWS is
+// attached to the CAN controller in setup() (vehicleController.initCAN()).
 VescMotorDriver steeringVesc(VESC_UART_NUM);
 SteeringController steeringActuator(steeringVesc);
 
@@ -52,25 +54,6 @@ WebPortal webPortal;
 
 // Telemetry Manager (collects and broadcasts telemetry data)
 TelemetryManager telemetryManager(vehicleController, webPortal, mavlinkInterface);
-
-// ============================================================================
-// BRING-UP HELPERS
-// ============================================================================
-
-// Probe the 7-bit address range 0x08-0x77 on the bus and print a single summary
-// line. Master-gated only (no feature flag) so a plain `debug on` shows it.
-static void scanI2CBus(TwoWire& bus, const char* label) {
-    String found;
-    for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
-        bus.beginTransmission(addr);
-        if (bus.endTransmission() == 0) {
-            char hex[8];
-            snprintf(hex, sizeof(hex), " 0x%02X", addr);
-            found += hex;
-        }
-    }
-    Debug::println("[I2C] " + String(label) + " devices:" + (found.isEmpty() ? " none" : found));
-}
 
 // ============================================================================
 // SETUP
@@ -121,20 +104,6 @@ void setup() {
 
     Debug::println("\n=== ESP32-S3 Quad Bike Control (DevKitC-1) ===");
 
-    // ── I2C bus ──────────────────────────────────────────────────────────────
-    // main.cpp is the single owner of the bus: it is opened here, before any
-    // consumer, so no driver depends on another driver's initialization succeeding.
-    // The AS5600 steering angle sensor is its only device.
-    if (!Wire.begin(PIN_STEER_SDA, PIN_STEER_SCL, I2C_BUS_FREQ_HZ)) {
-        Debug::println("[INIT] ERROR: I2C (Wire) init failed");
-    }
-
-    // Enumerate the bus before any driver claims it, so a missing or mis-wired
-    // sensor is obvious from the boot log alone.
-    if (Debug::isEnabled()) {
-        scanI2CBus(Wire, "I2C (Wire)");
-    }
-
     // Initialize throttle servo (loads calibration from NVS, moves to calibrated idle)
     if (!throttle.begin(PIN_THROTTLE_PWM, LEDC_CH_THROTTLE)) {
         Debug::printlnFeature(DebugFeature::SERVO, "ERROR: Throttle servo failed");
@@ -144,20 +113,20 @@ void setup() {
     // silent; the controller stays driver-down until the first valid reply).
     steeringVesc.begin(PIN_VESC_RX, PIN_VESC_TX, VESC_UART_BAUD);
 
-    // Initialize steering actuator (VESC driver + AS5600 absolute angle sensor — no homing)
-    if (steeringActuator.begin(PIN_STEER_SDA, PIN_STEER_SCL)) {
-        steeringActuator.loadCalibration();   // NVS-backed center + left/right limits
-
-        if (steeringActuator.isCalibrated() && steeringActuator.isSensorOk()) {
-            Debug::printlnFeature(DebugFeature::SERVO, "[STEER] Moving to center");
-            steeringActuator.setSteeringPercent(0.0f);
-        } else {
-            Debug::printlnFeature(DebugFeature::SERVO,
-                steeringActuator.isSensorOk() ? "[STEER] Not calibrated — holding position"
-                                              : "[STEER] Sensor fault — holding position");
-        }
+    // Initialize steering actuator (VESC driver + Bosch LWS on CAN — no homing: the
+    // angle is absolute). begin() loads the limits (migrating older NVS layouts); the
+    // sensor is attached to the CAN controller in initCAN() below.
+    steeringActuator.begin();
+    // Boot centering whenever calibrated. The LWS, the ECU and the VESC come up on the
+    // ignition key and may start after the ESP32 boots, so the move is deferred to
+    // update(): issued once the sensor is healthy and the VESC link is up, dropped
+    // after STEER_BOOT_CENTER_TIMEOUT_MS ("[STEER] Moving to center" is logged when
+    // the move is actually issued).
+    if (steeringActuator.isCalibrated()) {
+        Debug::printlnFeature(DebugFeature::SERVO, "[STEER] Boot centering requested (waiting for sensor + VESC link)");
+        steeringActuator.requestBootCenter();
     } else {
-        Debug::printlnFeature(DebugFeature::SERVO, "ERROR: Steering actuator failed");
+        Debug::printlnFeature(DebugFeature::SERVO, "[STEER] Not calibrated — holding position");
     }
 
     // Initialize transmission servo
@@ -198,7 +167,8 @@ void setup() {
     // Restore the engine hour meter from NVS (must run after NVS is up, so not in a ctor)
     vehicleController.initEngineHourMeter();
 
-    // Initialize CAN controller
+    // Initialize CAN controller (engine ECU + steering-angle sensor on one bus). It also
+    // attaches the steering controller's LWS decoder as the 0x305 frame sink.
     if (!vehicleController.initCAN()) {
         Debug::printlnFeature(DebugFeature::CAN, "WARNING: CAN controller failed (will continue without vehicle data)");
     }
@@ -279,8 +249,8 @@ void loop() {
     report.steerMotorCurrentA = steering.getMotorCurrent();        // MOTOR current, not input
     report.steerFetTempC      = steering.getFetTemp();
     report.steerInputVoltageV = steering.getInputVoltage();        // supply voltage at the VESC
-    // Steering POSITION from the same controller but a DIFFERENT gate: the AS5600's, not the
-    // VESC's. Filled unconditionally — the gating is applied where the message is packed, so
+    // Steering POSITION from the same controller but a DIFFERENT gate: the CAN steering-angle
+    // sensor's (healthy + both limits stored), not the VESC's. Filled unconditionally — the gating is applied where the message is packed, so
     // this stays a plain snapshot.
     report.steerPercent     = steering.getSteeringPercent();       // -100 left .. 0 .. +100 right
     report.steerSensorOk    = steering.isSensorOk();
@@ -288,9 +258,10 @@ void loop() {
     // The applied steering speed-scale (STEER_SCA). Always finite, 1.0 = not scaling — there is
     // no "unknown" state, so this is never gated and never NaN.
     report.steerScale       = vehicleController.getSteerScale();
+    // Steering control mode (STEER_MODE NAMED_VALUE_INT): 0 position, 1 rate, 2 blocked.
+    report.steerMode        = (uint8_t)vehicleController.getSteerMode();
     mavlinkInterface.report(report);
 
     // Broadcast telemetry to web clients
     telemetryManager.update();
-
 }

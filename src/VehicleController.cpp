@@ -17,6 +17,8 @@ VehicleController::VehicleController(SteeringController& steering,
       relayController_(relayController),
       speedSensor_(speedSensor),
       currentInputSource_(InputSource::FAILSAFE),
+      steerMode_(SteerMode::BLOCKED),   // the sensor starts unhealthy (no frames yet)
+      lastMavCmdCount_(0),
       failsafeApplied_(false),
       webControl_(false),
       currentBrakeTarget_(0.0f),
@@ -40,8 +42,12 @@ VehicleController::VehicleController(SteeringController& steering,
       lastSpeedLimitWarnMs_(0),
       lastSpeedLimitMs_(NAN),
       lastSpeedLimitLogMs_(0),
-      limiterCeilingPct_(100.0f),
+      limiter_(),
       limiterLastMs_(0),
+      limiterFloorPct_(SPEED_LIMIT_FLOOR_DEFAULT_PCT),
+      satSinceMs_(0),
+      satActive_(false),
+      satClearedMs_(0),
       steerScaBaseMs_(0.0f),
       steerScaleApplied_(1.0f),
       steerScaleLastMs_(0),
@@ -50,7 +56,8 @@ VehicleController::VehicleController(SteeringController& steering,
       lastSteerScaleLogMs_(0),
       steerTestSpeedMs_(0.0f),
       steerTestSpeedSetMs_(0),
-      webThrottleDemandPct_(0.0f) {
+      webThrottleDemandPct_(0.0f),
+      steerZeroResponsePortal_(nullptr) {
 }
 
 void VehicleController::initEngineHourMeter() {
@@ -86,8 +93,30 @@ bool VehicleController::initCAN() {
         steerScaBaseMs_,
         (steerScaBaseMs_ > 0.0f) ? "" : " — not set, will use the autopilot's MOT_SPD_SCA_BASE");
 
+    // The speed-limiter throttle floor, from the "speed" namespace (beside the speed-sensor
+    // calibration, which SpeedSensor owns; this key is VehicleController's). An absent key reads as
+    // the default; NaN or anything outside 0–20 % is ignored (and never rewritten).
+    if (prefs.begin("speed", true)) {
+        float floorPct = prefs.getFloat(SPEED_LIMIT_FLOOR_NVS_KEY, SPEED_LIMIT_FLOOR_DEFAULT_PCT);
+        prefs.end();
+        if (isnan(floorPct) || floorPct < SPEED_LIMIT_FLOOR_MIN_PCT ||
+            floorPct > SPEED_LIMIT_FLOOR_MAX_PCT) {
+            Debug::printfFeature(DebugFeature::VEHICLE,
+                "[SPEED] Stored limiter floor %.1f out of range (%.0f-%.0f %%) — ignored\n",
+                floorPct, SPEED_LIMIT_FLOOR_MIN_PCT, SPEED_LIMIT_FLOOR_MAX_PCT);
+            floorPct = SPEED_LIMIT_FLOOR_DEFAULT_PCT;
+        }
+        limiterFloorPct_ = floorPct;
+    }
+    Debug::printfFeature(DebugFeature::VEHICLE, "[SPEED] Limiter floor: %.1f %%\n", limiterFloorPct_);
+
     bool result = canController_.begin();
     canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM);
+    // The Bosch LWS steering-angle sensor shares this bus: every 0x305 frame goes to the
+    // steering controller's decoder, and the zero-set runs here. Attached even if init
+    // failed, so the steering reports `can_down` rather than `timeout`.
+    canController_.attachLwsSink(&steering_.lwsSensor());
+    steering_.attachCan(&canController_);
     return result;
 }
 
@@ -139,10 +168,17 @@ void VehicleController::update() {
             "[STEER] TEST speed override expired — back to the measured speed");
     }
 
+    // Steering control mode for this iteration — BEFORE the MAVLink commands, so a change of
+    // source (web takeover, FAILSAFE) or autopilot mode stops a rate drive in this same loop.
+    updateSteerMode();
+
     // Process MAVLink commands if MAVLink is active
     if (currentInputSource_ == InputSource::MAVLINK) {
         processMavlinkCommands();
     } else {
+        // No autopilot command path: keep the frame counter in step so a later return to
+        // MAVLink never treats an old frame as a fresh rate command.
+        lastMavCmdCount_ = mavlink_.getCommandCount();
         // The scale is a property of the AUTOPILOT command path alone. With the web or the
         // fail-safe in charge nothing is being scaled, so the reported scale must say so rather
         // than freeze at whatever the autopilot path last computed — a stale 0.18 on the portal
@@ -187,8 +223,29 @@ void VehicleController::update() {
         updateGearBoostPID();
     }
 
-    // Update steering position control
+    // Update steering position control (after canController_.update(): it sees this
+    // iteration's angle frames)
     steering_.update();
+
+    // Re-derive the steering mode once more: steering_.update() may just have changed the
+    // sensor health, and the MAVLink report / web telemetry built after this loop must see
+    // a mode consistent with it (steer_mode is position exactly when steer_sensor_ok).
+    updateSteerMode();
+
+    // Final answer to a pending "Set sensor zero"
+    if (steerZeroResponsePortal_ != nullptr &&
+        steering_.getZeroState() != SteeringController::ZeroState::RUNNING) {
+        if (steering_.getZeroState() == SteeringController::ZeroState::OK) {
+            steerZeroResponsePortal_->sendResponse(true,
+                "Sensor zero confirmed (angle 0.0°) — capture Left and Right again");
+        } else {
+            const char* why = steering_.getZeroError();
+            String reason = why ? String(why) : String("unknown");
+            if (reason == "range_latched") reason += " — restart the vehicle and retry";
+            steerZeroResponsePortal_->sendResponse(false, "Sensor zero failed: " + reason);
+        }
+        steerZeroResponsePortal_ = nullptr;
+    }
 
     // Update position control for transmission actuator
     transmission_.update();
@@ -237,6 +294,11 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
     if (cmd.cmd == "set_gear_default") {
         processSetGearDefaultCommand(cmd.strValue, cmd.floatValue, webPortal);
         return;
+    } else if (cmd.cmd == "set_gear_code" || cmd.cmd == "reset_gear_codes") {
+        // Gear code calibration is aztec-only (3-bit gear code); the quad bike senses
+        // one line per gear. Answer explicitly so an old cached page gets a reply.
+        webPortal.sendResponse(false, "Gear codes not used on this vehicle");
+        return;
     } else if (cmd.cmd == "move_to_position") {
         processMoveToPositionCommand(cmd.floatValue, webPortal);
         return;
@@ -249,12 +311,20 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
         processLightCommand(cmd.boolValue, webPortal);
         return;
     } else if (cmd.cmd == "set_wheel_lock") {
-        // Front-wheel lock always available (not restricted by input source)
+        // Front-wheel lock: not restricted by input source; rejected on aztec (not fitted)
         processWheelLockCommand(cmd.boolValue, webPortal);
         return;
+    } else if (cmd.cmd == "set_relay_test") {
+        // Relay wiring test: not restricted by input source; RelayController only
+        // accepts an ON while the ignition is OFF and no function relay is energized
+        processRelayTestCommand(cmd.relay, cmd.boolValue, webPortal);
         return;
     } else if (cmd.cmd == "steer_cal_center" || cmd.cmd == "steer_cal_left" || cmd.cmd == "steer_cal_right") {
         processSteerCalCommand(cmd.cmd, webPortal);
+        return;
+    } else if (cmd.cmd == "steer_lws_zero") {
+        // Sensor zero-set: no ignition / RPM / standstill precondition, any input source
+        processSteerZeroCommand(webPortal);
         return;
     } else if (cmd.cmd == "steer_jog") {
         processSteerJogCommand(cmd.floatValue, webPortal);
@@ -292,6 +362,9 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
     } else if (cmd.cmd == "speed_cal_circ") {
         processSpeedCalCircCommand(cmd.floatValue, webPortal);
         return;
+    } else if (cmd.cmd == "set_speed_limit_floor") {
+        processSetSpeedLimitFloorCommand(cmd.floatValue, webPortal);
+        return;
     } else if (cmd.cmd == "set_steer_sca_base") {
         processSetSteerScaBaseCommand(cmd.floatValue, webPortal);
         return;
@@ -301,6 +374,10 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
     } else if (cmd.cmd == "can_probe") {
         // ECU capability probe — available regardless of input source (diagnostic)
         processCanProbeCommand(webPortal);
+        return;
+    } else if (cmd.cmd == "can_sniff") {
+        // CAN bus sniffer — diagnostic, available regardless of input source
+        processCanSniffCommand(webPortal);
         return;
     }
 
@@ -373,6 +450,9 @@ String VehicleController::getFromGearString() const {
 void VehicleController::applyFailsafe() {
     if (currentInputSource_ == InputSource::FAILSAFE && !failsafeApplied_) {
         Debug::printlnFeature(DebugFeature::VEHICLE, "[FAILSAFE] Entering safe state");
+        // Centres with a healthy sensor; refused without one (never centres blind). A rate
+        // drive was already stopped this iteration: FAILSAFE makes the mode BLOCKED and
+        // updateSteerMode() ran stopRate() before this.
         steering_.setSteeringPercent(0.0f);
         throttle_.idle();
         webThrottleDemandPct_ = 0.0f;  // a demand that outlives the idle would reopen the throttle
@@ -396,7 +476,53 @@ void VehicleController::applyFailsafe() {
     }
 }
 
+void VehicleController::updateSteerMode() {
+    const bool sourceIsMavlink = (currentInputSource_ == InputSource::MAVLINK);
+    const bool apKnown = mavlink_.hasAutopilotMode();
+    const bool apManual = mavlink_.getAutopilotCustomMode() == ROVER_CUSTOM_MODE_MANUAL;
+    const SteerMode mode = steerModeSelect(steering_.isSensorOk(), sourceIsMavlink, apKnown, apManual);
+    if (mode == steerMode_) return;
+
+    // Reason: the sensor state when it is what changed, else the source, else the autopilot mode.
+    char reason[40];
+    if (mode == SteerMode::POSITION) {
+        snprintf(reason, sizeof(reason), "sensor OK");
+    } else if (steerMode_ == SteerMode::POSITION) {
+        snprintf(reason, sizeof(reason), "sensor %s",
+                 SteeringController::faultToken(steering_.getSensorFault()));
+    } else if (!sourceIsMavlink) {
+        snprintf(reason, sizeof(reason), "source %s",
+                 (currentInputSource_ == InputSource::WEB) ? INPUT_SOURCE_NAME_WEB : INPUT_SOURCE_NAME_FAILSAFE);
+    } else if (!apKnown) {
+        snprintf(reason, sizeof(reason), "autopilot mode unknown");
+    } else if (apManual) {
+        snprintf(reason, sizeof(reason), "autopilot MANUAL");
+    } else {
+        snprintf(reason, sizeof(reason), "autopilot mode %lu", (unsigned long)mavlink_.getAutopilotCustomMode());
+    }
+    Debug::printfFeature(DebugFeature::SERVO, "[STEER] mode: %s -> %s (%s)\n",
+                         steerModeToken(steerMode_), steerModeToken(mode), reason);
+
+    // Every change stops a rate-owned drive (a web jog/nudge and a closed-loop move are
+    // untouched) and every entry into RATE needs the stick centred once before motion.
+    if (steerMode_ == SteerMode::RATE) {
+        steering_.stopRate();
+    }
+    if (mode == SteerMode::RATE) {
+        steering_.disarmRate();
+        Debug::printlnFeature(DebugFeature::SERVO, "[STEER] rate mode: centre the stick to arm");
+    }
+    steerMode_ = mode;
+}
+
 void VehicleController::processMavlinkCommands() {
+    // Fresh-frame detection for the rate drive: the decoded channels are re-read every loop,
+    // but only a NEW SERVO_OUTPUT_RAW may refresh the rate jog (else a stale value would keep
+    // the motor running past STEER_JOG_TIMEOUT_MS).
+    const uint32_t cmdCount = mavlink_.getCommandCount();
+    const bool freshFrame = (cmdCount != lastMavCmdCount_);
+    lastMavCmdCount_ = cmdCount;
+
     if (!mavlink_.isSignalValid()) {
         return;  // Safety check
     }
@@ -405,8 +531,17 @@ void VehicleController::processMavlinkCommands() {
     // command and the actuator — the same place ArduPilot's own MANUAL_OPTIONS scaling sat,
     // only on the side of the link that owns the speed measurement. The web set_steering path
     // below is deliberately NOT scaled: it is a bench control with no road speed behind it.
+    // In RATE mode (no sensor, MANUAL) the same scaled value is a rotation-rate command,
+    // passed on once per fresh frame; POSITION and BLOCKED keep the percent path (refused
+    // without a sensor).
     float steeringPct = applySteeringScale(mavlink_.getSteering());
-    steering_.setSteeringPercent(steeringPct);
+    if (steerMode_ == SteerMode::RATE) {
+        if (freshFrame) {
+            steering_.setRateCommand(steeringPct);
+        }
+    } else {
+        steering_.setSteeringPercent(steeringPct);
+    }
 
     // Apply throttle — skipped when gear boost PID is active (PID overrides)
     if (!gearBoostActive_) {
@@ -468,7 +603,8 @@ void VehicleController::processMavlinkCommands() {
     bool frontLightOn = mavlink_.getFrontLight();
     relayController_.setFrontLight(frontLightOn);
 
-    // Apply front-wheel lock (channel 7)
+    // Front-wheel lock (channel 7) — fitted on the quad; on aztec (not fitted)
+    // RelayController rejects a LOCK
     relayController_.setWheelLock(mavlink_.getWheelLock());
 }
 
@@ -504,6 +640,11 @@ void VehicleController::processGearCommand(const String& gearStr, WebPortal& web
 }
 
 void VehicleController::processSteeringCommand(float value, WebPortal& webPortal) {
+    if (!steering_.isSensorOk()) {
+        // Defence in depth: the web UI locks the slider while steer_mode != position.
+        webPortal.sendResponse(false, "Steering rejected: no steering sensor — use Jog/Nudge");
+        return;
+    }
     if (!steering_.setSteeringPercent(value)) {
         webPortal.sendResponse(false, "Steering rejected (not calibrated or sensor fault)");
         return;
@@ -534,7 +675,7 @@ void VehicleController::processThrottleCommand(float value, WebPortal& webPortal
 }
 
 // ============================================================================
-// MAX-SPEED LIMITER — SPEED_MAX ceiling and proportional taper
+// MAX-SPEED LIMITER — SPEED_MAX ceiling, proportional taper and integral trim
 // ============================================================================
 
 float VehicleController::getSpeedLimitMs() const {
@@ -572,15 +713,25 @@ void VehicleController::logSpeedLimitChange(float limitMs) {
     }
 }
 
+void VehicleController::clearSpeedLimitSaturation(uint32_t now) {
+    satSinceMs_ = 0;
+    if (satActive_) {
+        satActive_ = false;
+        satClearedMs_ = now ? now : 1;   // starts the display hold; 0 is the "never" sentinel
+    }
+}
+
 float VehicleController::applySpeedLimit(float throttlePct) {
     float limitMs = getSpeedLimitMs();
     logSpeedLimitChange(limitMs);
+    uint32_t now = millis();
 
     if (limitMs <= 0.0f) {
-        // No usable SPEED_MAX => no limiting at all. Reset the taper so the next limit that
-        // arrives never resumes from a stale low ceiling.
-        limiterCeilingPct_ = 100.0f;
+        // No usable SPEED_MAX => no limiting at all. Reset the law (ceiling 100 %, trim 0) so the
+        // next limit that arrives never resumes from a stale ceiling or a stale trim.
+        limiter_.reset();
         limiterLastMs_ = 0;
+        clearSpeedLimitSaturation(now);
         return throttlePct;
     }
 
@@ -588,48 +739,58 @@ float VehicleController::applySpeedLimit(float throttlePct) {
     // lost sensor reads 0 m/s — clamping throttle on a reading we do not trust, mid-manoeuvre,
     // is the more dangerous failure. Over-speed protection assumes a working sensor.
     if (!speedSensor_.isValid()) {
-        uint32_t now = millis();
         if (lastSpeedLimitWarnMs_ == 0 || (now - lastSpeedLimitWarnMs_) >= SPEED_LIMIT_WARN_MS) {
             lastSpeedLimitWarnMs_ = now;
             Debug::printlnFeature(DebugFeature::VEHICLE,
                 "[SPEED] WARNING: speed limit active but speed reading is invalid — not clamping (fail open)");
         }
-        limiterCeilingPct_ = 100.0f;
+        limiter_.reset();
         limiterLastMs_ = 0;
+        clearSpeedLimitSaturation(now);
         return throttlePct;
     }
     lastSpeedLimitWarnMs_ = 0;
 
-    // Proportional taper: full authority up to `limit - band`, falling linearly to the floor at
-    // the limit, floor above it. A floor rather than zero — cutting all drive mid-corner is a
-    // stability event, not a safety feature.
-    float over = speedSensor_.getSpeedMs() - (limitMs - SPEED_LIMIT_TAPER_BAND_MS);
-    float targetPct;
-    if (over <= 0.0f) {
-        targetPct = 100.0f;
-    } else if (over >= SPEED_LIMIT_TAPER_BAND_MS) {
-        targetPct = SPEED_LIMIT_FLOOR_PCT;
-    } else {
-        targetPct = 100.0f - (100.0f - SPEED_LIMIT_FLOOR_PCT) * (over / SPEED_LIMIT_TAPER_BAND_MS);
-    }
-
-    // Slew-limit the CEILING (not the demand — the driver's own stick moves must pass through at
-    // full rate). dt is capped at 1 s and the first evaluation adopts the target directly, so a
+    // Taper + integral trim + ceiling slew (include/SpeedLimiterLaw.h). dt is capped at 1 s and
+    // ignored on the first evaluation, which adopts the taper directly with a zero trim, so a
     // stalled or just-restarted loop cannot integrate an unknown interval into a step change.
-    uint32_t now = millis();
-    if (limiterLastMs_ == 0) {
-        limiterCeilingPct_ = targetPct;
-    } else {
-        float dt = (now - limiterLastMs_) / 1000.0f;
-        if (dt > 1.0f) dt = 1.0f;
-        float maxStep = SPEED_LIMIT_CEILING_SLEW_PCT_S * dt;
-        float delta = constrain(targetPct - limiterCeilingPct_, -maxStep, maxStep);
-        limiterCeilingPct_ += delta;
-    }
-    limiterLastMs_ = now;
-    limiterCeilingPct_ = constrain(limiterCeilingPct_, SPEED_LIMIT_FLOOR_PCT, 100.0f);
+    SpeedLimiterParams params;
+    params.taperFraction = SPEED_LIMIT_TAPER_FRACTION;
+    params.taperMinMs = SPEED_LIMIT_TAPER_MIN_MS;
+    params.taperMaxMs = SPEED_LIMIT_TAPER_MAX_MS;
+    params.floorPct = limiterFloorPct_;
+    params.kiPctSPerMs = SPEED_LIMIT_TRIM_KI_PCT_S_PER_MS;
+    params.risePctS = SPEED_LIMIT_TRIM_RISE_PCT_S;
+    params.slewPctS = SPEED_LIMIT_CEILING_SLEW_PCT_S;
+    params.bindMarginPct = SPEED_LIMIT_BIND_MARGIN_PCT;
 
-    return min(throttlePct, limiterCeilingPct_);
+    float dt = 0.0f;
+    if (limiterLastMs_ != 0) {
+        dt = (now - limiterLastMs_) / 1000.0f;
+        if (dt > 1.0f) dt = 1.0f;
+    }
+    limiterLastMs_ = now ? now : 1;   // 0 is the "first call" sentinel
+
+    const float speedMs = speedSensor_.getSpeedMs();
+    const float out = speedLimiterStep(limiter_, params, throttlePct, speedMs, limitMs, dt);
+
+    // Saturation (design D6): the ceiling has run out of authority — at the floor — while the
+    // vehicle stays clearly above the limit. Entry needs SPEED_LIMIT_SAT_HOLD_MS of the raw
+    // condition; it clears on the first evaluation where any part fails (no release debounce).
+    // Shown in the web console only: deliberately no Debug line and no MAVLink message.
+    const bool raw = (limiter_.ceilPct <= limiterFloorPct_ + 0.5f) &&
+                     (speedMs > limitMs + SPEED_LIMIT_SAT_MARGIN_MS);
+    if (raw) {
+        if (satSinceMs_ == 0) {
+            satSinceMs_ = now ? now : 1;
+        } else if (!satActive_ && (now - satSinceMs_) >= SPEED_LIMIT_SAT_HOLD_MS) {
+            satActive_ = true;
+        }
+    } else {
+        clearSpeedLimitSaturation(now);
+    }
+
+    return out;
 }
 
 void VehicleController::processSpeedCalPprCommand(float value, WebPortal& webPortal) {
@@ -788,6 +949,33 @@ float VehicleController::applySteeringScale(float steeringPct) {
     // steeringPct is already signed about a centre of ZERO, so multiplying scales the DEVIATION
     // FROM CENTRE and leaves a centred command centred: a driver going straight feels nothing.
     return steeringPct * steerScaleApplied_;
+}
+
+void VehicleController::processSetSpeedLimitFloorCommand(float value, WebPortal& webPortal) {
+    if (isnan(value) || value < SPEED_LIMIT_FLOOR_MIN_PCT || value > SPEED_LIMIT_FLOOR_MAX_PCT) {
+        webPortal.sendResponse(false, "Speed-limiter floor out of range (" +
+                                      String(SPEED_LIMIT_FLOOR_MIN_PCT, 0) + "-" +
+                                      String(SPEED_LIMIT_FLOOR_MAX_PCT, 0) + " %)");
+        return;
+    }
+
+    // Persist first: if the write fails, the RAM value is left as it was, so what runs is always
+    // what the next boot will load. The "speed" namespace is shared with the speed-sensor
+    // calibration and odometer — write the one key, never clear() it.
+    Preferences prefs;
+    bool ok = false;
+    if (prefs.begin("speed", false)) {
+        ok = prefs.putFloat(SPEED_LIMIT_FLOOR_NVS_KEY, value) == sizeof(float);
+        prefs.end();
+    }
+    if (!ok) {
+        webPortal.sendResponse(false, "Failed to save the speed-limiter floor");
+        return;
+    }
+
+    limiterFloorPct_ = value;   // the law re-clamps trim and ceiling on its next evaluation
+    webPortal.sendResponse(true, "Speed-limiter floor set to " + String(value, 1) + " %");
+    Debug::printfFeature(DebugFeature::VEHICLE, "[SPEED] Limiter floor set to %.1f %%\n", value);
 }
 
 void VehicleController::processSetSteerScaBaseCommand(float value, WebPortal& webPortal) {
@@ -968,11 +1156,34 @@ void VehicleController::processCanProbeCommand(WebPortal& webPortal) {
             break;
         case CANController::ProbeStart::BUSY:
             Debug::printlnFeature(DebugFeature::VEHICLE, "[WEB] ECU probe deferred (busy)");
-            webPortal.sendResponse(false, "ECU probe busy (gear change or probe in progress)");
+            webPortal.sendResponse(false, "ECU probe busy (gear change, probe or CAN sniffer in progress)");
             break;
         case CANController::ProbeStart::NO_ECU:
             Debug::printlnFeature(DebugFeature::VEHICLE, "[WEB] ECU probe: no ECU / disconnected");
             webPortal.sendResponse(false, "No ECU / CAN disconnected");
+            break;
+    }
+}
+
+void VehicleController::processCanSniffCommand(WebPortal& webPortal) {
+    bool gearChangeActive = transmission_.isGearChangeActive() || transmission_.needsThrottleBoost();
+    switch (canController_.startSniff(CAN_SNIFF_WINDOW_MS, gearChangeActive)) {
+        case CANController::SniffStart::STARTED:
+            Debug::printlnFeature(DebugFeature::VEHICLE, "[WEB] CAN sniffer started");
+            webPortal.sendResponse(true, "CAN sniffer started");
+            break;
+        case CANController::SniffStart::BUSY_PROBE:
+            webPortal.sendResponse(false, "CAN sniffer refused: ECU probe active");
+            break;
+        case CANController::SniffStart::BUSY_LWS_ZERO:
+            webPortal.sendResponse(false, "CAN sniffer refused: sensor zero-set active");
+            break;
+        case CANController::SniffStart::NOT_INITIALIZED:
+            webPortal.sendResponse(false, "CAN sniffer refused: CAN not initialized");
+            break;
+        case CANController::SniffStart::BUSY:
+        default:
+            webPortal.sendResponse(false, "CAN sniffer refused: busy (gear change or already running)");
             break;
     }
 }
@@ -1025,36 +1236,82 @@ void VehicleController::setFrontLight(bool on) {
     Debug::printfFeature(DebugFeature::VEHICLE, "[LIGHT] Front light: %s\n", on ? "ON" : "OFF");
 }
 
-void VehicleController::setWheelLock(bool locked) {
-    relayController_.setWheelLock(locked);
-    Debug::printfFeature(DebugFeature::VEHICLE, "[WHEEL_LOCK] Front wheels: %s\n", locked ? "LOCKED" : "UNLOCKED");
+bool VehicleController::setWheelLock(bool locked) {
+    bool ok = relayController_.setWheelLock(locked);
+    if (ok) {
+        Debug::printfFeature(DebugFeature::VEHICLE, "[WHEEL_LOCK] Front wheels: %s\n", locked ? "LOCKED" : "UNLOCKED");
+    }
+    return ok;
 }
 
 void VehicleController::processWheelLockCommand(bool locked, WebPortal& webPortal) {
-    setWheelLock(locked);
-    webPortal.sendResponse(true, String("Front wheels ") + (locked ? "LOCKED" : "UNLOCKED"));
+    if (!isWheelLockFitted()) {
+        // Aztec: no relay behind the function — never report a lock as applied.
+        relayController_.setWheelLock(locked);   // logs the rejection once
+        webPortal.sendResponse(false, "Front-wheel lock not fitted on this vehicle");
+        return;
+    }
+    bool ok = setWheelLock(locked);
+    webPortal.sendResponse(ok, ok ? String("Front wheels ") + (locked ? "LOCKED" : "UNLOCKED")
+                                  : String("Wheel lock command rejected"));
+}
+
+void VehicleController::processRelayTestCommand(int32_t relayNumber, bool on, WebPortal& webPortal) {
+    // Out-of-range numbers are folded to 0, which RelayController rejects with the
+    // "must be 1-4" text (a uint8_t cast alone would wrap e.g. 257 onto Relay_1).
+    uint8_t n = (relayNumber >= 1 && relayNumber <= RELAY_COUNT) ? (uint8_t)relayNumber : 0;
+    const char* reason = nullptr;
+    bool ok = relayController_.setRelayTest(n, on, reason);
+    if (!ok) {
+        webPortal.sendResponse(false, String("Relay test: ") + (reason ? reason : "rejected"));
+        return;
+    }
+    webPortal.sendResponse(true, String("Relay test: Relay_") + String(n) + (on ? " ON" : " OFF"));
 }
 
 void VehicleController::processSteerCalCommand(const String& which, WebPortal& webPortal) {
-    bool ok;
-    String what;
     if (which == "steer_cal_center") {
-        ok = steering_.captureCenter();
-        what = "center";
-    } else if (which == "steer_cal_left") {
-        ok = steering_.captureLeftLimit();
-        what = "left limit";
-    } else {
-        ok = steering_.captureRightLimit();
-        what = "right limit";
-    }
-
-    if (!ok) {
-        webPortal.sendResponse(false, "Capture " + what + " failed (sensor fault, no center, or too close to center)");
+        // The center is the steering sensor's own stored zero: there is no center capture.
+        webPortal.sendResponse(false,
+            "Capture center removed: the center is the sensor zero — use \"Set sensor zero\"");
         return;
     }
-    webPortal.sendResponse(true, "Steering " + what + " saved: " + String(steering_.getRawAngle()) +
-                                 (steering_.isCalibrated() ? "" : " (calibration incomplete)"));
+
+    const bool left = (which == "steer_cal_left");
+    const String what = left ? "left limit" : "right limit";
+    const bool ok = left ? steering_.captureLeftLimit() : steering_.captureRightLimit();
+    if (!ok) {
+        const char* reason = steering_.getCaptureError();
+        webPortal.sendResponse(false, "Capture " + what + " failed: " + String(reason ? reason : "unknown"));
+        return;
+    }
+
+    // Saved immediately; reported in degrees, firmware sign (+ = right)
+    String msg = "Steering " + what + " saved: " +
+                 String((float)steering_.getLastCapturePos() / 10.0f, 1) + "°";
+    if (steering_.isLastCaptureBeyondSafe()) {
+        msg += " — WARNING: beyond the ±550° safe range, near the sensor latch at ~600°"
+               " (closed-loop moves stop at 550°)";
+    }
+    if (steering_.isLastCaptureToggled()) {
+        // The capture inferred the sensor direction; the opposite limit was cleared.
+        msg += String(" — sensor direction detected: ") +
+               (steering_.isSensorInverted() ? "mirrored" : "normal") +
+               " — capture the " + (left ? "right" : "left") + " limit again";
+    } else {
+        msg += steering_.isCalibrated() ? " — calibration complete" : " — capture the other limit too";
+    }
+    webPortal.sendResponse(true, msg);
+}
+
+void VehicleController::processSteerZeroCommand(WebPortal& webPortal) {
+    if (!steering_.requestSensorZero()) {
+        const char* why = steering_.getZeroRefusal();
+        webPortal.sendResponse(false, "Sensor zero refused: " + String(why ? why : "unknown"));
+        return;
+    }
+    steerZeroResponsePortal_ = &webPortal;   // final result sent from update()
+    webPortal.sendResponse(true, "Sensor zero started — Left/Right limits will be erased");
 }
 
 void VehicleController::processSteerJogCommand(float value, WebPortal& webPortal) {

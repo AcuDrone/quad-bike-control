@@ -46,16 +46,39 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.gear = vehicleController_.getCurrentGearString();
     telemetry.steering_pct = (int)vehicleController_.getSteeringPercent();
     const SteeringController& steering = vehicleController_.getSteering();
-    telemetry.steer_center = steering.getCenter();
-    telemetry.steer_left = steering.getLeftLimit();
-    telemetry.steer_right = steering.getRightLimit();
-    telemetry.steer_position = steering.getRawAngle();
+    // Steering angle sensor (Bosch LWS on CAN): degrees, firmware sign (+ = right)
+    const LwsSensor& lws = steering.lwsSensor();
+    telemetry.steer_angle_valid = steering.hasAngle();
+    telemetry.steer_angle = steering.getAngleDeg();
+    telemetry.steer_rate_valid = steering.hasRate();
+    telemetry.steer_rate = (float)steering.getRateDegS();
+    telemetry.steer_left_set = steering.getLeftLimit() != SteeringController::POS_UNSET;
+    telemetry.steer_left = (float)steering.getLeftLimit() / 10.0f;
+    telemetry.steer_right_set = steering.getRightLimit() != SteeringController::POS_UNSET;
+    telemetry.steer_right = (float)steering.getRightLimit() / 10.0f;
+    telemetry.steer_lws_seen = lws.hasFrame();
+    telemetry.steer_lws_ok = lws.statusOk();
+    telemetry.steer_lws_cal = lws.statusCal();
+    telemetry.steer_lws_adj = lws.statusAdj();
+    telemetry.steer_lws_fault_code = lws.faultCode();
+    telemetry.steer_sensor_fault = SteeringController::faultToken(steering.getSensorFault());
+    telemetry.steer_mode = steerModeToken(vehicleController_.getSteerMode());
     telemetry.steer_sensor_ok = steering.isSensorOk();
     telemetry.steer_calibrated = steering.isCalibrated();
+    telemetry.steer_range_warning = steering.isRangeWarning();
+    telemetry.steer_sensor_inv = steering.isSensorInverted();
+    telemetry.steer_lws_fps = lws.fps();
+    telemetry.steer_lws_crc_err = lws.crcErrors();
+    telemetry.steer_lws_cnt_err = lws.counterErrors();
+    telemetry.steer_lws_miss = lws.missedFrames();
+    telemetry.steer_zero_state = SteeringController::zeroStateToken(steering.getZeroState());
+    telemetry.steer_zero_error = steering.getZeroError();
     telemetry.steer_motor_current = steering.getMotorCurrent();
     telemetry.steer_fet_temp = steering.getFetTemp();
     telemetry.steer_vesc_fault = steering.getVescFault();
     telemetry.steer_driver_ok = steering.isDriverOk();
+    telemetry.steer_vin = steering.getInputVoltage();
+    telemetry.steer_vin_low = telemetry.steer_driver_ok && telemetry.steer_vin < STEER_VIN_LOW_V;
     telemetry.throttle_us = vehicleController_.getThrottleUs();
     telemetry.throttle_idle_us = vehicleController_.getThrottleIdleUs();
     telemetry.throttle_full_us = vehicleController_.getThrottleFullUs();
@@ -74,12 +97,8 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.vehicle_speed_ms = vehicleController_.getVehicleSpeedMs();
     telemetry.speed_valid = vehicleController_.isVehicleSpeedValid();
     telemetry.speed_ppr = vehicleController_.getSpeedPulsesPerRev();
+    telemetry.speed_pulse_total = vehicleController_.getSpeedPulseTotal();
     telemetry.speed_circ_mm = vehicleController_.getSpeedWheelCircumferenceMm();
-    // Noise diagnostics, for the bench: on a stationary vehicle with the engine running these
-    // should all read 0 — anything else is ignition-coil pickup, quantified.
-    telemetry.speed_raw_pulses = vehicleController_.getSpeedRawPulses();
-    telemetry.speed_stray_pulses = vehicleController_.getSpeedStrayPulses();
-    telemetry.speed_rej_windows = vehicleController_.getSpeedRejectedWindows();
     // Distance counters — the exact millimetre counters scaled to km at this point, not a
     // separately maintained total. Never gated: distance already driven stays true.
     telemetry.odo_km = vehicleController_.getOdoKm();
@@ -91,6 +110,11 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     // The one and only ceiling: the autopilot's SPEED_MAX. 0 means no limit.
     telemetry.speed_limit_ms = vehicleController_.getSpeedLimitMs();
     telemetry.speed_limit_ceil = vehicleController_.getSpeedLimitCeilingPct();
+    // The one persisted limiter setting, and the saturation indicator (live flag + the firmware's
+    // display hold, so every client — including one that joins late — shows the same state).
+    telemetry.speed_limit_floor = vehicleController_.getSpeedLimitFloorPct();
+    telemetry.speed_limit_sat = vehicleController_.isSpeedLimitSaturated();
+    telemetry.speed_limit_sat_held = vehicleController_.isSpeedLimitSatHeld();
     // Steering speed scaling: the applied scale, the base actually in use, which source that
     // base came from, and any live bench override — the four facts that explain the scale.
     telemetry.steer_scale = vehicleController_.getSteerScale();
@@ -107,6 +131,7 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
         telemetry.fuel_level = vehicleData.fuelLevel;
         telemetry.map_kpa = vehicleData.mapKpa;
         telemetry.module_voltage_mv = vehicleData.moduleVoltageMv;
+        telemetry.ecu_voltage_low = (vehicleData.moduleVoltageMv / 1000.0f) < ECU_VOLTAGE_LOW_V;
         telemetry.intake_temp = vehicleData.intakeTemp;
         telemetry.engine_load = vehicleData.engineLoad;
         telemetry.can_status = "connected";
@@ -118,6 +143,7 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
         telemetry.fuel_level = 0;
         telemetry.map_kpa = 0;
         telemetry.module_voltage_mv = 0;
+        telemetry.ecu_voltage_low = false;
         telemetry.intake_temp = 0;
         telemetry.engine_load = 0;
         telemetry.can_status = "disconnected";
@@ -128,6 +154,14 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.probe_present = telemetry.probe.running ||
         (telemetry.probe.complete &&
          (millis() - telemetry.probe.completedAtMs) < PROBE_RESULT_TTL);
+
+    // CAN sniffer: same idea, by reference (no copy of the table).
+    {
+        const CANController::SniffResults& sn = vehicleController_.getSniffResults();
+        bool fresh = sn.running ||
+            (sn.complete && (millis() - sn.completedAtMs) < SNIFF_RESULT_TTL);
+        telemetry.sniff = fresh ? &sn : nullptr;
+    }
 
     mavlink_.getRawChannels(telemetry.mav_channels);
     MavlinkInterface::LinkQuality linkQuality = mavlink_.getLinkQuality();
@@ -142,9 +176,21 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.is_cranking = (ignitionState == RelayController::IgnitionState::CRANKING);
     telemetry.front_light_on = vehicleController_.getFrontLight();
     telemetry.wheel_lock_on = vehicleController_.getWheelLock();
+    telemetry.wheel_lock_fitted = vehicleController_.isWheelLockFitted();
+    telemetry.relay_test = vehicleController_.getRelayTestBits();
 
     telemetry.firmware_version = FIRMWARE_VERSION;
     telemetry.board = BOARD_NAME;
+    telemetry.wifi_ssid = WIFI_AP_SSID;
+    {
+        // Static AP address — formatted once, then reused (no String churn at 5 Hz).
+        static char wifiIp[16] = "";
+        if (wifiIp[0] == '\0') {
+            const IPAddress ip = WIFI_AP_IP;
+            snprintf(wifiIp, sizeof(wifiIp), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
+        }
+        memcpy(telemetry.wifi_ip, wifiIp, sizeof(telemetry.wifi_ip));
+    }
 
     const TransmissionController& trans = vehicleController_.getTransmission();
     telemetry.gear_default_r = trans.getGearPosition(TransmissionController::Gear::GEAR_REVERSE);

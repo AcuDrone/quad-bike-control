@@ -15,7 +15,7 @@ mapping) and the **wire contract** (every outbound message field by field, with 
 | Link | UART1, 8N1, **115200** (`MAVLINK_BAUD_RATE`), channel `MAVLINK_COMM_0` |
 
 ArduPilot forwards **target-less** messages (`HEARTBEAT`, `EFI_STATUS`, `VFR_HUD`,
-`NAMED_VALUE_FLOAT`, `STATUSTEXT`, and
+`NAMED_VALUE_FLOAT`, `NAMED_VALUE_INT`, `STATUSTEXT`, and
 `VISION_POSITION_DELTA`, which it also consumes itself) from TELEM2 to every other MAVLink port, so
 they reach the GCS unchanged; `COMMAND_ACK` **is** addressed — to the requester — and rides the route
 ArduPilot learned from this component's own outbound traffic. Mission Planner will **not** populate
@@ -144,13 +144,13 @@ outputs must align with these indices (see `ServoChannelConfig` in `include/Cons
 | `servo3_raw` | Transmission | R <1200, N 1201–1520, L >1520 |
 | `servo4_raw` | Ignition | OFF <1200, ACC 1201–1520, IGNITION >1520 |
 | `servo6_raw` | Front light | >1520 = ON |
-| `servo7_raw` | Front-wheel lock | >1520 = LOCKED |
+| `servo7_raw` | Front-wheel lock — fitted on the quad (master); **not fitted on aztec**: decoded but ignored | >1520 = LOCKED (rejected on aztec) |
 
 (Channel 5 is intentionally unused.)
 
 ## Vehicle state reported back to the autopilot
 
-Ten outbound message types: six periodic, one reactive acknowledgement, three requests toward
+Eleven outbound message types: seven periodic, one reactive acknowledgement, three requests toward
 the autopilot. Scheduling is internal to `MavlinkInterface::report()`, called every loop iteration from
 `src/main.cpp`; the `StateReport` snapshot it consumes is declared in `include/MavlinkInterface.h`.
 
@@ -160,28 +160,37 @@ the autopilot. Scheduling is internal to `MavlinkInterface::report()`, called ev
 | `EFI_STATUS` | 225 | 5 Hz (`MAVLINK_REPORT_TX_MS` = 200 ms) | All engine/vehicle telemetry in one message | none — fields go NaN instead |
 | `VFR_HUD` | 74 | 5 Hz (same tick) | Hall ground speed + throttle for a HUD | none |
 | `NAMED_VALUE_FLOAT` | 251 | 5 Hz (same tick) ×3 + 1 Hz (`MAVLINK_STEER_SLOW_TX_MS` = 1000 ms) ×3 | The six steering values: `STEER_POS`, `STEER_A`, `VESC_V`, `VESC_TEMP`, `VESC_OK`, `STEER_SCA` | none — values go NaN instead (`VESC_OK` and `STEER_SCA` never do) |
+| `NAMED_VALUE_INT` | 252 | 1 Hz (`MAVLINK_STEER_SLOW_TX_MS`) + once immediately on every change | `STEER_MODE`: steering control mode, `0` = position, `1` = rate (no sensor), `2` = blocked | none — always sent, never any other value |
 | `VISION_POSITION_DELTA` | 11011 | ≤ 5 Hz (same tick) | Wheel odometry as an EKF3-fusable body-frame delta | **heavily gated** — silence over zeros |
-| `STATUSTEXT` | 253 | on change, ≥ 250 ms apart | Gear / ignition / fail-safe transitions | only on an actual change |
+| `STATUSTEXT` | 253 | on change, ≥ 250 ms apart | Gear / ignition / fail-safe transitions; steering mode changes | only on an actual change |
 | `COMMAND_ACK` | 77 | reactive | Answer to a `COMMAND_LONG` addressed exactly to 1/25 | broadcasts get **no** ACK |
 | `REQUEST_DATA_STREAM` | 66 | ≤ 1 per 3 s | Ask for `SERVO_OUTPUT_RAW` | while the command rate is below 10 Hz |
 | `COMMAND_LONG` (`SET_MESSAGE_INTERVAL`) | 76 | ≤ 1 per 3 s | Same request, modern form | same gate, sent together |
 | `PARAM_REQUEST_READ` | 20 | 0.2 Hz each | Poll `SPEED_MAX` and `MOT_SPD_SCA_BASE` (one request per loop iteration, never both at once) | link up + autopilot learned |
 
 Engine data comes from the CAN bus (`CANController::VehicleData`); ground speed, odometer and trip
-come from the hall wheel-speed sensor (GPIO 8 / X2), independently of CAN health. Steering-VESC
-electrical data comes from the VESC's own UART, and the measured steering position from the AS5600
-on the steering shaft — three more sources, each with its own validity gate.
+come from the hall wheel-speed sensor (GPIO 17), independently of CAN health. Steering-VESC
+electrical data comes from the VESC's own UART, and the measured steering position from the Bosch
+LWS steering-angle sensor on the steering shaft (frame `0x305` on the same CAN bus as the ECU, with
+its own health gate) — three more sources, each with its own validity gate.
 
 Value-to-name summary for the six steering `NAMED_VALUE_FLOAT` messages:
 
 | Value | `name` | Rate | Source | Comp |
 |-------|--------|------|--------|------|
-| Steering position, **MEASURED** (%) | `STEER_POS` | 5 Hz | AS5600 | 25 |
+| Steering position, **MEASURED** (%) | `STEER_POS` | 5 Hz | Bosch LWS (CAN `0x305`) | 25 |
 | Steering motor current (A) | `STEER_A` | 5 Hz | VESC UART | 25 |
-| VESC input voltage, 24 V rail (V) | `VESC_V` | 5 Hz | VESC UART | 25 |
+| VESC input voltage, VESC supply rail (V) | `VESC_V` | 5 Hz | VESC UART | 25 |
 | VESC FET temperature (°C) | `VESC_TEMP` | 1 Hz | VESC UART | 25 |
 | VESC link health (`1.0` / `0.0`) | `VESC_OK` | 1 Hz | VESC UART | 25 |
 | Applied steering speed-scale (`0`…`1`, `1` = not scaling) | `STEER_SCA` | 1 Hz | vehicle layer | 25 |
+
+Plus one `NAMED_VALUE_INT` (252), a different message id, so it does not widen the six-float
+exception:
+
+| Value | `name` | Rate | Source | Comp |
+|-------|--------|------|--------|------|
+| Steering control mode (`0` position, `1` rate, `2` blocked) | `STEER_MODE` | 1 Hz + on change | vehicle layer | 25 |
 
 ### `HEARTBEAT` (0) — 1 Hz
 
@@ -294,11 +303,11 @@ which switches on the first character of the gear name):
 
 #### `pt_compensation` bitmask
 
-`EFI_DIGITAL_FLAG_*` in `include/Constants.h:288-289`, assembled in `src/main.cpp`, cast to float:
+`EFI_DIGITAL_FLAG_*` in `include/Constants.h:351-352`, assembled in `src/main.cpp`, cast to float:
 
 | Bit | Mask | Meaning |
 |-----|------|---------|
-| 0 | `0x01` | `EFI_DIGITAL_FLAG_WHEEL_LOCK` — front-wheel lock engaged |
+| 0 | `0x01` | `EFI_DIGITAL_FLAG_WHEEL_LOCK` — front-wheel lock engaged (fitted on the quad (master); not fitted on aztec: always 0) |
 | 1 | `0x02` | `EFI_DIGITAL_FLAG_FRONT_LIGHT` — front light on |
 | 2–7 | — | unassigned, always 0 |
 
@@ -306,7 +315,7 @@ A `float` holding a small integer, so `0`, `1`, `2`, `3` are the only values on 
 
 #### Odometer and trip distance
 
-Both counters come from the hall wheel-speed sensor (GPIO 8 / X2), accumulated on the vehicle in
+Both counters come from the hall wheel-speed sensor (GPIO 17), accumulated on the vehicle in
 exact `uint64_t` **millimetres** from counted pulses only and persisted in NVS (so they survive a
 power cycle). They are reported in **kilometres** and are **always valid**, never `NaN`:
 
@@ -418,14 +427,14 @@ not the raw demand of any one input.)
 ### Steering telemetry (`NAMED_VALUE_FLOAT`)
 
 The **steering VESC** (Flipsky 75200) is the only smart driver on this vehicle. Its telemetry, the
-measured steering position from the AS5600 on the shaft it drives, and the speed-scale the firmware
+measured steering position from the Bosch LWS angle sensor on the shaft it drives, and the speed-scale the firmware
 is applying to that shaft's commands ride **exactly six** `NAMED_VALUE_FLOAT` (251) messages from
 component 25 — the **one scoped exception** to the "everything in the field that names it, in a
 single `EFI_STATUS`" rule stated above.
 
 | `name` | Value | Unit | Rate | Unknown | Gate |
 |--------|-------|------|------|---------|------|
-| `STEER_POS` | **MEASURED** steering position | % of calibrated travel, `-100` left … `0` centre … `+100` right | 5 Hz | `NaN` | `steerSensorOk && steerCalibrated` (AS5600) |
+| `STEER_POS` | **MEASURED** steering position | % of calibrated travel, `-100` left … `0` centre (sensor zero) … `+100` right | 5 Hz | `NaN` | `steerSensorOk && steerCalibrated` (CAN angle sensor healthy, both limits stored) |
 | `STEER_A` | VESC average **motor** current | A | 5 Hz | `NaN` | `steerDriverOk` |
 | `VESC_V` | VESC-measured **input** voltage (VESC supply rail) | V | 5 Hz | `NaN` | `steerDriverOk` |
 | `VESC_TEMP` | VESC power-stage (FET) temperature | °C | 1 Hz | `NaN` | `steerDriverOk` |
@@ -447,6 +456,23 @@ MAVLink side computes or influences the scale.
 
 The `time_boot_ms` field of all six carries the report tick's own `millis()`. It **wraps at 49.7
 days** — that is what the field is *defined* as (`uint32_t` ms since boot), not a defect to fix.
+
+#### `STEER_MODE` (`NAMED_VALUE_INT` 252)
+
+The steering control mode the vehicle layer selected in the latest loop iteration (see "Steering
+without the angle sensor (rate mode)" below):
+
+| Value | Mode | Meaning |
+|-------|------|---------|
+| `0` | `position` | Bosch LWS healthy: the stick commands a steering **position** (closed loop) |
+| `1` | `rate` | No sensor, MAVLink in charge, autopilot in MANUAL (or mode unknown): the stick commands a rotation **rate** |
+| `2` | `blocked` | No sensor in any other case (web control, fail-safe, autonomous mode): the stick steers nothing |
+
+Sent from 1/25 on the 1 Hz slow steering timer and **once immediately** on every change, whatever the
+sensor, VESC or link state; never any value but 0, 1 or 2. `time_boot_ms` is the tick's `millis()`.
+The name is exactly 10 characters and goes out **without** a NUL (trim on length). It is the only
+`NAMED_VALUE_INT` this component sends, and it is reporting only: nothing is stopped or interlocked
+by sending it. `STEER_POS` stays `NaN` in `rate` and `blocked`, because the sensor is unhealthy.
 
 #### Why `NAMED_VALUE_FLOAT` here, and only here
 
@@ -488,19 +514,20 @@ Also rejected:
 - **`STEER_A` is MOTOR current, not input current.** The same `COMM_GET_VALUES` payload carries both
   (`avg_motor_current` at offset 5, decoded; `avg_input_current` at offset 9, not decoded). Motor
   current is the one that moves with steering effort, so it is the one reported.
-- **`STEER_POS` is percent of calibrated travel, NOT degrees.** The firmware holds no
-  counts-to-degrees calibration anywhere (the AS5600's 0–4095 counts are only ever normalised
-  against the stored centre and the two limits), and the two halves are scaled independently because
-  the travel is asymmetric. **Negative is LEFT, positive is RIGHT** — the sign convention of
+- **`STEER_POS` is percent of calibrated travel, NOT degrees**, even though the sensor itself
+  reports degrees (0.1° resolution): the autopilot sees the same scale it commands on
+  `SERVO_OUTPUT_RAW`. The angle is normalised against the sensor's own zero (the centre) and the two
+  stored limits, and the two halves are scaled independently because the travel is asymmetric. **Negative is LEFT, positive is RIGHT** — the sign convention of
   `SteeringController::getSteeringPercent()`. **`0.0` is a real reading: straight ahead**, which is
   precisely why "unknown" must be `NaN` and never `0` (`getSteeringPercent()` itself returns `0.0f`
   when uncalibrated, so passing it through unguarded would report "wheels dead centre" for a vehicle
   whose steering position is entirely unknown — the same trap the `fuel_pressure` note above
   records, resolved the same way).
-- **`STEER_POS` has the AS5600's gate, not the VESC's** — `isSensorOk() && isCalibrated()`,
-  **independent** of `VESC_OK`. All four combinations are reachable and all four are meaningful:
+- **`STEER_POS` has the angle sensor's gate, not the VESC's** — `isSensorOk() && isCalibrated()`
+  (fault token `none` and both limits stored), **independent** of `VESC_OK`. All four combinations
+  are reachable and all four are meaningful:
 
-| VESC | AS5600 | `STEER_A` / `VESC_V` / `VESC_TEMP` | `VESC_OK` | `STEER_POS` |
+| VESC | Angle sensor | `STEER_A` / `VESC_V` / `VESC_TEMP` | `VESC_OK` | `STEER_POS` |
 |------|--------|------------------------------------|-----------|-------------|
 | healthy | healthy + calibrated | live | `1.0` | live position |
 | **silent** | healthy + calibrated | `NaN` | `0.0` | **live position** — a dead VESC does not blind the shaft sensor |
@@ -509,6 +536,27 @@ Also rejected:
 
   This is the same sensor-driven caveat `fuel_flow` already carries: "everything is unknown, so one
   subsystem is down" does **not** hold in reverse for this value.
+
+- **Steering sensor fault tokens** (web telemetry `steer_sensor_fault`; `STEER_POS` is `NaN` for
+  every token except `none`, in this priority order):
+
+| Token | Meaning | Operator action |
+|-------|---------|-----------------|
+| `zeroing` | "Set sensor zero" sequence running (`0x7C0 [05 00]`, ~100 ms, `[53 30]`, confirmation) | wait (≈ 1 s) |
+| `can_down` | CAN controller not initialised | check the MCP2515 / boot log |
+| `timeout` | no valid `0x305` frame for 100 ms (unplugged, unpowered, checksum errors, frozen counter) | check the sensor's CAN wiring and its 12 V (ignition key) |
+| `range_latched` | sensor fault code 9: turned beyond its ~±600° range; it stays latched until power-cycled | **restart the vehicle** (the stored zero survives) |
+| `sensor_fault` | sensor OK bit clear or another nonzero fault code | check the sensor |
+| `not_calibrated` | the sensor has no stored zero | jog to straight ahead, restart, "Set sensor zero" |
+| `angle_invalid` | angle `0x7FFF` | check the sensor |
+| `none` | healthy (after 5 consecutive good frames) | — |
+
+  A fault stops a closed-loop move and the autopilot's percent commands are rejected. **Jog and
+  nudge from the web portal keep working without a sensor** (open loop, no stall protection — only
+  the jog dead-man timeout, the nudge pulse length and the VESC current limit / fault stop apply), so
+  the steering can always be centred and the sensor re-zeroed. While the sensor is unhealthy
+  `STEER_POS` stays `NaN` even if a jog is moving the steering. Closed-loop (percent) moves are
+  clamped to ±550° so automatic steering never reaches the latch.
 
 - **Consumer note.** The **commanded** steering already reaches the GCS as `SERVO_OUTPUT_RAW` from
   the autopilot's steering channel; `STEER_POS` adds the **measured** half, so command-vs-actual
@@ -539,7 +587,7 @@ repeating the last number seen:
 |--------|--------------------------|-----------------|
 | `STEER_A`, `VESC_V`, `VESC_TEMP` | `NaN` | render `--` |
 | `VESC_OK` | `0.0` | read this as "VESC offline", and grey the three above |
-| `STEER_POS` | **unaffected** — its gate is the AS5600's | keep reading it |
+| `STEER_POS` | **unaffected** — its gate is the angle sensor's | keep reading it |
 
 > **All five keep being sent in that state.** Suppression would make "the peripheral is alive and
 > its VESC is down" look identical to "the peripheral is gone", and those need different responses
@@ -642,6 +690,18 @@ Emitted **outside** the 200 ms telemetry tick — the change test runs on every 
 `"OFF"` / `"ACC"` / `"IGNITION"` / `"CRANKING"`, `"?"` if null. Example: `gear=N ign=IGNITION`, or
 `gear=N ign=OFF FAILSAFE`.
 
+**Steering mode changes** produce a separate `STATUSTEXT` through the **same** 250 ms limiter:
+
+| New mode | `text` | `severity` |
+|----------|--------|------------|
+| `rate` | `Steer: RATE mode (no sensor)` | `MAV_SEVERITY_WARNING` (4) |
+| `blocked` | `Steer: blocked (no sensor)` | `MAV_SEVERITY_WARNING` (4) |
+| `position` | `Steer: position mode` | `MAV_SEVERITY_INFO` (6) |
+
+The first `report()` after boot only takes the baseline (no text). A change held back by the limiter
+stays pending and is announced with the then-current mode on the next call past the window; the
+change is visible at once through `STEER_MODE` either way.
+
 **Trigger:** the first `report()` after boot, or any change of gear string, ignition string or the
 fail-safe flag. **Rate limit:** `MAVLINK_STATUSTEXT_MIN_MS` = 250 ms; the "last sent" strings are
 updated only when a message actually goes out, so a suppressed change is sent on the next call past
@@ -702,8 +762,9 @@ stored value and no enable toggle — the limiter is always armed and does nothi
 (the poll above, plus unsolicited `PARAM_VALUE` frames are accepted), with no reboot.
 
 > **The parameter is never written and never persisted.** The ESP32 sends no `PARAM_SET` — it only
-> ever reads, the value lives in RAM and dies with the link, and nothing about the limiter is stored
-> in NVS.
+> ever reads, and the value lives in RAM and dies with the link. The only limiter setting stored in
+> NVS is the throttle *floor* (set in the web portal, see below), which shapes how the limit is
+> enforced and never imposes a limit by itself.
 
 ### When the limit applies
 
@@ -724,24 +785,62 @@ firmware are **m/s**; km/h appears only in the web JSON and in human-readable de
 
 ### What the limiter then does
 
-The throttle ceiling is **tapered**, not stepped: 100 % at `limit − SPEED_LIMIT_TAPER_BAND_MS`
-(1.4 m/s ≈ 5 km/h), falling linearly to `SPEED_LIMIT_FLOOR_PCT` (10 %) at the limit and holding that
-floor above it. The ceiling is slew-limited to `SPEED_LIMIT_CEILING_SLEW_PCT_S` (200 %/s) so
-engagement cannot snap the servo — the rate limit applies to the *ceiling*, never to the driver's own
-throttle movements. There is no hard cut (removing all drive mid-corner is a stability event, not a
-safety measure); an invalid speed reading **fails open**, and the gear-change throttle boost is
-outside the limiter entirely.
+The throttle ceiling is **tapered**, not stepped, and then **held at the limit** by an integral trim:
+
+- **Taper band** proportional to the limit: 20 % of it, but at least 0.5 m/s and at most 1.4 m/s
+  (`SPEED_LIMIT_TAPER_*`). At 10 km/h the ceiling starts falling at 8 km/h, at 20 km/h at 16 km/h,
+  and from 35 km/h up the band is the full 1.4 m/s ≈ 5 km/h. The proportional term falls linearly
+  from 100 % to the floor across the band and stays at the floor above the limit.
+- **Integral trim** on top of it: above the limit it keeps closing the throttle in proportion to
+  the excess (30 %/s per m/s); below the limit, while the limiter is actually restricting the
+  demand, it returns authority at most 10 %/s, so the speed settles **at** the limit rather than
+  somewhere inside the band, whatever the engine, CVT or grade needs.
+- **Floor**: the lowest ceiling, an operator setting in the web portal's Speed sensor card,
+  0–20 %, default **0 % = the calibrated idle position** (NVS `"speed"` / `thr_floor`). A higher
+  floor softens engine braking at the cost of a limit that may not hold.
+- The ceiling is slew-limited to `SPEED_LIMIT_CEILING_SLEW_PCT_S` (80 %/s) so engagement cannot snap
+  the servo — the rate limit applies to the *ceiling*, never to the driver's own throttle movements.
+  The ceiling never steps down to the floor, it only reaches it gradually (100 → 0 takes ≥ 1.25 s).
+
+An invalid speed reading **fails open** (ceiling 100 %, trim reset), and the gear-change throttle
+boost is outside the limiter entirely.
 
 This is a **throttle limiter, not a speed governor**: it only withholds throttle and **never applies
-the brake**. Total reaction latency is about **0.65 s** (a 200 ms speed sample plus the 0.45 s the
-ceiling needs to slew from 100 % to the floor) — roughly **5 m past the limit at 30 km/h** and
-**11 m at 60 km/h**. On a descent it cannot hold the ceiling at all: gravity, not the engine, is
-doing the accelerating.
+the brake**. Reaction latency is a 200 ms speed sample plus the time the ceiling needs to slew down.
+On a descent, or with a floor that is itself enough to exceed the limit, it cannot hold the limit:
+the web console then shows the **"Limiter at floor, speed above limit"** warning on the limiter row
+(after 2 s of the ceiling sitting at the floor with the speed > 0.3 m/s over the limit; kept for
+10 s after it clears). That indicator is web-only — there is no log line and no MAVLink message.
 
 The 1 Hz `[MAV]` debug line reports `spdmax:<m/s> age:<ms> valid:<Y|N>`, separating "never received"
 (`nan`), "answered and fresh" (a 0 → 5000 ms age sawtooth) and "stale/link down" (`valid:N`). The
 vehicle layer logs `[SPEED] Speed limit: … m/s (… km/h) from SPEED_MAX` on each change, and
 `[SPEED] Speed limit: none …` when it stops limiting.
+
+## Steering without the angle sensor (rate mode)
+
+If the Bosch LWS steering-angle sensor becomes unhealthy (CAN unplugged, frame timeout, the ±600°
+latch, `not_calibrated`, …), position steering is impossible. The firmware then switches
+**automatically** — no switch, no parameter — to **rate mode** when the input source is MAVLink and
+the autopilot is in **MANUAL** (or its mode is unknown/stale). `STEER_MODE` = 1 and
+`Steer: RATE mode (no sensor)` announce it.
+
+- **MANUAL only.** In any known non-MANUAL mode, with the web in control, or in fail-safe the mode
+  is `blocked`: the stick steers nothing (web Jog/Nudge still work).
+- **Stick = rotation rate.** Inside the ±2 % deadband the motor stops; outside it the VESC duty is
+  `140 + 115 · d²` (d = deflection beyond the deadband, 0…1), so full stick = duty 255, + = right.
+  The speed scale (`STEER_SCA`) shrinks the deflection, and so the rate, above the base speed.
+- **Centre to arm.** After every entry into rate mode the stick must be seen centred once before the
+  wheels move. A held stick at the moment the sensor dies does not turn into a rotation.
+- **Release = stop within 500 ms.** Each new `SERVO_OUTPUT_RAW` refreshes the drive; without one for
+  `STEER_JOG_TIMEOUT_MS` (500 ms) the motor stops. A centred stick stops it on the next frame.
+- **No end-stop protection** except the VESC's own *Motor Current Max* clamp and *Absolute Max
+  Current* fault. There is no position, so no software limits, stall detection or range guard. Watch
+  the wheels.
+- **`SERVO_OUTPUT_RAW` must arrive at ≥ 5 Hz** (normally 25 Hz, requested by the firmware); below
+  about 2 Hz the drive stutters on the 500 ms timeout.
+- When the sensor is healthy again the drive stops, the wheels hold where they are, and the next
+  stick movement is a normal position command (`Steer: position mode`).
 
 ## Fail-safe
 
@@ -784,7 +883,7 @@ Five independent validity domains share the link. They do **not** move together:
 | **Gear switches** | physical gear reads UNKNOWN | `fuel_flow` only |
 | **Hall speed sensor** | `state.speedValid` = `SpeedSensor::isValid()` | `VFR_HUD.groundspeed` (→ `NaN`) and `VISION_POSITION_DELTA` (→ silence) |
 | **Steering VESC link** | `state.steerDriverOk` = `SteeringController::isDriverOk()` | `STEER_A`, `VESC_V`, `VESC_TEMP` (→ `NaN`) and `VESC_OK` (→ `0.0`) |
-| **Steering position sensor** | `steerSensorOk && steerCalibrated` (AS5600 + stored calibration) | `STEER_POS` only (→ `NaN`) |
+| **Steering position sensor** | `steerSensorOk && steerCalibrated` (Bosch LWS on CAN `0x305` + both stored limits) | `STEER_POS` only (→ `NaN`) |
 
 - **All seven CAN fields NaN at once** → CAN/ECU is down (or the engine harness is off); gear,
   `throttle_out`, flags, ODO, TRIP and ground speed are unaffected.
@@ -797,9 +896,12 @@ Five independent validity domains share the link. They do **not** move together:
   VESC is unplugged, unpowered or silent past its comm timeout. All five names **keep arriving**,
   which is how this is told apart from "the peripheral is gone"; CAN, gear, speed and `STEER_POS`
   are unaffected.
-- **`STEER_POS` = `NaN` alone, with `VESC_OK` = `1`** → the AS5600 is unhealthy or the steering is
-  uncalibrated. Says **nothing** about the VESC — like `fuel_flow`, this value has its own sensor,
-  its own gate and its own `NaN`, and the reverse implication does not hold.
+- **`STEER_POS` = `NaN` alone, with `VESC_OK` = `1`** → the steering angle sensor is unhealthy (see
+  the fault tokens above; `range_latched` = restart the vehicle) or the steering is uncalibrated.
+  Says **nothing** about the VESC — like `fuel_flow`, this value has its own sensor, its own gate and
+  its own `NaN`, and the reverse implication does not hold. The angle sensor shares the CAN bus with
+  the ECU but not its gate: an ECU that is off (seven CAN fields `NaN`) leaves `STEER_POS` live, and
+  only a dead bus or MCP2515 takes both down.
 - **Nothing at all from 1/25** → the peripheral or the serial link is gone. The two `HEARTBEAT`s are
   independent: the Pixhawk's continuing while comp 25's stops is exactly this case.
 

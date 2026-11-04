@@ -5,12 +5,19 @@
 #include <mcp_can.h>
 #include "Constants.h"
 
+class LwsSensor;
+
 /**
  * @brief CAN bus controller for reading vehicle OBD-II data via MCP2515
  *
  * Interfaces with MCP2515 SPI CAN controller to read standard OBD-II diagnostic data
  * from vehicle ECU (engine RPM, speed, coolant temperature, etc.).
  * Uses a non-blocking state machine to avoid stalling the main loop.
+ *
+ * The same bus carries the Bosch LWS steering-angle sensor (0x305, 100 Hz): it has its
+ * own receive buffer (RXB1, see applyRxFilters()), every receive path hands 0x305 frames
+ * to the attached LwsSensor in any CAN state, and the LWS zero-set sequence
+ * (startLwsZero()) is the only code that transmits on 0x7C0.
  */
 class CANController {
 public:
@@ -33,7 +40,7 @@ public:
     };
 
     // ---- ECU capability probe (on-demand diagnostic sweep) ------------------
-    static constexpr uint8_t PROBE_CANDIDATE_COUNT = 9;  // candidate PIDs test-requested
+    static constexpr uint8_t PROBE_CANDIDATE_COUNT = 11; // candidate PIDs test-requested
     static constexpr uint8_t PROBE_MAX_DTC = 2;          // DTCs that fit one classic 8-byte frame
 
     // Supported-PID bitmap group (Mode 01 PID 0x00 / 0x20 / 0x40 / 0x60)
@@ -52,6 +59,9 @@ public:
         uint8_t raw[4];            // raw data payload (after mode+PID)
         float decoded;             // decoded engineering value (valid iff hasDecoded)
         bool hasDecoded;           // true when a known formula produced `decoded`
+        uint16_t rxId;             // CAN ID of the matched reply frame (valid iff answered)
+        uint8_t rxDlc;             // DLC of the matched reply frame
+        uint8_t rxFrame[8];        // all 8 data bytes of the reply frame, as received
     };
 
     // Stored-DTC summary (Mode 03, single classic frame)
@@ -77,6 +87,39 @@ public:
 
     // Outcome of a startProbe() request
     enum class ProbeStart : uint8_t { STARTED, BUSY, NO_ECU };
+
+    // ---- CAN bus sniffer (on-demand, all IDs for a fixed window) ---------------
+    // One row per distinct ID seen during the window
+    struct SniffEntry {
+        uint32_t id;        // 11- or 29-bit identifier (flags stripped)
+        bool ext;           // extended (29-bit) frame
+        uint8_t dlc;        // DLC of the last frame
+        uint32_t count;     // frames received with this ID
+        uint8_t data[8];    // last data bytes (zero-padded past dlc)
+        uint8_t changed;    // bit n set once byte n differed from the previous frame of this ID
+    };
+
+    // Sniffer snapshot (fixed-size, no heap)
+    struct SniffResults {
+        bool running;               // window in progress
+        bool complete;              // a sniff has completed at least once
+        bool restoreFailed;         // applyRxFilters() failed at the end (chip was re-initialised)
+        uint32_t startedAtMs;       // millis() at start
+        uint32_t completedAtMs;     // millis() at the end of the last window
+        uint32_t windowMs;          // requested window length
+        uint32_t frames;            // all frames read during the window
+        uint32_t overflows;         // RX0OVR/RX1OVR flags seen (each = at least one frame lost)
+        uint16_t overflowIds;       // distinct IDs that did not fit the table
+        bool overflowIdsSaturated;  // the dedup list for overflowIds filled up (count is a minimum)
+        uint8_t idCount;            // rows used in entries[]
+        SniffEntry entries[CAN_SNIFF_MAX_IDS];
+    };
+
+    // Outcome of a startSniff() request
+    enum class SniffStart : uint8_t { STARTED, NOT_INITIALIZED, BUSY_PROBE, BUSY_LWS_ZERO, BUSY };
+
+    // Outcome of a startLwsZero() request
+    enum class LwsZeroStart : uint8_t { STARTED, NOT_INITIALIZED, BUSY_PROBE, BUSY };
 
     CANController();
     ~CANController();
@@ -128,6 +171,54 @@ public:
      */
     ProbeResults getProbeResults() const { return probeResults_; }
 
+    /**
+     * @brief Start the CAN bus sniffer: pause OBD-II polling, accept every standard and
+     * extended ID for `ms` milliseconds, record a per-ID table, then restore the normal
+     * filters (applyRxFilters()) and resume polling. 0x305 frames still reach the LWS sink.
+     * Standstill diagnostic: with every ID accepted the two RX buffers can overflow and drop
+     * LWS frames; the steering loop then takes its sensor-unhealthy path until frames return.
+     * @param ms window length (clamped to 1..CAN_SNIFF_MAX_WINDOW_MS)
+     * @param gearChangeActive true if a gear change is in progress (refused as BUSY)
+     */
+    SniffStart startSniff(uint32_t ms, bool gearChangeActive = false);
+
+    /** @brief True while the sniffer window is running */
+    bool sniffActive() const { return mode_ == Mode::SNIFFING; }
+
+    /** @brief Latest sniffer snapshot (reference: no copy of the ~800-byte table) */
+    const SniffResults& getSniffResults() const { return sniffResults_; }
+
+    /** @brief True once the MCP2515 is initialised and on the bus */
+    bool isInitialized() const { return initialized_; }
+
+    // ---- Bosch LWS steering-angle sensor (shared bus) ------------------------
+
+    /**
+     * @brief Attach the steering-angle frame sink (owned by the steering controller).
+     * Every standard-ID 0x305 frame read on any receive path goes to sink->onFrame().
+     */
+    void attachLwsSink(LwsSensor* sink) { lwsSink_ = sink; }
+    bool hasLwsSink() const { return lwsSink_ != nullptr; }
+
+    /**
+     * @brief Start the LWS zero-set sequence: pause OBD-II polling (an in-flight request
+     * completes or times out first), send 0x7C0 [05 00], wait STEER_LWS_ZERO_GAP_MS
+     * without blocking, send 0x7C0 [53 30], resume polling. The two payloads are fixed;
+     * no API takes a 0x7C0 payload.
+     * @return STARTED, or why it was refused (nothing is sent then)
+     */
+    LwsZeroStart startLwsZero();
+
+    /** @brief True while the zero-set sequence is running (OBD-II polling paused) */
+    bool isLwsZeroRunning() const;
+    /** @brief The reset frame [05 00] of the last sequence was sent */
+    bool lwsZeroResetSent() const { return lwsZeroResetSent_; }
+    /** @brief The zero frame [53 30] of the last sequence was sent (at lwsZeroSentMs()) */
+    bool lwsZeroZeroSent() const { return lwsZeroZeroSent_; }
+    uint32_t lwsZeroSentMs() const { return lwsZeroSentMs_; }
+    /** @brief Abort reason of the last sequence ("tx_failed"), nullptr if none */
+    const char* lwsZeroAbortReason() const { return lwsZeroAbort_; }
+
 private:
     // State machine states
     enum class OBDState : uint8_t {
@@ -138,7 +229,17 @@ private:
     // Coarse controller mode: normal polling vs. one-shot capability probe
     enum class Mode : uint8_t {
         NORMAL,
-        PROBING
+        PROBING,
+        SNIFFING
+    };
+
+    // LWS zero-set sub-state machine (runs next to the OBD-II one, polling paused)
+    enum class LwsZeroPhase : uint8_t {
+        IDLE,        // not running (last result in the lwsZero* fields)
+        WAIT_IDLE,   // let an in-flight OBD-II request complete / time out
+        SEND_RESET,  // send 0x7C0 [05 00]
+        GAP,         // wait STEER_LWS_ZERO_GAP_MS (non-blocking)
+        SEND_ZERO    // send 0x7C0 [53 30], then back to IDLE (OBD-II resumes)
     };
 
     // Probe sequencer phases
@@ -207,12 +308,26 @@ private:
     uint32_t probeRequestSentTime_; // millis() when current probe request was sent
     uint8_t probeRetryCount_;       // retries used on the current probe request
 
+    // ---- Sniffer state ------------------------------------------------------------
+    SniffResults sniffResults_;
+    uint32_t sniffExtraIds_[CAN_SNIFF_MAX_IDS];   // dedup list for IDs beyond the table
+    uint8_t sniffExtraCount_;
+
+    // ---- LWS steering sensor state --------------------------------------------
+    LwsSensor* lwsSink_;            // steering-angle frame sink (nullptr = none attached)
+    LwsZeroPhase lwsZeroPhase_;
+    uint32_t lwsZeroPhaseMs_;       // millis() when the current phase started
+    bool lwsZeroResetSent_;
+    bool lwsZeroZeroSent_;
+    uint32_t lwsZeroSentMs_;        // millis() when [53 30] was sent
+    const char* lwsZeroAbort_;      // "tx_failed" or nullptr
+
     bool sendOBDRequest(uint8_t pid);
     bool sendMode03Request();
     bool tryReceiveResponse();
     // Generalized probe receive: matches a Mode 01 (0x41+pid) or Mode 03 (0x43) response.
     bool tryReceiveProbeResponse(uint8_t expectedMode, uint8_t expectedPid,
-                                 uint8_t* outBuf, uint8_t& outLen);
+                                 uint8_t* outBuf, uint8_t& outLen, uint16_t& outCanId);
     int8_t selectNextPID();
     void parseAndStore(uint8_t index, const uint8_t* data, uint8_t len);
     bool isDataStale() const;
@@ -238,20 +353,37 @@ private:
     // Clear MCP_EFLG_RX0OVR/RX1OVR if set, logging at most once per CAN_OVERFLOW_LOG_INTERVAL
     void checkRxOverflow();
 
-    // Program the MCP2515 masks/filters so only standard IDs 0x7E8-0x7EF reach the RX
-    // buffers. Must run after begin() and before setMode(MCP_NORMAL) — init_Mask()/
+    // Program the MCP2515 masks/filters: RXB0 = OBD-II replies 0x7E8-0x7EF, RXB1 = LWS
+    // 0x305 only. Must run after begin() and before setMode(MCP_NORMAL) — init_Mask()/
     // init_Filt() drop the chip into CONFIG mode and restore the library's cached mode.
     bool applyRxFilters();
+
+    // Sniffer: accept every standard and extended ID in both buffers (masks 0, one std and
+    // one ext filter per buffer). Same CONFIG-mode round trip as applyRxFilters().
+    bool applySniffFilters();
+    void updateSniff();
+    void recordSniffFrame(unsigned long canId, uint8_t len, const uint8_t* buf);
+    void finishSniff();
 
     // While IDLE: pull any queued frames out of the MCP2515 RX buffers so they
     // never sit full between polls; unmatched frames go through logUnmatchedFrame()
     void drainRxBuffers();
 
+    // Called FIRST for every frame read on any receive path: a standard-ID 0x305 frame
+    // goes to the LWS sink (if attached) and returns true — it is then neither an
+    // OBD-II candidate nor logged as unmatched.
+    bool dispatchSteeringFrame(unsigned long canId, uint8_t len, const uint8_t* buf);
+
+    // Zero-set sequencer step (called from update() while IDLE in NORMAL mode)
+    void serviceLwsZero();
+    // Send one of the two fixed 0x7C0 payloads: zeroFrame=false -> [05 00], true -> [53 30]
+    bool sendLwsCfg(bool zeroFrame);
+
     // Probe sequencer helpers
     void updateProbe();
     bool probeCurrentRequest(uint8_t& mode, uint8_t& pid) const;
     void probeAdvanceCursor();
-    void recordProbeResponse(uint8_t mode, uint8_t pid, const uint8_t* buf, uint8_t len);
+    void recordProbeResponse(uint8_t mode, uint8_t pid, uint16_t canId, const uint8_t* buf, uint8_t len);
     void recordProbeTimeout(uint8_t mode, uint8_t pid);
     void finishProbe();
 };

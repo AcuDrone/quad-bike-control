@@ -527,6 +527,7 @@ bool WebPortal::parseWebCommand(uint8_t* data, size_t len) {
     currentCommand.strValue = "";
     currentCommand.floatValue = 0.0f;
     currentCommand.boolValue = false;
+    currentCommand.relay = doc["relay"] | 0;   // set_relay_test relay number; 0 if absent
     if (doc.containsKey("value")) {
         if (doc["value"].is<bool>()) {
             currentCommand.boolValue = doc["value"].as<bool>();
@@ -550,12 +551,23 @@ bool WebPortal::parseWebCommand(uint8_t* data, size_t len) {
 // ============================================================================
 
 String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
-    // Capacity headroom: 63 top-level fields (incl. 4 steering-VESC fields, the
-    // 5 rail / board-I/O fields, the 15 hall-speed / limiter / distance / noise-diagnostic
-    // fields and the 4 steering speed-scaling fields) + a 16-element array + the nested probe / po / bm / dtc /
-    // gearDefaults objects, plus copied String values. Sized to 4096 to leave room for the
-    // transient `probe` object (only present while probe results are fresh).
-    StaticJsonDocument<4096> doc;
+    // Capacity headroom: ~80 top-level fields (incl. 4 steering-VESC fields, 20 steering
+    // angle-sensor / mode fields (steer_mode: one more slot, static token stored by pointer;
+    // steer_sensor_inv: one bool slot, ~25 B of JSON), wheel_lock_fitted, the relay_test bitfield, the
+    // 16 hall-speed / limiter / distance fields (incl. speed_limit_floor /
+    // speed_limit_sat / speed_limit_sat_held: 3 slots + one ~4 B copied string; speed_pulse_total: one
+    // more slot, key stored by pointer, ~30 B of JSON) and the
+    // 4 steering speed-scaling fields, steer_vin / steer_vin_low / ecu_voltage_low,
+    // wifi_ssid / wifi_ip) + a 16-element
+    // array + the nested probe / po / bm / dtc / gearDefaults objects, plus copied
+    // String values. Sized to 4096 to leave room for the transient `probe` object (only present
+    // while probe results are fresh). 4608 since 1.5.6: each answered candidate PID also
+    // carries its whole reply frame ("frm", ~31 B copied string) and the list grew to 11 PIDs.
+    // 8192 since 1.5.7: the transient `sniff` object (CAN sniffer) adds up to 32 rows of
+    // 5 slots + a 17 B copied data string (~115 B each, ~3.8 KB) and can coexist with `probe`.
+    // Static (single caller: the main-loop broadcast) so the larger document is off the stack.
+    static StaticJsonDocument<8192> doc;
+    doc.clear();
 
     doc["timestamp"] = telemetry.timestamp;
     doc["gear"] = telemetry.gear;
@@ -566,16 +578,48 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["throttle_full_us"] = telemetry.throttle_full_us;
     doc["throttle_calibrating"] = telemetry.throttle_calibrating;
     doc["steering_pct"] = telemetry.steering_pct;
-    doc["steer_center"] = telemetry.steer_center;
-    doc["steer_left"] = telemetry.steer_left;
-    doc["steer_right"] = telemetry.steer_right;
-    doc["steer_position"] = telemetry.steer_position;
+    // Steering angle sensor (Bosch LWS on CAN): degrees, firmware sign (+ = right).
+    // Unset / invalid values are JSON null — never NaN, never a sentinel number.
+    // ((const char*)nullptr is ArduinoJson 6's way to store a null.)
+    if (telemetry.steer_angle_valid) doc["steer_angle"] = serialized(String(telemetry.steer_angle, 1));
+    else                             doc["steer_angle"] = (const char*)nullptr;
+    if (telemetry.steer_rate_valid)  doc["steer_rate"] = (int32_t)telemetry.steer_rate;
+    else                             doc["steer_rate"] = (const char*)nullptr;
+    if (telemetry.steer_left_set)    doc["steer_left"] = serialized(String(telemetry.steer_left, 1));
+    else                             doc["steer_left"] = (const char*)nullptr;
+    if (telemetry.steer_right_set)   doc["steer_right"] = serialized(String(telemetry.steer_right, 1));
+    else                             doc["steer_right"] = (const char*)nullptr;
+    if (telemetry.steer_lws_seen) {
+        doc["steer_lws_ok"] = telemetry.steer_lws_ok;
+        doc["steer_lws_cal"] = telemetry.steer_lws_cal;
+        doc["steer_lws_adj"] = telemetry.steer_lws_adj;
+        doc["steer_lws_fault_code"] = telemetry.steer_lws_fault_code;
+    } else {
+        doc["steer_lws_ok"] = (const char*)nullptr;
+        doc["steer_lws_cal"] = (const char*)nullptr;
+        doc["steer_lws_adj"] = (const char*)nullptr;
+        doc["steer_lws_fault_code"] = (const char*)nullptr;
+    }
+    doc["steer_sensor_fault"] = telemetry.steer_sensor_fault;   // static token, stored by pointer
+    doc["steer_mode"] = telemetry.steer_mode;                   // position | rate | blocked, static token
     doc["steer_sensor_ok"] = telemetry.steer_sensor_ok;
     doc["steer_calibrated"] = telemetry.steer_calibrated;
+    doc["steer_range_warning"] = telemetry.steer_range_warning;
+    doc["steer_sensor_inv"] = telemetry.steer_sensor_inv;   // always a bool (RAM copy of NVS `inv`)
+    doc["steer_lws_fps"] = telemetry.steer_lws_fps;
+    doc["steer_lws_crc_err"] = telemetry.steer_lws_crc_err;
+    doc["steer_lws_cnt_err"] = telemetry.steer_lws_cnt_err;
+    doc["steer_lws_miss"] = telemetry.steer_lws_miss;
+    doc["steer_zero_state"] = telemetry.steer_zero_state;       // static token
+    if (telemetry.steer_zero_error) doc["steer_zero_error"] = telemetry.steer_zero_error;   // static token
+    else                            doc["steer_zero_error"] = (const char*)nullptr;
     doc["steer_motor_current"] = telemetry.steer_motor_current;
     doc["steer_fet_temp"] = telemetry.steer_fet_temp;
     doc["steer_vesc_fault"] = telemetry.steer_vesc_fault;
     doc["steer_driver_ok"] = telemetry.steer_driver_ok;
+    // VESC input voltage (V) + low flag; the UI ignores both while steer_driver_ok is false.
+    doc["steer_vin"] = serialized(String(isfinite(telemetry.steer_vin) ? telemetry.steer_vin : 0.0f, 1));
+    doc["steer_vin_low"] = telemetry.steer_vin_low;
     doc["input_source"] = telemetry.input_source;
     doc["mav_active"] = telemetry.mav_active;
     doc["web_control"] = telemetry.web_control;
@@ -588,14 +632,15 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["vehicle_speed"] = serialized(String(telemetry.vehicle_speed_ms * MS_TO_KMH, 1));
     doc["speed_valid"] = telemetry.speed_valid;
     doc["speed_ppr"] = telemetry.speed_ppr;
+    // Running pulse total since boot (uint32, plain integer): the page measures ppr from its delta.
+    doc["speed_pulse_total"] = telemetry.speed_pulse_total;
     doc["speed_circ_mm"] = serialized(String(telemetry.speed_circ_mm, 0));
-    // Noise diagnostics — raw counts, no unit conversion: these are pulses, not a road speed.
-    doc["speed_raw_pulses"] = telemetry.speed_raw_pulses;
-    doc["speed_stray_pulses"] = telemetry.speed_stray_pulses;
-    doc["speed_rej_windows"] = telemetry.speed_rej_windows;
     // The enforced ceiling, from the autopilot's SPEED_MAX alone. 0 = no limit.
     doc["speed_limit_kmh"] = serialized(String(telemetry.speed_limit_ms * MS_TO_KMH, 1));
     doc["speed_limit_ceil"] = serialized(String(telemetry.speed_limit_ceil, 0));
+    doc["speed_limit_floor"] = serialized(String(telemetry.speed_limit_floor, 1));
+    doc["speed_limit_sat"] = telemetry.speed_limit_sat;
+    doc["speed_limit_sat_held"] = telemetry.speed_limit_sat_held;
     // Steering speed scaling. These four stay in m/s, NOT km/h: the base is the same quantity
     // as the autopilot's MOT_SPD_SCA_BASE, which the operator sets in m/s in the ground station,
     // and a unit change here would make the two impossible to compare. 1.00 = not scaling.
@@ -627,6 +672,7 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
         doc["fuel_level"] = telemetry.fuel_level;
         doc["map_kpa"] = telemetry.map_kpa;
         doc["ecu_voltage"] = serialized(String(telemetry.module_voltage_mv / 1000.0f, 2));
+        doc["ecu_voltage_low"] = telemetry.ecu_voltage_low;
         doc["intake_temp"] = telemetry.intake_temp;
         doc["engine_load"] = telemetry.engine_load;
     }
@@ -649,10 +695,15 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["is_cranking"] = telemetry.is_cranking;
     doc["front_light_on"] = telemetry.front_light_on;
     doc["wheel_lock_on"] = telemetry.wheel_lock_on;
+    doc["wheel_lock_fitted"] = telemetry.wheel_lock_fitted;   // false on aztec → UI shows "not fitted"
+    doc["relay_test"] = telemetry.relay_test;   // web relay test, bit0 = Relay 1 … bit3 = Relay 4
 
     // Firmware version and target board
     doc["firmware_version"] = telemetry.firmware_version;
     doc["board"] = telemetry.board;
+    // Network identity (static AP constants); both stored by pointer — `telemetry` outlives doc.
+    doc["wifi_ssid"] = telemetry.wifi_ssid;
+    doc["wifi_ip"] = (const char*)telemetry.wifi_ip;
 
     // Gear default positions
     JsonObject gearDefaults = doc.createNestedObject("gear_defaults");
@@ -704,6 +755,15 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
             }
             raw[pr.rawLen * 2] = '\0';
             po["raw"] = raw;
+            if (pr.answered) {
+                // Whole reply frame: "7E8 [8] 04 41 0C 12 34 00 00 00"
+                char frm[32];
+                snprintf(frm, sizeof(frm), "%03X [%u] %02X %02X %02X %02X %02X %02X %02X %02X",
+                         pr.rxId, pr.rxDlc,
+                         pr.rxFrame[0], pr.rxFrame[1], pr.rxFrame[2], pr.rxFrame[3],
+                         pr.rxFrame[4], pr.rxFrame[5], pr.rxFrame[6], pr.rxFrame[7]);
+                po["frm"] = frm;
+            }
             if (pr.hasDecoded) {
                 po["dec"] = pr.decoded;
             }
@@ -729,6 +789,39 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
         }
     }
 
+    // CAN sniffer results — emitted only while running or freshly completed.
+    if (telemetry.sniff != nullptr) {
+        const CANController::SniffResults& sn = *telemetry.sniff;
+        static const char hexd[] = "0123456789ABCDEF";
+        JsonObject so = doc.createNestedObject("sniff");
+        so["run"] = sn.running;
+        so["done"] = sn.complete;
+        so["win"] = sn.windowMs;
+        so["el"] = sn.running ? (uint32_t)(millis() - sn.startedAtMs) : sn.windowMs;
+        so["fr"] = sn.frames;
+        so["ovf"] = sn.overflows;
+        so["xid"] = sn.overflowIds;
+        so["xsat"] = sn.overflowIdsSaturated;
+        so["rfail"] = sn.restoreFailed;
+        JsonArray ids = so.createNestedArray("ids");
+        for (uint8_t i = 0; i < sn.idCount; i++) {
+            const CANController::SniffEntry& e = sn.entries[i];
+            JsonObject r = ids.createNestedObject();
+            r["id"] = e.id;
+            r["x"] = e.ext ? 1 : 0;
+            r["n"] = e.count;
+            char d[17];   // DLC bytes as hex, no separators ("0441" + ...)
+            uint8_t k = 0;
+            for (uint8_t j = 0; j < e.dlc && j < 8; j++) {
+                d[k++] = hexd[(e.data[j] >> 4) & 0x0F];
+                d[k++] = hexd[e.data[j] & 0x0F];
+            }
+            d[k] = '\0';
+            r["d"] = d;
+            r["c"] = e.changed;
+        }
+    }
+
     if (doc.overflowed()) {
         Debug::printlnFeature(DebugFeature::WEB, "[WEB] WARNING: telemetry JSON overflowed — increase capacity");
     }
@@ -743,9 +836,10 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     if (doc.memoryUsage() > peakUsage) {
         peakUsage = doc.memoryUsage();
         Debug::printfFeature(DebugFeature::WEB,
-            "[WEB] telemetry JSON peak: mem=%u/%u bytes, serialized=%u bytes%s\n",
+            "[WEB] telemetry JSON peak: mem=%u/%u bytes, serialized=%u bytes%s%s\n",
             (unsigned)peakUsage, (unsigned)doc.capacity(), (unsigned)json.length(),
-            telemetry.probe_present ? " (probe present)" : "");
+            telemetry.probe_present ? " (probe present)" : "",
+            telemetry.sniff != nullptr ? " (sniff present)" : "");
     }
 
     return json;

@@ -14,6 +14,7 @@
 #include "CANController.h"
 #include "SpeedSensor.h"
 #include "EngineHourMeter.h"
+#include "SpeedLimiterLaw.h"
 
 /**
  * @brief Vehicle control coordination layer
@@ -118,11 +119,6 @@ public:
     SteeringController& getSteering() { return steering_; }
 
     /**
-     * @brief Get the calibrated steering center (AS5600 raw counts, -1 if unset)
-     */
-    int32_t getSteerCenter() const { return steering_.getCenter(); }
-
-    /**
      * @brief Steering controller (const access for telemetry)
      */
     const SteeringController& getSteering() const { return steering_; }
@@ -172,6 +168,11 @@ public:
     CANController::ProbeResults getProbeResults() const { return canController_.getProbeResults(); }
 
     /**
+     * @brief Latest CAN sniffer snapshot (reference into the CAN controller, for telemetry)
+     */
+    const CANController::SniffResults& getSniffResults() const { return canController_.getSniffResults(); }
+
+    /**
      * @brief Hall-sensor vehicle speed (m/s) and its health flag.
      * Independent of CAN status — a CAN outage does not blank these.
      */
@@ -180,17 +181,9 @@ public:
 
     /** @brief Speed-sensor calibration (telemetry / web UI) */
     uint16_t getSpeedPulsesPerRev() const { return speedSensor_.getPulsesPerRev(); }
+    /** @brief Running pulse total since boot, for the web ppr measurement; counts up in either rotation direction */
+    uint32_t getSpeedPulseTotal() const { return speedSensor_.getPulseTotal(); }
     float getSpeedWheelCircumferenceMm() const { return speedSensor_.getWheelCircumferenceMm(); }
-
-    /**
-     * @brief Speed-sensor noise diagnostics (telemetry / web UI). READ-ONLY, no control path.
-     * They exist so ignition-coil interference is measurable from the portal: raw pulses in
-     * the last window, isolated strays, and windows thrown away as noise bursts.
-     */
-    uint32_t getSpeedRawPulses() const { return speedSensor_.getRawPulsesLastWindow(); }
-    uint32_t getSpeedStrayPulses() const { return speedSensor_.getStrayPulses(); }
-    uint32_t getSpeedRejectedWindows() const { return speedSensor_.getRejectedWindows(); }
-    uint32_t getSpeedRejectedPulses() const { return speedSensor_.getRejectedPulses(); }
 
     /**
      * @brief Distance counters in km (telemetry / MAVLink). READ-ONLY.
@@ -225,9 +218,31 @@ public:
     float getSpeedLimitMs() const;
 
     /**
-     * @brief Throttle ceiling the proportional taper is currently applying (%, 100 = inactive)
+     * @brief Throttle ceiling the limiter is currently applying (%, 100 = inactive): the
+     * proportional taper plus the integral trim, after the floor/100 clamps and the slew.
      */
-    float getSpeedLimitCeilingPct() const { return limiterCeilingPct_; }
+    float getSpeedLimitCeilingPct() const { return limiter_.ceilPct; }
+
+    /**
+     * @brief Speed-limiter throttle floor in use (%, 0 = calibrated idle), NVS "speed"/thr_floor
+     */
+    float getSpeedLimitFloorPct() const { return limiterFloorPct_; }
+
+    /**
+     * @brief Live saturation: ceiling at the floor while the speed stays more than
+     * SPEED_LIMIT_SAT_MARGIN_MS above the limit, continuously for SPEED_LIMIT_SAT_HOLD_MS.
+     */
+    bool isSpeedLimitSaturated() const { return satActive_; }
+
+    /**
+     * @brief Saturation display hold: true while saturated and for SPEED_LIMIT_SAT_UI_HOLD_MS
+     * after it last cleared. Evaluated from millis() at call time, so the hold expires on time
+     * even while applySpeedLimit() is not being called.
+     */
+    bool isSpeedLimitSatHeld() const {
+        return satActive_ ||
+               (satClearedMs_ != 0 && (millis() - satClearedMs_) < SPEED_LIMIT_SAT_UI_HOLD_MS);
+    }
 
     /**
      * @brief Where the steering speed-scaling base in use came from.
@@ -257,6 +272,13 @@ public:
      * 0..1. ALWAYS finite and never NaN — 1.0 is the definite answer "not scaling".
      */
     float getSteerScale() const { return steerScaleApplied_; }
+
+    /**
+     * @brief Steering control mode selected in the latest update() (SteerRate.h):
+     * POSITION while the steering sensor is healthy; RATE while it is not, the source is
+     * MAVLink and the autopilot is in MANUAL (or its mode is unknown/stale); BLOCKED otherwise.
+     */
+    SteerMode getSteerMode() const { return steerMode_; }
 
     /**
      * @brief Live bench test-speed override in m/s, 0 when none is in force.
@@ -291,16 +313,26 @@ public:
     bool getFrontLight() const { return relayController_.getFrontLight(); }
 
     /**
-     * @brief Set front-wheel lock state
+     * @brief Set front-wheel lock state (NOT fitted on aztec — a LOCK is rejected)
      * @param locked true to engage the lock, false to release
+     * @return false if the request could not be honoured
      */
-    void setWheelLock(bool locked);
+    bool setWheelLock(bool locked);
 
     /**
      * @brief Get current front-wheel lock state
-     * @return true if locked
+     * @return true if locked (always false on aztec)
      */
     bool getWheelLock() const { return relayController_.getWheelLock(); }
+
+    /** @brief True if the front-wheel lock is fitted (false on aztec) */
+    bool isWheelLockFitted() const { return RelayController::isWheelLockFitted(); }
+
+    /**
+     * @brief Web relay test state, relay-number order (bit0 = Relay 1 … bit3 = Relay 4),
+     * from the relay output shadow. Published in telemetry as `relay_test`.
+     */
+    uint8_t getRelayTestBits() const { return relayController_.getRelayTestBits(); }
 
     /**
      * @brief Get current boost RPM target (NVS-backed, runtime-editable)
@@ -332,6 +364,10 @@ private:
 
     // State tracking
     InputSource currentInputSource_;
+
+    // Steering control mode (change add-aztec-steering-rate-mode)
+    SteerMode steerMode_;           // re-derived every update() before the MAVLink commands
+    uint32_t lastMavCmdCount_;      // MavlinkInterface::getCommandCount() seen last iteration
     bool failsafeApplied_;
     bool webControl_;   // latched web-control override (MAVLink ignored while true)
 
@@ -368,9 +404,16 @@ private:
     float    lastSpeedLimitMs_;     // NAN sentinel = nothing logged yet
     uint32_t lastSpeedLimitLogMs_;
 
-    // Proportional taper state. The ceiling is what gets rate-limited, never the demand.
-    float    limiterCeilingPct_;    // currently applied throttle ceiling (%, 100 = inactive)
-    uint32_t limiterLastMs_;        // millis() of the last taper evaluation (0 = first call)
+    // Limiter law state (include/SpeedLimiterLaw.h). The ceiling is what gets rate-limited,
+    // never the demand.
+    SpeedLimiterState limiter_;     // applied ceiling (%, 100 = inactive), integral trim, primed
+    uint32_t limiterLastMs_;        // millis() of the last limiter evaluation (0 = first call)
+    float    limiterFloorPct_;      // floor in use (%), from NVS "speed"/thr_floor or the default
+
+    // Saturation indicator (web console only — no log line, no MAVLink message)
+    uint32_t satSinceMs_;           // millis() the raw condition started holding (0 = not holding)
+    bool     satActive_;            // live flag: raw condition held for SPEED_LIMIT_SAT_HOLD_MS
+    uint32_t satClearedMs_;         // millis() satActive_ last cleared (0 = never) — display hold
 
     // Steering speed scaling. `steerScaBaseMs_` is the LOCAL (NVS-backed) base in m/s; 0 means
     // "not set", which falls through to the autopilot's MOT_SPD_SCA_BASE and then to no scaling
@@ -394,10 +437,21 @@ private:
     // idles the throttle — a demand that outlives an idle command would reopen the throttle.
     float    webThrottleDemandPct_;
 
+    // Portal waiting for the final result of a "Set sensor zero" (steer_lws_zero): the
+    // command is answered once when it starts and again when the zero-set ends.
+    WebPortal* steerZeroResponsePortal_;
+
     /**
      * @brief Apply fail-safe commands (center steering, idle throttle, stop actuators)
      */
     void applyFailsafe();
+
+    /**
+     * @brief Re-derive steerMode_ (steerModeSelect()) and apply the transition actions:
+     * one serial line per change, stopRate() when leaving RATE, disarmRate() when entering it.
+     * Called every update() before processMavlinkCommands().
+     */
+    void updateSteerMode();
 
     /**
      * @brief Process MAVLink commands from the autopilot
@@ -480,12 +534,32 @@ private:
     void processWheelLockCommand(bool locked, WebPortal& webPortal);
 
     /**
-     * @brief Steering calibration commands (web-only).
-     * Capture commands persist the current AS5600 angle as center/left/right;
+     * @brief Process the web relay test command (`set_relay_test`).
+     * Toggles one relay (1..RELAY_COUNT) for a wiring check. Not gated by input source — the
+     * gate is in RelayController: ON only with ignition OFF and no function relay on.
+     * @param relayNumber relay 1..RELAY_COUNT (anything else is rejected)
+     * @param on true to energize, false to release
+     * @param webPortal Reference to web portal for sending responses
+     */
+    void processRelayTestCommand(int32_t relayNumber, bool on, WebPortal& webPortal);
+
+    /**
+     * @brief Steering calibration commands (web-only, any input source).
+     * steer_cal_left / steer_cal_right store the current angle as that limit and save it
+     * at once (reply in degrees, with the refusal reason or the beyond-safe-range warning);
+     * steer_cal_center is answered with a failure pointing to "Set sensor zero";
      * jog drives the actuator open-loop (momentary, sign = direction, |value| = duty);
-     * nudge fires one short slow pulse for precise positioning.
+     * nudge fires one short slow pulse for precise positioning. Jog and nudge work
+     * without a healthy sensor.
      */
     void processSteerCalCommand(const String& which, WebPortal& webPortal);
+
+    /**
+     * @brief "Set sensor zero" (steer_lws_zero): start the LWS zero-set sequence with no
+     * precondition. Answered when it starts (or is refused) and again with the final
+     * result (zero confirmed / failed + reason) from update().
+     */
+    void processSteerZeroCommand(WebPortal& webPortal);
     void processSteerJogCommand(float value, WebPortal& webPortal);
     void processSteerNudgeCommand(int8_t direction, WebPortal& webPortal);
 
@@ -502,6 +576,7 @@ private:
      */
     void processSetGearDefaultCommand(const String& gear, float positionPct, WebPortal& webPortal);
     void processMoveToPositionCommand(float positionPct, WebPortal& webPortal);
+
     void processBoostTestCommand(bool enable, WebPortal& webPortal);
     void processSetBoostRpmCommand(int32_t rpm, WebPortal& webPortal);
 
@@ -513,12 +588,24 @@ private:
     void processCanProbeCommand(WebPortal& webPortal);
 
     /**
-     * @brief Speed-sensor calibration commands (`speed_cal_ppr`, `speed_cal_circ`).
+     * @brief Process can_sniff command — accept every CAN ID for CAN_SNIFF_WINDOW_MS and
+     * record a per-ID table. Standstill diagnostic; refused while the ECU probe or the LWS
+     * zero-set runs, or during a gear change.
+     */
+    void processCanSniffCommand(WebPortal& webPortal);
+
+    /**
+     * @brief Speed-sensor calibration commands (`speed_cal_ppr`, `speed_cal_circ`) and the
+     * speed-limiter floor (`set_speed_limit_floor`).
      * Accepted regardless of the active input source, like the other calibration commands.
-     * There is deliberately no limiter command: the ceiling is the autopilot's alone.
+     * There is deliberately no limiter CEILING command: the ceiling is the autopilot's alone.
+     * The floor is the one limiter setting: it shapes how the limit is enforced and never
+     * imposes a limit by itself.
      */
     void processSpeedCalPprCommand(float value, WebPortal& webPortal);
     void processSpeedCalCircCommand(float value, WebPortal& webPortal);
+    /** @brief Validate (NaN, 0–20 %), persist to NVS "speed"/thr_floor, then apply in RAM. */
+    void processSetSpeedLimitFloorCommand(float value, WebPortal& webPortal);
 
     /**
      * @brief Steering speed-scaling commands (`set_steer_sca_base`, `set_test_speed`).
@@ -563,11 +650,24 @@ private:
      * throttle command only (the gear-boost PID owns throttle during a shift and is
      * never touched here). Fails OPEN: an invalid/stale speed reading does not clamp.
      *
-     * A PROPORTIONAL taper, not a step: the ceiling is 100 % at
-     * `limit - SPEED_LIMIT_TAPER_BAND_MS`, falls linearly to SPEED_LIMIT_FLOOR_PCT at the
-     * limit, and holds the floor above it — never a hard cut mid-corner. The ceiling itself
-     * is slew-limited so engagement cannot snap the servo. With no limit (0 m/s) the demand
-     * passes through untouched.
+     * The law (include/SpeedLimiterLaw.h, design D2/D3): a PROPORTIONAL taper over a band of
+     * clamp(SPEED_LIMIT_TAPER_FRACTION × limit, SPEED_LIMIT_TAPER_MIN_MS, SPEED_LIMIT_TAPER_MAX_MS)
+     * — 100 % at `limit - band`, linear down to the floor at the limit — plus an INTEGRAL TRIM.
+     * The trim falls at SPEED_LIMIT_TRIM_KI_PCT_S_PER_MS × excess above the limit (step capped at
+     * the slew), so the throttle keeps closing toward the floor; below the limit it rises at
+     * Ki × deficit, capped at SPEED_LIMIT_TRIM_RISE_PCT_S, so the speed settles AT the limit
+     * instead of drooping inside the band. The ceiling clamp(taper + trim, floor, 100) is then
+     * slew-limited at SPEED_LIMIT_CEILING_SLEW_PCT_S (dt capped at 1 s), so it never steps —
+     * it reaches the floor (default 0 % = calibrated idle) only gradually.
+     *
+     * Anti-windup: the trim is clamped to [0, 100 − floor]; it rises only while the limiter
+     * binds (demand ≥ ceiling − SPEED_LIMIT_BIND_MARGIN_PCT) and is held otherwise; it is reset
+     * below the band, on "no limit", on an invalid sensor and on the first evaluation.
+     *
+     * Fail-open: with no limit (0 m/s) or an invalid speed reading the state is reset (ceiling
+     * 100 %, trim 0) and the demand passes through untouched.
+     *
+     * Also updates the saturation indicator (design D6) after each step.
      * @return the throttle percentage to command
      */
     float applySpeedLimit(float throttlePct);
@@ -578,6 +678,9 @@ private:
      * is logged on the next opportunity rather than being lost.
      */
     void logSpeedLimitChange(float limitMs);
+
+    /** @brief End the live saturation (no-limit / fail-open paths); starts the display hold. */
+    void clearSpeedLimitSaturation(uint32_t now);
 
     // Returns true when throttle should be clamped to TRANS_UNKNOWN_GEAR_THROTTLE_MAX.
     // Clips when gear position is invalid and physical gear is not neutral

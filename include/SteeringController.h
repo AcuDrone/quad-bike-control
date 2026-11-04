@@ -3,25 +3,76 @@
 
 #include <Arduino.h>
 #include "Constants.h"
-#include "AS5600Sensor.h"
 #include "IMotorDriver.h"
+#include "LwsSensor.h"
+#include "SteerPositionLaw.h"
+#include "SteerRate.h"
+#include "SteerSensorDir.h"
+
+class CANController;
 
 /**
  * @brief Steering actuator controller: drives an IMotorDriver (VESC over UART)
- * with proportional PWM, absolute position feedback from an AS5600 magnetic
- * angle sensor.
+ * with proportional PWM and absolute multi-turn position feedback from a Bosch LWS
+ * steering-angle sensor 0 265 005 486 mounted directly on the steering shaft and
+ * read over the shared MCP2515 CAN bus (frame 0x305, 100 Hz).
  *
- * All positions are AS5600 raw counts (0-4095, ~0.088°/LSB). Position control
- * works in wrap-safe counts relative to the calibrated center; center and
- * left/right travel limits are captured at the current wheel position via the
- * web UI and persisted in NVS ("steering"/"c_ang","l_ang","r_ang").
- *
- * No homing: position is absolute. On sensor fault (I2C failure or magnet
- * lost) the motor stops immediately and position commands are ignored until
- * valid readings return.
+ *  - Position = −angle for a normal mount (the sensor's positive is LEFT; the firmware's
+ *    positive is RIGHT), +angle for a mirrored mount (NVS flag `inv`), in 0.1° of
+ *    steering-shaft angle (int32), relative to the sensor's own stored zero. No homing,
+ *    no turn tracking: every frame is absolute. The flag is applied inside LwsSensor, so
+ *    every consumer of getPosition() / getRateDegS() sees the firmware sign only.
+ *  - Sensor direction (SteerSensorDir.h): inferred at limit capture, never set by hand.
+ *    A capture on the wrong side of zero (by ≥ STEER_CAL_MIN_SPAN) toggles the flag only
+ *    while the opposite limit is unset, and clears it; with the opposite limit stored it
+ *    is refused (no ping-pong). Below the span it never toggles. A zero-set keeps the flag.
+ *  - Health (fault token, design D5): zeroing > can_down > timeout > range_latched >
+ *    sensor_fault > not_calibrated > angle_invalid > none. Faults take effect at once;
+ *    recovery needs STEER_LWS_RECOVER_FRAMES good frames. A fault stops a closed-loop
+ *    move and rejects percent commands; jog and nudge keep working (sensorless, open
+ *    loop, no stall backstop) — they only need the VESC link and no stall latch.
+ *  - Calibration: center = sensor zero (set by requestSensorZero()); NVS namespace
+ *    "steering" v4 keeps lim_l / lim_r (0.1°, firmware sign) and inv (bool). v3 limits
+ *    are kept with inv = false. Each capture is saved at once; calibrated = both limits
+ *    stored and valid (always under one flag).
+ *  - Closed loop (SteerPositionLaw.h): states IDLE / DRIVING / PARKED. Continuous target
+ *    tracking — while driving or parked a percent command only replaces the target (the
+ *    former 5° re-command guard, STEER_RETARGET_TOLERANCE, is removed). Stop hysteresis —
+ *    park (one coast; the self-locking 1:40 worm holds) within STEER_POSITION_TOLERANCE,
+ *    drive again only beyond STEER_RESTART_TOLERANCE. Two duty floors — STEER_PWM_MIN_DUTY
+ *    (break-away) from rest / after a reversal until 0.3° of progress, then
+ *    STEER_PWM_TRACK_MIN_DUTY. Every stop / fault path coasts and goes to IDLE.
+ *  - Range guard: percent-driven (closed-loop) targets are clamped to the limits, then to
+ *    ±STEER_LWS_SAFE_RANGE, and a closed-loop move driving outward at |pos| ≥ that range
+ *    is stopped. Jog, nudge and captures are not guarded.
+ *  - Steering modes (selected by VehicleController, see SteerRate.h): POSITION while the
+ *    sensor is healthy (closed loop, setSteeringPercent()); RATE while it is not, the
+ *    source is MAVLink and the autopilot is in MANUAL/unknown; BLOCKED otherwise.
+ *  - Rate drive (RATE mode only): setRateCommand(pct) is a continuous jog with variable
+ *    duty (steerRateDuty(): deadband → 0, else 140..255 quadratic). Refused while the
+ *    sensor is healthy, the VESC is down, or the path is disarmed (centre-to-arm: one
+ *    zero-duty command arms it after disarmRate()). It reuses the jog refresh timeout
+ *    (STEER_JOG_TIMEOUT_MS), the stall latch and the VESC fault / comm stops; position
+ *    stall detection, boost, move timeout and range guard never apply to it.
+ *  - Jog ownership: an active jog is owned by WEB (jog()/nudge()) or RATE
+ *    (setRateCommand()). Rate commands never stop or override a WEB jog/nudge; a zero
+ *    rate command and stopRate() stop only a RATE-owned drive; jog(0) and stop() stop
+ *    any jog.
  */
 class SteeringController {
 public:
+    /** @brief Steering-angle sensor fault reason (telemetry token via faultToken()) */
+    using SensorFault = LwsFault;
+
+    /** @brief Sentinel for an unset limit position (positions may be negative) */
+    static constexpr int32_t POS_UNSET = INT32_MIN;
+
+    /** @brief Owner of the active open-loop jog drive */
+    enum class JogOwner : uint8_t { NONE, WEB, RATE };
+
+    /** @brief Zero-set progress (telemetry token via zeroStateToken()) */
+    enum class ZeroState : uint8_t { IDLE, RUNNING, OK, FAILED };
+
     /**
      * @brief Construct bound to an already-constructed motor driver.
      * The driver's own begin() (e.g. VESC UART init) must be called by the
@@ -30,14 +81,32 @@ public:
     explicit SteeringController(IMotorDriver& motor);
 
     /**
-     * @brief Initialize the AS5600 sensor and prime driver state.
-     * @return true if the sensor initializes (a silent VESC does not block boot;
-     *         see driver-ok gating below)
+     * @brief Coast the motor and load the limits from NVS (migrating older layouts).
+     * The sensor starts as `timeout` (or `can_down`) until frames arrive.
      */
-    bool begin(gpio_num_t sdaPin, gpio_num_t sclPin);
+    bool begin();
 
     /**
-     * @brief Update sensor reading and position control — call every loop iteration
+     * @brief Bind the CAN controller that feeds lwsSensor() and runs the zero-set.
+     * Without it the sensor state is `can_down`.
+     */
+    void attachCan(CANController* can) { can_ = can; }
+
+    /** @brief The frame sink to attach to the CAN controller */
+    LwsSensor& lwsSensor() { return lws_; }
+    const LwsSensor& lwsSensor() const { return lws_; }
+
+    /**
+     * @brief Sensor health, zero-set and position control — call every loop
+     * iteration, after CANController::update().
+     *
+     * Closed loop (steerPosStep()): DRIVING applies duty = clamp(|err| × STEER_KP + boost,
+     * floor, STEER_PWM_MAX_DUTY), floor = STEER_PWM_MIN_DUTY until the wheel has moved 0.3°
+     * since the drive started or last reversed, then STEER_PWM_TRACK_MIN_DUTY. At
+     * |err| ≤ STEER_POSITION_TOLERANCE it parks (one stop(), no further commands); a parked
+     * loop restarts only at |err| > STEER_RESTART_TOLERANCE. Stall (DRIVING only; window
+     * restarts from rest or on a direction flip), move timeout (time continuously behind by
+     * more than STEER_RESTART_TOLERANCE) and the range guard end in a coast and IDLE.
      */
     void update();
 
@@ -49,55 +118,139 @@ public:
     // === Steering interface ===
 
     /**
-     * @brief Set steering by percentage: -100 (left limit) .. 0 (center) .. +100 (right limit).
-     * Left and right ranges may be asymmetric.
-     * @return false if rejected (not calibrated or sensor invalid)
+     * @brief Set steering by percentage: -100 (left limit) .. 0 (sensor zero) .. +100
+     * (right limit), then clamped to ±STEER_LWS_SAFE_RANGE.
+     *
+     * Continuous tracking: while the loop is DRIVING or PARKED the call only replaces the
+     * target (any delta) — the move timer, stall window, progress baseline, boost and
+     * break-away state keep running, so the stall and timeout checks work under the 25 Hz
+     * MAVLink stream (there is no re-command guard any more). From IDLE the stall latch is
+     * checked; an accepted command cancels a jog and starts a drive from rest, or parks at
+     * once (coast) when already within STEER_POSITION_TOLERANCE.
+     * @return false if rejected (limits missing, sensor unhealthy, VESC down, stall latch from idle)
      */
     bool setSteeringPercent(float percent);
     float getSteeringPercent() const;
 
+    /**
+     * @brief Request a one-shot move to center once it becomes possible
+     * (calibrated, sensor healthy, VESC link up). Issued from update();
+     * dropped silently after STEER_BOOT_CENTER_TIMEOUT_MS, and cancelled by any
+     * accepted steering/jog/nudge command, capture or zero-set made before it fires.
+     */
+    void requestBootCenter();
+
     // === Calibration ===
 
     /**
-     * @brief Momentary open-loop jog for calibration: -1 = left, +1 = right, 0 = stop.
-     * Auto-stops if not refreshed within STEER_JOG_TIMEOUT_MS.
-     * @param duty PWM duty 0-255; clamped up to STEER_PWM_MIN_DUTY (below it the actuator stalls)
+     * @brief Momentary open-loop jog: -1 = left, +1 = right, 0 = stop.
+     * Needs only the VESC link (sensorless allowed). Auto-stops if not refreshed
+     * within STEER_JOG_TIMEOUT_MS. Not limited by the range guard.
+     * @param duty PWM duty 0-255; clamped up to STEER_PWM_MIN_DUTY
      */
     void jog(int8_t direction, uint8_t duty = STEER_JOG_DUTY);
 
     /**
-     * @brief Precision nudge: one STEER_NUDGE_MS pulse at STEER_NUDGE_DUTY,
-     * moving a few counts per call. For landing exactly on center during calibration.
+     * @brief Precision nudge: one STEER_NUDGE_MS pulse at STEER_NUDGE_DUTY.
+     * Same gating as jog().
      */
     void nudge(int8_t direction);
 
+    // === Sensorless rate drive (RATE mode) ===
+
     /**
-     * @brief Capture the current AS5600 angle as center / left limit / right limit
-     * and persist to NVS. Limits are validated against center (opposite sides,
-     * minimum STEER_CAL_MIN_SPAN counts).
-     * @return true if captured and saved
+     * @brief Rate command from the autopilot stick (−100..+100, + = right), RATE mode only.
+     * Duty = steerRateDuty(pct, RC_STEERING_DEADBAND, STEER_PWM_MIN_DUTY, STEER_PWM_MAX_DUTY),
+     * driven as a RATE-owned jog refreshed by every call (stops after STEER_JOG_TIMEOUT_MS
+     * without one). Duty 0 arms the path and stops a RATE-owned drive only. Ignored
+     * (returns true) while a WEB jog/nudge is active.
+     * @return false if refused (sensor healthy, VESC down, disarmed with nonzero duty,
+     *         direction stall-latched)
      */
-    bool captureCenter();
+    bool setRateCommand(float pct);
+
+    /** @brief Stop a RATE-owned drive at once; a WEB jog/nudge or a closed-loop move is untouched */
+    void stopRate();
+
+    /** @brief Disarm the rate path: nonzero rate commands are refused until a zero one */
+    void disarmRate() { rateArmed_ = false; }
+
+    /** @brief The rate path has seen a centred stick since the last disarmRate() */
+    bool isRateArmed() const { return rateArmed_; }
+
+    /** @brief Owner of the active jog (NONE when no jog/nudge/rate drive runs) */
+    JogOwner getJogOwner() const { return jogDir_ != 0 ? jogOwner_ : JogOwner::NONE; }
+
+    /**
+     * @brief Store the current position as the left / right limit and save it at once.
+     * Needs a healthy sensor and |pos| ≥ STEER_CAL_MIN_SPAN. A capture on the wrong side
+     * toggles the sensor-direction flag while the opposite limit is unset (and clears it),
+     * or is refused while it is stored (steerDirCapture()). A limit beyond ±STEER_LWS_SAFE_RANGE is accepted with a warning (isLastCaptureBeyondSafe()).
+     * @return true if saved (else see getCaptureError())
+     */
     bool captureLeftLimit();
     bool captureRightLimit();
 
+    /** @brief Why the last capture was refused (nullptr if it was accepted) */
+    const char* getCaptureError() const { return captureError_; }
+    /** @brief Position stored by the last successful capture, 0.1° */
+    int32_t getLastCapturePos() const { return lastCapturePos_; }
+    /** @brief The last successful capture lies beyond ±STEER_LWS_SAFE_RANGE */
+    bool isLastCaptureBeyondSafe() const { return lastCaptureBeyondSafe_; }
+    /** @brief The last successful capture toggled the sensor-direction flag */
+    bool isLastCaptureToggled() const { return lastCaptureToggled_; }
+
     /**
-     * @brief Load calibration from NVS. Call at init.
+     * @brief Run the sensor zero-set: stop motion, cancel boot centering, ask the CAN
+     * controller for 0x7C0 [05 00] / [53 30], erase both limits once the reset frame is
+     * sent, and confirm within STEER_LWS_ZERO_CONFIRM_MS. No ignition/RPM/standstill
+     * precondition. Progress: getZeroState()/getZeroError().
+     * @return true if started (else getZeroRefusal(): "busy" or "can_unavailable")
      */
+    bool requestSensorZero();
+    const char* getZeroRefusal() const { return zeroRefusal_; }
+    ZeroState getZeroState() const { return zeroState_; }
+    /** @brief Failure reason of the last zero-set (nullptr unless FAILED) */
+    const char* getZeroError() const { return zeroError_; }
+    static const char* zeroStateToken(ZeroState s);
+
+    /** @brief Load the limits from NVS, migrating older layouts (called by begin()). */
     void loadCalibration();
 
     // === State ===
 
     bool isCalibrated() const { return calibrated_; }
+
+    /** @brief Sensor-direction flag: true = sensor mounted mirrored (NVS `inv`) */
+    bool isSensorInverted() const { return inv_; }
+
+    /** @brief Steering-angle sensor healthy (token `none` for the recovery streak) */
     bool isSensorOk() const { return sensorOk_; }
 
-    /** @brief Last AS5600 raw angle reading (0-4095) */
-    int32_t getRawAngle() const { return rawAngle_; }
+    /** @brief Current position, 0.1°, firmware sign (+ = right); meaningful while isSensorOk() */
+    int32_t getPosition() const { return lws_.position(); }
 
-    /** @brief Calibrated raw angles (-1 if not set) */
-    int32_t getCenter() const { return center_; }
-    int32_t getLeftLimit() const { return leftLimit_; }
-    int32_t getRightLimit() const { return rightLimit_; }
+    /** @brief Stored limits (0.1°, firmware sign), POS_UNSET if unset */
+    int32_t getLeftLimit() const { return limLeft_; }
+    int32_t getRightLimit() const { return limRight_; }
+
+    /** @brief Either stored limit lies beyond ±STEER_LWS_SAFE_RANGE (near the ~600° latch) */
+    bool isRangeWarning() const;
+
+    /** @brief Fresh accepted frame with a valid angle: getAngleDeg() is meaningful */
+    bool hasAngle() const;
+    /** @brief Steering angle in degrees, firmware sign (+ = right) */
+    float getAngleDeg() const { return (float)getPosition() / 10.0f; }
+    /** @brief Fresh accepted frame with a valid speed byte: getRateDegS() is meaningful */
+    bool hasRate() const;
+    /** @brief Signed rotation rate, deg/s (+ = turning right) */
+    int32_t getRateDegS() const { return lws_.rateDegS(); }
+
+    /** @brief Current fault reason */
+    SensorFault getSensorFault() const { return fault_; }
+
+    /** @brief Telemetry token: none, zeroing, can_down, timeout, range_latched, sensor_fault, not_calibrated, angle_invalid */
+    static const char* faultToken(SensorFault f) { return lwsFaultToken(f); }
 
     // === VESC driver telemetry (for the web/telemetry layer) ===
 
@@ -113,40 +266,48 @@ public:
     uint8_t getVescFault() const { return motor_.faultCode(); }
 
 private:
-    AS5600Sensor sensor_;
     IMotorDriver& motor_;
+    CANController* can_;
+    LwsSensor lws_;
 
-    // Sensor state
-    int32_t rawAngle_;          // last valid raw reading (0-4095)
+    // Sensor health
     bool sensorOk_;
-    uint8_t badSampleCount_;    // consecutive bad samples (fault debounce)
+    SensorFault fault_;
+    bool firstFrameLogged_;      // raw sensor sign shown once at boot
+    uint32_t lastStateLogMs_;    // rate limit for the while-moving debug log
 
-    // Calibration (raw angles, -1 = not set)
-    int32_t center_;
-    int32_t leftLimit_;
-    int32_t rightLimit_;
+    // Calibration (NVS v4)
+    int32_t limLeft_;            // 0.1°, firmware sign, < 0; POS_UNSET = unset
+    int32_t limRight_;           // 0.1°, firmware sign, > 0; POS_UNSET = unset
     bool calibrated_;
-    bool invert_;               // sensor counts decrease when the wheel moves right
-    int32_t relLeft_;           // normalized left limit relative to center (< 0)
-    int32_t relRight_;          // normalized right limit relative to center (> 0)
+    bool inv_;                   // sensor mounted mirrored (RAM copy of NVS `inv`, pushed into lws_)
 
-    // Position control state (normalized counts relative to center)
+    // Capture bookkeeping (for the web response)
+    const char* captureError_;
+    int32_t lastCapturePos_;
+    bool lastCaptureBeyondSafe_;
+    bool lastCaptureToggled_;
+
+    // Zero-set
+    ZeroState zeroState_;
+    const char* zeroError_;      // reason when FAILED
+    const char* zeroRefusal_;    // reason of the last refused requestSensorZero()
+    bool zeroLimitsErased_;      // limits erased for the running sequence
+
+    // Position control state (0.1°, firmware sign). The loop "owns the target" while
+    // posState_ is DRIVING or PARKED (loopActive()).
     int32_t targetRel_;
-    bool isMoving_;
-    uint32_t moveStartTime_;
-    uint32_t lastMoveLogTime_;   // rate limit for the while-moving debug log
-
-    // Anti-stall boost (extra duty above the P term while progress stalls under load)
-    int16_t dutyBoost_;
-    int32_t lastProgressPos_;
-    uint32_t lastProgressTime_;
+    SteerPosState posState_;
+    SteerPosTimers posTimers_;   // move timer, stall window, boost, break-away (reset only from rest)
 
     // Jog state
     int8_t jogDir_;
     uint32_t lastJogRefresh_;
     uint32_t jogPulseUntil_;    // nudge mode: absolute ms to stop at (0 = normal hold-jog)
+    JogOwner jogOwner_;          // who started the active jog (WEB jog/nudge or RATE)
+    bool rateArmed_;             // centre-to-arm: a zero rate command was seen since disarmRate()
 
-    // Stall detection
+    // Jog stall detection (only while the sensor is healthy; the closed loop keeps its own in posTimers_)
     int32_t lastStallPosition_;
     uint32_t lastStallCheckTime_;
     int8_t lastDriveDir_;        // sign of the last nonzero drive command (+1 right, -1 left)
@@ -160,8 +321,26 @@ private:
     // VESC driver health / monitors
     bool steerDriverOk_;         // mirrors driver link health (false until first good reply)
 
-    /** @brief Signed shortest delta from center, sensor-direction normalized (positive = right) */
-    int32_t relPosition() const;
+    // One-shot boot centering (deferred until sensor + VESC link are up)
+    bool bootCenterPending_;
+    uint32_t bootCenterRequestMs_;
+
+    /**
+     * @brief Shared open-loop jog start/refresh (stall-latch check, lastDriveDir_,
+     * lastJogRefresh_, setSpeed(d·duty)). Caller has checked the VESC link.
+     * @param pulseMs 0 = hold-jog (refresh timeout), else nudge pulse length
+     * @return false if refused by the stall latch
+     */
+    bool driveJog(int8_t d, uint8_t duty, JogOwner owner, uint32_t pulseMs);
+
+    /** @brief A WEB-owned jog (refreshed within STEER_JOG_TIMEOUT_MS) or nudge (pulse running) is active */
+    bool webJogActive(uint32_t now) const;
+
+    /** @brief The closed loop owns the target (DRIVING or PARKED) */
+    bool loopActive() const { return posState_ != SteerPosState::IDLE; }
+
+    /** @brief Coast and drop the closed loop to IDLE (no-op when already idle) */
+    void loopToIdle();
 
     /** @brief True if a new move in direction d must be refused due to the stall latch */
     bool latchBlocks(int8_t d, uint32_t now) const;
@@ -173,17 +352,33 @@ private:
      *  @return false if the driver is down (caller should skip driving this cycle) */
     bool serviceDriver(uint32_t now);
 
-    /** @brief Signed shortest delta between two raw angles: ((a - b + 2048) & 4095) - 2048 */
-    static int32_t wrapDelta(int32_t a, int32_t b);
+    /** @brief Evaluate the LWS health (D5); on a new fault stop a closed-loop move only */
+    void refreshSensor(uint32_t now);
 
-    /** @brief Refresh sensor reading + magnet status (single I2C burst); stop the motor on fault */
-    bool refreshSensor();
+    /** @brief Advance a running zero-set (limit erase, CAN result, confirmation) */
+    void serviceZero(uint32_t now);
+    void finishZero(bool ok, const char* reason);
 
-    /** @brief Recompute calibrated_/invert_/relLeft_/relRight_ from stored angles */
+    /** @brief Issue the pending boot centering once possible, or drop it on timeout */
+    void serviceBootCenter(uint32_t now, bool driverReady);
+
+    /** @brief Shared capture path for the two limits */
+    bool captureLimit(bool left);
+
+    /** @brief Recompute calibrated_ from the limits */
     void revalidateCalibration();
 
-    /** @brief Persist calibration angles to NVS */
-    void saveCalibration();
+    /**
+     * @brief Persist one limit key (v4 layout). With a flag toggle, in the same session:
+     * the limit, then `inv`, then remove the opposite key (oppositeKey, nullptr = none).
+     */
+    void saveLimit(const char* key, int32_t value, bool writeInv = false, const char* oppositeKey = nullptr);
+
+    /** @brief Erase both limits (NVS + RAM); the sensor-direction flag is kept */
+    void eraseLimits();
+
+    /** @brief One debug line: angle, pos, token, fps (+ suffix) */
+    void logState(const char* suffix);
 };
 
 #endif // STEERING_CONTROLLER_H

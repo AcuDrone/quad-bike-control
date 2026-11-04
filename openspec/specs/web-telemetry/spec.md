@@ -108,9 +108,10 @@ The system SHALL display the firmware version and the target board name in the w
 #### Scenario: Display firmware version in web UI
 - **WHEN** the web portal receives telemetry data via WebSocket
 - **AND** the telemetry message contains a `firmware_version` field
-- **THEN** the status bar shows `Firmware: <version> · <board>` using the existing `.status-item` pattern
+- **THEN** the firmware status item at the bottom of the sidebar shows `Firmware: <version> · <board>`, next to the WebSocket status item
 - **AND** when `board` is absent only the version is shown
-- **AND** the version is visible without scrolling (always in status bar)
+- **AND** on wide screens the item is visible in every section without scrolling (the sidebar stays in view)
+- **AND** at 768 px or less the item is shown in the navigation opened by the ☰ button
 
 #### Scenario: Handle missing firmware version gracefully
 - **WHEN** the web portal connects but version data is not yet received
@@ -125,17 +126,18 @@ The system SHALL display the firmware version and the target board name in the w
 - **AND** each hardware branch defines its own `BOARD_NAME` value
 
 ### Requirement: Gear Default Positions in Telemetry
-The telemetry broadcast SHALL include the current effective default positions for all four gears so the web UI can populate the defaults editor without a separate request.
+The telemetry broadcast SHALL include the current effective default positions for all four gears so the web UI can show them without a separate request.
 
 #### Scenario: Include gear_defaults in telemetry JSON
 - **WHEN** the system broadcasts a telemetry update
-- **THEN** the JSON payload SHALL include a `gear_defaults` object with keys `R`, `N`, `L`, `H` containing the current default encoder counts for each gear
+- **THEN** the JSON payload SHALL include a `gear_defaults` object with keys `R`, `N`, `L`, `H` containing the current default transmission servo position for each gear (0.0–100.0 %)
 - **AND** the values SHALL reflect the active NVS defaults (or factory constants when no NVS defaults are set)
 
 #### Scenario: Web UI populates defaults editor from telemetry
 - **WHEN** a telemetry message containing `gear_defaults` is received
-- **AND** the user is not currently editing the corresponding input field
-- **THEN** the web UI SHALL update the input fields with the received values
+- **THEN** the web UI SHALL show each gear's value on the second line of its "Зберегти як" / "Save as" button in the Gear position defaults card
+- **AND** the "▶ <gear>" buttons SHALL use these values as their targets
+- **AND** the active-gear highlight SHALL be recomputed against the current slider value
 
 ### Requirement: Steering Motor Telemetry
 The telemetry broadcast SHALL include steering-motor health data sourced from the VESC, and the web interface SHALL display it, so operators can see steering motor current, temperature, and driver health.
@@ -230,8 +232,9 @@ metres per second and converted to km/h only at serialisation.
   label when `speed_limit_kmh` is zero
 - **AND** the current throttle ceiling SHALL be shown only while the limiter is actually
   withdrawing authority (`speed_limit_ceil` below 100)
-- **AND** the card SHALL state that the limit comes only from the autopilot's `SPEED_MAX`, that
-  zero means no limit, and that the limiter does not act without a valid sensor reading
+- **AND** the help of the "Обмеження швидкості та кермо" / "Speed limit and steering" card (its ⓘ
+  button) SHALL state that the limit comes only from the autopilot's `SPEED_MAX`, that zero means
+  no limit, and that the limiter does not act without a valid sensor reading
 - **AND** every label SHALL be present in both the English and the Ukrainian dictionary
 
 ### Requirement: ECU Electrical and Air Telemetry
@@ -422,4 +425,335 @@ The system SHALL ship a user-facing changelog inside the firmware binary and exp
 - **WHEN** `/api/changelog` is unreachable or returns invalid JSON
 - **THEN** the modal shows a localized error message instead of an empty list
 - **AND** no JavaScript errors are thrown
+
+### Requirement: Relay Test Telemetry
+Web telemetry SHALL include `relay_test`, an unsigned integer with one bit per relay in
+relay-number order (bit0 = Relay 1 … bit3 = Relay 4 on the DevKitC-1), set for each relay currently
+energized by the web relay test. It SHALL be derived from the relay output shadow byte (the last
+written GPIO state), limited to the test bits, so a vehicle function relay is never reported as a
+test relay. The existing function fields (`ignition_state`, `is_cranking`, `front_light_on`,
+`wheel_lock_on`, `wheel_lock_fitted`) SHALL be unchanged. There is no relay-fault field on this board
+(direct GPIO).
+
+#### Scenario: Test relay reported
+- **WHEN** Relay 3 (GPIO38) is test-energized
+- **THEN** telemetry SHALL report `relay_test` = 4 (bit2)
+
+#### Scenario: No test active
+- **WHEN** no relay is test-energized
+- **THEN** telemetry SHALL report `relay_test` = 0
+
+#### Scenario: Auto-off or forced-off is visible
+- **WHEN** a test relay times out or is forced off (function command, fail-safe)
+- **THEN** the next telemetry broadcast SHALL report its bit as 0
+
+### Requirement: Steering Angle Sensor Telemetry
+The telemetry broadcast SHALL report the Bosch LWS steering angle, its status and its error counters, together with the stored limits and the zero-set progress, and the web interface SHALL display them in a read-only "Кермо: стан" / "Steering: state" card in the Diagnostics section, so that calibration and sensor faults can be diagnosed from the portal.
+
+#### Scenario: Angle and limits
+- **WHEN** telemetry data is formatted as JSON
+- **THEN** `steer_angle` SHALL carry the current steering angle in degrees with one decimal, positive = right, or `null` unless a fresh accepted frame carries a valid angle
+- **AND** `steer_rate` SHALL carry the signed rotation rate in °/s (positive = turning right), or `null` when the speed is invalid or no fresh frame exists
+- **AND** `steer_left` and `steer_right` SHALL carry the stored limits in degrees, or `null` when unset
+- **AND** `steer_calibrated` SHALL be `true` only when both limits are stored and valid
+- **AND** `steer_sensor_inv` SHALL be `true` while the stored sensor-direction flag says the sensor is mounted mirrored, otherwise `false`, and SHALL always be emitted (it does not depend on a fresh frame)
+- **AND** `steer_angle` and `steer_rate` SHALL already carry the firmware sign under that flag
+- **AND** `steer_range_warning` SHALL be `true` while either stored limit is beyond ±`STEER_LWS_SAFE_RANGE` (550.0°), otherwise `false`
+- **AND** `steering_pct` SHALL keep its percent-of-calibrated-travel meaning
+
+#### Scenario: Sensor status and counters
+- **WHEN** telemetry data is formatted as JSON
+- **THEN** it SHALL include `steer_lws_ok`, `steer_lws_cal` and `steer_lws_adj` (booleans) and `steer_lws_fault_code` (0–15) from the last accepted frame, each `null` until a frame has been accepted
+- **AND** it SHALL include `steer_sensor_fault`, one of `none`, `zeroing`, `can_down`, `timeout`, `range_latched`, `sensor_fault`, `not_calibrated` or `angle_invalid`, which SHALL NOT be `none` while `steer_sensor_ok` is `false`
+- **AND** it SHALL include `steer_lws_fps` (accepted frames in the last second) and the cumulative counters `steer_lws_crc_err`, `steer_lws_cnt_err` and `steer_lws_miss`
+- **AND** it SHALL include `steer_zero_state` (`idle`, `running`, `ok` or `failed`) and `steer_zero_error` (a reason token, or `null`)
+- **AND** the fields `steer_position`, `steer_center`, `steer_fine_raw`, `steer_coarse_raw`, `steer_turn`, `steer_ratio`, `steer_residual`, `steer_cal_points`, `steer_cal_error` and `steer_cal_lost` SHALL NOT be emitted
+
+#### Scenario: Calibration card shows the sensor readout
+- **WHEN** the web UI receives steering telemetry
+- **THEN** the "Кермо: стан" card SHALL show a 2-column tile grid: Кут / Angle, Швидкість / Rate (°/s), Межа Л / Limit L, Межа П / Limit R, Датчик / Sensor, Режим / Mode, Калібрування / Calibration, Драйвер VESC / VESC driver, Нуль датчика / Sensor zero, Струм мотора / Motor current, Темп. FET / FET temp and Напруга VESC / VESC voltage, with `--` for `null` or missing values
+- **AND** while `steer_range_warning` is true, a limit beyond ±550° SHALL carry a short ⚠ note in its tile and a full-width note SHALL explain that the sensor latches a fault at about ±600°
+- **AND** the Sensor tile SHALL show the `steer_sensor_fault` token as a localized label (en/uk); for `range_latched` the label SHALL say to restart the vehicle
+- **AND** while `steer_sensor_inv` is `true` the Sensor tile SHALL also show a "дзеркально" / "mirrored" marker, and none while it is `false` or missing
+- **AND** the Sensor zero tile SHALL show the zero-set progress and any failure reason
+- **AND** the Mode tile SHALL show `steer_mode` as described in "Steering Control Mode Telemetry"
+- **AND** below the tiles one full-width, muted, monospace line SHALL show the raw LWS status bits (OK, cal, adj), the fault code, the frame rate and the checksum, counter and missed-frame counters
+
+#### Scenario: Compact readout in the calibration card
+- **WHEN** the Calibration section is shown
+- **THEN** the Steering calibration card SHALL show only the angle, the Left/Right limits with their ⚠ notes and one sensor/calibration status line, rendered from the same telemetry frame as the "Кермо: стан" card
+- **AND** the status line SHALL include the "дзеркально" / "mirrored" marker while `steer_sensor_inv` is `true`
+
+#### Scenario: Sensor direction help text
+- **WHEN** the engineer opens the ⓘ help of the "Кермо: стан" card
+- **THEN** its help text (en/uk) SHALL explain the "mirrored" marker: the sensor direction is detected at the first limit capture, and angles are always shown with + = right
+
+### Requirement: Diagnostics Attention Summary
+The Diagnostics section SHALL start with an "Увага" / "Attention" box that lists the problems
+active in the latest telemetry frame, derived only from existing telemetry fields, and SHALL be
+hidden when no problem is active.
+
+#### Scenario: Sensorless steering
+- **WHEN** a frame has `steer_sensor_ok` false
+- **THEN** the box SHALL list "steering sensor unhealthy, jog/nudge run open loop without stall
+  protection" in the danger colour
+
+#### Scenario: Steering in rate mode
+- **WHEN** a frame has `steer_mode` equal to `rate`
+- **THEN** the box SHALL list "Кермо без датчика: режим швидкості" / "Steering without sensor:
+  rate mode" in the danger colour, in addition to the sensorless steering line
+- **AND** the line SHALL disappear on the first frame whose `steer_mode` is not `rate`
+
+#### Scenario: Steering VESC down or faulted
+- **WHEN** a frame has `steer_driver_ok` false
+- **THEN** the box SHALL list "steering driver down" in the danger colour
+- **WHEN** `steer_driver_ok` is true and `steer_vesc_fault` is nonzero
+- **THEN** the box SHALL list a VESC fault line with the fault code in the danger colour
+
+#### Scenario: Steering limit beyond the safe range
+- **WHEN** a frame has `steer_range_warning` true
+- **THEN** the box SHALL list "a steering limit is beyond ±550°" in the warning colour
+
+#### Scenario: MAVLink inactive
+- **WHEN** a frame has `mav_active` false
+- **THEN** the box SHALL list "MAVLink inactive, autopilot commands are not arriving" in the warning
+  colour
+
+#### Scenario: Low steering VESC input voltage
+- **WHEN** a frame has `steer_vin_low` true and `steer_driver_ok` true
+- **THEN** the box SHALL list "Напруга VESC низька (xx.x В)" / "VESC voltage low (xx.x V)" with the
+  value of `steer_vin`, in the warning colour
+- **AND** while `steer_driver_ok` is false no voltage line SHALL be listed, because there is no
+  valid VESC data
+
+#### Scenario: Low 12 V ECU voltage
+- **WHEN** a frame has `can_status` equal to `connected` and `ecu_voltage_low` true
+- **THEN** the box SHALL list "Напруга 12 В низька (xx.x В)" / "12 V voltage low (xx.x V)" with the
+  value of `ecu_voltage`, in the warning colour
+
+#### Scenario: No ECU link
+- **WHEN** a frame has `can_status` not equal to `connected`
+- **THEN** the box SHALL list "Немає зв'язку з ЕБК" / "No ECU link" in the warning colour
+- **AND** no 12 V voltage line SHALL be listed
+
+#### Scenario: Lines are localized text
+- **WHEN** any line is listed
+- **THEN** it SHALL be localized (en/uk) and inserted as text, not HTML
+
+#### Scenario: Nothing to report
+- **WHEN** none of the conditions is active
+- **THEN** the box SHALL be hidden
+
+#### Scenario: Condition clears
+- **WHEN** a condition that was listed is no longer active in a later frame
+- **THEN** its line SHALL disappear on that frame without a page reload
+
+### Requirement: Steering VESC Input Voltage Telemetry
+The telemetry broadcast SHALL include the steering VESC's measured input voltage and a low-voltage
+flag computed in the firmware against the compile-time constant `STEER_VIN_LOW_V` (default 21.5 V,
+chosen to suit both a 6s NMC and a 7s LiFePO4 steering pack and adjustable per build), and SHALL
+include a 12 V low-voltage flag computed against `ECU_VOLTAGE_LOW_V` (default 12.0 V, lead-acid starter battery), so the web
+page never needs a copy of either threshold.
+
+#### Scenario: Include the VESC input voltage
+- **WHEN** telemetry data is formatted as JSON
+- **THEN** it SHALL include `steer_vin`, the input voltage from `SteeringController::getInputVoltage()`
+  (the VESC `COMM_GET_VALUES` input voltage) in volts with one decimal
+- **AND** it SHALL include `steer_vin_low`, true only when `steer_driver_ok` is true and `steer_vin`
+  is below `STEER_VIN_LOW_V`
+
+#### Scenario: Include the 12 V low flag
+- **WHEN** telemetry data is formatted as JSON and CAN status is "connected"
+- **THEN** it SHALL include `ecu_voltage_low`, true when the ECU module voltage is below
+  `ECU_VOLTAGE_LOW_V`
+- **WHEN** CAN status is not "connected"
+- **THEN** `ecu_voltage_low` SHALL be omitted along with the other CAN vehicle-data fields
+
+#### Scenario: Show the VESC voltage tile
+- **WHEN** the "Кермо: стан" card renders a telemetry frame
+- **THEN** a "Напруга VESC" / "VESC voltage" tile SHALL show `steer_vin` in volts
+- **AND** it SHALL show `--` while `steer_driver_ok` is false or the key is missing
+- **AND** it SHALL use the warning colour while `steer_vin_low` is true
+
+#### Scenario: Thresholds are firmware constants
+- **WHEN** the firmware is built
+- **THEN** `STEER_VIN_LOW_V` and `ECU_VOLTAGE_LOW_V` SHALL be defined in `include/Constants.h`
+- **AND** `data/index.html` SHALL NOT contain either threshold value
+
+### Requirement: Speed State Card
+The Diagnostics section SHALL contain a read-only "Швидкість" / "Speed" card, separate from the
+two speed settings cards in the Calibration section ("Датчик швидкості" / "Speed sensor" and
+"Обмеження швидкості та кермо" / "Speed limit and steering"), showing the speed sensor state and
+the limiter and steering-scaling state without any input or command.
+
+#### Scenario: Read-only speed readout
+- **WHEN** the Diagnostics section renders a telemetry frame
+- **THEN** the card SHALL show the vehicle speed, the sensor state, the speed limit, the limiting
+  row (only while `speed_limit_ceil` is below 100), the steering authority, the scaling base with
+  its source, the inactive reason, the bench test-speed row (only while an override is in force),
+  the odometer and the trip
+- **AND** the card SHALL contain no input field, button or other control that sends a command
+
+#### Scenario: Same values in both places
+- **WHEN** a value is shown both in this card and in one of the two speed settings cards
+- **THEN** both SHALL be rendered from the same telemetry frame by one rendering path, so they never
+  disagree
+
+### Requirement: Network Identity Telemetry
+The telemetry broadcast SHALL include the WiFi access point identity from the firmware constants,
+delivered the same way as `firmware_version`, and the System section's "Мережа" / "Network" card
+SHALL display it read-only. The web page SHALL NOT hard-code these values or derive them from the
+browser location.
+
+#### Scenario: Include the network identity in telemetry JSON
+- **WHEN** telemetry data is formatted as JSON
+- **THEN** it SHALL include `wifi_ssid` equal to the compiled `WIFI_AP_SSID`
+- **AND** `wifi_ip` equal to the compiled `WIFI_AP_IP` as a dotted-quad string (e.g. `"192.168.10.1"`)
+- **AND** both SHALL be emitted unconditionally, independent of CAN or MAVLink status, and SHALL
+  keep the telemetry document within its configured capacity
+
+#### Scenario: Network card shows the values read-only
+- **WHEN** a telemetry message containing `wifi_ssid` and `wifi_ip` is received
+- **THEN** the Network card SHALL show the SSID and the IP address as read-only text, with a note
+  that the settings will come later
+- **AND** the card SHALL offer no input or command
+
+#### Scenario: Values not yet received
+- **WHEN** no telemetry with these keys has been received, or a frame lacks them
+- **THEN** the card SHALL show `--` until the first value arrives and otherwise keep the previous
+  value
+- **AND** no JavaScript error SHALL be thrown
+
+### Requirement: Steering Control Mode Telemetry
+The telemetry broadcast SHALL include the current steering mode as `steer_mode`, and the "Кермо: стан" / "Steering: state" card SHALL display it in a "Режим" / "Mode" tile, so the operator can see whether the autopilot stick commands a position, a rotation rate, or nothing.
+
+#### Scenario: Include the steering mode in telemetry JSON
+- **WHEN** telemetry data is formatted as JSON
+- **THEN** it SHALL include `steer_mode`, one of `position`, `rate` or `blocked`, equal to the mode selected by the vehicle layer in the latest control-loop iteration (see "Sensorless Steering Rate Mode")
+- **AND** the key SHALL be emitted unconditionally and SHALL keep the telemetry document within its configured capacity
+- **AND** `steer_mode` SHALL be `position` whenever `steer_sensor_ok` is true, and SHALL NOT be `position` while `steer_sensor_ok` is false
+
+#### Scenario: Mode tile
+- **WHEN** the "Кермо: стан" card renders a telemetry frame
+- **THEN** the Mode tile SHALL show "Позиція" / "Position" for `position`, "Швидкість (без датчика)" / "Rate (no sensor)" in the danger colour for `rate`, and "Заблоковано" / "Blocked" in the warning colour for `blocked`
+- **AND** it SHALL show `--` when the key is missing or carries an unknown value, without a JavaScript error
+- **AND** every label SHALL be present in both the English and the Ukrainian dictionary
+
+#### Scenario: Help text
+- **WHEN** the help (ⓘ) of the "Кермо: стан" card is opened
+- **THEN** it SHALL explain that without the angle sensor the autopilot stick steers by rate in MANUAL only (deflection = rotation, centre = stop, centre the stick once to arm), that there are no end-stop limits except the VESC current limit, and that other modes and the web slider are blocked
+
+### Requirement: Speed-Limiter Floor Telemetry
+The telemetry stream SHALL report the speed-limiter throttle floor currently in use, so the web
+portal can show the stored setting and recognise a limiter sitting on its floor. The existing
+`speed_limit_ceil` key SHALL keep carrying the final applied ceiling: the proportional taper plus
+the integral trim, after clamping and the rate limit. No key SHALL be added for the integral trim
+itself.
+
+#### Scenario: Report the floor
+- **WHEN** a telemetry frame is produced
+- **THEN** it SHALL include `speed_limit_floor`, the floor in percent to one decimal
+- **AND** the key SHALL be present whether or not a limit is in force
+
+#### Scenario: The ceiling key carries the final ceiling
+- **WHEN** a telemetry frame is produced while a limit is in force
+- **THEN** `speed_limit_ceil` SHALL be the ceiling actually applied to the throttle demand, after
+  the taper, the integral trim, the floor and 100 % clamps and the ceiling rate limit
+- **AND** it SHALL be 100 whenever no limit is in force or the speed reading is invalid
+
+#### Scenario: The portal shows a limiter at its floor
+- **WHEN** the portal renders a telemetry frame in which a limit is in force and
+  `speed_limit_ceil` equals `speed_limit_floor`
+- **THEN** the limiting row SHALL mark the ceiling as being at the floor
+- **AND** the marker SHALL be present in both the English and the Ukrainian dictionary
+
+### Requirement: Speed-Limiter Saturation Indicator
+The system SHALL detect when the maximum-speed limiter has run out of authority, that is when
+the applied ceiling is at the floor and the vehicle nevertheless stays above the limit. It SHALL
+report this in the telemetry stream, and the web portal SHALL show it as a warning on the limiter
+row. Because the operator cannot read the serial log in the field, the indicator SHALL be carried
+by telemetry and the web portal and not by a serial log line. The firmware SHALL hold the
+indicator for a fixed time after the condition clears, so the operator can still see it after the
+event and every client shows the same state.
+
+#### Scenario: Saturation is detected
+- **WHEN** a limit is in force, the speed reading is valid, the applied ceiling is within 0.5 %
+  of the floor, and the measured speed exceeds the limit by more than `SPEED_LIMIT_SAT_MARGIN_MS`
+  (0.3 m/s), continuously for `SPEED_LIMIT_SAT_HOLD_MS` (2000 ms)
+- **THEN** telemetry SHALL report `speed_limit_sat` as `true`
+- **AND** `speed_limit_sat_held` SHALL be `true`
+
+#### Scenario: Saturation clears immediately
+- **WHEN** `speed_limit_sat` is `true` and, on any evaluation, the ceiling is no longer within
+  0.5 % of the floor, the speed no longer exceeds the limit by more than
+  `SPEED_LIMIT_SAT_MARGIN_MS`, the limit becomes zero, or the speed reading becomes invalid
+- **THEN** `speed_limit_sat` SHALL become `false` at once, without a release delay
+- **AND** a later entry SHALL again require the full `SPEED_LIMIT_SAT_HOLD_MS` of the condition
+
+#### Scenario: The firmware holds the indicator after it clears
+- **WHEN** `speed_limit_sat` changes from `true` to `false`
+- **THEN** `speed_limit_sat_held` SHALL stay `true` for `SPEED_LIMIT_SAT_UI_HOLD_MS` (10 000 ms)
+  measured on the firmware clock, and then become `false`
+- **AND** a new saturation during the hold SHALL keep it `true` and restart the hold when that
+  saturation clears
+- **AND** the hold SHALL expire on time even if the limiter is no longer being evaluated
+- **AND** a web client that connects or reconnects during the hold SHALL receive
+  `speed_limit_sat_held` = `true`
+
+#### Scenario: Report the saturation keys
+- **WHEN** a telemetry frame is produced
+- **THEN** it SHALL include `speed_limit_sat` and `speed_limit_sat_held` as JSON booleans
+- **AND** both keys SHALL be present whether or not a limit is in force
+- **AND** both SHALL be `false` on a unit that has not saturated within the last
+  `SPEED_LIMIT_SAT_UI_HOLD_MS`
+
+#### Scenario: The portal shows saturation as a warning on the limiter row
+- **WHEN** the portal renders a telemetry frame in which `speed_limit_sat_held` is `true`
+- **THEN** the limiter row SHALL be shown even if `speed_limit_ceil` is 100
+- **AND** it SHALL be drawn as a warning badge in the console's standard warning styling
+- **AND** it SHALL read "Limiter at floor, speed above limit" while `speed_limit_sat` is `true`,
+  and "Limiter was at floor, speed above limit" while only `speed_limit_sat_held` is `true`
+- **AND** the portal SHALL NOT keep its own hold timer, but SHALL render what the firmware reports
+- **AND** both texts SHALL be present in both the English and the Ukrainian dictionary
+
+#### Scenario: The portal without saturation keys behaves as before
+- **WHEN** the portal renders a frame in which `speed_limit_sat_held` is absent or `false`
+- **THEN** the limiter row SHALL be shown and labelled exactly as "Speed-Limit and
+  Limiter-Ceiling Telemetry" requires, with the "at floor" marker of "Speed-Limiter Floor
+  Telemetry"
+
+#### Scenario: No serial log line for saturation
+- **WHEN** saturation is entered or cleared
+- **THEN** no serial debug line SHALL be emitted for it, and no MAVLink message SHALL be sent for it
+- **AND** the existing rate-limited log of limit changes SHALL be unaffected
+
+### Requirement: Speed Sensor Pulse Total Telemetry
+The telemetry stream SHALL report the speed sensor's running pulse total since boot, so the web
+portal can measure pulses per revolution by itself. The firmware SHALL keep no measurement state
+and SHALL offer no command for it: the value is read-only and is the same total that speed and
+distance are derived from.
+
+#### Scenario: Report the pulse total
+- **WHEN** a telemetry frame is produced
+- **THEN** it SHALL include `speed_pulse_total`, the value of `SpeedSensor::getPulseTotal()` as an
+  unsigned 32-bit JSON integer
+- **AND** the key SHALL be present in every frame, whether or not the speed reading is valid, and
+  whatever the CAN status
+
+#### Scenario: The total only increases
+- **WHEN** the wheel turns in either direction
+- **THEN** every counted falling edge of the sensor signal SHALL increase `speed_pulse_total` by one,
+  because the single-channel sensor carries no direction
+- **AND** the total SHALL never decrease except by wrapping modulo 2³² or by a reboot, which
+  resets it to 0
+
+#### Scenario: The total is independent of speed validity
+- **WHEN** pulses are counted while `speed_valid` is false, the reading has decayed to 0 after the
+  stale timeout, or a sample is discarded by the per-sample glitch guard
+- **THEN** `speed_pulse_total` SHALL still include those pulses
+
+#### Scenario: The firmware stays stateless
+- **WHEN** the portal measures pulses per revolution
+- **THEN** no web command, NVS key or firmware state SHALL be involved until the operator saves a
+  result through the existing `speed_cal_ppr` command
 
