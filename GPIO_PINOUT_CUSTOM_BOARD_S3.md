@@ -407,7 +407,7 @@ vehicle GND  ◄───────────── PC817 pin2 (K)      PC81
 | Output side | Collector → X3.1 (5 V), emitter → X3.2. The on-board 1.2K + 2.2K (≈3.4 kΩ) divider is the emitter load; PC817 CTR ≥ 50 % gives ≥ 3.7 mA available vs ≈1.5 mA needed (≥ 2.5× margin) |
 | Levels | LED on → ≈4.8 V at X3.2 → **≈3.1 V at GPIO14** (high, must be ≥ 2.5 V); LED off → the 2.2K pulls GPIO14 to **0 V** |
 | Polarity | **Not inverted** (ECU high = GPIO high). Firmware times the RISING edge only, so duty and polarity do not matter |
-| Firmware | `PIN_TACHO` (GPIO14), plain input; IRAM ISR timestamps edges (µs), 1 ms glitch filter, RPM from the mean of the last 4 periods, 0 RPM after 500 ms without pulses |
+| Firmware | `PIN_TACHO` (GPIO14), plain input; IRAM ISR timestamps edges (µs), 1.5 ms absolute glitch floor plus a lock window (an edge closer than 0.5 × the median period to the last accepted one is rejected and counted), RPM from the **median** of the last 8 periods (fw 1.5.10), 0 RPM and lock cleared after 500 ms without pulses |
 | ppr | NVS `tacho`/`ppr` ∈ {0.5, 1, 2, 3, 4}, default 1; web `cal_tacho_ppr` (reference RPM, snapped), `set_tacho_ppr`, `reset_tacho_ppr` |
 | Expected | ≈25–26 Hz at the ≈1500 RPM idle with ppr 1 (crank reference: 24-1 wheel, RPM = crank Hz × 60 / 23) |
 | Consumers | Effective RPM (tacho first, CAN fallback): gear gate, starter cut-off / crank interlock, boost PID, hour meter, telemetry, MAVLink `EFI_STATUS.rpm` |
@@ -415,6 +415,14 @@ vehicle GND  ◄───────────── PC817 pin2 (K)      PC81
 ⚠ Why emitter follower: the first common-emitter draft with a 4.7 kΩ pull-up to 5 V would give only
 5 × 3.4 / 8.1 ≈ 2.1 V at X3.2 → ≈1.36 V at GPIO14, below the ESP32-S3 V_IH (≈2.48 V). Do **not** add
 a pull-up. See warning 10.
+
+⚠ **Noise (fw 1.5.10 field finding):** at a ≈1400 RPM dash idle fw 1.5.9 read 1100–2800 RPM — extra
+edges (ignition noise on the TACHO wire, or ringing on the slow opto edges) and occasional missed ones.
+The tacho card's **Діагностика / Diagnostics** block shows the last 8 raw periods, min / max over 1 s
+and accepted / rejected edges per second (`tacho_periods`, `tacho_min_ms`, `tacho_max_ms`,
+`tacho_acc`, `tacho_rej`, `tacho_rej_total`). Healthy: periods all alike, `rej/s` ≈ 0. **If `rej/s`
+stays high, add 100 nF across the PC817 LED (pins 1–2) and keep the TACHO wire away from the coil
+leads** (route it as a twisted pair with GND).
 
 ---
 

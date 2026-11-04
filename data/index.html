@@ -1119,6 +1119,14 @@
                         <div class="telemetry-value" id="tacho-src">--</div>
                     </div>
                 </div>
+                <!-- Tacho signal diagnostics (fw 1.5.10): raw periods, min/max, accepted/rejected edges -->
+                <div id="tacho-diag" style="margin-top: 8px; padding: 6px 8px; border-radius: 4px; border: 1px solid var(--border); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.75em; line-height: 1.5; color: var(--muted-foreground); overflow-wrap: anywhere;">
+                    <div data-i18n="lbl_tacho_diag" style="color: var(--foreground);">Diagnostics</div>
+                    <div><span data-i18n="lbl_tacho_periods">periods, ms</span>: <span id="tacho-periods">--</span></div>
+                    <div><span data-i18n="lbl_tacho_minmax">min / max (1 s), ms</span>: <span id="tacho-minmax">--</span></div>
+                    <div><span data-i18n="lbl_tacho_edges">edges/s accepted / rejected</span>: <span id="tacho-edges">--</span></div>
+                    <div><span data-i18n="lbl_tacho_rej_total">rejected since boot</span>: <span id="tacho-rej-total">--</span></div>
+                </div>
                 <div id="tacho-no-pulses" data-i18n="tacho_no_pulses" style="display:none; margin-top: 6px; font-size: 0.85em; color: var(--warning);">no pulses</div>
                 <div data-i18n="tacho_ref_hint" style="margin-top: 6px; font-size: 0.78em; color: var(--muted-foreground);">Reference: the dash, or the crank sensor: RPM = crank Hz × 60 / 23</div>
                 <div style="margin-top: 12px;">
@@ -1542,6 +1550,11 @@
                 btn_tacho_reset: 'Reset',
                 invalid_tacho_ref: 'Enter a reference RPM, 300–8000',
                 tacho_sending: 'Sending…',
+                lbl_tacho_diag: 'Diagnostics',
+                lbl_tacho_periods: 'periods, ms',
+                lbl_tacho_minmax: 'min / max (1 s), ms',
+                lbl_tacho_edges: 'edges/s accepted / rejected',
+                lbl_tacho_rej_total: 'rejected since boot',
                 unit_hz: 'Hz',
                 unit_volt: 'V',
                 lbl_io_health: 'Board I/O',
@@ -1983,6 +1996,11 @@
                 btn_tacho_reset: 'Скинути',
                 invalid_tacho_ref: 'Введіть еталонні оберти, 300–8000',
                 tacho_sending: 'Надсилання…',
+                lbl_tacho_diag: 'Діагностика',
+                lbl_tacho_periods: 'періоди, мс',
+                lbl_tacho_minmax: 'мін / макс (1 с), мс',
+                lbl_tacho_edges: 'фронтів/с прийнято / відкинуто',
+                lbl_tacho_rej_total: 'відкинуто від запуску',
                 unit_hz: 'Гц',
                 unit_volt: 'В',
                 lbl_io_health: 'Ввід-вивід плати',
@@ -3743,6 +3761,15 @@
             if (srcEl) srcEl.textContent = (src === 'TACHO' || src === 'CAN') ? src : '—';
             const noPulses = document.getElementById('tacho-no-pulses');
             if (noPulses) noPulses.style.display = (Number.isFinite(hz) && hz > 0) ? 'none' : '';
+            // Signal diagnostics (fw 1.5.10): absent on older firmware → leave '--'
+            if (data.tacho_acc !== undefined) {
+                const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+                setTxt('tacho-periods', data.tacho_periods ? data.tacho_periods : '—');
+                const mn = Number(data.tacho_min_ms), mx = Number(data.tacho_max_ms);
+                setTxt('tacho-minmax', (mn > 0 || mx > 0) ? mn.toFixed(1) + ' / ' + mx.toFixed(1) : '—');
+                setTxt('tacho-edges', data.tacho_acc + ' / ' + data.tacho_rej);
+                setTxt('tacho-rej-total', data.tacho_rej_total != null ? data.tacho_rej_total : '--');
+            }
         }
         function tachoStatus(text, color) {
             const el = document.getElementById('tacho-status-msg');

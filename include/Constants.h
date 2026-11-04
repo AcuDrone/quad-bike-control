@@ -274,11 +274,16 @@ static_assert(GEAR_CODE_LOW != 0b000 && GEAR_CODE_HIGH != 0b000 && GEAR_CODE_NEU
 // ----------------------------------------------------------------------------
 // ECU TACHO INPUT (PIN_TACHO, aztec) — NVS namespace "tacho", key "ppr"
 // ----------------------------------------------------------------------------
-// RISING-edge IRAM ISR with microsecond timestamps; RPM from the mean of the last
-// TACHO_AVG_PERIODS periods. Pure math in include/TachoLaw.h (test/test_tacho).
-#define TACHO_TIMEOUT_MS        500      // ms without an accepted edge -> 0 Hz / 0 RPM, buffer cleared
-#define TACHO_AVG_PERIODS       4        // periods averaged (ring buffer holds one more edge)
-#define TACHO_MIN_PERIOD_US     1000     // µs - software glitch filter (1 kHz; ppr 4 @ 10 000 RPM = 667 Hz)
+// RISING-edge IRAM ISR with microsecond timestamps; RPM from the MEDIAN of the last
+// TACHO_MEDIAN_PERIODS periods (fw 1.5.10: the field signal carries spurious / missed edges, the
+// former mean of 4 jumped 1100–2800 at a 1400 RPM idle). Edges are dropped below the absolute
+// floor TACHO_MIN_PERIOD_US and, once locked, below TACHO_LOCK_FRACTION × the median period.
+// Pure math in include/TachoLaw.h (test/test_tacho).
+#define TACHO_TIMEOUT_MS        500      // ms without an accepted edge -> 0 Hz / 0 RPM, buffer and lock cleared
+#define TACHO_MEDIAN_PERIODS    8        // periods in the median (ring buffer holds one more edge)
+#define TACHO_LOCK_FRACTION     0.5f     // lock window: reject an edge < this × the median period after the last accepted one
+#define TACHO_MIN_PERIOD_US     1500     // µs - absolute glitch floor (667 Hz = ppr 4 @ 10 000 RPM)
+#define TACHO_DIAG_WINDOW_MS    1000     // ms - rolling window for the min/max period and edges/s diagnostics
 #define TACHO_MAX_RPM           10000    // RPM above this is implausible and discarded
 #define TACHO_PPR_DEFAULT       1.0f     // pulses per revolution when nothing is stored
 #define TACHO_CAL_REF_MIN_RPM   300.0f   // accepted reference RPM for cal_tacho_ppr
@@ -850,7 +855,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.9"
+#define FIRMWARE_VERSION "1.5.10"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

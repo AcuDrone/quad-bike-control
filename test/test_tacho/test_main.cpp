@@ -1,7 +1,9 @@
 // Native unit tests for the ECU tacho input (include/TachoLaw.h): period → RPM, averaging,
-// timeout, plausibility, ppr validation / snapping, calibration and RPM source selection.
+// timeout, plausibility, ppr validation / snapping, calibration and RPM source selection;
+// fw 1.5.10: median period, lock-window edge filter and diagnostics formatting.
 // Run: pio test -e native
 #include <unity.h>
+#include <string.h>
 #include "TachoLaw.h"
 
 // Mirror of include/Constants.h (which needs Arduino.h and cannot be built natively).
@@ -165,6 +167,114 @@ static void test_select_not_fitted() {
     TEST_ASSERT_EQUAL_STRING("CAN", rpmSourceName(RpmSource::CAN));
 }
 
+// ---- fw 1.5.10: median period, lock window, diagnostics formatting ----------------------
+
+// Build chronological edges from a list of periods (µs), starting at t0.
+static uint8_t edgesFromPeriods(const uint32_t* periods, uint8_t n, uint32_t t0, uint32_t* out) {
+    out[0] = t0;
+    for (uint8_t i = 0; i < n; i++) out[i + 1] = out[i] + periods[i];
+    return (uint8_t)(n + 1);
+}
+
+static void test_median_of_8_clean() {
+    const uint32_t p[8] = {42800, 42900, 43000, 42900, 42800, 43000, 42900, 42900};
+    uint32_t e[9];
+    const uint8_t n = edgesFromPeriods(p, 8, 1000, e);
+    // sorted: 42800 42800 42900 42900 42900 42900 43000 43000 -> middle pair 42900
+    TEST_ASSERT_FLOAT_WITHIN(0.5f, 42900.0f, tachoMedianPeriod(e, n, 8));
+}
+
+static void test_median_ignores_one_spurious_half_period() {
+    // A spurious edge produced one half-length period among eight
+    const uint32_t p[8] = {42900, 42900, 21400, 42900, 42900, 42900, 42900, 42900};
+    uint32_t e[9];
+    const uint8_t n = edgesFromPeriods(p, 8, 5000, e);
+    TEST_ASSERT_FLOAT_WITHIN(0.5f, 42900.0f, tachoMedianPeriod(e, n, 8));
+    // the old mean is pulled down well away from the true period
+    TEST_ASSERT_TRUE(tachoMeanPeriod(e, n, 8) < 40500.0f);
+}
+
+static void test_median_ignores_two_spurious_half_periods() {
+    // One extra edge mid-period splits it into two halves: 6 true + 2 half periods
+    const uint32_t p[8] = {42900, 21400, 21500, 42900, 42900, 42900, 42900, 42900};
+    uint32_t e[9];
+    const uint8_t n = edgesFromPeriods(p, 8, 5000, e);
+    const float med = tachoMedianPeriod(e, n, 8);
+    TEST_ASSERT_FLOAT_WITHIN(0.5f, 42900.0f, med);
+    // ppr 1 -> ≈1399 RPM, the dash idle
+    TEST_ASSERT_FLOAT_WITHIN(2.0f, 1398.6f, tachoRpm(tachoHzFromPeriodUs(med), 1.0f));
+}
+
+static void test_median_ignores_one_missed_edge() {
+    // A missed edge merges two periods into one double-length period
+    const uint32_t p[8] = {42900, 42900, 42900, 85800, 42900, 42900, 42900, 42900};
+    uint32_t e[9];
+    const uint8_t n = edgesFromPeriods(p, 8, 0xFFFFFFFFu - 100000u, e);   // across the µs wrap
+    TEST_ASSERT_FLOAT_WITHIN(0.5f, 42900.0f, tachoMedianPeriod(e, n, 8));
+}
+
+static void test_median_uses_only_last_n_periods() {
+    // 10 edges -> 9 periods; the oldest (1 000 000 µs) must be outside the last 8
+    const uint32_t p[9] = {1000000, 40000, 40000, 40000, 40000, 40000, 40000, 40000, 40000};
+    uint32_t e[10];
+    const uint8_t n = edgesFromPeriods(p, 9, 0, e);
+    TEST_ASSERT_FLOAT_WITHIN(0.5f, 40000.0f, tachoMedianPeriod(e, n, 8));
+    // odd count: the middle value
+    const uint32_t q[5] = {40000, 20000, 41000, 39000, 90000};
+    uint32_t f[6];
+    TEST_ASSERT_FLOAT_WITHIN(0.5f, 40000.0f, tachoMedianPeriod(f, edgesFromPeriods(q, 5, 0, f), 8));
+}
+
+static void test_median_falls_back_to_mean_below_three_periods() {
+    const uint32_t e2[3] = {0, 40000, 60000};          // 2 periods: 40 000, 20 000 -> mean 30 000
+    TEST_ASSERT_FLOAT_WITHIN(0.5f, 30000.0f, tachoMedianPeriod(e2, 3, 8));
+    TEST_ASSERT_FLOAT_WITHIN(0.5f, tachoMeanPeriod(e2, 3, 8), tachoMedianPeriod(e2, 3, 8));
+    const uint32_t e1[2] = {100, 40100};               // 1 period
+    TEST_ASSERT_FLOAT_WITHIN(0.5f, 40000.0f, tachoMedianPeriod(e1, 2, 8));
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, tachoMedianPeriod(e1, 1, 8));
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, tachoMedianPeriod(nullptr, 5, 8));
+}
+
+static void test_edge_filter_unlocked_floor_only() {
+    // lock 0: only the absolute floor (1500 µs) applies
+    TEST_ASSERT_FALSE(tachoEdgeAccepted(1499, 0, 0.5f, 1500));
+    TEST_ASSERT_TRUE(tachoEdgeAccepted(1500, 0, 0.5f, 1500));
+    TEST_ASSERT_TRUE(tachoEdgeAccepted(5000, 0, 0.5f, 1500));
+    TEST_ASSERT_EQUAL_UINT32(0u, tachoLockMinUs(0, 0.5f));
+}
+
+static void test_edge_filter_lock_window() {
+    // locked on a 42 900 µs period: threshold 21 450 µs
+    TEST_ASSERT_EQUAL_UINT32(21450u, tachoLockMinUs(42900, 0.5f));
+    TEST_ASSERT_FALSE(tachoEdgeAccepted(3000, 42900, 0.5f, 1500));    // ignition spike
+    TEST_ASSERT_FALSE(tachoEdgeAccepted(21449, 42900, 0.5f, 1500));   // just inside the window
+    TEST_ASSERT_TRUE(tachoEdgeAccepted(21450, 42900, 0.5f, 1500));    // edge of the window
+    TEST_ASSERT_TRUE(tachoEdgeAccepted(42900, 42900, 0.5f, 1500));    // the real pulse
+    TEST_ASSERT_TRUE(tachoEdgeAccepted(30000, 42900, 0.5f, 1500));    // RPM rising up to 2x passes
+    // a tiny lock never undercuts the floor
+    TEST_ASSERT_FALSE(tachoEdgeAccepted(1200, 2000, 0.5f, 1500));
+    // the ISR's integer core agrees with the float wrapper
+    TEST_ASSERT_TRUE(tachoEdgeAcceptedMin(21450, tachoLockMinUs(42900, 0.5f), 1500));
+    TEST_ASSERT_FALSE(tachoEdgeAcceptedMin(21449, tachoLockMinUs(42900, 0.5f), 1500));
+}
+
+static void test_format_periods_ms() {
+    const uint32_t p[4] = {42940, 43050, 21400, 999};
+    char buf[64];
+    tachoFormatPeriodsMs(p, 4, buf, sizeof(buf));
+    TEST_ASSERT_EQUAL_STRING("42.9 43.1 21.4 1.0", buf);
+    tachoFormatPeriodsMs(p, 0, buf, sizeof(buf));
+    TEST_ASSERT_EQUAL_STRING("", buf);
+    // eight worst-case (499.9 ms) values fit the 64 B telemetry buffer
+    const uint32_t w[8] = {499900, 499900, 499900, 499900, 499900, 499900, 499900, 499900};
+    tachoFormatPeriodsMs(w, 8, buf, sizeof(buf));
+    TEST_ASSERT_EQUAL_STRING("499.9 499.9 499.9 499.9 499.9 499.9 499.9 499.9", buf);
+    // a too-small buffer stays NUL-terminated
+    char small[6];
+    tachoFormatPeriodsMs(p, 4, small, sizeof(small));
+    TEST_ASSERT_TRUE(strlen(small) < sizeof(small));
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_period_to_rpm_ppr_half_one_two);
@@ -183,5 +293,14 @@ int main(int, char**) {
     RUN_TEST(test_select_silent_tacho_falls_back_to_can_rpm);
     RUN_TEST(test_select_silent_fitted_tacho_reads_zero);
     RUN_TEST(test_select_not_fitted);
+    RUN_TEST(test_median_of_8_clean);
+    RUN_TEST(test_median_ignores_one_spurious_half_period);
+    RUN_TEST(test_median_ignores_two_spurious_half_periods);
+    RUN_TEST(test_median_ignores_one_missed_edge);
+    RUN_TEST(test_median_uses_only_last_n_periods);
+    RUN_TEST(test_median_falls_back_to_mean_below_three_periods);
+    RUN_TEST(test_edge_filter_unlocked_floor_only);
+    RUN_TEST(test_edge_filter_lock_window);
+    RUN_TEST(test_format_periods_ms);
     return UNITY_END();
 }

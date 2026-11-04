@@ -14,6 +14,13 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.10","date":"2026-11-04","uk":[
+"Оберти з тахометра стабільніші: замість середнього береться медіана останніх 8 періодів, а завади між імпульсами відкидаються",
+"У картці «Оберти (TACHO)» з'явився блок «Діагностика»: останні періоди імпульсів, мінімум і максимум, прийняті й відкинуті фронти за секунду"
+],"en":[
+"Tacho RPM is steadier: the median of the last 8 periods replaces the average, and noise between pulses is rejected",
+"The Tacho card gains a Diagnostics block: the latest pulse periods, min and max, and accepted / rejected edges per second"
+]},
 {"version":"1.5.9","date":"2026-11-04","uk":[
 "Оберти двигуна тепер беруться з тахометричного виходу ЕБК (сірий J1, контакт 6) через оптрон на X3; оберти з CAN залишаються резервом",
 "Нова картка «Оберти (TACHO)» у розділі «Калібрування»: частота, імпульси на оберт, оберти й джерело; калібрування за еталонними обертами з приладової панелі або датчика колінвала",

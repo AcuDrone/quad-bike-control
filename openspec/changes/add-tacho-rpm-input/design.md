@@ -128,3 +128,38 @@ Flash fw 1.5.9 + LittleFS. Without the tacho wired nothing changes except the 80
 2. ppr changes are NOT refused while the engine runs: `cal_tacho_ppr` needs a running engine by
    definition, and `set_tacho_ppr` / `reset_tacho_ppr` are harmless at runtime — the effective RPM
    simply changes on the next sample.
+
+## Field revision 1.5.10 — noise-robust period
+**Finding.** On the buggy the dash shows a ≈1400 RPM idle but fw 1.5.9 read 1100–2800 RPM, jumping.
+1.5.9 averaged the last 4 periods between RISING edges behind a fixed 1 ms glitch filter. A 2× swing
+is the signature of EXTRA edges (one spurious edge mid-period turns one 43 ms period into two ≈21 ms
+ones; candidates: ignition noise coupled into the TACHO wire, or ringing on the slow PC817 edges
+crossing the GPIO threshold twice), and the low readings of occasional missed / odd edges. A mean
+absorbs every outlier; the signal cannot be inspected remotely.
+
+**Decisions.**
+- **Median instead of mean.** Period = median of the last `TACHO_MEDIAN_PERIODS` (8) periods (ring of
+  9 edges), mean of the two middle values for an even count. With 8 periods, up to 3 outliers on one
+  side leave it unchanged: one spurious edge (2 half periods) or one missed edge (1 double period) is
+  invisible. Below 3 periods the mean is used (a median of 1–2 is no better). Lag: ≈4 periods
+  (≈170 ms at idle), acceptable for the gear gate / starter cut-off / PID.
+- **Lock window in the ISR.** Besides the absolute floor (raised 1000 → 1500 µs = 667 Hz, still above
+  ppr 4 at 10 000 RPM), once the median rests on ≥ 3 periods an edge closer than
+  `TACHO_LOCK_FRACTION` (0.5) × the median to the last accepted edge is rejected and counted; the
+  reference does not move, so the next real pulse is measured from the last real one. Self-correcting:
+  if the engine speeds up past 2× between updates, every second pulse is accepted, the median halves
+  at most and the window re-admits all pulses on the next pass; after `TACHO_TIMEOUT_MS` of silence
+  the lock is cleared (by `update()` and by the ISR's first edge). `update()` writes the
+  pre-multiplied threshold (µs) under the spinlock so the ISR does integer compares only (no FPU use
+  in an Xtensa ISR); the pure filter is `tachoEdgeAccepted(sinceUs, lockPeriodUs, fraction, floorUs)`
+  with the integer core `tachoEdgeAcceptedMin` that the ISR calls.
+- **Diagnostics instead of a scope.** `update()` keeps the last 8 raw periods and, per 1 s window,
+  min / max period and accepted / rejected edges per second; telemetry `tacho_periods`,
+  `tacho_min_ms`, `tacho_max_ms`, `tacho_acc`, `tacho_rej`, `tacho_rej_total`; a monospace block in the
+  tacho card; one `[TACHO]` VEHICLE log line per second while live. Reading it: alike periods and
+  `rej/s` ≈ 0 = clean; halves among full periods / high `rej/s` = noise → hardware fix (100 nF across
+  the PC817 LED, TACHO wire away from the coil leads); doubles = missed edges (weak drive).
+- Telemetry JSON capacity 8192 → 9216 (+≈200 B of slots and copied strings on a document whose
+  sniff + probe worst case was already near 8 KB).
+- Hz / RPM / ppr / calibration snapping / source selection unchanged. `TACHO_AVG_PERIODS` is replaced
+  by `TACHO_MEDIAN_PERIODS`; new `TACHO_LOCK_FRACTION`, `TACHO_DIAG_WINDOW_MS`.

@@ -152,6 +152,15 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.tacho_hz = vehicleController_.getTacho().getHz();
     telemetry.tacho_ppr = vehicleController_.getTacho().getPpr();
     telemetry.tacho_rpm = vehicleController_.getTacho().getRpm();
+    {
+        const TachoSensor& tacho = vehicleController_.getTacho();
+        tacho.formatDiagPeriods(telemetry.tacho_periods, sizeof(telemetry.tacho_periods));
+        telemetry.tacho_min_ms = tacho.getWindowMinMs();
+        telemetry.tacho_max_ms = tacho.getWindowMaxMs();
+        telemetry.tacho_acc = tacho.getAcceptedPerSec();
+        telemetry.tacho_rej = tacho.getRejectedPerSec();
+        telemetry.tacho_rej_total = tacho.getRejectedTotal();
+    }
 
     CANController::VehicleData vehicleData = vehicleController_.getVehicleData();
     if (vehicleData.dataValid) {

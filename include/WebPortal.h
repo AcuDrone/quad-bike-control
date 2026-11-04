@@ -131,6 +131,13 @@ public:
         float tacho_hz;           // averaged tacho edge frequency, Hz (0 when timed out)
         float tacho_ppr;          // tacho pulses per revolution in effect
         uint16_t tacho_rpm;       // the tacho's own RPM (0 when timed out)
+        // Tacho signal diagnostics (fw 1.5.10) — what the field tech reads instead of a scope
+        char tacho_periods[64];   // last 8 raw accepted periods, ms 1 decimal, oldest first ("" = none)
+        float tacho_min_ms;       // shortest / longest accepted period in the last 1 s window (0 = none)
+        float tacho_max_ms;
+        uint16_t tacho_acc;       // accepted edges per second (last 1 s window)
+        uint16_t tacho_rej;       // rejected edges per second (floor + lock window)
+        uint32_t tacho_rej_total; // rejected edges since boot
 
         // CAN bus vehicle data
         int8_t coolant_temp;      // Coolant temperature °C (-40 to +215)

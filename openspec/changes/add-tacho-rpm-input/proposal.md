@@ -14,7 +14,8 @@ dash reads; this change reads it.
   sensor not tapped.
 - New `TachoSensor` module (`include/TachoSensor.h`, `src/TachoSensor.cpp`): GPIO14 (`PIN_TACHO`)
   edge ISR with `micros()` timestamps, software glitch filter, RPM from the mean of the last 4
-  periods, 500 ms timeout → 0 RPM, ppr in NVS `"tacho"`/`"ppr"` (allowed {0.5, 1, 2, 3, 4},
+  periods (field revision 1.5.10: median of the last 8 periods + a 0.5 × median lock window in the
+  ISR, raw-signal diagnostics in telemetry — see design.md), 500 ms timeout → 0 RPM, ppr in NVS `"tacho"`/`"ppr"` (allowed {0.5, 1, 2, 3, 4},
   default 1), "fitted" = pulse seen since boot OR ppr stored in NVS.
 - New pure header `include/TachoLaw.h` (period → RPM, plausibility, timeout, ppr validation and
   snapping, calibration, RPM source selection) + native suite `test/test_tacho` (≥ 10 cases).

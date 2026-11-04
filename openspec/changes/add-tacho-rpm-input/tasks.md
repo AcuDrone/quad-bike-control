@@ -41,3 +41,15 @@
 - [ ] 7.5 Cranking RPM read on the card stays below 800; the starter is released as soon as the engine fires; START is refused with the engine running
 - [ ] 7.6 After engine stop the RPM reads 0 within 0.5 s and `isEngineRunning()` drops (gear gate closes)
 - [ ] 7.7 Mission Planner shows `EFI_STATUS.rpm` matching the card
+
+## 8. Field revision 1.5.10 (noise-robust period + diagnostics)
+- [x] 8.1 `TachoLaw.h`: `tachoMedianPeriod` (median of up to 8, mean below 3 periods), `tachoLockMinUs`, `tachoEdgeAccepted(sinceUs, lockPeriodUs, fraction, floorUs)` + integer core `tachoEdgeAcceptedMin`, `tachoFormatPeriodsMs`
+- [x] 8.2 Constants: `TACHO_MEDIAN_PERIODS` 8 (replaces `TACHO_AVG_PERIODS`), `TACHO_LOCK_FRACTION` 0.5, `TACHO_MIN_PERIOD_US` 1000 → 1500, `TACHO_DIAG_WINDOW_MS` 1000
+- [x] 8.3 `tachoIsr`: floor + lock window via `tachoEdgeAcceptedMin`, `s_rejected` counter, lock reset on the first edge after a silence; `update()`: median period, lock threshold written under the spinlock (≥ 3 periods), lock cleared on timeout
+- [x] 8.4 Diagnostics in `TachoSensor`: last 8 raw periods, 1 s window min / max + accepted / rejected edges/s, rejected total; `[TACHO]` VEHICLE log once per window while live
+- [x] 8.5 Telemetry `tacho_periods`, `tacho_min_ms`, `tacho_max_ms`, `tacho_acc`, `tacho_rej`, `tacho_rej_total` (WebPortal.h / TelemetryManager / WebPortal JSON, capacity 8192 → 9216)
+- [x] 8.6 Web: "Діагностика" / "Diagnostics" monospace block under the tacho tiles (uk / en)
+- [x] 8.7 `test_tacho` +9 cases (median clean / 1 and 2 spurious half-periods / missed edge / last-N window / < 3 fallback, edge filter unlocked and locked, period formatting)
+- [x] 8.8 `FIRMWARE_VERSION` 1.5.10, `Changelog.h` uk + en, `WEB_PORTAL_SETUP.md` keys, `GPIO_PINOUT_CUSTOM_BOARD_S3.md` §7a noise note (100 nF across the PC817 LED, TACHO wire away from the coil leads)
+- [x] 8.9 `pio test -e native`, `pio run -e esp32-s3-devkitc-1`, `openspec validate add-tacho-rpm-input --strict`
+- [ ] 8.10 Field: at idle the card reads ≈1400 RPM steadily; note `tacho_periods` and `rej/s`; if `rej/s` stays high fit the 100 nF and reroute the wire

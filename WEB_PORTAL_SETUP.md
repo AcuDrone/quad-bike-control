@@ -198,6 +198,15 @@ kept) with no pulses, a reference outside 300–8000, or `raw` more than ±25 % 
 instead of CAN). All three commands work from any input source; replies start with "Tacho" and are
 shown in the card's status line. Telemetry (always emitted, not gated on CAN): `engine_rpm`
 (effective), `rpm_source` ("TACHO" / "CAN" / "NONE"), `tacho_hz`, `tacho_ppr`, `tacho_rpm`.
+Since fw 1.5.10 the RPM is the **median** of the last 8 periods and edges closer than 0.5 × that
+median (or 1.5 ms) to the last accepted edge are rejected. A monospace **Діагностика / Diagnostics**
+block under the tiles shows the raw signal for remote diagnosis — telemetry: `tacho_periods` (string,
+the last 8 accepted periods in ms with one decimal, oldest first, e.g. `"42.9 43.1 21.4 21.6 42.8"`,
+`""` before the first period; kept after the engine stops), `tacho_min_ms` / `tacho_max_ms` (float,
+shortest / longest accepted period in the last 1 s window, 0 = none), `tacho_acc` / `tacho_rej`
+(integers, accepted / rejected edges per second over that window) and `tacho_rej_total` (rejected
+edges since boot). Healthy signal: alike periods and `tacho_rej` ≈ 0; halves (21 ms among 43 ms) or a
+high `tacho_rej` mean noise on the TACHO wire — see `GPIO_PINOUT_CUSTOM_BOARD_S3.md` §7a.
 
 **Measuring pulses per revolution (Speed sensor card):** lift the wheel off the ground, put the
 transmission in neutral and put a chalk mark on the tyre. Enter the number of turns (1–20, default

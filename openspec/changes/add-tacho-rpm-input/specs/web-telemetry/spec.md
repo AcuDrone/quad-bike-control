@@ -10,6 +10,17 @@ block, so that the web console can show and calibrate the tacho whatever the CAN
   and `rpm_source` ("TACHO", "CAN" or "NONE")
 - **AND** these fields SHALL be present whether or not `can_status` is "connected"
 
+#### Scenario: Emit tacho signal diagnostics
+- **WHEN** a telemetry update is broadcast
+- **THEN** the JSON SHALL include `tacho_periods` (string: the last 8 accepted periods in ms with one
+  decimal, space separated, oldest first, e.g. "42.9 43.1 21.4 21.6 42.8"; "" before the first
+  period), `tacho_min_ms` and `tacho_max_ms` (float, shortest / longest accepted period in the last
+  1 s window, 0 when none), `tacho_acc` and `tacho_rej` (integer, accepted / rejected edges per
+  second over that window) and `tacho_rej_total` (integer, rejected edges since boot)
+- **AND** these fields SHALL be present whether or not `can_status` is "connected"
+- **AND** the tacho card SHALL show them in a monospace "Діагностика" / "Diagnostics" block under its
+  tiles (uk / en)
+
 #### Scenario: engine_rpm carries the effective RPM
 - **WHEN** a telemetry update is broadcast
 - **THEN** `engine_rpm` SHALL be the effective engine RPM and SHALL be emitted outside the

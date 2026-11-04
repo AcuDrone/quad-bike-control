@@ -566,8 +566,10 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // 8192 since 1.5.7: the transient `sniff` object (CAN sniffer) adds up to 32 rows of
     // 5 slots + a 17 B copied data string (~115 B each, ~3.8 KB) and can coexist with `probe`.
     // 1.5.9 adds 4 tacho / RPM-source slots (two short copied strings, ~60 B) — still in budget.
+    // 9216 since 1.5.10: 6 tacho diagnostic slots + the copied period string (~200 B) on top of
+    // a document whose sniff + probe worst case already sat close to 8 KB; +1 KB of .bss buys margin.
     // Static (single caller: the main-loop broadcast) so the larger document is off the stack.
-    static StaticJsonDocument<8192> doc;
+    static StaticJsonDocument<9216> doc;
     doc.clear();
 
     doc["timestamp"] = telemetry.timestamp;
@@ -682,6 +684,13 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["tacho_hz"] = serialized(String(telemetry.tacho_hz, 2));
     doc["tacho_ppr"] = serialized(String(telemetry.tacho_ppr, 1));
     doc["tacho_rpm"] = telemetry.tacho_rpm;
+    // Tacho diagnostics (fw 1.5.10): tacho_periods is a char array -> COPIED into the pool (~50 B).
+    doc["tacho_periods"] = telemetry.tacho_periods;
+    doc["tacho_min_ms"] = serialized(String(telemetry.tacho_min_ms, 1));
+    doc["tacho_max_ms"] = serialized(String(telemetry.tacho_max_ms, 1));
+    doc["tacho_acc"] = telemetry.tacho_acc;
+    doc["tacho_rej"] = telemetry.tacho_rej;
+    doc["tacho_rej_total"] = telemetry.tacho_rej_total;
 
     // CAN bus vehicle data
     if (telemetry.can_status == "connected") {
