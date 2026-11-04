@@ -565,6 +565,7 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // carries its whole reply frame ("frm", ~31 B copied string) and the list grew to 11 PIDs.
     // 8192 since 1.5.7: the transient `sniff` object (CAN sniffer) adds up to 32 rows of
     // 5 slots + a 17 B copied data string (~115 B each, ~3.8 KB) and can coexist with `probe`.
+    // 1.5.9 adds 4 tacho / RPM-source slots (two short copied strings, ~60 B) — still in budget.
     // Static (single caller: the main-loop broadcast) so the larger document is off the stack.
     static StaticJsonDocument<8192> doc;
     doc.clear();
@@ -674,9 +675,16 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["engine_hours"] = serialized(String(isfinite(telemetry.engine_hours) ? telemetry.engine_hours : 0.0f, 2));
     doc["engine_trip_hours"] = serialized(String(isfinite(telemetry.engine_trip_hours) ? telemetry.engine_trip_hours : 0.0f, 2));
 
+    // Effective engine RPM + ECU tacho — emitted UNCONDITIONALLY, outside the CAN block (on
+    // aztec the RPM comes from the tacho wire). rpm_source is a static token stored by pointer.
+    doc["engine_rpm"] = telemetry.engine_rpm;
+    doc["rpm_source"] = telemetry.rpm_source ? telemetry.rpm_source : "NONE";
+    doc["tacho_hz"] = serialized(String(telemetry.tacho_hz, 2));
+    doc["tacho_ppr"] = serialized(String(telemetry.tacho_ppr, 1));
+    doc["tacho_rpm"] = telemetry.tacho_rpm;
+
     // CAN bus vehicle data
     if (telemetry.can_status == "connected") {
-        doc["engine_rpm"] = telemetry.engine_rpm;
         doc["coolant_temp"] = telemetry.coolant_temp;
         doc["oil_temp"] = telemetry.oil_temp;
         doc["throttle_position"] = telemetry.throttle_position;

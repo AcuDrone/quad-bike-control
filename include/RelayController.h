@@ -182,7 +182,7 @@ public:
      * While the driver is faulted this instead re-attempts the safe-state port
      * write on every call until it verifies.
      *
-     * @param engineRpm Current engine RPM from CAN bus
+     * @param engineRpm EFFECTIVE engine RPM (tacho when fitted, CAN otherwise; 0 when none is valid)
      */
     void update(uint16_t engineRpm);
 

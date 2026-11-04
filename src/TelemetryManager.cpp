@@ -145,9 +145,16 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.steer_sca_src = (uint8_t)vehicleController_.getSteerScaleSource();
     telemetry.steer_test_speed_ms = vehicleController_.getSteerTestSpeedMs();
 
+    // Effective engine RPM (tacho when fitted, CAN otherwise) and the tacho state — OUTSIDE
+    // the CAN block: on aztec the RPM comes from the ECU tacho wire, not from CAN.
+    telemetry.engine_rpm = vehicleController_.getEngineRpm();
+    telemetry.rpm_source = rpmSourceName(vehicleController_.getRpmSource());
+    telemetry.tacho_hz = vehicleController_.getTacho().getHz();
+    telemetry.tacho_ppr = vehicleController_.getTacho().getPpr();
+    telemetry.tacho_rpm = vehicleController_.getTacho().getRpm();
+
     CANController::VehicleData vehicleData = vehicleController_.getVehicleData();
     if (vehicleData.dataValid) {
-        telemetry.engine_rpm = vehicleData.engineRPM;
         telemetry.coolant_temp = vehicleData.coolantTemp;
         telemetry.oil_temp = vehicleData.oilTemp;
         telemetry.throttle_position = vehicleData.throttlePosition;
@@ -157,7 +164,6 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
         telemetry.engine_load = vehicleData.engineLoad;
         telemetry.can_status = "connected";
     } else {
-        telemetry.engine_rpm = 0;
         telemetry.coolant_temp = 0;
         telemetry.oil_temp = 0;
         telemetry.throttle_position = 0;

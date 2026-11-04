@@ -577,7 +577,7 @@ void MavlinkInterface::report(const StateReport& state) {
     // PRINCIPLE: every value sits in the field that NAMES it, so the message is self-describing.
     // Only five fields are repurposed, and each is documented below.
     //
-    //   rpm                         -> engine RPM (PID 0x0C)                       NaN if !canValid
+    //   rpm                         -> EFFECTIVE engine RPM (tacho, CAN 0x0C fallback) NaN if !rpmValid
     //   cylinder_head_temperature   -> coolant temperature (°C, PID 0x05)          NaN if !canValid
     //   intake_manifold_temperature -> intake air temperature (°C, PID 0x0F)       NaN if !canValid
     //   intake_manifold_pressure    -> manifold absolute pressure (kPa, PID 0x0B)  NaN if !canValid
@@ -636,7 +636,9 @@ void MavlinkInterface::report(const StateReport& state) {
         // ambiguous pattern, or a faulted input expander). Its validity is the SENSOR's,
         // deliberately independent of CAN health.
         float physGearVal = encodeGear(state.gearPhysical, NAN);
-        float rpmVal = state.canValid ? (float)state.engineRpm  : NAN;
+        // Effective RPM (tacho when fitted, CAN fallback): its own gate, NOT CAN health — NaN
+        // only when no source is valid. A fitted, silent tacho reports a genuine 0.
+        float rpmVal = state.rpmValid ? (float)state.engineRpm  : NAN;
         float chtVal = state.canValid ? (float)state.coolantTemp : NAN;
         float iatVal = state.canValid ? (float)state.intakeTemp : NAN;
         float mapVal = state.canValid ? (float)state.mapKpa : NAN;
@@ -661,7 +663,7 @@ void MavlinkInterface::report(const StateReport& state) {
             MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &msg,
             1,             // health (1 = present)
             0.0f,          // ecu_index
-            rpmVal,        // rpm                         <- ENGINE RPM (0x0C)
+            rpmVal,        // rpm                         <- EFFECTIVE ENGINE RPM (tacho / 0x0C)
             gearVal,       // fuel_consumed               <- ASSUMED GEAR (repurposed)
             physGearVal,   // fuel_flow                   <- PHYSICAL GEAR (repurposed)
             loadVal,       // engine_load                 <- ECU CALCULATED LOAD (0x04)

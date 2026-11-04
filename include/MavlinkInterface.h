@@ -91,7 +91,8 @@ public:
      */
     struct StateReport {
         bool        canValid;       // CAN data fresh/valid
-        uint16_t    engineRpm;      // RPM
+        uint16_t    engineRpm;      // EFFECTIVE engine RPM (tacho when fitted, CAN otherwise)
+        bool        rpmValid;       // effective RPM source is TACHO or CAN (independent of canValid)
         int8_t      coolantTemp;    // °C
         const char* gearFrom;       // gear the current step is leaving "R"/"N"/"L"/"H"
         const char* gearTo;         // current step / assumed gear "R"/"N"/"L"/"H"

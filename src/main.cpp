@@ -252,6 +252,9 @@ void setup() {
         Debug::println("[INIT] ERROR: Speed sensor PCNT init failed — speed stays invalid");
     }
 
+    // ECU tacho input on GPIO14 (ppr from NVS "tacho", RISING-edge ISR) — engine RPM on aztec
+    vehicleController.initTacho();
+
     // Restore the engine hour meter from NVS (must run after NVS is up, so not in a ctor)
     vehicleController.initEngineHourMeter();
 
@@ -311,7 +314,8 @@ void loop() {
     String gearPhysStr = vehicleController.getCurrentGearString();  // physically sensed ("?" = unknown)
     MavlinkInterface::StateReport report;
     report.canValid     = vd.dataValid;
-    report.engineRpm    = vd.engineRPM;
+    report.engineRpm    = vehicleController.getEngineRpm();     // EFFECTIVE RPM (tacho / CAN)
+    report.rpmValid     = vehicleController.isEngineRpmValid(); // false only for source NONE
     report.coolantTemp  = vd.coolantTemp;
     report.gearFrom     = gearFromStr.c_str();
     report.gearTo       = gearToStr.c_str();

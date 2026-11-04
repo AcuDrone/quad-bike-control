@@ -14,6 +14,19 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.9","date":"2026-11-04","uk":[
+"Оберти двигуна тепер беруться з тахометричного виходу ЕБК (сірий J1, контакт 6) через оптрон на X3; оберти з CAN залишаються резервом",
+"Нова картка «Оберти (TACHO)» у розділі «Калібрування»: частота, імпульси на оберт, оберти й джерело; калібрування за еталонними обертами з приладової панелі або датчика колінвала",
+"Плитка «Оберти двигуна» показується завжди, навіть без зв'язку з ЕБК, і має позначку TACHO або CAN",
+"Двигун вважається працюючим від 800 об/хв (було 1500): перемикання передач з автопілота на холостому ході, стартер вимикається, щойно двигун завівся",
+"EFI_STATUS.rpm у MAVLink тепер передає оберти з тахометра"
+],"en":[
+"Engine RPM now comes from the ECU tachometer output (grey J1 pin 6) through an optocoupler on X3; CAN RPM stays as the fallback",
+"New “Tacho (RPM) calibration” card in Calibration: frequency, pulses per revolution, RPM and source; calibrate against a reference RPM from the dash or the crank sensor",
+"The Engine RPM tile is always shown, even without an ECU link, with a TACHO or CAN badge",
+"The engine counts as running from 800 RPM (was 1500): autopilot gear changes work at idle and the starter is released as soon as the engine fires",
+"MAVLink EFI_STATUS.rpm now carries the tacho RPM"
+]},
 {"version":"1.5.8","date":"2026-11-04","uk":[
 "Напруга АКБ 12 В тепер вимірюється через роз'єм X10 (на баггі немає плати boost) і показується завжди, навіть без зв'язку з ЕБК",
 "Калібрування АКБ: виміряйте напругу мультиметром, введіть значення й натисніть «Калібрувати»; «Скинути» повертає заводський коефіцієнт",

@@ -18,6 +18,7 @@
 5. [Opto-Isolated Input Assignment](#5-opto-isolated-input-assignment)
 6. [Relay Board Assignment](#6-relay-board-assignment)
 7. [X10 battery sense (aztec)](#7-x10-battery-sense-aztec)
+7a. [X3 tacho input (aztec)](#7a-x3-tacho-input-aztec)
 8. [⚠ Warnings & Bring-Up Checklist](#8--warnings--bring-up-checklist)
 9. [Firmware Migration Summary](#9-firmware-migration-summary)
 
@@ -62,7 +63,7 @@ document is the wiring / pin reference only.
 | **11** | Hall_3 channel B (X5) | spare | `PIN_CAN_MOSI` | SPARE |
 | **12** | Hall_2 channel A (X4) | spare | `PIN_CAN_SCK` | SPARE |
 | **13** | Hall_2 channel B (X4) | spare | `PIN_CAN_MISO` | SPARE |
-| **14** | Hall_1 channel A (X3) | spare — 5V hall channel (×0.65 divider) | `PIN_BRAKE_SENSOR` | SPARE |
+| **14** | Hall_1 channel A (X3) | `PIN_TACHO` — ECU tacho input (aztec) via an external PC817 emitter follower, RISING-edge ISR, not inverted — see §7a | `PIN_BRAKE_SENSOR` | NEW feature (aztec) |
 | **15** | PWM_5 → X8 pin 2 (L_PWM) | `PIN_THROTTLE_PWM` — LEDC ch1, 50 Hz | `PIN_MAVLINK_TX` | MOVED (was 3) |
 | **16** | PWM_6 → X8 pin 3 (R_PWM) | `PIN_TRANS_SERVO` — LEDC ch2, 50 Hz | FREE | MOVED (was 9) |
 | **17** | PWM_7 → X9 pin 2 (L_PWM) | `PIN_MAVLINK_TX` — UART1 TX → Pixhawk RX | `PIN_STEER_RPWM` (freed) | MOVED (was 15) |
@@ -99,7 +100,7 @@ document is the wiring / pin reference only.
 |-----------|---------|--------|
 | **X1** | Prog header — **steering VESC UART0** (aztec) | 1=3V3, 2=RESET, 3=GND, 4=TxD (GPIO43) → **VESC RX**, 5=RxD (GPIO44) ← **VESC TX**, 6=BOOT. 3.3V logic, direct through 510Ω R13/R14 (no level shifter); wire TxD/RxD/GND only, **not** 3V3. ⚠ No longer usable for UART flashing — flash over USB-C (RESET/BOOT still work) |
 | **X2** | Driveline speed sensor (12V), opto-isolated | 1 = In+, 2 = In− → 470Ω `R22` → 6N137 LED → open-collector output + pull-up → **GPIO8**. ⚠ **Inverted** (LED on → GPIO8 low) and ⚠ **needs an extra series resistor** — see below |
-| **X3** | Hall 1 — spare | 1=5V, 2=Hall A (GPIO14), 3=Hall B (GPIO21), 4=GND |
+| **X3** | Hall 1 — **ECU tacho input** (aztec) | 1=5V → PC817 collector, 2=Hall A (GPIO14) ← PC817 emitter, 3=Hall B (GPIO21, spare), 4=GND (unused). No pull-up — see §7a |
 | **X4** | Hall 2 — spare | 1=5V, 2=Hall A (GPIO12), 3=Hall B (GPIO13), 4=GND |
 | **X5** | Hall 3 — spare | 1=5V, 2=Hall A (GPIO10), 3=Hall B (GPIO11), 4=GND |
 | **X6** | FREE — reserved for a 4th BTS7960 | 1=5V(fused), 2=L_PWM (GPIO4), 3=R_PWM (GPIO5), 4/5=L_IS/R_IS (mux CH3/CH0), 6=GND. *History:* carried the steering VESC UART2 until it moved to X1 / UART0 |
@@ -122,8 +123,9 @@ firmware uses the verified 800–2200 µs range) is rated for **16.8 V max**. It
 powered from the 24 V supply (boost rail on master, the 7s LiFePO4 VESC pack on aztec).
 
 **Hall input conditioning (X3/X4/X5):** ferrite bead (1 kΩ @ 100 MHz) → 1.2K / 2.2K divider (×0.65)
-→ PESD3V3L1UA TVS + 100n. Designed for **5V** sensors. All three channels are **spare** — the
-driveline speed sensor is a 12V type and uses the X2 opto input instead.
+→ PESD3V3L1UA TVS + 100n. Designed for **5V** sensors. X3 channel A (GPIO14) carries the ECU tacho
+on aztec (§7a); the other channels are **spare** — the driveline speed sensor is a 12V type and uses
+the X2 opto input instead.
 
 **Speed-sensor input conditioning (X2, 6N137):** `X2.1 / X2.2` → 470Ω `R22` → 6N137 LED →
 open-collector output with pull-up → **GPIO8**. Current-driven and galvanically isolated, so a 12V
@@ -386,6 +388,36 @@ divider. This section describes the aztec branch only.
 
 ---
 
+## 7a. X3 tacho input (aztec)
+
+The Delphi MT05 ECU never reports engine RPM over CAN (PID 0x0C always 0, no broadcast frame), so
+engine RPM comes from the ECU **tachometer output** — grey connector **J1 pin 6**, a ≈12 V square
+wave of ≈50 % duty that the ECU drives with or without the original dash. It reaches GPIO14 through
+an external **PC817** optocoupler wired as an **emitter follower** on X3 (Hall_1 channel A).
+
+```
+TACHO (J1-6) ──1.5k 0.25W──► PC817 pin1 (A)      PC817 pin4 (C) ──► X3.1 (5 V)
+vehicle GND  ◄───────────── PC817 pin2 (K)      PC817 pin3 (E) ──► X3.2 (GPIO14 via 1.2K/2.2K + TVS)
+                                                 X3.4 (GND) unused, no pull-up resistor
+```
+
+| Aspect | Detail |
+|--------|--------|
+| LED side | 1.5 kΩ 0.25 W series: ≈7.5 mA at 12.5 V, ≈9 mA at 14.5 V, ≈0.12 W in the resistor; LED cathode to vehicle GND |
+| Output side | Collector → X3.1 (5 V), emitter → X3.2. The on-board 1.2K + 2.2K (≈3.4 kΩ) divider is the emitter load; PC817 CTR ≥ 50 % gives ≥ 3.7 mA available vs ≈1.5 mA needed (≥ 2.5× margin) |
+| Levels | LED on → ≈4.8 V at X3.2 → **≈3.1 V at GPIO14** (high, must be ≥ 2.5 V); LED off → the 2.2K pulls GPIO14 to **0 V** |
+| Polarity | **Not inverted** (ECU high = GPIO high). Firmware times the RISING edge only, so duty and polarity do not matter |
+| Firmware | `PIN_TACHO` (GPIO14), plain input; IRAM ISR timestamps edges (µs), 1 ms glitch filter, RPM from the mean of the last 4 periods, 0 RPM after 500 ms without pulses |
+| ppr | NVS `tacho`/`ppr` ∈ {0.5, 1, 2, 3, 4}, default 1; web `cal_tacho_ppr` (reference RPM, snapped), `set_tacho_ppr`, `reset_tacho_ppr` |
+| Expected | ≈25–26 Hz at the ≈1500 RPM idle with ppr 1 (crank reference: 24-1 wheel, RPM = crank Hz × 60 / 23) |
+| Consumers | Effective RPM (tacho first, CAN fallback): gear gate, starter cut-off / crank interlock, boost PID, hour meter, telemetry, MAVLink `EFI_STATUS.rpm` |
+
+⚠ Why emitter follower: the first common-emitter draft with a 4.7 kΩ pull-up to 5 V would give only
+5 × 3.4 / 8.1 ≈ 2.1 V at X3.2 → ≈1.36 V at GPIO14, below the ESP32-S3 V_IH (≈2.48 V). Do **not** add
+a pull-up. See warning 10.
+
+---
+
 ## 8. ⚠ Warnings & Bring-Up Checklist
 
 1. **GPIO43/44 (UART0) carry the steering VESC on X1.** *History:* they were shared copper between the
@@ -447,7 +479,17 @@ divider. This section describes the aztec branch only.
    - The opto **inverts** the signal (LED on → GPIO8 low). Harmless for pulse counting; the PCNT
      config just picks one edge and records the inversion.
    - Consequence: **S-BUS as an RC-receiver input is gone for good** (no UART was available anyway),
-     and Hall_1 (GPIO14 A / GPIO21 B, X3) returns to spare.
+     and Hall_1 (GPIO14 A / GPIO21 B, X3) returns to spare (on aztec GPIO14 is now the tacho, warning 10).
+10. **ECU tacho on X3 (aztec) — emitter-follower wiring only** (§7a). PC817 collector to X3.1 (5 V),
+    emitter to X3.2, **no pull-up resistor**, X3.4 (GND) **unused**; the LED is driven from the TACHO
+    wire through 1.5 kΩ 0.25 W to vehicle GND. A pull-up / common-emitter wiring leaves GPIO14 below
+    V_IH and counts nothing.
+    - **Bench first:** drive the LED from 12 V via 1.5 kΩ and measure GPIO14 — ≈3.1 V high (must be
+      ≥ 2.5 V), ≈0 V low (≤ 0.8 V) — before trusting the counts.
+    - **Do not tap the crank sensor** (24-1 wheel): any load on it risks the ECU's ignition timing. It
+      may be measured with a separate instrument as a calibration reference only.
+    - Run the TACHO wire as a **twisted pair with GND** away from the ignition coil leads; the opto,
+      the 1 ms software glitch filter and the 4-period mean handle residual noise.
 
 ---
 
@@ -479,6 +521,7 @@ divider. This section describes the aztec branch only.
 | `PIN_ADC_24V` | 9 | 12 V battery sense on aztec, X10 pin 3 (÷9.33 × cal) |
 | `PIN_ADC_IS_MUX` | 3 | CD4051 common output — BTS7960 IS channels |
 | `PIN_SPEED_SENSOR` | 8 | Driveline speed sensor (PCNT) via the X2 6N137 opto input, inverted — from the pending speed-sensor change |
+| `PIN_TACHO` | 14 | ECU tacho input (aztec) on X3 Hall_1 A via an external PC817 emitter follower, not inverted, RISING-edge ISR (§7a) |
 
 ### Removed constants (function moved off-GPIO)
 
@@ -502,6 +545,7 @@ divider. This section describes the aztec branch only.
 | PCA9557 input reader | New driver on **I2C2** @ 0x1A (U10) — supplies gear switches and the brake limit sensor to `TransmissionController` / brake logic (replaces `digitalRead`) |
 | `RelayController` | Rewrite from direct GPIO to the relay-board PCA9557 @ 0x1F — bus passed in by `main.cpp` (**`Wire1`/I2C2** via X15) |
 | Battery sense / telemetry | `PIN_BOOST_EN` HIGH at boot (harmless); `PIN_ADC_24V` = 12 V battery → `ecu_voltage` telemetry and MAVLink `EFI_STATUS.ignition_voltage`, web calibration `cal_bat_v` |
+| `TachoSensor` (aztec) | New: `PIN_TACHO` IRAM ISR + period averaging (`include/TachoLaw.h`), ppr in NVS `tacho`; `VehicleController` composes the effective RPM (TACHO → CAN fallback); `ENGINE_RUNNING_RPM_THRESHOLD` 1500 → 800 |
 | Console | Add `ARDUINO_USB_CDC_ON_BOOT=1` build flag (USB-CDC over USB-C) |
 | CD4051 IS mux (future) | PCA9557 U2 @ 0x1C drives A/B/C + enable; read on `PIN_ADC_IS_MUX` — brake-motor current monitoring |
 

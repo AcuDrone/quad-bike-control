@@ -88,7 +88,9 @@ it. Cards are shown in one column.
   the "mirrored" marker for a mirrored sensor mount), calibration, VESC driver, sensor zero, motor current, FET temperature and VESC input voltage, plus
   one line of raw LWS status bits and error counters.
 - **Vehicle Data (CAN)**: engine data from the ECU, engine hours and trip hours, CAN status, and
-  "Probe ECU" with its results.
+  "Probe ECU" with its results. The **Engine RPM** tile shows the EFFECTIVE RPM (`engine_rpm`,
+  tacho when fitted, CAN otherwise) whether or not CAN is connected, with a small **TACHO** / **CAN**
+  badge (`rpm_source`); "—" when no source is valid.
 - **MAVLink Command Channels**: link rate/age and channels 1–8.
 - **Швидкість / Speed**: speed and sensor state, speed limit and limiting, steering authority and
   scaling base, the bench test-speed state, odometer and trip.
@@ -115,6 +117,8 @@ it. Cards are shown in one column.
   circumference.
 - **Speed limit and steering**: speed-limiter floor, speed-limit readout, steering authority,
   steering scaling base and bench test speed.
+- **Оберти (TACHO) / Tacho (RPM) calibration** (aztec): live frequency, pulses per revolution,
+  tacho RPM and RPM source; reference-RPM calibration, a manual ppr select and Reset (see below).
 
 **Тести / Tests** (bench checks):
 - **Manual control**: Take / Release control, gear buttons, steering, throttle and brake sliders.
@@ -178,6 +182,22 @@ missing battery, saves it to NVS `"bat12"` / `cal` and applies it at once. **Res
 `reset_bat_v_cal` (factor 1.0, saved). The "Attention" box shows "12 V voltage low" below 11.8 V
 (cleared above 12.1 V) only while `bat_v_valid`, never while the starter relay is on and for 2 s
 after.
+
+**Tacho (RPM) calibration card:** engine RPM comes from the ECU tachometer wire (grey J1 pin 6)
+through a PC817 on X3 / GPIO14 (wiring: `GPIO_PINOUT_CUSTOM_BOARD_S3.md` §7a); CAN RPM is the
+fallback. The card shows `tacho_hz` (one decimal), `tacho_ppr`, `tacho_rpm` and `rpm_source`, and
+"немає імпульсів" / "no pulses" while `tacho_hz` is 0. **Calibrate:** with the engine running, type
+the reference RPM (300–8000) from the dash — or from the crank sensor, RPM = crank Hz × 60 / 23 —
+and press **Calibrate**: the page sends `cal_tacho_ppr` with `value` = the reference; the firmware
+computes `raw = Hz × 60 / reference` from its current averaged frequency, snaps it to the nearest of
+0.5, 1, 2, 3, 4 and replies e.g. "Tacho: 26.1 Hz × 60 / 1550 = 1.01 → ppr 1". It refuses (old ppr
+kept) with no pulses, a reference outside 300–8000, or `raw` more than ±25 % from the snapped value.
+**Apply** sends `set_tacho_ppr` with the selected ppr (only 0.5/1/2/3/4 accepted). **Reset** sends
+`reset_tacho_ppr`: the stored key is removed and ppr goes back to 1. The ppr lives in NVS `"tacho"` /
+`ppr`; storing it also marks the tacho fitted from boot (a stopped engine then reads 0 from the tacho
+instead of CAN). All three commands work from any input source; replies start with "Tacho" and are
+shown in the card's status line. Telemetry (always emitted, not gated on CAN): `engine_rpm`
+(effective), `rpm_source` ("TACHO" / "CAN" / "NONE"), `tacho_hz`, `tacho_ppr`, `tacho_rpm`.
 
 **Measuring pulses per revolution (Speed sensor card):** lift the wheel off the ground, put the
 transmission in neutral and put a chalk mark on the tyre. Enter the number of turns (1–20, default

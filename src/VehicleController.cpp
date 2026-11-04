@@ -43,7 +43,7 @@ VehicleController::VehicleController(SteeringController& steering,
       boostManualActive_(false),
       gearBoostStartTime_(0),
       pidLastUpdateTime_(0),
-      lastCanUpdateTime_(0),
+      lastRpmSampleMs_(0),
       pidIntegral_(0.0f),
       pidPrevError_(0.0f),
       lastPIDThrottleUs_(THROTTLE_DEFAULT_IDLE_US),
@@ -69,6 +69,7 @@ VehicleController::VehicleController(SteeringController& steering,
       steerTestSpeedSetMs_(0),
       webThrottleDemandPct_(0.0f),
       steerZeroResponsePortal_(nullptr) {
+    effRpm_ = EffectiveRpm{0, false, RpmSource::NONE, 0};
 }
 
 BatParams VehicleController::batteryParams() {
@@ -223,6 +224,62 @@ void VehicleController::processBatteryCalResetCommand(WebPortal& webPortal) {
     Debug::printlnFeature(DebugFeature::VEHICLE, "[BAT] Calibration reset to 1.0");
 }
 
+static String tachoPprText(float ppr) {
+    // 0.5 keeps its decimal, the whole values print as integers ("ppr 1", not "ppr 1.0")
+    return (fabsf(ppr - roundf(ppr)) > 0.01f) ? String(ppr, 1) : String((int)lroundf(ppr));
+}
+
+void VehicleController::processTachoCalCommand(float refRpm, WebPortal& webPortal) {
+    const float hz = tacho_.getHz();   // the CURRENT averaged frequency (0 when timed out)
+    float raw = NAN;
+    float ppr = tacho_.getPpr();
+    const TachoCalParams p{TACHO_CAL_REF_MIN_RPM, TACHO_CAL_REF_MAX_RPM, TACHO_CAL_TOLERANCE};
+    const TachoCalResult r = tachoComputeCal(hz, refRpm, p, raw, ppr);
+    if (r == TachoCalResult::NO_PULSES) {
+        webPortal.sendResponse(false, "Tacho: no pulses - start the engine and check the wiring");
+        return;
+    }
+    if (r == TachoCalResult::REF_OUT_OF_RANGE) {
+        webPortal.sendResponse(false, "Tacho: reference RPM out of range (" +
+                                      String((int)TACHO_CAL_REF_MIN_RPM) + "-" +
+                                      String((int)TACHO_CAL_REF_MAX_RPM) + ")");
+        return;
+    }
+    const String ratio = String(hz, 1) + " Hz × 60 / " + String((int)lroundf(refRpm)) + " = " + String(raw, 2);
+    if (r == TachoCalResult::RATIO_OFF) {
+        webPortal.sendResponse(false, "Tacho: " + ratio +
+                                      " - not within 25% of an allowed ppr (0.5, 1, 2, 3, 4), check the reference");
+        return;
+    }
+    if (!tacho_.setPpr(ppr)) {
+        webPortal.sendResponse(false, "Tacho: failed to save ppr");
+        return;
+    }
+    webPortal.sendResponse(true, "Tacho: " + ratio + " → ppr " + tachoPprText(ppr));
+    Debug::printfFeature(DebugFeature::VEHICLE, "[TACHO] Calibrated: %.2f Hz, ref %.0f RPM -> raw %.3f -> ppr %.1f\n",
+                         hz, refRpm, raw, ppr);
+}
+
+void VehicleController::processTachoSetPprCommand(float ppr, WebPortal& webPortal) {
+    if (!tachoPprAllowed(ppr)) {
+        webPortal.sendResponse(false, "Tacho: ppr " + String(ppr, 2) + " not allowed (0.5, 1, 2, 3, 4)");
+        return;
+    }
+    if (!tacho_.setPpr(ppr)) {
+        webPortal.sendResponse(false, "Tacho: failed to save ppr");
+        return;
+    }
+    webPortal.sendResponse(true, "Tacho: ppr set to " + tachoPprText(tacho_.getPpr()));
+}
+
+void VehicleController::processTachoResetPprCommand(WebPortal& webPortal) {
+    if (!tacho_.resetPpr()) {
+        webPortal.sendResponse(false, "Tacho: failed to reset ppr");
+        return;
+    }
+    webPortal.sendResponse(true, "Tacho: ppr reset to " + tachoPprText(tacho_.getPpr()));
+}
+
 void VehicleController::initEngineHourMeter() {
     engineHours_.begin();
 }
@@ -283,9 +340,21 @@ bool VehicleController::initCAN() {
     return result;
 }
 
+void VehicleController::updateEffectiveRpm() {
+    const CANController::VehicleData d = canController_.getVehicleData();
+    effRpm_ = tachoSelectRpm(tacho_.isFitted(), tacho_.isLive(), tacho_.getRpm(), tacho_.lastEdgeMs(),
+                             d.dataValid, d.engineRPM, d.lastUpdateTime);
+}
+
 void VehicleController::update() {
     // Update CAN controller (read vehicle data from ECU)
     canController_.update();
+
+    // ECU tacho, then the ONE effective engine RPM every consumer below reads
+    // (live TACHO → CAN rpm > 0 → fitted TACHO 0 → CAN → NONE). VehicleData.engineRPM
+    // keeps the raw CAN value.
+    tacho_.update();
+    updateEffectiveRpm();
 
     // Sample the 12 V battery on X10 (rate-limited internally)
     updateBatteryMonitor();
@@ -312,16 +381,17 @@ void VehicleController::update() {
     transData.sensorSpeedSuspicious = speedSensor_.isSuspicious();
     transmission_.setVehicleData(transData);
 
-    // Engine hour meter, from the SAME snapshot the transmission just got — no second
-    // getVehicleData() call, so the two consumers can never see different data in one
-    // iteration. An invalid CAN reading means the engine state is UNKNOWN, not "off": the
-    // interval is discarded rather than counted, because an unknown state must not invent
-    // hours. ENGINE_HOURS_MIN_RPM, not ENGINE_RUNNING_RPM_THRESHOLD — an hour meter must
-    // count idling, which the 1500 RPM gear-change safety threshold sits above.
-    engineHours_.update(canData.dataValid && canData.engineRPM >= ENGINE_HOURS_MIN_RPM, millis());
+    // Engine hour meter, from the effective RPM computed once at the top of update(). No
+    // valid source (CAN invalid and no fitted tacho) means the engine state is UNKNOWN, not
+    // "off": the interval is discarded rather than counted, because an unknown state must not
+    // invent hours. A fitted tacho that timed out reads a valid 0 (nothing counted either).
+    // ENGINE_HOURS_MIN_RPM, not ENGINE_RUNNING_RPM_THRESHOLD — an hour meter counts every
+    // second the crank turns, independent of the gear-change safety threshold.
+    engineHours_.update(effRpm_.valid && effRpm_.rpm >= ENGINE_HOURS_MIN_RPM, millis());
 
-    // Update relay controller with engine RPM (for automatic cranking stop)
-    relayController_.update(canData.engineRPM);
+    // Update relay controller with the effective engine RPM (automatic cranking stop and the
+    // armed-crank suppression); 0 when no source is valid.
+    relayController_.update(getEngineRpm());
 
     // Expire the bench test-speed override. The fuse is the whole point: an override left on
     // must not survive as a silent steering restriction, so it clears itself whether or not
@@ -495,6 +565,16 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
         return;
     } else if (cmd.cmd == "reset_bat_v_cal") {
         processBatteryCalResetCommand(webPortal);
+        return;
+    } else if (cmd.cmd == "cal_tacho_ppr") {
+        // Tacho ppr from a reference RPM (dash or crank sensor): any input source
+        processTachoCalCommand(cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_tacho_ppr") {
+        processTachoSetPprCommand(cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "reset_tacho_ppr") {
+        processTachoResetPprCommand(webPortal);
         return;
     } else if (cmd.cmd == "steer_cal_center" || cmd.cmd == "steer_cal_left" || cmd.cmd == "steer_cal_right") {
         processSteerCalCommand(cmd.cmd, webPortal);
@@ -1417,10 +1497,10 @@ bool VehicleController::setIgnitionState(const String& state, String& errorMsg) 
 
     // Safety interlock: prevent cranking if engine already running
     if (targetState == RelayController::IgnitionState::CRANKING) {
-        CANController::VehicleData canData = canController_.getVehicleData();
-        if (canData.dataValid && canData.engineRPM >= ENGINE_RUNNING_RPM_THRESHOLD) {
+        if (isEngineRunning()) {   // effective RPM (tacho when fitted, CAN otherwise)
             errorMsg = "Engine already running";
-            Debug::printfFeature(DebugFeature::VEHICLE, "[IGNITION] Rejected: engine already running (RPM: %d)\n", canData.engineRPM);
+            Debug::printfFeature(DebugFeature::VEHICLE, "[IGNITION] Rejected: engine already running (RPM: %u, %s)\n",
+                                 (unsigned)effRpm_.rpm, rpmSourceName(effRpm_.source));
             return false;
         }
     }
@@ -1708,7 +1788,7 @@ void VehicleController::updateBrakeControl() {
 
 void VehicleController::updateGearBoostPID() {
     uint32_t now = millis();
-    CANController::VehicleData canData = canController_.getVehicleData();
+    const EffectiveRpm rpm = effRpm_;   // tacho when fitted, CAN otherwise
 
     // Deactivate when gear change completes (skip if in manual test mode)
     if (gearBoostActive_ && !boostManualActive_ && !transmission_.needsThrottleBoost()) {
@@ -1722,13 +1802,13 @@ void VehicleController::updateGearBoostPID() {
 
     // Activate on first call (gear change just started, or manual test triggered)
     if (!gearBoostActive_) {
-        if (!canData.dataValid || canData.engineRPM < ENGINE_RUNNING_RPM_THRESHOLD) {
+        if (!rpm.valid || rpm.rpm < ENGINE_RUNNING_RPM_THRESHOLD) {
             return;  // Engine not running — unsafe to boost throttle
         }
         gearBoostActive_ = true;
         gearBoostStartTime_ = now;
         pidLastUpdateTime_ = now;
-        lastCanUpdateTime_ = 0;
+        lastRpmSampleMs_ = 0;
         pidIntegral_ = 0.0f;
         pidPrevError_ = 0.0f;
         lastPIDThrottleUs_ = throttle_.getIdleUs();
@@ -1746,25 +1826,26 @@ void VehicleController::updateGearBoostPID() {
         return;
     }
 
-    // CAN stale: hold last µs, don't accumulate integral
-    if (!canData.dataValid) {
+    // No valid RPM source (CAN stale and no fitted tacho): don't accumulate integral
+    if (!rpm.valid) {
         throttle_.idle();
         return;
     }
 
-    // No new CAN sample since last compute: hold last µs, skip integral accumulation
-    if (canData.lastUpdateTime == lastCanUpdateTime_) {
+    // No new RPM sample (CAN reply or accepted tacho edge) since last compute: hold last µs,
+    // skip integral accumulation
+    if (rpm.sampleMs == lastRpmSampleMs_) {
         throttle_.setThrottleUs(lastPIDThrottleUs_);
         return;
     }
-    lastCanUpdateTime_ = canData.lastUpdateTime;
+    lastRpmSampleMs_ = rpm.sampleMs;
 
     // Compute PID
     float dt = (now - pidLastUpdateTime_) / 1000.0f;
     if (dt < 0.001f) dt = 0.001f;
     pidLastUpdateTime_ = now;
 
-    float error = (float)boostTargetRpm_ - (float)canData.engineRPM;
+    float error = (float)boostTargetRpm_ - (float)rpm.rpm;
 
     // Reset integral on zero-crossing to prevent windup from fighting recovery
     if (pidPrevError_ != 0.0f && ((error > 0.0f) != (pidPrevError_ > 0.0f))) {
@@ -1793,7 +1874,8 @@ void VehicleController::updateGearBoostPID() {
 
     static uint32_t lastProgressLog = 0;
     if (now - lastProgressLog > 250) {
-        Debug::printfFeature(DebugFeature::VEHICLE, "[BOOST] Us=%d Error=%.0f RPM=%d CAN_age=%lums\n", us, error, canData.engineRPM, now - canData.lastUpdateTime);
+        Debug::printfFeature(DebugFeature::VEHICLE, "[BOOST] Us=%d Error=%.0f RPM=%u (%s) age=%lums\n", us, error,
+                             (unsigned)rpm.rpm, rpmSourceName(rpm.source), (unsigned long)(now - rpm.sampleMs));
         lastProgressLog = now;
     }
 }

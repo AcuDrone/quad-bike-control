@@ -17,6 +17,8 @@
 #include "SpeedSensor.h"
 #include "EngineHourMeter.h"
 #include "SpeedLimiterLaw.h"
+#include "TachoLaw.h"
+#include "TachoSensor.h"
 
 /**
  * @brief Vehicle control coordination layer
@@ -41,6 +43,12 @@ public:
      * drives `PIN_BOOST_EN` HIGH (no boost board on aztec — harmless).
      */
     void initBatterySense();
+
+    /**
+     * @brief Start the ECU tacho input on GPIO14 (ppr from NVS "tacho", RISING-edge ISR).
+     * Call once from setup(), after NVS is up.
+     */
+    void initTacho() { tacho_.begin(); }
 
     /**
      * @brief Load the engine hour meter from NVS. Call once from setup().
@@ -383,13 +391,26 @@ public:
     int32_t getBoostTargetRpm() const { return boostTargetRpm_; }
 
     /**
-     * @brief Check if engine is running based on CAN RPM data
-     * @return true if CAN data is valid and RPM >= 1000
+     * @brief Engine running, from the EFFECTIVE RPM (tacho when fitted, CAN otherwise).
+     * @return true if the effective RPM is valid and >= ENGINE_RUNNING_RPM_THRESHOLD (800 on
+     *         aztec: above cranking speed, below the ≈1500 RPM idle)
      */
     bool isEngineRunning() const {
-        CANController::VehicleData d = canController_.getVehicleData();
-        return d.dataValid && d.engineRPM >= ENGINE_RUNNING_RPM_THRESHOLD;
+        return effRpm_.valid && effRpm_.rpm >= ENGINE_RUNNING_RPM_THRESHOLD;
     }
+
+    /** @brief Effective engine RPM (0 when no source is valid) — the ONE value every consumer reads */
+    uint16_t getEngineRpm() const { return effRpm_.valid ? effRpm_.rpm : 0; }
+
+    /** @brief True when the effective RPM came from a valid source (TACHO or CAN) */
+    bool isEngineRpmValid() const { return effRpm_.valid; }
+
+    /** @brief Where the effective RPM came from (TACHO / CAN / NONE) */
+    RpmSource getRpmSource() const { return effRpm_.source; }
+
+    /** @brief ECU tacho input (live Hz / ppr / RPM for telemetry) */
+    const TachoSensor& getTacho() const { return tacho_; }
+    TachoSensor& getTacho() { return tacho_; }
 
 private:
     // Actuator references
@@ -405,6 +426,8 @@ private:
     SpeedSensor& speedSensor_;     // hall speed sensor (updated from main.cpp)
     EngineHourMeter engineHours_;  // OWNED by value: a counter, not a shared device
     CANController canController_;  // CAN bus controller (owned, not reference)
+    TachoSensor tacho_;            // ECU tacho input on GPIO14 (owned; single instance — file-static ISR)
+    EffectiveRpm effRpm_;          // effective engine RPM, recomputed once per update()
 
     // 12 V battery sense (X10 / GPIO9)
     float    batteryV_;            // last calibrated battery voltage (V)
@@ -442,7 +465,7 @@ private:
     bool boostManualActive_;            // True when boost is triggered manually via web for testing
     uint32_t gearBoostStartTime_;       // millis() when boost activated (for timeout)
     uint32_t pidLastUpdateTime_;        // millis() of last PID compute (for dt)
-    uint32_t lastCanUpdateTime_;        // CAN lastUpdateTime seen on previous PID iteration
+    uint32_t lastRpmSampleMs_;          // effective-RPM sample timestamp seen on previous PID iteration
     float pidIntegral_;                 // Accumulated integral term
     float pidPrevError_;                // Previous error (for derivative)
     uint16_t lastPIDThrottleUs_;        // Last PID-computed throttle µs (held on CAN stale)
@@ -613,6 +636,22 @@ private:
 
     /** @brief `reset_bat_v_cal`: calibration factor back to 1.0 (persisted) */
     void processBatteryCalResetCommand(WebPortal& webPortal);
+
+    /**
+     * @brief `cal_tacho_ppr`: raw = CURRENT tacho Hz × 60 / reference RPM, snapped to
+     * {0.5,1,2,3,4}; refused without pulses, with a reference outside 300–8000 RPM or a raw
+     * ratio more than ±25 % off. Persisted, then applied. Replies start with "Tacho:".
+     */
+    void processTachoCalCommand(float refRpm, WebPortal& webPortal);
+
+    /** @brief `set_tacho_ppr`: accept only {0.5,1,2,3,4}; persisted, then applied */
+    void processTachoSetPprCommand(float ppr, WebPortal& webPortal);
+
+    /** @brief `reset_tacho_ppr`: remove the stored key, ppr back to 1 */
+    void processTachoResetPprCommand(WebPortal& webPortal);
+
+    /** @brief Compose effRpm_ from the tacho and the CAN snapshot (TachoLaw.h tachoSelectRpm) */
+    void updateEffectiveRpm();
 
     /**
      * @brief Sample and average the 12 V battery on X10 (non-blocking, every

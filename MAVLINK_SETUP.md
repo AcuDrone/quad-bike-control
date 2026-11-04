@@ -233,7 +233,7 @@ documented exception, and the reason they are one is set out in their own sectio
 | # | Field | MAVLink meaning / unit | What we send | Validity | Source |
 |---|-------|------------------------|--------------|----------|--------|
 | 1 | `ecu_index` | ECU index | `0.0` | always | literal |
-| 2 | `rpm` | RPM | **Engine RPM** (PID `0x0C`) | NaN if `!canValid` | `state.engineRpm` |
+| 2 | `rpm` | RPM | **EFFECTIVE engine RPM** — the ECU tacho wire (aztec) when fitted, CAN PID `0x0C` as fallback (see "Engine RPM source" below) | NaN only if `!rpmValid` (no source) — **not** gated on CAN | `state.engineRpm` |
 | 3 | ⚑ `fuel_consumed` | [cm³] Fuel consumed | **ASSUMED (commanded) gear** — repurposed: fuel PID `0x2F` absent from this ECU | **always valid**, never NaN | `gearVal` |
 | 4 | ⚑ `fuel_flow` | [cm³/min] Fuel flow | **PHYSICAL (opto-sensed) gear** — same absent-PID justification | **NaN when the gear reads UNKNOWN** — sensor-driven, *not* CAN-driven | `physGearVal` |
 | 5 | `engine_load` | [%] Engine load | **ECU calculated load** (PID `0x04`) | NaN if `!canValid` | `state.engineLoad` |
@@ -251,6 +251,16 @@ documented exception, and the reason they are one is set out in their own sectio
 | 17 | `health` | EFI health (`uint8_t`) | `1` = present. **Constant — not a CAN-health flag** | always `1` | literal |
 | 18 | `ignition_voltage` | [V] EFI supply voltage | **12 V battery voltage**, measured by this board (X10 pin 3 → 200K/24K divider → GPIO 9, calibrated via web `cal_bat_v`) — **not** an ECU PID | NaN if no battery is wired (`!bat_v_valid`) | `state.batteryV` |
 | 19 | ⚑ `fuel_pressure` | [kPa] Fuel pressure | **TRIP distance, resettable, km** — repurposed: fuel PIDs absent | **always valid**, never NaN; **0 is a genuine zero** | `state.tripKm` |
+
+**Engine RPM source (aztec, fw 1.5.9).** The Delphi MT05 ECU answers PID `0x0C` with 0 and broadcasts
+no RPM, so `rpm` carries the **effective** engine RPM chosen by `VehicleController`: a live ECU tacho
+(GPIO14 / X3, see `GPIO_PINOUT_CUSTOM_BOARD_S3.md` §7a) first; else the CAN RPM when CAN is valid and
+reports > 0 (a broken tacho wire never hides a running engine); else a fitted but silent tacho reads a
+genuine `0`; else the CAN value; and only with **no source** at all is `rpm` NaN. The same value
+drives the gear gate (`isEngineRunning()`, ≥ `ENGINE_RUNNING_RPM_THRESHOLD` = 800 on aztec), the
+starter cut-off, the crank interlock, the boost PID and the hour meter. The tacho frequency is a
+calibration value shown only in web telemetry (`tacho_hz`) — it is deliberately **not** sent as a
+`NAMED_VALUE_FLOAT` (same collision reason as above). No new MAVLink message is added.
 
 `EFI_STATUS` has exactly **19 fields** — the 18 floats plus the `uint8_t health` — and all 19 are
 listed above in struct/wire order, which is *not* the `_pack()` argument order (`health` is the first
@@ -366,13 +376,13 @@ for the next interval.
 > **`injection_time = 0` is a genuine zero**, the same note `fuel_pressure` carries: it means "the
 > trip has just been reset", not "unknown". Nothing substitutes a sentinel.
 
-**What makes it count.** Time accrues only while the CAN data is **valid** *and* the reported engine
-RPM is at or above `ENGINE_HOURS_MIN_RPM` (300). Two consequences follow, both deliberate:
+**What makes it count.** Time accrues only while the effective engine RPM is **valid** (a fitted
+tacho, or valid CAN data) *and* at or above `ENGINE_HOURS_MIN_RPM` (300). Two consequences follow, both deliberate:
 
 - **Idling counts.** 300 RPM sits well below this engine's idle, because idling is running time and
   wears the engine on the same schedule. This is a *different* threshold from
-  `ENGINE_RUNNING_RPM_THRESHOLD` (1500), which is a gear-change and crank interlock chosen to sit
-  safely above idle; sharing them would build an hour meter that ignores the yard.
+  `ENGINE_RUNNING_RPM_THRESHOLD` (800 on aztec, 1500 on the quad), which is a gear-change and crank
+  interlock tuned for a different purpose; sharing them would couple the meter to that tuning.
 - **Ignition on with the engine stopped does not count.** The ECU answers on ACC and reports
   `rpm = 0`, which is CAN-*valid* — so it is the RPM floor, not the validity flag, that stops the
   meter there.
@@ -887,11 +897,12 @@ inverse holds too: a field that *can* be `NaN` and is not is a real measurement,
 
 ### Telling "CAN down" from "sensor down"
 
-Six independent validity domains share the link. They do **not** move together:
+Seven independent validity domains share the link. They do **not** move together:
 
 | Domain | Gate | Fields it controls |
 |--------|------|--------------------|
-| **CAN / ECU** | `state.canValid` (`CANController::VehicleData::dataValid`) | `rpm`, `engine_load`, `throttle_position`, `intake_manifold_pressure`, `intake_manifold_temperature`, `cylinder_head_temperature` — **six** fields, all NaN together |
+| **CAN / ECU** | `state.canValid` (`CANController::VehicleData::dataValid`) | `engine_load`, `throttle_position`, `intake_manifold_pressure`, `intake_manifold_temperature`, `cylinder_head_temperature` — **five** fields, all NaN together |
+| **Effective engine RPM** | `state.rpmValid` (`rpm_source` ≠ NONE: fitted tacho, or valid CAN) | `rpm` only (→ `NaN`) — with a fitted tacho it stays valid through a CAN outage |
 | **12 V battery sense** | `state.batteryValid` (`bat_v_valid`: X10 raw > `BAT12_PRESENT_MIN_V` = 5 V) | `ignition_voltage` only (→ `NaN`) — independent of CAN |
 | **Gear switches** | physical gear reads UNKNOWN | `fuel_flow` only |
 | **Hall speed sensor** | `state.speedValid` = `SpeedSensor::isValid()` | `VFR_HUD.groundspeed` (→ `NaN`) and `VISION_POSITION_DELTA` (→ silence) |

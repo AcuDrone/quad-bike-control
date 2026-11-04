@@ -724,7 +724,9 @@
                 <div class="telemetry-grid">
                     <div class="telemetry-item">
                         <div class="telemetry-label" data-i18n="lbl_engine_rpm">Engine RPM</div>
-                        <div class="telemetry-value" id="can-rpm">0</div>
+                        <!-- Effective RPM (tacho when fitted, CAN otherwise), updated OUTSIDE the
+                             can_status gate; the badge shows rpm_source, "—" for NONE. -->
+                        <div class="telemetry-value"><span id="can-rpm">—</span> <span id="rpm-src-badge" style="display:none; font-size: 0.5em; padding: 1px 5px; border-radius: 4px; border: 1px solid var(--border); color: var(--muted-foreground); vertical-align: middle;"></span></div>
                     </div>
                     <!-- Engine hour meter: read-only, never reset. Updated OUTSIDE the
                          can_status gate below — running time already accumulated is not
@@ -1095,6 +1097,54 @@
                     </div>
                 </div>
                 <div id="speed-limit-status-msg" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
+            </div>
+            <!-- Tacho (RPM) calibration — calibration only: live Hz / ppr / RPM / source, ppr from a reference RPM, manual ppr, reset -->
+            <div class="card" id="tacho-card">
+                <h2 class="card-title"><span data-i18n="card_tacho">⏱️ Tacho (RPM) calibration</span><button type="button" class="help-btn" onclick="openHelp('tacho_help', 'card_tacho')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <div class="telemetry-grid">
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_tacho_hz">Frequency</div>
+                        <div class="telemetry-value" id="tacho-hz">--</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_tacho_ppr">Pulses/rev</div>
+                        <div class="telemetry-value" id="tacho-ppr">--</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_tacho_rpm">Tacho RPM</div>
+                        <div class="telemetry-value" id="tacho-rpm">--</div>
+                    </div>
+                    <div class="telemetry-item">
+                        <div class="telemetry-label" data-i18n="lbl_rpm_source">RPM source</div>
+                        <div class="telemetry-value" id="tacho-src">--</div>
+                    </div>
+                </div>
+                <div id="tacho-no-pulses" data-i18n="tacho_no_pulses" style="display:none; margin-top: 6px; font-size: 0.85em; color: var(--warning);">no pulses</div>
+                <div data-i18n="tacho_ref_hint" style="margin-top: 6px; font-size: 0.78em; color: var(--muted-foreground);">Reference: the dash, or the crank sensor: RPM = crank Hz × 60 / 23</div>
+                <div style="margin-top: 12px;">
+                    <label for="tacho-ref-input" data-i18n="lbl_tacho_ref" style="font-size: 0.8em; color: var(--muted-foreground);">Reference RPM</label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap;">
+                        <input type="number" id="tacho-ref-input" min="300" max="8000" step="1" inputmode="numeric" style="flex:1; min-width: 90px; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button onclick="calibrateTacho()" data-i18n="btn_tacho_cal" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Calibrate</button>
+                    </div>
+                </div>
+                <div style="margin-top: 10px;">
+                    <label for="tacho-ppr-select" data-i18n="lbl_tacho_ppr_set" style="font-size: 0.8em; color: var(--muted-foreground);">Pulses per revolution (manual)</label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap;">
+                        <select id="tacho-ppr-select" style="flex:1; min-width: 90px; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                            <option value="0.5">0.5</option>
+                            <option value="1" selected>1</option>
+                            <option value="2">2</option>
+                            <option value="3">3</option>
+                            <option value="4">4</option>
+                        </select>
+                        <button onclick="setTachoPpr()" data-i18n="btn_tacho_apply" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Apply</button>
+                    </div>
+                </div>
+                <div style="margin-top: 6px; font-size: 0.8em;">
+                    <a href="#" onclick="resetTachoPpr(); return false;" data-i18n="btn_tacho_reset" style="color: var(--muted-foreground);">Reset</a>
+                </div>
+                <div id="tacho-status-msg" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
             </div>
             </div>
             </section>
@@ -1477,6 +1527,22 @@
                 bat_not_connected: 'not connected',
                 invalid_bat_cal: 'Enter the measured voltage, 8–16 V',
                 bat_cal_sending: 'Calibrating…',
+                card_tacho: '⏱️ Tacho (RPM) calibration',
+                tacho_help: 'Engine RPM comes from the ECU tachometer wire (grey J1 pin 6) through an optocoupler on X3; CAN RPM is the fallback. With the engine running, type a reference RPM read from the dash — or from the crank sensor, RPM = crank Hz × 60 / 23 — and press Calibrate: the firmware computes Hz × 60 / reference and snaps it to 0.5, 1, 2, 3 or 4 pulses per revolution (refused if more than 25 % off). You can also pick the value manually. Reset removes the stored value (back to 1).',
+                lbl_tacho_hz: 'Frequency',
+                lbl_tacho_ppr: 'Pulses/rev',
+                lbl_tacho_rpm: 'Tacho RPM',
+                lbl_rpm_source: 'RPM source',
+                tacho_no_pulses: 'no pulses',
+                tacho_ref_hint: 'Reference: the dash, or the crank sensor: RPM = crank Hz × 60 / 23',
+                lbl_tacho_ref: 'Reference RPM',
+                btn_tacho_cal: 'Calibrate',
+                lbl_tacho_ppr_set: 'Pulses per revolution (manual)',
+                btn_tacho_apply: 'Apply',
+                btn_tacho_reset: 'Reset',
+                invalid_tacho_ref: 'Enter a reference RPM, 300–8000',
+                tacho_sending: 'Sending…',
+                unit_hz: 'Hz',
                 unit_volt: 'V',
                 lbl_io_health: 'Board I/O',
                 io_ok: 'OK',
@@ -1902,6 +1968,22 @@
                 bat_not_connected: 'не підключено',
                 invalid_bat_cal: 'Введіть виміряну напругу, 8–16 В',
                 bat_cal_sending: 'Калібрування…',
+                card_tacho: '⏱️ Оберти (TACHO)',
+                tacho_help: 'Оберти двигуна беруться з тахометричного виходу ЕБК (сірий J1, контакт 6) через оптрон на X3; оберти з CAN — резерв. На працюючому двигуні введіть еталонні оберти з приладової панелі — або з датчика колінвала, оберти = Гц колінвала × 60 / 23 — і натисніть «Калібрувати»: прошивка обчислить Гц × 60 / еталон і округлить до 0,5, 1, 2, 3 або 4 імпульсів на оберт (відмова, якщо відхилення понад 25 %). Значення можна вибрати й вручну. «Скинути» видаляє збережене значення (повертає 1).',
+                lbl_tacho_hz: 'Частота',
+                lbl_tacho_ppr: 'Імп./оберт',
+                lbl_tacho_rpm: 'Оберти (TACHO)',
+                lbl_rpm_source: 'Джерело обертів',
+                tacho_no_pulses: 'немає імпульсів',
+                tacho_ref_hint: 'Еталон: приладова панель або датчик колінвала: оберти = Гц колінвала × 60 / 23',
+                lbl_tacho_ref: 'Еталонні оберти',
+                btn_tacho_cal: 'Калібрувати',
+                lbl_tacho_ppr_set: 'Імпульсів на оберт (вручну)',
+                btn_tacho_apply: 'Застосувати',
+                btn_tacho_reset: 'Скинути',
+                invalid_tacho_ref: 'Введіть еталонні оберти, 300–8000',
+                tacho_sending: 'Надсилання…',
+                unit_hz: 'Гц',
                 unit_volt: 'В',
                 lbl_io_health: 'Ввід-вивід плати',
                 io_ok: 'Норма',
@@ -2352,6 +2434,10 @@
                 if (data.message && data.message.startsWith('Battery')) {
                     batCalStatus(data.message, data.success ? 'var(--success)' : 'var(--danger)');
                 }
+                // Tacho (RPM) calibration replies → the tacho card status line
+                if (data.message && data.message.startsWith('Tacho')) {
+                    tachoStatus(data.message, data.success ? 'var(--success)' : 'var(--danger)');
+                }
                 if (data.message && data.message.startsWith('CAN sniffer')) {
                     sniffReply(data.success, data.message);
                 }
@@ -2451,9 +2537,11 @@
             document.getElementById('mav-link-age').textContent = data.mav_link_age || 0;
             document.getElementById('mav-hb-age').textContent = data.mav_heartbeat_age || 0;
 
+            // Effective engine RPM (tacho when fitted, CAN otherwise) — NOT gated on can_status
+            updateRpmDisplay(data);
+
             // Update CAN data
             if (data.can_status === 'connected') {
-                document.getElementById('can-rpm').textContent = data.engine_rpm || 0;
                 document.getElementById('can-throttle-pos').textContent = (data.throttle_position || 0) + '%';
 
                 // Coolant temperature with color coding
@@ -2488,7 +2576,6 @@
                 document.getElementById('can-status-text').textContent = t('can_connected');
                 document.getElementById('can-status-text').style.color = 'var(--success)';
             } else {
-                document.getElementById('can-rpm').textContent = '--';
                 document.getElementById('can-coolant').textContent = '--°C';
                 document.getElementById('can-oil').textContent = '--°C';
                 document.getElementById('can-throttle-pos').textContent = '--%';
@@ -3627,6 +3714,59 @@
         function resetBatteryCal() {
             sendCommand('reset_bat_v_cal', true);
             batCalStatus(t('bat_cal_sending'), 'var(--muted-foreground)');
+        }
+
+        // ---- Effective RPM tile + tacho (RPM) calibration card ----
+        function updateRpmDisplay(data) {
+            const rpmEl = document.getElementById('can-rpm');
+            const badge = document.getElementById('rpm-src-badge');
+            const src = data.rpm_source;
+            if (rpmEl) {
+                if (src === 'TACHO' || src === 'CAN') {
+                    rpmEl.textContent = data.engine_rpm || 0;
+                    if (badge) { badge.textContent = src; badge.style.display = ''; }
+                } else {
+                    rpmEl.textContent = '—';
+                    if (badge) badge.style.display = 'none';
+                }
+            }
+            if (data.tacho_hz === undefined) return;
+            const hz = Number(data.tacho_hz);
+            const ppr = Number(data.tacho_ppr);
+            const hzEl = document.getElementById('tacho-hz');
+            if (hzEl) hzEl.textContent = Number.isFinite(hz) ? hz.toFixed(1) + ' ' + t('unit_hz') : '--';
+            const pprEl = document.getElementById('tacho-ppr');
+            if (pprEl) pprEl.textContent = Number.isFinite(ppr) ? String(ppr) : '--';
+            const tRpmEl = document.getElementById('tacho-rpm');
+            if (tRpmEl) tRpmEl.textContent = data.tacho_rpm != null ? data.tacho_rpm : '--';
+            const srcEl = document.getElementById('tacho-src');
+            if (srcEl) srcEl.textContent = (src === 'TACHO' || src === 'CAN') ? src : '—';
+            const noPulses = document.getElementById('tacho-no-pulses');
+            if (noPulses) noPulses.style.display = (Number.isFinite(hz) && hz > 0) ? 'none' : '';
+        }
+        function tachoStatus(text, color) {
+            const el = document.getElementById('tacho-status-msg');
+            if (!el) return;
+            el.textContent = text;
+            el.style.color = color;
+        }
+        function calibrateTacho() {
+            const val = parseFloat(document.getElementById('tacho-ref-input').value);
+            if (isNaN(val) || val < 300 || val > 8000) {
+                tachoStatus(t('invalid_tacho_ref'), 'var(--danger)');
+                return;
+            }
+            sendCommand('cal_tacho_ppr', val);
+            tachoStatus(t('tacho_sending'), 'var(--muted-foreground)');
+        }
+        function setTachoPpr() {
+            const val = parseFloat(document.getElementById('tacho-ppr-select').value);
+            sendCommand('set_tacho_ppr', val);
+            tachoStatus(t('tacho_sending'), 'var(--muted-foreground)');
+        }
+        function resetTachoPpr() {
+            sendCommand('reset_tacho_ppr', true);
+            tachoStatus(t('tacho_sending'), 'var(--muted-foreground)');
         }
 
         // ---- Web-control latched takeover ----

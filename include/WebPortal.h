@@ -125,8 +125,14 @@ public:
         float engine_hours;       // Engine hour meter (h) — always valid, NOT gated on can_status
         float engine_trip_hours;  // Trip engine hours (h) — same, zeroed by the GCS trip reset
 
+        // Effective engine RPM + ECU tacho (NOT gated on CAN)
+        uint16_t engine_rpm;      // EFFECTIVE engine RPM (0-16383), 0 when rpm_source is NONE
+        const char* rpm_source;   // "TACHO" / "CAN" / "NONE" (static string)
+        float tacho_hz;           // averaged tacho edge frequency, Hz (0 when timed out)
+        float tacho_ppr;          // tacho pulses per revolution in effect
+        uint16_t tacho_rpm;       // the tacho's own RPM (0 when timed out)
+
         // CAN bus vehicle data
-        uint16_t engine_rpm;      // Engine RPM (0-16383)
         int8_t coolant_temp;      // Coolant temperature °C (-40 to +215)
         int8_t oil_temp;          // Oil temperature °C (-40 to +215)
         uint8_t throttle_position; // Throttle position % (0-100)

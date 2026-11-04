@@ -21,6 +21,8 @@
 //               from UART0 on the aztec board, see PIN_VESC_TX below).
 //   GPIO4/5   — FREE: X6 is reserved for a 4th BTS7960 driver (IS mux CH3/CH0).
 //   GPIO0/21, GPIO10-13 — spare (system LED, Hall_1 B, Hall_2/3).
+//   GPIO14 (Hall_1 A, X3) is no longer spare on aztec: it is the ECU tacho input
+//   (PIN_TACHO, change add-tacho-rpm-input).
 // GPIO43/44 (UART0) carry the steering VESC on the Prog header X1. The console is
 // USB-CDC (ARDUINO_USB_CDC_ON_BOOT=1), never UART0.
 
@@ -91,6 +93,16 @@
 // ⚠ HARDWARE: a 12V sensor needs 560R-1k extra in series in the cable (or R22 reworked to
 // 1k); the stock 470R alone passes ≈22 mA, over the 6N137's 20 mA absolute maximum.
 #define PIN_SPEED_SENSOR    GPIO_NUM_8
+
+// ECU tachometer input (aztec: Delphi MT05 grey connector J1 pin 6, ≈12 V square wave,
+// ≈50 % duty) — connector X3 (Hall_1 channel A), external PC817 wired as an EMITTER FOLLOWER:
+//   TACHO -> 1.5 kΩ 0.25 W -> PC817 pin 1 (A); pin 2 (K) -> vehicle GND;
+//   pin 4 (C) -> X3.1 (5 V); pin 3 (E) -> X3.2 -> 1.2K/2.2K divider + TVS -> GPIO14.
+//   NO pull-up resistor, X3.4 (GND) unused. The divider is the emitter load.
+// The signal is NOT inverted: LED on (ECU output high) -> ≈3.1 V at GPIO14 (high), LED off ->
+// the 2.2K pulls GPIO14 to 0 V. The firmware times the RISING edge only, so neither polarity
+// nor duty matters. Plain input, no internal pull. The crank sensor is NOT tapped.
+#define PIN_TACHO           GPIO_NUM_14
 
 // CD4051 8:1 current-sense mux common output (BTS7960 IS channels), ADC1.
 // DEFINED ONLY — the mux-control PCA9557 U2 @ 0x1C is not driven by this firmware,
@@ -254,16 +266,34 @@ static_assert(GEAR_CODE_LOW != 0b000 && GEAR_CODE_HIGH != 0b000 && GEAR_CODE_NEU
 // Cranking Parameters
 #define CRANKING_TIMEOUT           2000  // ms - maximum cranking duration
 #define ACC_PRECRANK_DWELL_MS      2000  // ms - ignition/ECU line (Relay_1+Relay_2) must be powered this long before the starter (Relay_3) engages
-#define ENGINE_RUNNING_RPM_THRESHOLD 1500  // RPM - engine considered running above this
+// 800 on aztec (change add-tacho-rpm-input): above the starter's cranking speed (≈250–400 RPM)
+// and safely BELOW the ≈1500 RPM warm idle, so an idling engine always counts as running
+// (MAVLink gear gate, crank interlock, starter cut-off). The quad (master) keeps 1500.
+#define ENGINE_RUNNING_RPM_THRESHOLD 800   // RPM - engine considered running at or above this
+
+// ----------------------------------------------------------------------------
+// ECU TACHO INPUT (PIN_TACHO, aztec) — NVS namespace "tacho", key "ppr"
+// ----------------------------------------------------------------------------
+// RISING-edge IRAM ISR with microsecond timestamps; RPM from the mean of the last
+// TACHO_AVG_PERIODS periods. Pure math in include/TachoLaw.h (test/test_tacho).
+#define TACHO_TIMEOUT_MS        500      // ms without an accepted edge -> 0 Hz / 0 RPM, buffer cleared
+#define TACHO_AVG_PERIODS       4        // periods averaged (ring buffer holds one more edge)
+#define TACHO_MIN_PERIOD_US     1000     // µs - software glitch filter (1 kHz; ppr 4 @ 10 000 RPM = 667 Hz)
+#define TACHO_MAX_RPM           10000    // RPM above this is implausible and discarded
+#define TACHO_PPR_DEFAULT       1.0f     // pulses per revolution when nothing is stored
+#define TACHO_CAL_REF_MIN_RPM   300.0f   // accepted reference RPM for cal_tacho_ppr
+#define TACHO_CAL_REF_MAX_RPM   8000.0f
+#define TACHO_CAL_TOLERANCE     0.25f    // |raw - snapped| must be <= 25 % of snapped
+#define TACHO_NVS_NS            "tacho"  // NVS namespace (owned by TachoSensor)
+#define TACHO_NVS_KEY           "ppr"    // float, one of {0.5, 1, 2, 3, 4}; absent = default + not calibrated
 
 // ----------------------------------------------------------------------------
 // ENGINE HOUR METER ("мотогодини") — NVS namespace "engine", key "hours_s"
 // ----------------------------------------------------------------------------
-// Deliberately NOT ENGINE_RUNNING_RPM_THRESHOLD (1500). That one is a gear-change /
-// crank-interlock SAFETY threshold, chosen to sit safely ABOVE idle; an hour meter
-// built on it would refuse to count idling, which is exactly the running time an
-// hour meter exists to record. Nothing in this repo documents this engine's idle
-// RPM, so the floor rests on a physical argument instead: a starter cranks at
+// Deliberately NOT ENGINE_RUNNING_RPM_THRESHOLD (800 on aztec). That one is a gear-change /
+// crank-interlock SAFETY threshold, chosen to sit between cranking speed and the ≈1500 RPM
+// idle; it is tuned for a different purpose, so the hour meter keeps its own lower floor
+// and counts every second the crank turns. The floor rests on a physical argument: a starter cranks at
 // ~200-300 RPM and a petrol engine idles at 800-1500, so anything above ~300 means
 // the crank is turning under its own power or under the starter — both are running
 // time. Below it, "ignition on, engine stopped" (CAN valid, rpm 0) counts nothing.
@@ -820,7 +850,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.8"
+#define FIRMWARE_VERSION "1.5.9"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry
