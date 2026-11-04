@@ -691,6 +691,11 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["tacho_acc"] = telemetry.tacho_acc;
     doc["tacho_rej"] = telemetry.tacho_rej;
     doc["tacho_rej_total"] = telemetry.tacho_rej_total;
+    // fw 1.5.11: pulse widths (4 slots + short copied strings, ≈90 B; within the 9216 margin).
+    doc["tacho_hi_ms"] = serialized(String(telemetry.tacho_hi_ms, 1));
+    doc["tacho_lo_ms"] = serialized(String(telemetry.tacho_lo_ms, 1));
+    doc["tacho_hi_min_ms"] = serialized(String(telemetry.tacho_hi_min_ms, 1));
+    doc["tacho_hi_max_ms"] = serialized(String(telemetry.tacho_hi_max_ms, 1));
 
     // CAN bus vehicle data
     if (telemetry.can_status == "connected") {

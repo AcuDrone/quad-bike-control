@@ -396,18 +396,18 @@ wave of ≈50 % duty that the ECU drives with or without the original dash. It r
 an external **PC817** optocoupler wired as an **emitter follower** on X3 (Hall_1 channel A).
 
 ```
-TACHO (J1-6) ──1.5k 0.25W──► PC817 pin1 (A)      PC817 pin4 (C) ──► X3.1 (5 V)
+TACHO (J1-6) ──1k 0.25W───► PC817 pin1 (A)      PC817 pin4 (C) ──► X3.1 (5 V)
 vehicle GND  ◄───────────── PC817 pin2 (K)      PC817 pin3 (E) ──► X3.2 (GPIO14 via 1.2K/2.2K + TVS)
                                                  X3.4 (GND) unused, no pull-up resistor
 ```
 
 | Aspect | Detail |
 |--------|--------|
-| LED side | 1.5 kΩ 0.25 W series: ≈7.5 mA at 12.5 V, ≈9 mA at 14.5 V, ≈0.12 W in the resistor; LED cathode to vehicle GND |
+| LED side | **1 kΩ** 0.25 W series since fw 1.5.11 (was 1.5 kΩ: ≈7.5 mA, too little margin on the ≈3.0 V high): ≈11 mA at 12.5 V, ≈13 mA at 14.5 V, ≈0.18 W in the resistor (PC817 IF max 50 mA); LED cathode to vehicle GND |
 | Output side | Collector → X3.1 (5 V), emitter → X3.2. The on-board 1.2K + 2.2K (≈3.4 kΩ) divider is the emitter load; PC817 CTR ≥ 50 % gives ≥ 3.7 mA available vs ≈1.5 mA needed (≥ 2.5× margin) |
 | Levels | LED on → ≈4.8 V at X3.2 → **≈3.1 V at GPIO14** (high, must be ≥ 2.5 V); LED off → the 2.2K pulls GPIO14 to **0 V** |
-| Polarity | **Not inverted** (ECU high = GPIO high). Firmware times the RISING edge only, so duty and polarity do not matter |
-| Firmware | `PIN_TACHO` (GPIO14), plain input; IRAM ISR timestamps edges (µs), 1.5 ms absolute glitch floor plus a lock window (an edge closer than 0.5 × the median period to the last accepted one is rejected and counted), RPM from the **median** of the last 8 periods (fw 1.5.10), 0 RPM and lock cleared after 500 ms without pulses |
+| Polarity | **Not inverted** (ECU high = GPIO high). Firmware times validated RISING edges; since fw 1.5.11 both high and low must last ≥ 2 ms, which the ≈50 % duty ECU signal satisfies up to 250 Hz (7500 RPM at 2 ppr) |
+| Firmware | `PIN_TACHO` (GPIO14), plain input; IRAM ISR on **both** edges reads the pin and timestamps it (µs); a rising edge counts only when the LOW before it and the HIGH after it each last ≥ 2 ms (`TACHO_MIN_LEVEL_US`, fw 1.5.11 — replaces the 1.5.10 lock window), 1.5 ms sanity floor between accepted rises, RPM from the **median** of the last 8 periods (fw 1.5.10), 0 RPM after 500 ms without pulses |
 | ppr | NVS `tacho`/`ppr` ∈ {0.5, 1, 2, 3, 4}, default 1; web `cal_tacho_ppr` (reference RPM, snapped), `set_tacho_ppr`, `reset_tacho_ppr` |
 | Expected | ≈25–26 Hz at the ≈1500 RPM idle with ppr 1 (crank reference: 24-1 wheel, RPM = crank Hz × 60 / 23) |
 | Consumers | Effective RPM (tacho first, CAN fallback): gear gate, starter cut-off / crank interlock, boost PID, hour meter, telemetry, MAVLink `EFI_STATUS.rpm` |
@@ -423,6 +423,16 @@ and accepted / rejected edges per second (`tacho_periods`, `tacho_min_ms`, `tach
 `tacho_acc`, `tacho_rej`, `tacho_rej_total`). Healthy: periods all alike, `rej/s` ≈ 0. **If `rej/s`
 stays high, add 100 nF across the PC817 LED (pins 1–2) and keep the TACHO wire away from the coil
 leads** (route it as a twisted pair with GND).
+
+⚠ **Edges (fw 1.5.11 field finding):** with ppr 1 at a ≈1400 RPM idle fw 1.5.10 showed periods of
+exactly ≈21.5 and ≈43–46 ms (halves / doubles). The rising edge is fast (emitter follower turning
+on), but the **falling edge is slow**: the emitter follower turns off and the GPIO node discharges
+only through the 2.2K, then through the board's 100 Ω + 100 nF RC (τ ≈ 0.25 ms) — a slow crossing of
+the input threshold can produce a spurious edge at 50 % of the period; and the ≈3.0 V high is close
+to V_IH (2.48 V), so weak pulses can be missed. fw 1.5.11 validates the pulse width (high and low
+≥ 2 ms) and shows high / low times in the Diagnostics block (`tacho_hi_ms`, `tacho_lo_ms`,
+`tacho_hi_min_ms`, `tacho_hi_max_ms`): high ≈ low ≈ 10.7 ms → the ECU gives 2 ppr; ≈21.5 ms → 1 ppr.
+The LED series resistor is now **1 kΩ** (was 1.5 kΩ) for more drive margin on the high level.
 
 ---
 
@@ -490,9 +500,9 @@ leads** (route it as a twisted pair with GND).
      and Hall_1 (GPIO14 A / GPIO21 B, X3) returns to spare (on aztec GPIO14 is now the tacho, warning 10).
 10. **ECU tacho on X3 (aztec) — emitter-follower wiring only** (§7a). PC817 collector to X3.1 (5 V),
     emitter to X3.2, **no pull-up resistor**, X3.4 (GND) **unused**; the LED is driven from the TACHO
-    wire through 1.5 kΩ 0.25 W to vehicle GND. A pull-up / common-emitter wiring leaves GPIO14 below
+    wire through 1 kΩ 0.25 W (1.5 kΩ before fw 1.5.11) to vehicle GND. A pull-up / common-emitter wiring leaves GPIO14 below
     V_IH and counts nothing.
-    - **Bench first:** drive the LED from 12 V via 1.5 kΩ and measure GPIO14 — ≈3.1 V high (must be
+    - **Bench first:** drive the LED from 12 V via 1 kΩ and measure GPIO14 — ≈3.1 V high (must be
       ≥ 2.5 V), ≈0 V low (≤ 0.8 V) — before trusting the counts.
     - **Do not tap the crank sensor** (24-1 wheel): any load on it risks the ECU's ignition timing. It
       may be measured with a separate instrument as a calibration reference only.

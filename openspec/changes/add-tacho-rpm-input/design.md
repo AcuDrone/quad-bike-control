@@ -163,3 +163,44 @@ absorbs every outlier; the signal cannot be inspected remotely.
   sniff + probe worst case was already near 8 KB).
 - Hz / RPM / ppr / calibration snapping / source selection unchanged. `TACHO_AVG_PERIODS` is replaced
   by `TACHO_MEDIAN_PERIODS`; new `TACHO_LOCK_FRACTION`, `TACHO_DIAG_WINDOW_MS`.
+
+## Field revision 1.5.11 — pulse-width edge validation
+**Finding.** fw 1.5.10 with ppr 1 at a ≈1400 RPM dash idle: periods "42.9 21.6 64.2 44.5 46.2 23.2
+23.0 46.1", min / max 21.3 / 46.2 ms, 26–28 accepted and 0–3 rejected edges/s. The ECU TACHO is a
+≈50 % duty square wave (≈6.35 V AC RMS at every RPM), so the periods are exact halves / doubles of
+each other. Two hypotheses: **(A)** the true signal is ≈46 Hz (2 ppr) and the GPIO misses pulses
+because the high level is marginal (≈3.0 V vs V_IH 2.475 V); **(B)** the true signal is ≈23 Hz
+(1 ppr) and the slow FALLING edge (emitter follower turning off through the 2.2K, then the board
+100 Ω + 100 nF, τ ≈ 0.25 ms) produces a spurious RISING interrupt at exactly 50 % of the period. The
+1.5.10 lock window (reject an edge < 0.5 × median) is harmful in both: once the median lands on the
+double period it rejects true edges.
+
+**Decisions.**
+- **Both edges, pulse-width validated.** The ISR is attached on CHANGE, reads the pin level directly
+  from `GPIO_IN_REG` (IRAM-safe) and timestamps every edge with `esp_timer_get_time()`. The pure,
+  integer-only state machine `tachoEdgeStep(TachoEdgeState&, level, nowUs, minLevelUs)` →
+  `TachoEdgeEvent {NONE, ACCEPTED_RISE, GLITCH}` lives in `TachoLaw.h`:
+  - a RISING edge after a LOW ≥ `TACHO_MIN_LEVEL_US` (2000 µs) starts a high pulse whose rise is a
+    *candidate*; a RISING edge after a shorter LOW is a GLITCH (bounce on the falling edge, or a
+    glitch low inside the high pulse) and the current high pulse CONTINUES (rise time unchanged);
+  - at the FALLING edge a candidate whose HIGH lasted ≥ `TACHO_MIN_LEVEL_US` is ACCEPTED_RISE with
+    the original rise time (once per pulse; latency ≤ one half period); a shorter high stays pending
+    until the next rise decides: a short low → glitch inside the pulse, a long low → the pulse was
+    narrow and is rejected (GLITCH);
+  - a repeated level (both edges of a glitch elapsed before the ISR read the pin) is ignored;
+  - init from the pin level at `begin()` (a high found at boot is never accepted, a low counts as
+    long); `tachoEdgeSilence()` on the timeout makes a low in progress long and drops a candidate
+    stuck high (a stale rise time never enters the ring).
+- **Lock window removed** (`TACHO_LOCK_FRACTION`, `s_lockMinUs`, `tachoLockMinUs`,
+  `tachoEdgeAccepted*`). `TACHO_MIN_PERIOD_US` (1500 µs) stays as a sanity floor between accepted
+  rises (`tachoPeriodAboveFloor`). Median of 8 unchanged.
+- **2 ms threshold.** At 50 % duty high and low each last ≥ 5 ms below 3000 RPM at 2 ppr (≈10.7 ms at
+  idle); 2 ms rejects bounce / ringing (RC ≈ 0.25 ms) and ignition spikes. Ceiling 250 Hz (7500 RPM
+  at 2 ppr, 3750 RPM at 4 ppr) — above anything this engine reaches at ppr ≤ 2.
+- **Diagnostics distinguish A from B.** Last high span and last validated low, plus the 1 s
+  min / max of the high span (kept by the ISR, read-and-reset atomically at the window close):
+  telemetry `tacho_hi_ms`, `tacho_lo_ms`, `tacho_hi_min_ms`, `tacho_hi_max_ms`; the card line
+  "high / low, ms: 10.7 / 10.9 (high min/max 10.2 / 11.1)"; the `[TACHO]` log gains hi / lo. High ≈ low
+  ≈ 10.7 ms at ≈46 Hz → 2 ppr (A); ≈ 21.5 ms at ≈23 Hz → 1 ppr (B). JSON capacity stays 9216 (+≈90 B).
+- **Hardware margin.** The field tech changes the LED series resistor 1.5 kΩ → 1 kΩ (≈11 mA at
+  12.5 V, ≈0.18 W at 14.5 V in a 0.25 W part) for more drive on the marginal high level.

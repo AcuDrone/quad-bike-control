@@ -14,6 +14,15 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.11","date":"2026-11-04","uk":[
+"Оберти з тахометра: імпульс приймається лише тоді, коли і низький, і високий рівень тривають щонайменше 2 мс — дрижання на фронтах і короткі завади відкидаються",
+"Прибрано «вікно захоплення» з 1.5.10: воно могло зачепитися за подвоєний період і відкидати справжні імпульси",
+"У блоці «Діагностика» новий рядок: тривалість високого й низького рівня та мінімум / максимум високого рівня за секунду"
+],"en":[
+"Tacho RPM: a pulse is accepted only when both its low and its high level last at least 2 ms — edge bounce and short glitches are rejected",
+"The 1.5.10 lock window is removed: it could lock onto a doubled period and reject real pulses",
+"The Diagnostics block gains a line: high and low time, plus the min / max high time over one second"
+]},
 {"version":"1.5.10","date":"2026-11-04","uk":[
 "Оберти з тахометра стабільніші: замість середнього береться медіана останніх 8 періодів, а завади між імпульсами відкидаються",
 "У картці «Оберти (TACHO)» з'явився блок «Діагностика»: останні періоди імпульсів, мінімум і максимум, прийняті й відкинуті фронти за секунду"

@@ -136,8 +136,12 @@ public:
         float tacho_min_ms;       // shortest / longest accepted period in the last 1 s window (0 = none)
         float tacho_max_ms;
         uint16_t tacho_acc;       // accepted edges per second (last 1 s window)
-        uint16_t tacho_rej;       // rejected edges per second (floor + lock window)
+        uint16_t tacho_rej;       // rejected edges per second (pulse-width check + floor)
         uint32_t tacho_rej_total; // rejected edges since boot
+        float tacho_hi_ms;        // fw 1.5.11: last high span / last validated low time, ms (0 = none)
+        float tacho_lo_ms;
+        float tacho_hi_min_ms;    // shortest / longest high span in the last 1 s window (0 = none)
+        float tacho_hi_max_ms;
 
         // CAN bus vehicle data
         int8_t coolant_temp;      // Coolant temperature °C (-40 to +215)

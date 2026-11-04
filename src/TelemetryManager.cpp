@@ -160,6 +160,10 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
         telemetry.tacho_acc = tacho.getAcceptedPerSec();
         telemetry.tacho_rej = tacho.getRejectedPerSec();
         telemetry.tacho_rej_total = tacho.getRejectedTotal();
+        telemetry.tacho_hi_ms = tacho.getHighMs();
+        telemetry.tacho_lo_ms = tacho.getLowMs();
+        telemetry.tacho_hi_min_ms = tacho.getHighMinMs();
+        telemetry.tacho_hi_max_ms = tacho.getHighMaxMs();
     }
 
     CANController::VehicleData vehicleData = vehicleController_.getVehicleData();

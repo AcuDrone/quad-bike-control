@@ -17,9 +17,12 @@ block, so that the web console can show and calibrate the tacho whatever the CAN
   period), `tacho_min_ms` and `tacho_max_ms` (float, shortest / longest accepted period in the last
   1 s window, 0 when none), `tacho_acc` and `tacho_rej` (integer, accepted / rejected edges per
   second over that window) and `tacho_rej_total` (integer, rejected edges since boot)
+- **AND** since field revision 1.5.11 the JSON SHALL include `tacho_hi_ms` (float, the last high
+  span), `tacho_lo_ms` (float, the last validated low time), `tacho_hi_min_ms` and `tacho_hi_max_ms`
+  (float, shortest / longest high span in the last 1 s window), all in ms with one decimal, 0 when none
 - **AND** these fields SHALL be present whether or not `can_status` is "connected"
 - **AND** the tacho card SHALL show them in a monospace "Діагностика" / "Diagnostics" block under its
-  tiles (uk / en)
+  tiles (uk / en), the pulse widths as one line "high / low, ms: 10.7 / 10.9 (high min/max 10.2 / 11.1)"
 
 #### Scenario: engine_rpm carries the effective RPM
 - **WHEN** a telemetry update is broadcast

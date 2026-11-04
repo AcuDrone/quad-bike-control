@@ -53,3 +53,14 @@
 - [x] 8.8 `FIRMWARE_VERSION` 1.5.10, `Changelog.h` uk + en, `WEB_PORTAL_SETUP.md` keys, `GPIO_PINOUT_CUSTOM_BOARD_S3.md` §7a noise note (100 nF across the PC817 LED, TACHO wire away from the coil leads)
 - [x] 8.9 `pio test -e native`, `pio run -e esp32-s3-devkitc-1`, `openspec validate add-tacho-rpm-input --strict`
 - [ ] 8.10 Field: at idle the card reads ≈1400 RPM steadily; note `tacho_periods` and `rej/s`; if `rej/s` stays high fit the 100 nF and reroute the wire
+
+## 9. Field revision 1.5.11 (pulse-width edge validation)
+- [x] 9.1 `TachoLaw.h`: `TachoEdgeState`, `TachoEdgeEvent {NONE, ACCEPTED_RISE, GLITCH}`, `tachoEdgeInit`, `tachoEdgeStep(state, level, nowUs, minLevelUs)`, `tachoEdgeSilence`, `tachoPeriodAboveFloor`, `tachoUsToMs1`; lock-window helpers (`tachoLockMinUs`, `tachoEdgeAccepted*`) removed
+- [x] 9.2 Constants: `TACHO_MIN_LEVEL_US` 2000 (new), `TACHO_LOCK_FRACTION` removed, `TACHO_MIN_PERIOD_US` 1500 kept as a sanity floor
+- [x] 9.3 `tachoIsr` on CHANGE: pin level from `GPIO_IN_REG`, `tachoEdgeStep`, only accepted rises enter the ring (floor + fresh buffer after a silence), glitches counted as rejected; `s_lockMinUs` removed; `update()` calls `tachoEdgeSilence` on the timeout clear
+- [x] 9.4 Diagnostics: last high / low time, 1 s high min / max (ISR-kept, reset at window close); `[TACHO]` log gains hi / lo
+- [x] 9.5 Telemetry `tacho_hi_ms`, `tacho_lo_ms`, `tacho_hi_min_ms`, `tacho_hi_max_ms`; card line "high / low, ms: … (high min/max … / …)" in the Diagnostics block (uk / en)
+- [x] 9.6 `test_tacho`: lock-window cases removed, +9 state-machine cases (clean 23 Hz square, falling-edge bounce, glitch low inside high, narrow high, first edge after boot / silence, boot high / stuck high, µs wrap, same level + thresholds, A vs B signals)
+- [x] 9.7 `FIRMWARE_VERSION` 1.5.11, `Changelog.h` uk + en, `WEB_PORTAL_SETUP.md` (new keys, reading A vs B), `GPIO_PINOUT_CUSTOM_BOARD_S3.md` §7a (falling-edge RC ≈ 0.25 ms, LED resistor 1 kΩ)
+- [x] 9.8 `pio test -e native`, `pio run -e esp32-s3-devkitc-1`, `openspec validate add-tacho-rpm-input --strict`
+- [ ] 9.9 Field (LED resistor 1 kΩ): at idle note `tacho_hi_ms` / `tacho_lo_ms` and the periods — ≈10.7 ms / ≈21.4 ms → set ppr 2, ≈21.5 ms / ≈43 ms → ppr 1; calibrate against the dash; `rej/s` ≈ 0 and the card RPM steady at ≈1400

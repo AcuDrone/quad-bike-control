@@ -1119,11 +1119,12 @@
                         <div class="telemetry-value" id="tacho-src">--</div>
                     </div>
                 </div>
-                <!-- Tacho signal diagnostics (fw 1.5.10): raw periods, min/max, accepted/rejected edges -->
+                <!-- Tacho signal diagnostics (fw 1.5.10; high/low line fw 1.5.11): raw periods, min/max, pulse widths, accepted/rejected edges -->
                 <div id="tacho-diag" style="margin-top: 8px; padding: 6px 8px; border-radius: 4px; border: 1px solid var(--border); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.75em; line-height: 1.5; color: var(--muted-foreground); overflow-wrap: anywhere;">
                     <div data-i18n="lbl_tacho_diag" style="color: var(--foreground);">Diagnostics</div>
                     <div><span data-i18n="lbl_tacho_periods">periods, ms</span>: <span id="tacho-periods">--</span></div>
                     <div><span data-i18n="lbl_tacho_minmax">min / max (1 s), ms</span>: <span id="tacho-minmax">--</span></div>
+                    <div><span data-i18n="lbl_tacho_hilo">high / low, ms</span>: <span id="tacho-hilo">--</span></div>
                     <div><span data-i18n="lbl_tacho_edges">edges/s accepted / rejected</span>: <span id="tacho-edges">--</span></div>
                     <div><span data-i18n="lbl_tacho_rej_total">rejected since boot</span>: <span id="tacho-rej-total">--</span></div>
                 </div>
@@ -1553,6 +1554,8 @@
                 lbl_tacho_diag: 'Diagnostics',
                 lbl_tacho_periods: 'periods, ms',
                 lbl_tacho_minmax: 'min / max (1 s), ms',
+                lbl_tacho_hilo: 'high / low, ms',
+                lbl_tacho_hi_minmax: 'high min/max',
                 lbl_tacho_edges: 'edges/s accepted / rejected',
                 lbl_tacho_rej_total: 'rejected since boot',
                 unit_hz: 'Hz',
@@ -1999,6 +2002,8 @@
                 lbl_tacho_diag: 'Діагностика',
                 lbl_tacho_periods: 'періоди, мс',
                 lbl_tacho_minmax: 'мін / макс (1 с), мс',
+                lbl_tacho_hilo: 'високий / низький, мс',
+                lbl_tacho_hi_minmax: 'високий мін/макс',
                 lbl_tacho_edges: 'фронтів/с прийнято / відкинуто',
                 lbl_tacho_rej_total: 'відкинуто від запуску',
                 unit_hz: 'Гц',
@@ -3769,6 +3774,14 @@
                 setTxt('tacho-minmax', (mn > 0 || mx > 0) ? mn.toFixed(1) + ' / ' + mx.toFixed(1) : '—');
                 setTxt('tacho-edges', data.tacho_acc + ' / ' + data.tacho_rej);
                 setTxt('tacho-rej-total', data.tacho_rej_total != null ? data.tacho_rej_total : '--');
+                // Pulse widths (fw 1.5.11): absent on 1.5.10 → '--'
+                if (data.tacho_hi_ms !== undefined) {
+                    const hi = Number(data.tacho_hi_ms), lo = Number(data.tacho_lo_ms);
+                    const hmn = Number(data.tacho_hi_min_ms), hmx = Number(data.tacho_hi_max_ms);
+                    setTxt('tacho-hilo', (hi > 0 || lo > 0)
+                        ? hi.toFixed(1) + ' / ' + lo.toFixed(1) + ' (' + t('lbl_tacho_hi_minmax') + ' ' + hmn.toFixed(1) + ' / ' + hmx.toFixed(1) + ')'
+                        : '—');
+                }
             }
         }
         function tachoStatus(text, color) {

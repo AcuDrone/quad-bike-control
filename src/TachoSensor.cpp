@@ -3,6 +3,8 @@
 #include <Preferences.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
+#include <soc/gpio_reg.h>
+#include <soc/soc.h>
 
 // ---- ISR-shared state -------------------------------------------------------
 // Written by the ISR, read by update() ONLY inside the spinlock below (the ESP32-S3 is
@@ -11,40 +13,56 @@ static constexpr uint8_t TACHO_RING = TACHO_MEDIAN_PERIODS + 1;   // N periods n
 static volatile uint32_t s_edgesUs[TACHO_RING];
 static volatile uint8_t  s_head = 0;        // next write slot
 static volatile uint8_t  s_count = 0;       // valid edges in the ring (0..TACHO_RING)
-static volatile uint32_t s_lastEdgeUs = 0;  // last ACCEPTED edge (filter reference)
-static volatile uint32_t s_edgeTotal = 0;   // accepted edges since boot
-static volatile uint32_t s_rejected = 0;    // edges rejected by the floor / lock window since boot
-// Lock threshold (µs) = TACHO_LOCK_FRACTION × the median period, written by update(); 0 = no
-// lock (floor only). Stored pre-multiplied so the ISR does integer compares only (no FPU in ISR).
-static volatile uint32_t s_lockMinUs = 0;
+static volatile uint32_t s_lastEdgeUs = 0;  // last ACCEPTED rise (period reference)
+static volatile uint32_t s_edgeTotal = 0;   // accepted rises since boot
+static volatile uint32_t s_rejected = 0;    // edges rejected by the pulse-width check / floor since boot
+// Pulse-width validator (fw 1.5.11, TachoLaw.h). Only the ISR steps it; update() reads the
+// diagnostics and calls tachoEdgeSilence() inside the spinlock.
+static TachoEdgeState    s_edge;
+static volatile uint32_t s_hiMinUs = 0;     // high-span min / max since the last diag window close
+static volatile uint32_t s_hiMaxUs = 0;
 static portMUX_TYPE s_tachoMux = portMUX_INITIALIZER_UNLOCKED;
+
+static_assert(PIN_TACHO < 32, "PIN_TACHO must be in GPIO_IN_REG (GPIO0..31)");
 
 static void IRAM_ATTR tachoIsr() {
     const uint32_t nowUs = (uint32_t)esp_timer_get_time();
+    // Direct register read (IRAM-safe; digitalRead is in flash): the level AFTER this change.
+    const uint8_t level = (uint8_t)((REG_READ(GPIO_IN_REG) >> PIN_TACHO) & 1u);
     portENTER_CRITICAL_ISR(&s_tachoMux);
-    const uint32_t sinceUs = (uint32_t)(nowUs - s_lastEdgeUs);
-    bool accept;
-    if (s_count == 0) {
-        accept = true;                       // first edge after boot / a stop
-    } else if (sinceUs >= (uint32_t)TACHO_TIMEOUT_MS * 1000u) {
-        // First edge after a silence: start a fresh buffer and drop the lock even if update()
-        // has not cleared them yet, so a period spanning the silence is never used.
-        s_count = 0;
-        s_lockMinUs = 0;
-        accept = true;
-    } else {
-        // Absolute floor (ignition noise: ppr 4 at 10 000 RPM is only 667 Hz) and, while
-        // locked, the lock window: an edge closer than half the median period is not a pulse.
-        accept = tachoEdgeAcceptedMin(sinceUs, s_lockMinUs, (uint32_t)TACHO_MIN_PERIOD_US);
+    const TachoEdgeEvent ev = tachoEdgeStep(s_edge, level, nowUs, (uint32_t)TACHO_MIN_LEVEL_US);
+    if (s_edge.highMeasured) {
+        const uint32_t hi = s_edge.lastHighUs;
+        if (s_hiMinUs == 0 || hi < s_hiMinUs) s_hiMinUs = hi;
+        if (hi > s_hiMaxUs) s_hiMaxUs = hi;
     }
-    if (accept) {
-        s_edgesUs[s_head] = nowUs;
-        s_head = (uint8_t)((s_head + 1) % TACHO_RING);
-        if (s_count < TACHO_RING) s_count = (uint8_t)(s_count + 1);
-        s_lastEdgeUs = nowUs;
-        s_edgeTotal = s_edgeTotal + 1;
-    } else {
+    if (ev == TachoEdgeEvent::GLITCH) {
         s_rejected = s_rejected + 1;
+    } else if (ev == TachoEdgeEvent::ACCEPTED_RISE) {
+        // The validated rise time (acceptance is finalised at the falling edge, <= half a period late).
+        const uint32_t riseUs = s_edge.riseUs;
+        const uint32_t sinceUs = (uint32_t)(riseUs - s_lastEdgeUs);
+        bool accept;
+        if (s_count == 0) {
+            accept = true;                       // first rise after boot / a stop
+        } else if (sinceUs >= (uint32_t)TACHO_TIMEOUT_MS * 1000u) {
+            // First rise after a silence: start a fresh buffer even if update() has not cleared it
+            // yet, so a period spanning the silence is never used.
+            s_count = 0;
+            accept = true;
+        } else {
+            // Sanity floor (ppr 4 at 10 000 RPM is only 667 Hz).
+            accept = tachoPeriodAboveFloor(sinceUs, (uint32_t)TACHO_MIN_PERIOD_US);
+        }
+        if (accept) {
+            s_edgesUs[s_head] = riseUs;
+            s_head = (uint8_t)((s_head + 1) % TACHO_RING);
+            if (s_count < TACHO_RING) s_count = (uint8_t)(s_count + 1);
+            s_lastEdgeUs = riseUs;
+            s_edgeTotal = s_edgeTotal + 1;
+        } else {
+            s_rejected = s_rejected + 1;
+        }
     }
     portEXIT_CRITICAL_ISR(&s_tachoMux);
 }
@@ -71,6 +89,10 @@ TachoSensor::TachoSensor()
       winMaxUs_(0),
       winMinMs_(0.0f),
       winMaxMs_(0.0f),
+      hiMs_(0.0f),
+      loMs_(0.0f),
+      hiMinMs_(0.0f),
+      hiMaxMs_(0.0f),
       accPerSec_(0),
       rejPerSec_(0) {
 }
@@ -96,13 +118,16 @@ void TachoSensor::begin() {
     fitted_ = pprStored_;
 
     pinMode(PIN_TACHO, INPUT);   // plain input: the board divider is the emitter load
-    attachInterrupt(digitalPinToInterrupt(PIN_TACHO), tachoIsr, RISING);
+    portENTER_CRITICAL(&s_tachoMux);
+    tachoEdgeInit(s_edge, (uint8_t)digitalRead(PIN_TACHO), (uint32_t)esp_timer_get_time());
+    portEXIT_CRITICAL(&s_tachoMux);
+    attachInterrupt(digitalPinToInterrupt(PIN_TACHO), tachoIsr, CHANGE);
     winStartMs_ = millis();
     initialized_ = true;
 
     Debug::printfFeature(DebugFeature::VEHICLE,
-        "[TACHO] GPIO%d rising-edge ISR (floor %d us, lock %.2f x median of %d), ppr %.1f (%s), %s\n",
-        (int)PIN_TACHO, (int)TACHO_MIN_PERIOD_US, (double)TACHO_LOCK_FRACTION, (int)TACHO_MEDIAN_PERIODS, ppr_, pprStored_ ? "stored" : "default",
+        "[TACHO] GPIO%d both-edge ISR (high/low >= %d us, floor %d us, median of %d), ppr %.1f (%s), %s\n",
+        (int)PIN_TACHO, (int)TACHO_MIN_LEVEL_US, (int)TACHO_MIN_PERIOD_US, (int)TACHO_MEDIAN_PERIODS, ppr_, pprStored_ ? "stored" : "default",
         fitted_ ? "fitted (ppr stored)" : "not fitted until the first pulse");
 }
 
@@ -130,15 +155,26 @@ void TachoSensor::closeDiagWindow(uint32_t nowMs) {
     rejPerSec_ = (uint16_t)lroundf(rej > 65535.0f ? 65535.0f : rej);
     winMinMs_ = (float)winMinUs_ / 1000.0f;
     winMaxMs_ = (float)winMaxUs_ / 1000.0f;
+    // High-span min / max of the window: read and restart atomically (the ISR keeps them).
+    uint32_t hiMin, hiMax;
+    portENTER_CRITICAL(&s_tachoMux);
+    hiMin = s_hiMinUs;
+    hiMax = s_hiMaxUs;
+    s_hiMinUs = 0;
+    s_hiMaxUs = 0;
+    portEXIT_CRITICAL(&s_tachoMux);
+    hiMinMs_ = tachoUsToMs1(hiMin);
+    hiMaxMs_ = tachoUsToMs1(hiMax);
 
     if (live_) {
         // Rate-limited field log: once per window, only while pulses arrive.
         char periods[8 * 7 + 1];
         formatDiagPeriods(periods, sizeof(periods));
         Debug::printfFeature(DebugFeature::VEHICLE,
-            "[TACHO] hz=%.2f rpm=%u med=%luus acc=%u rej=%u periods=[%s]\n",
+            "[TACHO] hz=%.2f rpm=%u med=%luus acc=%u rej=%u hi=%.1fms lo=%.1fms hi_min/max=%.1f/%.1fms periods=[%s]\n",
             hz_, (unsigned)rpm_, (unsigned long)medianUs_, (unsigned)accPerSec_,
-            (unsigned)rejPerSec_, periods);
+            (unsigned)rejPerSec_, (double)hiMs_, (double)loMs_, (double)hiMinMs_, (double)hiMaxMs_,
+            periods);
     }
 
     winStartMs_ = nowMs;
@@ -164,7 +200,11 @@ void TachoSensor::update() {
     total = s_edgeTotal;
     lastUs = s_lastEdgeUs;
     rejected = s_rejected;
+    const uint32_t hiUs = s_edge.lastHighUs;
+    const uint32_t loUs = s_edge.lastLowUs;
     portEXIT_CRITICAL(&s_tachoMux);
+    hiMs_ = tachoUsToMs1(hiUs);
+    loMs_ = tachoUsToMs1(loUs);
 
     // Chronological copy (oldest first) for the pure helpers.
     uint32_t ordered[TACHO_RING];
@@ -198,11 +238,14 @@ void TachoSensor::update() {
         rpm_ = 0;
         medianUs_ = 0;
         if (!cleared_) {
-            // Clear the buffer and the lock so the first period after a restart is not mixed
-            // with periods from before the stop. An edge racing this clear simply starts fresh.
+            // Clear the buffer so the first period after a restart is not mixed with periods
+            // from before the stop, and tell the validator about the silence (a low in progress
+            // counts as long; a rise stuck high is stale). An edge racing this simply starts fresh.
             portENTER_CRITICAL(&s_tachoMux);
-            if (s_edgeTotal == edgeTotal_) s_count = 0;
-            s_lockMinUs = 0;
+            if (s_edgeTotal == edgeTotal_) {
+                s_count = 0;
+                tachoEdgeSilence(s_edge);
+            }
             portEXIT_CRITICAL(&s_tachoMux);
             cleared_ = true;
         }
@@ -218,11 +261,6 @@ void TachoSensor::update() {
 
     const float periodUs = tachoMedianPeriod(ordered, count, TACHO_MEDIAN_PERIODS);
     medianUs_ = (uint32_t)lroundf(periodUs);
-    // Lock window only once the median rests on >= 3 periods; until then the floor alone.
-    const uint32_t lockMinUs = (count >= 4) ? tachoLockMinUs(medianUs_, TACHO_LOCK_FRACTION) : 0u;
-    portENTER_CRITICAL(&s_tachoMux);
-    if (s_edgeTotal == total) s_lockMinUs = lockMinUs;   // a newer edge (maybe a restart): next pass
-    portEXIT_CRITICAL(&s_tachoMux);
 
     const float hz = tachoHzFromPeriodUs(periodUs);
     const float rpm = tachoRpm(hz, ppr_);

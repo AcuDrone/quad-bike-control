@@ -1,6 +1,6 @@
 // Native unit tests for the ECU tacho input (include/TachoLaw.h): period → RPM, averaging,
 // timeout, plausibility, ppr validation / snapping, calibration and RPM source selection;
-// fw 1.5.10: median period, lock-window edge filter and diagnostics formatting.
+// fw 1.5.10: median period and diagnostics formatting; fw 1.5.11: pulse-width edge validator.
 // Run: pio test -e native
 #include <unity.h>
 #include <string.h>
@@ -167,7 +167,7 @@ static void test_select_not_fitted() {
     TEST_ASSERT_EQUAL_STRING("CAN", rpmSourceName(RpmSource::CAN));
 }
 
-// ---- fw 1.5.10: median period, lock window, diagnostics formatting ----------------------
+// ---- fw 1.5.10: median period, diagnostics formatting ----------------------
 
 // Build chronological edges from a list of periods (µs), starting at t0.
 static uint8_t edgesFromPeriods(const uint32_t* periods, uint8_t n, uint32_t t0, uint32_t* out) {
@@ -235,29 +235,6 @@ static void test_median_falls_back_to_mean_below_three_periods() {
     TEST_ASSERT_EQUAL_FLOAT(0.0f, tachoMedianPeriod(nullptr, 5, 8));
 }
 
-static void test_edge_filter_unlocked_floor_only() {
-    // lock 0: only the absolute floor (1500 µs) applies
-    TEST_ASSERT_FALSE(tachoEdgeAccepted(1499, 0, 0.5f, 1500));
-    TEST_ASSERT_TRUE(tachoEdgeAccepted(1500, 0, 0.5f, 1500));
-    TEST_ASSERT_TRUE(tachoEdgeAccepted(5000, 0, 0.5f, 1500));
-    TEST_ASSERT_EQUAL_UINT32(0u, tachoLockMinUs(0, 0.5f));
-}
-
-static void test_edge_filter_lock_window() {
-    // locked on a 42 900 µs period: threshold 21 450 µs
-    TEST_ASSERT_EQUAL_UINT32(21450u, tachoLockMinUs(42900, 0.5f));
-    TEST_ASSERT_FALSE(tachoEdgeAccepted(3000, 42900, 0.5f, 1500));    // ignition spike
-    TEST_ASSERT_FALSE(tachoEdgeAccepted(21449, 42900, 0.5f, 1500));   // just inside the window
-    TEST_ASSERT_TRUE(tachoEdgeAccepted(21450, 42900, 0.5f, 1500));    // edge of the window
-    TEST_ASSERT_TRUE(tachoEdgeAccepted(42900, 42900, 0.5f, 1500));    // the real pulse
-    TEST_ASSERT_TRUE(tachoEdgeAccepted(30000, 42900, 0.5f, 1500));    // RPM rising up to 2x passes
-    // a tiny lock never undercuts the floor
-    TEST_ASSERT_FALSE(tachoEdgeAccepted(1200, 2000, 0.5f, 1500));
-    // the ISR's integer core agrees with the float wrapper
-    TEST_ASSERT_TRUE(tachoEdgeAcceptedMin(21450, tachoLockMinUs(42900, 0.5f), 1500));
-    TEST_ASSERT_FALSE(tachoEdgeAcceptedMin(21449, tachoLockMinUs(42900, 0.5f), 1500));
-}
-
 static void test_format_periods_ms() {
     const uint32_t p[4] = {42940, 43050, 21400, 999};
     char buf[64];
@@ -273,6 +250,180 @@ static void test_format_periods_ms() {
     char small[6];
     tachoFormatPeriodsMs(p, 4, small, sizeof(small));
     TEST_ASSERT_TRUE(strlen(small) < sizeof(small));
+}
+
+
+// ---- fw 1.5.11: pulse-width edge validator (tachoEdgeStep) --------------------------------
+
+static const uint32_t MIN_LEVEL = 2000;   // TACHO_MIN_LEVEL_US
+
+// Simple pin-change simulator: feeds one edge, collects accepted rise times and glitch count.
+struct Sim {
+    TachoEdgeState st;
+    uint32_t accepted[64];
+    uint8_t  nAcc;
+    uint16_t glitches;
+    void init(uint8_t level, uint32_t t) { tachoEdgeInit(st, level, t); nAcc = 0; glitches = 0; }
+    TachoEdgeEvent edge(uint8_t level, uint32_t t) {
+        const TachoEdgeEvent ev = tachoEdgeStep(st, level, t, MIN_LEVEL);
+        if (ev == TachoEdgeEvent::ACCEPTED_RISE && nAcc < 64) accepted[nAcc++] = st.riseUs;
+        if (ev == TachoEdgeEvent::GLITCH) glitches++;
+        return ev;
+    }
+};
+
+static void test_edge_clean_square_23hz() {
+    // 23 Hz, 50 % duty: period 43 478 µs, high 21 739 µs
+    Sim s; s.init(0, 0);
+    const uint32_t P = 43478, H = 21739;
+    for (uint32_t k = 0; k < 10; k++) {
+        const uint32_t t0 = 100000 + k * P;
+        TEST_ASSERT_EQUAL(TachoEdgeEvent::NONE, s.edge(1, t0));            // candidate only
+        TEST_ASSERT_EQUAL(TachoEdgeEvent::ACCEPTED_RISE, s.edge(0, t0 + H));
+    }
+    TEST_ASSERT_EQUAL_UINT8(10, s.nAcc);
+    TEST_ASSERT_EQUAL_UINT16(0, s.glitches);
+    for (uint8_t i = 1; i < s.nAcc; i++) TEST_ASSERT_EQUAL_UINT32(P, s.accepted[i] - s.accepted[i - 1]);
+    TEST_ASSERT_EQUAL_UINT32(H, s.st.lastHighUs);
+    TEST_ASSERT_EQUAL_UINT32(P - H, s.st.lastLowUs);
+    // the median over the accepted rises is the true period
+    TEST_ASSERT_FLOAT_WITHIN(0.5f, (float)P, tachoMedianPeriod(s.accepted + 1, 9, 8));
+}
+
+static void test_edge_bounce_on_falling_edge_rejected() {
+    // Each falling edge rings: fall, 0.3 ms low dip, back high 0.1 ms, fall again (hypothesis B)
+    Sim s; s.init(0, 0);
+    const uint32_t P = 43478, H = 21739;
+    for (uint32_t k = 0; k < 6; k++) {
+        const uint32_t t0 = 50000 + k * P;
+        s.edge(1, t0);
+        TEST_ASSERT_EQUAL(TachoEdgeEvent::ACCEPTED_RISE, s.edge(0, t0 + H));
+        TEST_ASSERT_EQUAL(TachoEdgeEvent::GLITCH, s.edge(1, t0 + H + 300));   // spurious rise
+        TEST_ASSERT_EQUAL(TachoEdgeEvent::NONE, s.edge(0, t0 + H + 400));     // no second accept
+    }
+    TEST_ASSERT_EQUAL_UINT8(6, s.nAcc);
+    TEST_ASSERT_EQUAL_UINT16(6, s.glitches);
+    for (uint8_t i = 1; i < s.nAcc; i++) TEST_ASSERT_EQUAL_UINT32(P, s.accepted[i] - s.accepted[i - 1]);
+    // the low after the bounce is measured from the LAST fall
+    TEST_ASSERT_EQUAL_UINT32(P - H - 400, s.st.lastLowUs);
+}
+
+static void test_edge_glitch_low_inside_high_ignored() {
+    // 0.2 ms low glitch early inside the high pulse (before minLevel has elapsed)
+    Sim s; s.init(0, 0);
+    TEST_ASSERT_EQUAL(TachoEdgeEvent::NONE, s.edge(1, 10000));
+    TEST_ASSERT_EQUAL(TachoEdgeEvent::NONE, s.edge(0, 11000));     // high only 1 ms: pending
+    TEST_ASSERT_EQUAL(TachoEdgeEvent::GLITCH, s.edge(1, 11200));   // low 0.2 ms: pulse continues
+    TEST_ASSERT_EQUAL(TachoEdgeEvent::ACCEPTED_RISE, s.edge(0, 31500));
+    TEST_ASSERT_EQUAL_UINT8(1, s.nAcc);
+    TEST_ASSERT_EQUAL_UINT32(10000, s.accepted[0]);                // the ORIGINAL rise time
+    TEST_ASSERT_EQUAL_UINT32(21500, s.st.lastHighUs);              // the whole high span
+    // and late inside the high pulse (after minLevel): accepted once, never twice
+    s.edge(1, 53000);
+    TEST_ASSERT_EQUAL(TachoEdgeEvent::ACCEPTED_RISE, s.edge(0, 63000));
+    TEST_ASSERT_EQUAL(TachoEdgeEvent::GLITCH, s.edge(1, 63200));
+    TEST_ASSERT_EQUAL(TachoEdgeEvent::NONE, s.edge(0, 74500));
+    TEST_ASSERT_EQUAL_UINT8(2, s.nAcc);
+    TEST_ASSERT_EQUAL_UINT32(53000, s.accepted[1]);
+}
+
+static void test_edge_narrow_high_pulse_rejected() {
+    // A 1 ms high spike in the middle of a low, then a real pulse
+    Sim s; s.init(0, 0);
+    TEST_ASSERT_EQUAL(TachoEdgeEvent::NONE, s.edge(1, 20000));
+    TEST_ASSERT_EQUAL(TachoEdgeEvent::NONE, s.edge(0, 21000));     // high 1 ms: not accepted
+    TEST_ASSERT_EQUAL(TachoEdgeEvent::GLITCH, s.edge(1, 40000));   // low 19 ms: the spike is dropped
+    TEST_ASSERT_EQUAL(TachoEdgeEvent::ACCEPTED_RISE, s.edge(0, 61500));
+    TEST_ASSERT_EQUAL_UINT8(1, s.nAcc);
+    TEST_ASSERT_EQUAL_UINT32(40000, s.accepted[0]);
+    TEST_ASSERT_EQUAL_UINT16(1, s.glitches);
+}
+
+static void test_edge_first_edge_after_silence() {
+    // Boot with the pin low: the first rise is a candidate (the low counts as long)
+    Sim s; s.init(0, 1000);
+    TEST_ASSERT_EQUAL(TachoEdgeEvent::NONE, s.edge(1, 1500));      // only 0.5 ms after init, still OK
+    TEST_ASSERT_EQUAL(TachoEdgeEvent::ACCEPTED_RISE, s.edge(0, 23000));
+    TEST_ASSERT_EQUAL_UINT32(1500, s.accepted[0]);
+    // 5 s of silence (low), then the engine restarts: the first rise is accepted again
+    tachoEdgeSilence(s.st);
+    s.edge(1, 5023000);
+    TEST_ASSERT_EQUAL(TachoEdgeEvent::ACCEPTED_RISE, s.edge(0, 5044000));
+    TEST_ASSERT_EQUAL_UINT8(2, s.nAcc);
+    TEST_ASSERT_EQUAL_UINT32(5023000, s.accepted[1]);
+}
+
+static void test_edge_boot_high_and_stuck_high() {
+    // Boot with the pin high: that pulse has an unknown start and is never accepted
+    Sim s; s.init(1, 0);
+    TEST_ASSERT_EQUAL(TachoEdgeEvent::NONE, s.edge(0, 15000));
+    TEST_ASSERT_EQUAL_UINT8(0, s.nAcc);
+    TEST_ASSERT_FALSE(s.st.highMeasured);
+    s.edge(1, 36000);
+    TEST_ASSERT_EQUAL(TachoEdgeEvent::ACCEPTED_RISE, s.edge(0, 57000));
+    // Engine stopped with the signal high: after the silence the stale rise is dropped
+    s.edge(1, 80000);
+    tachoEdgeSilence(s.st);
+    TEST_ASSERT_EQUAL(TachoEdgeEvent::NONE, s.edge(0, 3000000));
+    TEST_ASSERT_EQUAL_UINT8(1, s.nAcc);
+}
+
+static void test_edge_micros_wrap() {
+    // A clean 46 Hz square (2 ppr idle) straddling the 32-bit µs wrap
+    Sim s;
+    const uint32_t P = 21400, H = 10700;
+    const uint32_t start = 0xFFFFFFFFu - 50000u;
+    s.init(0, start - 30000u);
+    for (uint32_t k = 0; k < 6; k++) {
+        const uint32_t t0 = start + k * P;   // wraps naturally
+        s.edge(1, t0);
+        TEST_ASSERT_EQUAL(TachoEdgeEvent::ACCEPTED_RISE, s.edge(0, t0 + H));
+    }
+    TEST_ASSERT_EQUAL_UINT8(6, s.nAcc);
+    for (uint8_t i = 1; i < s.nAcc; i++) TEST_ASSERT_EQUAL_UINT32(P, s.accepted[i] - s.accepted[i - 1]);
+    TEST_ASSERT_EQUAL_UINT32(H, s.st.lastHighUs);
+    TEST_ASSERT_EQUAL_UINT32(P - H, s.st.lastLowUs);
+    // a glitch across the wrap is still a glitch
+    s.init(1, 0xFFFFFFFFu - 30000u);
+    s.edge(0, 0xFFFFFFFFu - 100u);
+    TEST_ASSERT_EQUAL(TachoEdgeEvent::GLITCH, s.edge(1, 100u));    // low 201 µs across the wrap
+}
+
+static void test_edge_same_level_and_thresholds() {
+    Sim s; s.init(0, 0);
+    // a repeated level (both edges of a glitch elapsed before the ISR read the pin) is ignored
+    TEST_ASSERT_EQUAL(TachoEdgeEvent::NONE, s.edge(0, 5000));
+    s.edge(1, 10000);
+    TEST_ASSERT_EQUAL(TachoEdgeEvent::NONE, s.edge(1, 10500));
+    TEST_ASSERT_EQUAL_UINT32(10000, s.st.riseUs);
+    // a high of exactly minLevel is accepted; a low one µs short is a glitch
+    TEST_ASSERT_EQUAL(TachoEdgeEvent::ACCEPTED_RISE, s.edge(0, 10000 + MIN_LEVEL));
+    TEST_ASSERT_EQUAL(TachoEdgeEvent::GLITCH, s.edge(1, 10000 + 2 * MIN_LEVEL - 1));
+    s.init(0, 0);
+    s.edge(1, 10000);
+    TEST_ASSERT_EQUAL(TachoEdgeEvent::NONE, s.edge(0, 10000 + MIN_LEVEL - 1));   // pending
+    TEST_ASSERT_EQUAL(TachoEdgeEvent::GLITCH, s.edge(1, 10000 + 2 * MIN_LEVEL));  // narrow dropped
+    // sanity floor and the diagnostics conversion
+    TEST_ASSERT_FALSE(tachoPeriodAboveFloor(1499, 1500));
+    TEST_ASSERT_TRUE(tachoPeriodAboveFloor(1500, 1500));
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 10.7f, tachoUsToMs1(10690));
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, tachoUsToMs1(0));
+}
+
+static void test_edge_half_frequency_signal_reads_true_period() {
+    // Hypothesis A data (46 Hz, 2 ppr) vs B (23 Hz + falling-edge bounce): both give the TRUE
+    // period, and the high time tells them apart (≈10.7 ms vs ≈21.7 ms).
+    Sim a; a.init(0, 0);
+    for (uint32_t k = 0; k < 9; k++) { a.edge(1, 1000 + k * 21400); a.edge(0, 1000 + k * 21400 + 10700); }
+    TEST_ASSERT_FLOAT_WITHIN(0.5f, 21400.0f, tachoMedianPeriod(a.accepted, a.nAcc, 8));
+    TEST_ASSERT_EQUAL_UINT32(10700, a.st.lastHighUs);
+    Sim b; b.init(0, 0);
+    for (uint32_t k = 0; k < 9; k++) {
+        const uint32_t t0 = 1000 + k * 42800;
+        b.edge(1, t0); b.edge(0, t0 + 21400); b.edge(1, t0 + 21600); b.edge(0, t0 + 21650);
+    }
+    TEST_ASSERT_FLOAT_WITHIN(0.5f, 42800.0f, tachoMedianPeriod(b.accepted, b.nAcc, 8));
+    TEST_ASSERT_EQUAL_UINT16(9, b.glitches);
 }
 
 int main(int, char**) {
@@ -299,8 +450,15 @@ int main(int, char**) {
     RUN_TEST(test_median_ignores_one_missed_edge);
     RUN_TEST(test_median_uses_only_last_n_periods);
     RUN_TEST(test_median_falls_back_to_mean_below_three_periods);
-    RUN_TEST(test_edge_filter_unlocked_floor_only);
-    RUN_TEST(test_edge_filter_lock_window);
+    RUN_TEST(test_edge_clean_square_23hz);
+    RUN_TEST(test_edge_bounce_on_falling_edge_rejected);
+    RUN_TEST(test_edge_glitch_low_inside_high_ignored);
+    RUN_TEST(test_edge_narrow_high_pulse_rejected);
+    RUN_TEST(test_edge_first_edge_after_silence);
+    RUN_TEST(test_edge_boot_high_and_stuck_high);
+    RUN_TEST(test_edge_micros_wrap);
+    RUN_TEST(test_edge_same_level_and_thresholds);
+    RUN_TEST(test_edge_half_frequency_signal_reads_true_period);
     RUN_TEST(test_format_periods_ms);
     return UNITY_END();
 }

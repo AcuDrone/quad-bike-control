@@ -198,8 +198,8 @@ kept) with no pulses, a reference outside 300–8000, or `raw` more than ±25 % 
 instead of CAN). All three commands work from any input source; replies start with "Tacho" and are
 shown in the card's status line. Telemetry (always emitted, not gated on CAN): `engine_rpm`
 (effective), `rpm_source` ("TACHO" / "CAN" / "NONE"), `tacho_hz`, `tacho_ppr`, `tacho_rpm`.
-Since fw 1.5.10 the RPM is the **median** of the last 8 periods and edges closer than 0.5 × that
-median (or 1.5 ms) to the last accepted edge are rejected. A monospace **Діагностика / Diagnostics**
+Since fw 1.5.10 the RPM is the **median** of the last 8 periods (in 1.5.10 only, edges closer than
+0.5 × that median to the last accepted edge were also rejected — removed in 1.5.11, see below). A monospace **Діагностика / Diagnostics**
 block under the tiles shows the raw signal for remote diagnosis — telemetry: `tacho_periods` (string,
 the last 8 accepted periods in ms with one decimal, oldest first, e.g. `"42.9 43.1 21.4 21.6 42.8"`,
 `""` before the first period; kept after the engine stops), `tacho_min_ms` / `tacho_max_ms` (float,
@@ -207,6 +207,17 @@ shortest / longest accepted period in the last 1 s window, 0 = none), `tacho_acc
 (integers, accepted / rejected edges per second over that window) and `tacho_rej_total` (rejected
 edges since boot). Healthy signal: alike periods and `tacho_rej` ≈ 0; halves (21 ms among 43 ms) or a
 high `tacho_rej` mean noise on the TACHO wire — see `GPIO_PINOUT_CUSTOM_BOARD_S3.md` §7a.
+Since fw 1.5.11 the lock window is gone: the ISR sees both edges and a rising edge counts only when
+the LOW before it and the HIGH after it each last ≥ 2 ms (`TACHO_MIN_LEVEL_US`); bounce on an edge,
+glitches inside a level and narrow spikes are counted in `tacho_rej`. The block gains a line
+**high / low, ms: 10.7 / 10.9 (high min/max 10.2 / 11.1)** — telemetry `tacho_hi_ms` (float, the last
+high span), `tacho_lo_ms` (float, the last validated low), `tacho_hi_min_ms` / `tacho_hi_max_ms`
+(float, shortest / longest high span in the last 1 s window); all ms with one decimal, 0 = none yet.
+**Reading the ppr from it** (the ECU TACHO is a ≈50 % duty square wave): high ≈ low ≈ **10.7 ms**
+with periods ≈21.4 ms (≈46 Hz at a 1400 RPM idle) means the ECU gives **2 ppr** (the 1.5.10 doubles
+were missed pulses); high ≈ low ≈ **21.5 ms** with periods ≈43 ms (≈23 Hz) means **1 ppr** (the
+1.5.10 halves were a spurious edge at the slow falling edge, now rejected). Then calibrate against
+the dash. A `tacho_hi_min_ms` well below `tacho_hi_ms` means glitches inside the high pulse.
 
 **Measuring pulses per revolution (Speed sensor card):** lift the wheel off the ground, put the
 transmission in neutral and put a chalk mark on the tyre. Enter the number of turns (1–20, default

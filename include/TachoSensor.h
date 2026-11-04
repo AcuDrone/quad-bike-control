@@ -9,18 +9,20 @@
  * @brief Engine RPM from the ECU tachometer output on PIN_TACHO (GPIO14, X3 Hall_1 A)
  * through an external PC817 emitter follower (change add-tacho-rpm-input, aztec).
  *
- * An IRAM ISR on the RISING edge stores `esp_timer_get_time()` (µs) into a ring buffer of
- * TACHO_MEDIAN_PERIODS + 1 edges. It drops any edge closer than TACHO_MIN_PERIOD_US to the last
- * accepted one (absolute floor) and, once locked, any edge closer than TACHO_LOCK_FRACTION × the
- * current median period (lock window, fw 1.5.10: ignition noise / ringing on the opto edges);
- * dropped edges are counted. `update()` copies the buffer inside a short critical section, takes
- * the MEDIAN of the last up to TACHO_MEDIAN_PERIODS periods (mean below 3 periods), derives Hz and
- * RPM (`Hz × 60 / ppr`) and writes the lock threshold back for the ISR. A reading above
- * TACHO_MAX_RPM is discarded (the previous one is kept). After TACHO_TIMEOUT_MS without an
- * accepted edge Hz / RPM read 0 and the buffer and the lock are cleared.
+ * An IRAM ISR on BOTH edges (CHANGE) reads the pin level and feeds the pulse-width validator
+ * `tachoEdgeStep()` (TachoLaw.h, fw 1.5.11): a RISING edge is accepted only when the LOW before it
+ * and the HIGH after it each last >= TACHO_MIN_LEVEL_US (acceptance is final at the falling edge);
+ * bounce / ringing on an edge and short glitches inside a level are rejected and counted. The
+ * accepted rise time (`esp_timer_get_time()`, µs) goes into a ring buffer of
+ * TACHO_MEDIAN_PERIODS + 1 edges, behind the sanity floor TACHO_MIN_PERIOD_US. `update()` copies the
+ * buffer inside a short critical section, takes the MEDIAN of the last up to TACHO_MEDIAN_PERIODS
+ * periods (mean below 3 periods) and derives Hz and RPM (`Hz × 60 / ppr`). A reading above
+ * TACHO_MAX_RPM is discarded (the previous one is kept). After TACHO_TIMEOUT_MS without an accepted
+ * edge Hz / RPM read 0 and the buffer is cleared.
  *
- * Diagnostics (field tech, no scope needed): the last 8 raw accepted periods, and over a rolling
- * TACHO_DIAG_WINDOW_MS window the min / max period and the accepted / rejected edges per second.
+ * Diagnostics (field tech, no scope needed): the last 8 raw accepted periods, the last high / low
+ * time, and over a rolling TACHO_DIAG_WINDOW_MS window the min / max period, the min / max high
+ * time and the accepted / rejected edges per second.
  *
  * "Fitted" = an accepted edge since boot OR a `ppr` key in NVS "tacho"; it latches for the boot.
  * Only ONE instance may exist (the ISR state is file-static); VehicleController owns it.
@@ -61,7 +63,7 @@ public:
     /** @brief Accepted edges since boot (diagnostics) */
     uint32_t getEdgeTotal() const { return edgeTotal_; }
 
-    /** @brief Edges rejected by the floor / lock window since boot (diagnostics) */
+    /** @brief Edges rejected by the pulse-width check / floor since boot (diagnostics) */
     uint32_t getRejectedTotal() const { return rejTotal_; }
 
     /** @brief Robust (median) period estimate in µs, 0 when not live (diagnostics) */
@@ -81,6 +83,14 @@ public:
     /** @brief Shortest / longest accepted period in the last diagnostics window, ms (0 = none) */
     float getWindowMinMs() const { return winMinMs_; }
     float getWindowMaxMs() const { return winMaxMs_; }
+
+    /** @brief Last measured high span / last validated low time, ms one decimal (0 = none yet) */
+    float getHighMs() const { return hiMs_; }
+    float getLowMs() const { return loMs_; }
+
+    /** @brief Shortest / longest high span in the last diagnostics window, ms (0 = none) */
+    float getHighMinMs() const { return hiMinMs_; }
+    float getHighMaxMs() const { return hiMaxMs_; }
 
     /** @brief Accepted / rejected edges per second over the last diagnostics window */
     uint16_t getAcceptedPerSec() const { return accPerSec_; }
@@ -119,6 +129,10 @@ private:
     uint32_t winMaxUs_;
     float    winMinMs_;                      // published values of the last full window
     float    winMaxMs_;
+    float    hiMs_;                          // last high span / last validated low (ms)
+    float    loMs_;
+    float    hiMinMs_;                       // high-span min / max of the last full window (ms)
+    float    hiMaxMs_;
     uint16_t accPerSec_;
     uint16_t rejPerSec_;
 

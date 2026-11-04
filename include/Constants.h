@@ -274,15 +274,20 @@ static_assert(GEAR_CODE_LOW != 0b000 && GEAR_CODE_HIGH != 0b000 && GEAR_CODE_NEU
 // ----------------------------------------------------------------------------
 // ECU TACHO INPUT (PIN_TACHO, aztec) — NVS namespace "tacho", key "ppr"
 // ----------------------------------------------------------------------------
-// RISING-edge IRAM ISR with microsecond timestamps; RPM from the MEDIAN of the last
-// TACHO_MEDIAN_PERIODS periods (fw 1.5.10: the field signal carries spurious / missed edges, the
-// former mean of 4 jumped 1100–2800 at a 1400 RPM idle). Edges are dropped below the absolute
-// floor TACHO_MIN_PERIOD_US and, once locked, below TACHO_LOCK_FRACTION × the median period.
+// Both-edge (CHANGE) IRAM ISR with microsecond timestamps; RPM from the MEDIAN of the last
+// TACHO_MEDIAN_PERIODS periods between accepted RISING edges (fw 1.5.10). fw 1.5.11: a rising edge
+// is accepted only when the LOW before it and the HIGH after it each last >= TACHO_MIN_LEVEL_US
+// (pulse-width validation; replaces the 1.5.10 lock window, which locked onto a doubled period
+// and then rejected true edges). Accepted rises closer than TACHO_MIN_PERIOD_US are still dropped.
 // Pure math in include/TachoLaw.h (test/test_tacho).
-#define TACHO_TIMEOUT_MS        500      // ms without an accepted edge -> 0 Hz / 0 RPM, buffer and lock cleared
+#define TACHO_TIMEOUT_MS        500      // ms without an accepted edge -> 0 Hz / 0 RPM, buffer cleared
 #define TACHO_MEDIAN_PERIODS    8        // periods in the median (ring buffer holds one more edge)
-#define TACHO_LOCK_FRACTION     0.5f     // lock window: reject an edge < this × the median period after the last accepted one
-#define TACHO_MIN_PERIOD_US     1500     // µs - absolute glitch floor (667 Hz = ppr 4 @ 10 000 RPM)
+// The ECU TACHO is a ≈50 % duty square wave: below 3000 RPM at 2 ppr (100 Hz) high and low each
+// last >= 5 ms (≈10.7 ms at a 1400 RPM idle, 2 ppr). 2 ms rejects bounce / ringing on the slow
+// opto falling edge (board RC ≈0.25 ms) and ignition spikes. Ceiling: 250 Hz at 50 % duty
+// (7500 RPM at 2 ppr, 3750 RPM at 4 ppr).
+#define TACHO_MIN_LEVEL_US      2000     // µs - minimum LOW before and HIGH after an accepted rising edge
+#define TACHO_MIN_PERIOD_US     1500     // µs - sanity floor between accepted rises (667 Hz = ppr 4 @ 10 000 RPM)
 #define TACHO_DIAG_WINDOW_MS    1000     // ms - rolling window for the min/max period and edges/s diagnostics
 #define TACHO_MAX_RPM           10000    // RPM above this is implausible and discarded
 #define TACHO_PPR_DEFAULT       1.0f     // pulses per revolution when nothing is stored
@@ -855,7 +860,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.10"
+#define FIRMWARE_VERSION "1.5.11"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

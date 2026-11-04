@@ -3,9 +3,10 @@
 // NO Arduino / Constants.h dependency: this header is compiled by the native unit tests
 // (test/test_tacho). Callers pass the constants in.
 //
-//  edges  : an edge closer than floorUs to the last accepted one is dropped; while locked, an
-//           edge closer than fraction × the robust period estimate is dropped too (lock window,
-//           fw 1.5.10 — ignition noise / ringing on the opto edges)
+//  edges  : pulse-width validation (fw 1.5.11, replaces the 1.5.10 lock window): the ISR sees
+//           BOTH edges; a RISING edge is accepted only when the LOW before it and the HIGH after
+//           it each last >= minLevelUs (tachoEdgeStep); an accepted rise closer than floorUs to
+//           the previous accepted one is still dropped (sanity floor)
 //  period : MEDIAN of the last up to N periods between accepted RISING edges (µs timestamps);
 //           mean when fewer than 3 periods exist (fw 1.5.10; the mean of 4 was fooled by spurious edges)
 //  Hz     = 1e6 / period_us
@@ -87,26 +88,106 @@ inline float tachoMedianPeriod(const uint32_t* edgesUs, uint8_t count, uint8_t m
   return ((float)p[mid - 1] + (float)p[mid]) * 0.5f;
 }
 
-/**
- * @brief Lock-window threshold in µs: fraction × the robust period estimate (0 = no lock).
- * Computed in update(); the ISR only compares integers (no FPU use inside the ISR).
- */
-inline uint32_t tachoLockMinUs(uint32_t lockPeriodUs, float fraction) {
-  if (lockPeriodUs == 0 || !(fraction > 0.0f)) return 0;
-  return (uint32_t)lroundf((float)lockPeriodUs * fraction);
-}
-
-/** @brief Integer core of the edge filter, used by the ISR: floor first, then the lock threshold */
-inline bool tachoEdgeAcceptedMin(uint32_t sinceUs, uint32_t lockMinUs, uint32_t floorUs) {
-  return sinceUs >= floorUs && sinceUs >= lockMinUs;
-}
+/** @brief Outcome of one tachoEdgeStep() */
+enum class TachoEdgeEvent : uint8_t {
+  NONE = 0,        // nothing to report (a level change that is neither accepted nor a glitch)
+  ACCEPTED_RISE,   // the current high pulse is validated: its rise time is TachoEdgeState::riseUs
+  GLITCH           // an edge rejected by the pulse-width check (count it as rejected)
+};
 
 /**
- * @brief Edge filter: accept an edge `sinceUs` after the last ACCEPTED one when it clears the
- * absolute floor and, while locked (lockPeriodUs > 0), fraction × the current period estimate.
+ * @brief Pulse-width edge validator state (fw 1.5.11). Integer only, ISR-safe; all durations are
+ * wrap-safe unsigned differences of µs timestamps.
+ *
+ *  RISE after a LOW >= min      : a new high pulse starts, its rise is a CANDIDATE (riseUs = now).
+ *                                 If the previous candidate was never validated (its high was
+ *                                 < min: a narrow pulse) the step returns GLITCH.
+ *  RISE after a LOW <  min      : a glitch low inside a high pulse, or bounce on the falling edge:
+ *                                 GLITCH; the current high pulse CONTINUES (riseUs, candidate and
+ *                                 accepted state unchanged).
+ *  FALL                         : the high span (now − riseUs) is measured; a candidate whose high
+ *                                 lasted >= min is ACCEPTED_RISE (once per pulse). A shorter one
+ *                                 stays pending: the low that follows decides (glitch → the pulse
+ *                                 continues, long → the pulse was narrow and is rejected).
+ *  same level as before         : NONE (both edges of a glitch elapsed before the ISR read the pin).
  */
-inline bool tachoEdgeAccepted(uint32_t sinceUs, uint32_t lockPeriodUs, float fraction, uint32_t floorUs) {
-  return tachoEdgeAcceptedMin(sinceUs, tachoLockMinUs(lockPeriodUs, fraction), floorUs);
+struct TachoEdgeState {
+  uint8_t  level;        // last level processed, 0 / 1
+  bool     candidate;    // the current high pulse's rise awaits validation
+  bool     riseKnown;    // riseUs is a real rise time (false for a high level found at init)
+  bool     lowLong;      // the current low counts as long (init / after a silence), fallUs unused
+  uint32_t riseUs;       // rise time of the current (or last) high pulse
+  uint32_t fallUs;       // last falling edge time = start of the current low
+  uint32_t lastHighUs;   // last measured high span (µs, diagnostics; 0 = none yet)
+  uint32_t lastLowUs;    // last validated low (µs, diagnostics; 0 = none yet)
+  bool     highMeasured; // set by the step that wrote lastHighUs, cleared by every other step
+};
+
+/** @brief Start the validator from the pin level read at begin() */
+inline void tachoEdgeInit(TachoEdgeState& s, uint8_t level, uint32_t nowUs) {
+  s.level = level ? 1u : 0u;
+  s.candidate = false;     // a high found at init has an unknown start: never accepted
+  s.riseKnown = false;
+  s.lowLong = (s.level == 0);   // a low found at init: the first rise is a candidate
+  s.riseUs = nowUs;
+  s.fallUs = nowUs;
+  s.lastHighUs = 0;
+  s.lastLowUs = 0;
+  s.highMeasured = false;
+}
+
+/**
+ * @brief After a silence (no accepted edge for the timeout): a low in progress counts as long, and a
+ * pending candidate (signal stuck high) is dropped so a stale rise time never enters the ring.
+ */
+inline void tachoEdgeSilence(TachoEdgeState& s) {
+  if (s.level == 0) s.lowLong = true;
+  s.candidate = false;
+}
+
+/**
+ * @brief Feed one pin-change interrupt: `level` is the pin level read in the ISR, `nowUs` its
+ * timestamp. On ACCEPTED_RISE the validated rise time is `s.riseUs`.
+ */
+inline TachoEdgeEvent tachoEdgeStep(TachoEdgeState& s, uint8_t level, uint32_t nowUs, uint32_t minLevelUs) {
+  level = level ? 1u : 0u;
+  s.highMeasured = false;
+  if (level == s.level) return TachoEdgeEvent::NONE;
+  s.level = level;
+  if (level) {
+    // RISING
+    const bool lowOk = s.lowLong || (uint32_t)(nowUs - s.fallUs) >= minLevelUs;
+    if (!lowOk) return TachoEdgeEvent::GLITCH;   // the high pulse continues
+    if (!s.lowLong) s.lastLowUs = (uint32_t)(nowUs - s.fallUs);
+    const bool narrowDropped = s.candidate;      // previous high never reached minLevelUs
+    s.lowLong = false;
+    s.riseUs = nowUs;
+    s.riseKnown = true;
+    s.candidate = true;
+    return narrowDropped ? TachoEdgeEvent::GLITCH : TachoEdgeEvent::NONE;
+  }
+  // FALLING
+  s.fallUs = nowUs;
+  s.lowLong = false;
+  if (!s.riseKnown) return TachoEdgeEvent::NONE;
+  const uint32_t highUs = (uint32_t)(nowUs - s.riseUs);
+  s.lastHighUs = highUs;
+  s.highMeasured = true;
+  if (s.candidate && highUs >= minLevelUs) {
+    s.candidate = false;
+    return TachoEdgeEvent::ACCEPTED_RISE;
+  }
+  return TachoEdgeEvent::NONE;
+}
+
+/** @brief Absolute sanity floor on accepted rises: true when sinceUs (to the previous accepted rise) >= floorUs */
+inline bool tachoPeriodAboveFloor(uint32_t sinceUs, uint32_t floorUs) {
+  return sinceUs >= floorUs;
+}
+
+/** @brief µs → ms with one decimal, rounded, as float (diagnostics; 0 stays 0) */
+inline float tachoUsToMs1(uint32_t us) {
+  return (float)((us + 50u) / 100u) / 10.0f;
 }
 
 /**
