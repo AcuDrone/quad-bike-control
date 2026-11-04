@@ -14,7 +14,7 @@ namespace {
 // (the consumer must trim on length, not on NUL — documented in MAVLINK_SETUP.md).
 constexpr char NV_STEER_POS[] = "STEER_POS";   // measured steering position, %
 constexpr char NV_STEER_A[]   = "STEER_A";     // VESC average MOTOR current, A
-constexpr char NV_VESC_V[]    = "VESC_V";      // VESC input voltage (24 V boost rail), V
+constexpr char NV_VESC_V[]    = "VESC_V";      // VESC input voltage (24 V VESC supply, 7s LiFePO4 on aztec), V
 constexpr char NV_VESC_TEMP[] = "VESC_TEMP";   // VESC FET temperature, °C
 constexpr char NV_VESC_OK[]   = "VESC_OK";     // VESC link flag, 1.0 / 0.0 — never NaN
 constexpr char NV_STEER_SCA[] = "STEER_SCA";   // applied steering speed-scale, 0..1 — never NaN
@@ -584,7 +584,7 @@ void MavlinkInterface::report(const StateReport& state) {
     //   engine_load                 -> ECU CALCULATED load (%, PID 0x04)           NaN if !canValid
     //   throttle_position           -> MEASURED throttle (%, PID 0x11)             NaN if !canValid
     //   throttle_out                -> COMMANDED/arbitrated throttle (%)           always valid
-    //   ignition_voltage            -> module supply voltage (V, PID 0x42)         NaN if !canValid
+    //   ignition_voltage            -> 12 V battery (V, X10/GPIO9 sense, calibrated) NaN if no battery
     //   fuel_consumed               -> ASSUMED gear   (repurposed)                 always valid
     //   fuel_flow                   -> PHYSICAL gear  (repurposed)                 NaN if UNKNOWN
     //   pt_compensation             -> digital-output bitmask (repurposed)         always valid
@@ -641,7 +641,9 @@ void MavlinkInterface::report(const StateReport& state) {
         float iatVal = state.canValid ? (float)state.intakeTemp : NAN;
         float mapVal = state.canValid ? (float)state.mapKpa : NAN;
         float loadVal = state.canValid ? (float)state.engineLoad : NAN;
-        float voltVal = state.canValid ? (state.moduleVoltageMv / 1000.0f) : NAN;
+        // 12 V battery from the X10 sense (the MT05 ECU never answers PID 0x42): its own gate,
+        // independent of CAN health.
+        float voltVal = state.batteryValid ? state.batteryV : NAN;
         // MEASURED throttle (ECU truth) and COMMANDED throttle (arbitrated servo output) are two
         // different values and get two different fields, so a consumer can compare them directly.
         // Only the measured one can go missing; the commanded one is always known locally.
@@ -684,7 +686,7 @@ void MavlinkInterface::report(const StateReport& state) {
             0.0f,          // exhaust_gas_temperature     (unused)
             thrOutVal,     // throttle_out                <- COMMANDED THROTTLE
             flagsVal,      // pt_compensation             <- DIGITAL FLAGS bitmask (repurposed)
-            voltVal,       // ignition_voltage            <- MODULE VOLTAGE (0x42)
+            voltVal,       // ignition_voltage            <- 12 V BATTERY (X10 sense)
             state.tripKm); // fuel_pressure               <- TRIP (km, resettable)
         uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
         serial_->write(buf, len);
@@ -758,11 +760,10 @@ void MavlinkInterface::report(const StateReport& state) {
         //                SERVO_OUTPUT_RAW steering channel, as throttle_out does for throttle.
         //   STEER_A   -> VESC average MOTOR current, A — the steering load/stall diagnostic,
         //                NOT the input current drawn from the rail.
-        //   VESC_V    -> VESC-measured INPUT voltage, V: the 24 V BOOST RAIL at the load. A
-        //                DIFFERENT physical quantity from EFI_STATUS.ignition_voltage (the ECU
-        //                control-module supply on the 12 V side, PID 0x42) and from the
-        //                board-side ADC on GPIO 9 — a divergence between the two IS the
-        //                sagging-rail diagnostic.
+        //   VESC_V    -> VESC-measured INPUT voltage, V: the 24 V VESC supply (7s LiFePO4 on
+        //                aztec) at the load. A DIFFERENT physical quantity from
+        //                EFI_STATUS.ignition_voltage (the 12 V battery, measured by the board-side
+        //                ADC on GPIO 9 through X10).
         //
         // The two gates are kept as separate statements, never folded together: they are
         // different sensors with different failure modes, and a reviewer must see that at a glance.

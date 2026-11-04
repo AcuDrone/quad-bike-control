@@ -153,8 +153,6 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
         telemetry.throttle_position = vehicleData.throttlePosition;
         telemetry.fuel_level = vehicleData.fuelLevel;
         telemetry.map_kpa = vehicleData.mapKpa;
-        telemetry.module_voltage_mv = vehicleData.moduleVoltageMv;
-        telemetry.ecu_voltage_low = (vehicleData.moduleVoltageMv / 1000.0f) < ECU_VOLTAGE_LOW_V;
         telemetry.intake_temp = vehicleData.intakeTemp;
         telemetry.engine_load = vehicleData.engineLoad;
         telemetry.can_status = "connected";
@@ -165,8 +163,6 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
         telemetry.throttle_position = 0;
         telemetry.fuel_level = 0;
         telemetry.map_kpa = 0;
-        telemetry.module_voltage_mv = 0;
-        telemetry.ecu_voltage_low = false;
         telemetry.intake_temp = 0;
         telemetry.engine_load = 0;
         telemetry.can_status = "disconnected";
@@ -202,10 +198,13 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.wheel_lock_fitted = vehicleController_.isWheelLockFitted();
     telemetry.relay_test = vehicleController_.getRelayTestBits();
 
-    // 24V boost rail and board I/O expander health
-    telemetry.rail_24v = vehicleController_.getRail24V();
-    telemetry.boost_on = vehicleController_.isBoostOn();
-    telemetry.rail_low = vehicleController_.isRailLow();
+    // 12 V battery (X10 / GPIO9 sense) — the "ECU voltage" source, ALWAYS (not gated on CAN:
+    // the MT05 ECU never answers PID 0x42). Then board I/O expander health.
+    telemetry.bat_v_valid = vehicleController_.isBatteryValid();
+    telemetry.bat_v_raw = vehicleController_.getBatteryRawV();
+    telemetry.bat_v_cal = vehicleController_.getBatteryCal();
+    telemetry.module_voltage_mv = (uint16_t)lroundf(fmaxf(0.0f, vehicleController_.getBatteryV()) * 1000.0f);
+    telemetry.ecu_voltage_low = telemetry.bat_v_valid && vehicleController_.isBatteryLow();
     telemetry.io_input_fault = vehicleController_.isInputFault();
     telemetry.io_raw = vehicleController_.getInputRaw();
     telemetry.io_relay_fault = vehicleController_.isRelayFault();

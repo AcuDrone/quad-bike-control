@@ -78,9 +78,10 @@
 #define PIN_CAN_CS          GPIO_NUM_39  // SPI Chip Select
 #define PIN_CAN_INT         GPIO_NUM_38  // MCP2515 INT — DEFINED ONLY, the driver polls
 
-// 24V boost rail (Buck Boost board via X10)
-#define PIN_BOOST_EN        GPIO_NUM_46  // Boost enable (X10 pin 1). 100K pulldown R7 keeps it off through reset
-#define PIN_ADC_24V         GPIO_NUM_9   // Rail measurement (X10 pin 3) through a 200K/24K divider, ADC1
+// X10 (Buck-Boost connector). aztec has NO boost board: pin 3 carries the 12 V battery +
+// for the battery sense (see "12 V BATTERY SENSE"). GPIO46 is still driven HIGH (harmless).
+#define PIN_BOOST_EN        GPIO_NUM_46  // Boost enable (X10 pin 1) — unused on aztec. 100K pulldown R7
+#define PIN_ADC_24V         GPIO_NUM_9   // X10 pin 3 through the 200K/24K divider, ADC1 — 12 V battery sense on aztec
 
 // Driveline speed sensor (12V hall) pulse input — connector X2, PCNT counted.
 // Signal path: X2.1/X2.2 -> 470R R22 -> 6N137 LED -> open-collector + pull-up -> GPIO8.
@@ -230,18 +231,25 @@ static_assert(GEAR_CODE_LOW != 0b000 && GEAR_CODE_HIGH != 0b000 && GEAR_CODE_NEU
 #define RELAY_WRITE_RETRIES        3     // read-back verification retries per port write
 
 // ============================================================================
-// 24V BOOST RAIL
+// 12 V BATTERY SENSE (X10 / GPIO9 — aztec: no Buck-Boost board fitted)
 // ============================================================================
-
-#define RAIL_SAMPLE_INTERVAL_MS    500    // ms between rail voltage samples
-#define RAIL_ADC_SAMPLE_COUNT      8      // readings averaged per sample (ADC1 is noisy)
-#define RAIL_24V_DIVIDER_RATIO     9.33f  // 200K/24K divider: V24 = Vadc × 224/24
-// Low-rail warning threshold. ⚠ PROVISIONAL — must be tuned on the bench against
-// the measured loaded minimum of the TL494 boost under Jetson + Starlink + camera
-// load before it is trusted (task 11.1). Warning only: the rail is never dropped
-// automatically because that would remove steering authority.
-#define RAIL_24V_LOW_THRESHOLD     21.0f  // V
-#define BOOST_STARTUP_GRACE_MS     1000   // ms after enable during which low-rail warnings are suppressed
+// The 12 V lead-acid battery (+) is wired straight to X10 pin 3 → on-board 200K/24K
+// divider → GPIO9 (PIN_ADC_24V, ADC1, ADC_11db). Pure math in include/BatteryVoltage.h.
+// It is the source of the "ECU/module voltage" telemetry (the Delphi MT05 never answers
+// OBD PID 0x42). Warning only — nothing is ever switched off on a low battery.
+#define BAT12_SAMPLE_INTERVAL_MS   500    // ms between battery voltage samples
+#define BAT12_ADC_SAMPLE_COUNT     8      // readings averaged per sample (ADC1 is noisy)
+#define BAT12_DIVIDER_RATIO        9.33f  // 200K/24K divider: V = Vadc × 224/24
+#define BAT12_PRESENT_MIN_V        5.0f   // V raw - below this nothing is wired to X10 (bat_v_valid=false)
+#define BAT12_LOW_V                11.8f  // V - low warning set below this (lead-acid ≈ 30 % SoC at rest)
+#define BAT12_LOW_CLEAR_V          12.1f  // V - low warning cleared only above this (hysteresis)
+#define BAT12_CRANK_HOLDOFF_MS     2000   // ms after the starter relay releases during which low is suppressed
+#define BAT12_CAL_MIN              0.80f  // accepted user calibration factor range
+#define BAT12_CAL_MAX              1.20f
+#define BAT12_CAL_MEASURED_MIN_V   8.0f   // V - accepted multimeter reading for cal_bat_v
+#define BAT12_CAL_MEASURED_MAX_V   16.0f  // V
+#define BAT12_CAL_NVS_NS           "bat12" // NVS namespace (owned by VehicleController)
+#define BAT12_CAL_NVS_KEY          "cal"   // float factor; absent / invalid → 1.0
 
 // Cranking Parameters
 #define CRANKING_TIMEOUT           2000  // ms - maximum cranking duration
@@ -778,9 +786,8 @@ enum class InputSource {
 #define CAN_RX_LWS_MASK_REG   (((uint32_t)CAN_RX_LWS_MASK) << 16)    // 0x07FF0000
 #define CAN_RX_LWS_FILTER_REG (((uint32_t)STEER_LWS_CAN_ID) << 16)   // 0x03050000
 
-// ECU module (12 V battery) voltage below this = "low" (telemetry ecu_voltage_low → web "Увага"
-// warning only). Lead-acid starter battery at rest: 12.0 V ≈ 50 % state of charge.
-#define ECU_VOLTAGE_LOW_V         12.0f // V
+// The "ECU/module voltage" low threshold (ECU_VOLTAGE_LOW_V) is gone: ecu_voltage_low now
+// comes from the X10 battery sense with hysteresis (BAT12_LOW_V / BAT12_LOW_CLEAR_V).
 
 // ECU Capability Probe (on-demand diagnostic sweep)
 #define CAN_PROBE_RETRY_ATTEMPTS  1     // Retries per probe request (keeps worst-case sweep duration bounded)
@@ -813,7 +820,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.7"
+#define FIRMWARE_VERSION "1.5.8"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

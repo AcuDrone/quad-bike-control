@@ -14,6 +14,17 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.8","date":"2026-11-04","uk":[
+"Напруга АКБ 12 В тепер вимірюється через роз'єм X10 (на баггі немає плати boost) і показується завжди, навіть без зв'язку з ЕБК",
+"Калібрування АКБ: виміряйте напругу мультиметром, введіть значення й натисніть «Калібрувати»; «Скинути» повертає заводський коефіцієнт",
+"Попередження «Увага» про низьку напругу АКБ (нижче 11,8 В) не з'являється під час прокрутки стартера",
+"Кнопку й показник «Шина 24В» прибрано"
+],"en":[
+"The 12 V battery voltage is now measured through connector X10 (the buggy has no boost board) and is always shown, even without an ECU link",
+"Battery calibration: measure the battery with a multimeter, type the reading and press Calibrate; Reset restores the default factor",
+"The low battery warning (below 11.8 V) no longer appears while cranking",
+"The 24V rail button and reading are removed"
+]},
 {"version":"1.5.7","date":"2026-11-03","uk":[
 "Діагностика: кнопка «Сніфер CAN (10 с)» показує всі ID на шині CAN з лічильниками й даними (лише на місці)"
 ],"en":[

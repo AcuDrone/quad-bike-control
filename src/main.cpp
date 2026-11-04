@@ -110,9 +110,9 @@ static int usbOnlyLogVprintf(const char* fmt, va_list args) {
 }
 
 void setup() {
-    // 24V boost rail FIRST: it feeds the steering VESC, the Jetson, Starlink and
-    // the cameras, so it must be up before any subsystem that depends on it.
-    // GPIO46 has a 100K pulldown (R7) so the rail is off through reset.
+    // GPIO46 = X10 pin 1 (boost enable on master). aztec has NO Buck-Boost board — X10 pin 3
+    // is the 12 V battery sense — but the line is still driven HIGH exactly as on master
+    // (harmless with nothing fitted). GPIO46 has a 100K pulldown (R7).
     pinMode(PIN_BOOST_EN, OUTPUT);
     digitalWrite(PIN_BOOST_EN, HIGH);
 
@@ -128,7 +128,7 @@ void setup() {
     uartSetDebug(NULL);
     esp_log_set_vprintf(usbOnlyLogVprintf);
 
-    Serial.println("[INIT] 24V boost rail enabled (GPIO46)");
+    Serial.println("[INIT] GPIO46 (X10 boost enable) HIGH - no boost board on aztec");
 
     // Initialize NVS first (required by Debug utility)
     Serial.println("[INIT] Initializing NVS...");
@@ -168,8 +168,8 @@ void setup() {
 
     Debug::println("\n=== ESP32-S3 Quad Bike Control (Control_v0) ===");
 
-    // Record the boost enable and start rail monitoring (grace window + ADC setup)
-    vehicleController.initBoostRail();
+    // 12 V battery sense on X10 / GPIO9 (ADC setup + calibration factor from NVS)
+    vehicleController.initBatterySense();
 
     // ── I2C bus (map at the top of this file) ────────────────────────────────
     // main.cpp is the single owner of the bus: it is opened here, before any
@@ -324,7 +324,8 @@ void loop() {
     report.speedValid   = vehicleController.isVehicleSpeedValid();
     report.speedMs      = vehicleController.getVehicleSpeedMs();
     report.intakeTemp   = vd.intakeTemp;
-    report.moduleVoltageMv = vd.moduleVoltageMv;
+    report.batteryValid = vehicleController.isBatteryValid();     // X10 battery sense
+    report.batteryV     = vehicleController.getBatteryV();        // calibrated 12 V battery
     report.throttlePosition = vd.throttlePosition;              // measured (ECU)
     report.throttleCmdPct   = vehicleController.getThrottlePercent();  // commanded (arbitrated)
     report.gearPhysical     = gearPhysStr.c_str();               // measured (opto switches)
@@ -341,7 +342,7 @@ void loop() {
     report.steerDriverOk      = steering.isDriverOk();
     report.steerMotorCurrentA = steering.getMotorCurrent();        // MOTOR current, not input
     report.steerFetTempC      = steering.getFetTemp();
-    report.steerInputVoltageV = steering.getInputVoltage();        // 24 V boost rail at the VESC
+    report.steerInputVoltageV = steering.getInputVoltage();        // 24 V VESC supply (7s LiFePO4 on aztec)
     // Steering POSITION from the same controller but a DIFFERENT gate: the CAN steering-angle
     // sensor's (healthy + both limits stored), not the VESC's. Filled unconditionally — the gating is applied where the message is packed, so
     // this stays a plain snapshot.

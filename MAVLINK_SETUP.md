@@ -34,7 +34,12 @@ Inspector, and to nothing else in MP. Verified on BlueOS + MP 1.3.83.
 |----------------|---------------|---------------------|
 | TX             | GPIO 18 (`PIN_MAVLINK_RX`) | X9 pin 3 |
 | RX             | GPIO 17 (`PIN_MAVLINK_TX`) | X9 pin 2 |
-| GND            | GND | X9 pin 4 |
+| GND            | GND | X9 pin 6 |
+| 5V / VCC       | — | X9 pin 1 — **do NOT connect** |
+
+> ⚠ Leave the TELEM cable's 5 V wire unconnected at both ends: X9 pin 1 and the Pixhawk TELEM 5 V
+> are both supply outputs, and the X9 shifter is powered from this board's own 5 V. X9 pins 4/5
+> (IS lines) also stay unconnected.
 
 Non-inverted, no inverter circuit (unlike SBUS).
 
@@ -185,7 +190,7 @@ Value-to-name summary for the six steering `NAMED_VALUE_FLOAT` messages:
 |-------|--------|------|--------|------|
 | Steering position, **MEASURED** (%) | `STEER_POS` | 5 Hz | Bosch LWS (CAN `0x305`) | 25 |
 | Steering motor current (A) | `STEER_A` | 5 Hz | VESC UART | 25 |
-| VESC input voltage, 24 V rail (V) | `VESC_V` | 5 Hz | VESC UART | 25 |
+| VESC input voltage, 24 V VESC supply (V) | `VESC_V` | 5 Hz | VESC UART | 25 |
 | VESC FET temperature (°C) | `VESC_TEMP` | 1 Hz | VESC UART | 25 |
 | VESC link health (`1.0` / `0.0`) | `VESC_OK` | 1 Hz | VESC UART | 25 |
 | Applied steering speed-scale (`0`…`1`, `1` = not scaling) | `STEER_SCA` | 1 Hz | vehicle layer | 25 |
@@ -244,7 +249,7 @@ documented exception, and the reason they are one is set out in their own sectio
 | 15 | `throttle_out` | [%] Output throttle | **COMMANDED (arbitrated) throttle** | **always valid**, never NaN | `state.throttleCmdPct` |
 | 16 | ⚑ `pt_compensation` | Pressure/temp compensation | **Digital-output bitmask** — repurposed: this ECU publishes no compensation factor | **always valid** (relay ground truth) | `state.digitalFlags` |
 | 17 | `health` | EFI health (`uint8_t`) | `1` = present. **Constant — not a CAN-health flag** | always `1` | literal |
-| 18 | `ignition_voltage` | [V] EFI supply voltage | **Control-module supply voltage** (PID `0x42`) | NaN if `!canValid` | `state.moduleVoltageMv / 1000` |
+| 18 | `ignition_voltage` | [V] EFI supply voltage | **12 V battery voltage**, measured by this board (X10 pin 3 → 200K/24K divider → GPIO 9, calibrated via web `cal_bat_v`) — **not** an ECU PID | NaN if no battery is wired (`!bat_v_valid`) | `state.batteryV` |
 | 19 | ⚑ `fuel_pressure` | [kPa] Fuel pressure | **TRIP distance, resettable, km** — repurposed: fuel PIDs absent | **always valid**, never NaN; **0 is a genuine zero** | `state.tripKm` |
 
 `EFI_STATUS` has exactly **19 fields** — the 18 floats plus the `uint8_t health` — and all 19 are
@@ -441,7 +446,7 @@ single `EFI_STATUS`" rule stated above.
 |--------|-------|------|------|---------|------|
 | `STEER_POS` | **MEASURED** steering position | % of calibrated travel, `-100` left … `0` centre (sensor zero) … `+100` right | 5 Hz | `NaN` | `steerSensorOk && steerCalibrated` (CAN angle sensor healthy, both limits stored) |
 | `STEER_A` | VESC average **motor** current | A | 5 Hz | `NaN` | `steerDriverOk` |
-| `VESC_V` | VESC-measured **input** voltage (24 V boost rail) | V | 5 Hz | `NaN` | `steerDriverOk` |
+| `VESC_V` | VESC-measured **input** voltage (24 V VESC supply — 7s LiFePO4 on aztec) | V | 5 Hz | `NaN` | `steerDriverOk` |
 | `VESC_TEMP` | VESC power-stage (FET) temperature | °C | 1 Hz | `NaN` | `steerDriverOk` |
 | `VESC_OK` | VESC link flag | `1.0` / `0.0` | 1 Hz | **never `NaN`** | *is* the flag |
 | `STEER_SCA` | **Applied** steering speed-scale | `0`…`1` (`1.0` = not scaling) | 1 Hz | **never `NaN`** | none — every fault resolves to `1.0` |
@@ -513,12 +518,11 @@ Also rejected:
 
 #### Field notes
 
-- **`VESC_V` is not `EFI_STATUS.ignition_voltage`.** That field is the **ECU control-module supply**
-  on the **12 V** side (PID `0x42`); this one is the **24 V boost rail** that powers the steering
-  VESC, measured **by the VESC itself, at the load**. Different rails, different quantities. The
-  board-side ADC on GPIO 9 measures the same rail at the *board* and keeps its existing
-  web-telemetry path — a **divergence between the two under load is the sagging-rail diagnostic**,
-  which is exactly why both are kept.
+- **`VESC_V` is not `EFI_STATUS.ignition_voltage`.** That field is the **12 V battery**, measured
+  by this board's own ADC (X10 pin 3 → divider → GPIO 9); this one is the **24 V VESC supply** (a
+  separate 7s LiFePO4 battery on aztec — there is no Buck-Boost board), measured **by the VESC
+  itself, at the load**. Different batteries, different quantities, independent gates
+  (`bat_v_valid` vs `steerDriverOk`).
 - **`STEER_A` is MOTOR current, not input current.** The same `COMM_GET_VALUES` payload carries both
   (`avg_motor_current` at offset 5, decoded; `avg_input_current` at offset 9, not decoded). Motor
   current is the one that moves with steering effort, so it is the one reported.
@@ -883,17 +887,18 @@ inverse holds too: a field that *can* be `NaN` and is not is a real measurement,
 
 ### Telling "CAN down" from "sensor down"
 
-Five independent validity domains share the link. They do **not** move together:
+Six independent validity domains share the link. They do **not** move together:
 
 | Domain | Gate | Fields it controls |
 |--------|------|--------------------|
-| **CAN / ECU** | `state.canValid` (`CANController::VehicleData::dataValid`) | `rpm`, `engine_load`, `throttle_position`, `intake_manifold_pressure`, `intake_manifold_temperature`, `cylinder_head_temperature`, `ignition_voltage` — **seven** fields, all NaN together |
+| **CAN / ECU** | `state.canValid` (`CANController::VehicleData::dataValid`) | `rpm`, `engine_load`, `throttle_position`, `intake_manifold_pressure`, `intake_manifold_temperature`, `cylinder_head_temperature` — **six** fields, all NaN together |
+| **12 V battery sense** | `state.batteryValid` (`bat_v_valid`: X10 raw > `BAT12_PRESENT_MIN_V` = 5 V) | `ignition_voltage` only (→ `NaN`) — independent of CAN |
 | **Gear switches** | physical gear reads UNKNOWN | `fuel_flow` only |
 | **Hall speed sensor** | `state.speedValid` = `SpeedSensor::isValid()` | `VFR_HUD.groundspeed` (→ `NaN`) and `VISION_POSITION_DELTA` (→ silence) |
 | **Steering VESC link** | `state.steerDriverOk` = `SteeringController::isDriverOk()` | `STEER_A`, `VESC_V`, `VESC_TEMP` (→ `NaN`) and `VESC_OK` (→ `0.0`) |
 | **Steering position sensor** | `steerSensorOk && steerCalibrated` (Bosch LWS on CAN `0x305` + both stored limits) | `STEER_POS` only (→ `NaN`) |
 
-- **All seven CAN fields NaN at once** → CAN/ECU is down (or the engine harness is off); gear,
+- **All six CAN fields NaN at once** → CAN/ECU is down (or the engine harness is off); gear,
   `throttle_out`, flags, ODO, TRIP and ground speed are unaffected.
 - **`fuel_flow` alone NaN** → the gear switches are unsure (mid-shift, ambiguous pattern, faulted
   input expander). Says **nothing** about CAN — "everything is NaN so CAN is down" does not hold in
@@ -908,7 +913,7 @@ Five independent validity domains share the link. They do **not** move together:
   the fault tokens above; `range_latched` = restart the vehicle) or the steering is uncalibrated.
   Says **nothing** about the VESC — like `fuel_flow`, this value has its own sensor, its own gate and
   its own `NaN`, and the reverse implication does not hold. The angle sensor shares the CAN bus with
-  the ECU but not its gate: an ECU that is off (seven CAN fields `NaN`) leaves `STEER_POS` live, and
+  the ECU but not its gate: an ECU that is off (six CAN fields `NaN`) leaves `STEER_POS` live, and
   only a dead bus or MCP2515 takes both down.
 - **Nothing at all from 1/25** → the peripheral or the serial link is gone. The two `HEARTBEAT`s are
   independent: the Pixhawk's continuing while comp 25's stops is exactly this case.
@@ -970,7 +975,7 @@ Decoding rules, all mandatory:
 |--------|-------|------|------|
 | `STEER_POS` | measured steering position, `-100` left … `0` centre … `+100` right | % of calibrated travel | 5 Hz |
 | `STEER_A` | VESC average **motor** current | A | 5 Hz |
-| `VESC_V` | VESC-measured input voltage (**24 V boost rail**) | V | 5 Hz |
+| `VESC_V` | VESC-measured input voltage (**24 V VESC supply**, 7s LiFePO4 on aztec) | V | 5 Hz |
 | `VESC_TEMP` | VESC FET temperature | °C | 1 Hz |
 | `VESC_OK` | VESC link flag, `1.0` / `0.0` — **never `NaN`** | — | 1 Hz |
 | `STEER_SCA` | applied steering speed-scale, `0`…`1` — `1.0` = not scaling, **never `NaN`** | — | 1 Hz |

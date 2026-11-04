@@ -24,8 +24,8 @@
  * messages (ids 290 and 291) are absent from the dialect Mission Planner decodes
  * with, so that pair never reached a consumer at all. They carry the MEASURED
  * steering position in percent of the calibrated lock-to-lock range, the VESC's
- * MOTOR current, its input voltage (the 24 V boost rail, distinct from
- * EFI_STATUS.ignition_voltage on the 12 V side) and its FET temperature, each
+ * MOTOR current, its input voltage (the 24 V VESC supply — 7s LiFePO4 on aztec —
+ * distinct from EFI_STATUS.ignition_voltage, the 12 V battery) and its FET temperature, each
  * NaN while its own source is unhealthy, plus
  * VESC_OK (1.0/0.0, never NaN) as the link flag. All five keep being sent while the
  * VESC is silent, so "VESC down" stays distinguishable from "peripheral down".
@@ -102,7 +102,9 @@ public:
         bool        speedValid;     // hall speed sensor health (independent of canValid)
         float       speedMs;        // hall-sensor ground speed, m/s (reported as VFR_HUD groundspeed)
         int8_t      intakeTemp;     // intake air temperature °C (ECU PID 0x0F)
-        uint16_t    moduleVoltageMv; // control module supply voltage, mV (ECU PID 0x42)
+        bool        batteryValid;   // X10 battery sense sees a battery (raw > BAT12_PRESENT_MIN_V)
+        float       batteryV;       // calibrated 12 V battery voltage, V (X10 / GPIO9) —
+                                    // EFI_STATUS.ignition_voltage; independent of canValid
         uint8_t     throttlePosition; // MEASURED throttle position, % (ECU PID 0x11)
         uint8_t     throttleCmdPct;   // COMMANDED (arbitrated) throttle, % 0-100 — servo output
         const char* gearPhysical;     // PHYSICALLY sensed gear "R"/"N"/"L"/"H" (opto switches),
@@ -129,9 +131,9 @@ public:
         float       steerMotorCurrentA;   // VESC average MOTOR current, A (load/stall diagnostic —
                                           // NOT the input current drawn from the rail)
         float       steerFetTempC;        // VESC power-stage (FET) temperature, °C
-        float       steerInputVoltageV;   // VESC-measured input voltage, V — the 24 V BOOST RAIL at
-                                          // the load. NOT the ECU module voltage in
-                                          // EFI_STATUS.ignition_voltage (12 V side, PID 0x42)
+        float       steerInputVoltageV;   // VESC-measured input voltage, V — the 24 V VESC supply
+                                          // (7s LiFePO4 on aztec) at the load. NOT the 12 V
+                                          // battery in EFI_STATUS.ignition_voltage (X10 sense)
 
         // --- Steering POSITION (Bosch LWS steering-angle sensor on CAN) -------------------
         // A DIFFERENT validity gate from the driver fields above: this is the shaft sensor's,

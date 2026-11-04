@@ -756,10 +756,6 @@
                         <div class="telemetry-value" id="can-map">-- kPa</div>
                     </div>
                     <div class="telemetry-item">
-                        <div class="telemetry-label" data-i18n="lbl_ecu_voltage">ECU Voltage</div>
-                        <div class="telemetry-value" id="can-ecu-voltage">-- V</div>
-                    </div>
-                    <div class="telemetry-item">
                         <div class="telemetry-label" data-i18n="lbl_intake_temp">Intake Air Temp</div>
                         <div class="telemetry-value" id="can-intake-temp">--°C</div>
                     </div>
@@ -1161,7 +1157,7 @@
             </div>
             <!-- Ignition & Lighting Control -->
             <div class="card">
-                <h2 class="card-title"><span data-i18n="card_ignition">🔑 Vehicle Ignition & Lighting</span><button type="button" class="help-btn" onclick="openHelp('boost_rail_hint', 'card_ignition')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <h2 class="card-title"><span data-i18n="card_ignition">🔑 Vehicle Ignition & Lighting</span><button type="button" class="help-btn" onclick="openHelp('bat12_hint', 'card_ignition')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
 
                 <h3 data-i18n="h_ignition_control" style="margin-top: 0; margin-bottom: 10px;">Ignition Control</h3>
                 <div class="gear-buttons" style="margin-bottom: 20px;">
@@ -1184,13 +1180,6 @@
                     </button>
                 </div>
 
-                <h3 data-i18n="h_boost_rail" style="margin-bottom: 10px;">24V Boost Rail</h3>
-                <div style="margin-bottom: 20px;">
-                    <button class="upload-btn" id="boost-rail-btn" onclick="toggleBoostRail()" style="background: var(--secondary);">
-                        ⚡ <span data-i18n="lbl_boost_rail">24V Rail:</span> <span id="boost-rail-status">--</span>
-                    </button>
-                </div>
-
                 <h3 data-i18n="h_telemetry" style="margin-bottom: 10px;">Telemetry</h3>
                 <div class="telemetry-grid" style="grid-template-columns: repeat(2, 1fr);">
                     <div class="telemetry-item">
@@ -1202,12 +1191,24 @@
                         <div class="telemetry-value" id="telemetry-cranking" style="font-size: 1.3em;">No</div>
                     </div>
                     <div class="telemetry-item">
-                        <div class="telemetry-label" data-i18n="lbl_rail_24v">24V Rail</div>
-                        <div class="telemetry-value" id="telemetry-rail-24v" style="font-size: 1.3em;">--</div>
+                        <div class="telemetry-label" data-i18n="lbl_ecu_voltage">12 V battery</div>
+                        <div class="telemetry-value" id="bat-voltage" style="font-size: 1.3em;">--</div>
+                        <div id="bat-voltage-raw" style="font-size: 0.75em; color: var(--muted-foreground);">--</div>
                     </div>
                     <div class="telemetry-item">
                         <div class="telemetry-label" data-i18n="lbl_io_health">Board I/O</div>
                         <div class="telemetry-value" id="telemetry-io-health" style="font-size: 1.3em;">--</div>
+                    </div>
+                </div>
+                <div style="margin-top: 14px;">
+                    <label for="bat-cal-input" data-i18n="lbl_bat_cal" style="font-size: 0.8em; color: var(--muted-foreground);">Multimeter reading (V)</label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap;">
+                        <input type="number" id="bat-cal-input" min="8" max="16" step="0.01" inputmode="decimal" style="flex:1; min-width: 90px; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button onclick="calibrateBattery()" data-i18n="btn_bat_cal" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Calibrate</button>
+                    </div>
+                    <div style="margin-top: 6px; font-size: 0.8em;">
+                        <a href="#" onclick="resetBatteryCal(); return false;" data-i18n="btn_bat_cal_reset" style="color: var(--muted-foreground);">Reset</a>
+                        <span id="bat-cal-status" style="margin-left: 8px;"></span>
                     </div>
                 </div>
             </div>
@@ -1468,10 +1469,14 @@
                 lock_locked: 'LOCKED',
                 lock_unlocked: 'UNLOCKED',
                 lock_not_fitted: '— not fitted',
-                h_boost_rail: '24V Boost Rail',
-                lbl_boost_rail: '24V Rail:',
-                boost_rail_hint: 'Powers the steering driver - can only be switched off with ignition OFF.',
-                lbl_rail_24v: '24V Rail',
+                bat12_hint: '12 V battery measured on X10 (no boost board on this vehicle). To calibrate: measure the battery terminals with a multimeter, type the reading (V) and press Calibrate — the firmware stores the correction factor (0.80–1.20). Reset returns it to 1.000. The low-battery warning is suppressed while cranking and for 2 s after.',
+                lbl_bat_cal: 'Multimeter reading (V)',
+                btn_bat_cal: 'Calibrate',
+                btn_bat_cal_reset: 'Reset',
+                bat_raw_line: 'raw %s V × cal %s',
+                bat_not_connected: 'not connected',
+                invalid_bat_cal: 'Enter the measured voltage, 8–16 V',
+                bat_cal_sending: 'Calibrating…',
                 unit_volt: 'V',
                 lbl_io_health: 'Board I/O',
                 io_ok: 'OK',
@@ -1507,7 +1512,7 @@
                 lbl_oil_temp: 'Oil Temp',
                 lbl_throttle_pos: 'Throttle Pos',
                 lbl_map: 'MAP',
-                lbl_ecu_voltage: 'ECU Voltage',
+                lbl_ecu_voltage: '12 V battery',
                 lbl_intake_temp: 'Intake Air Temp',
                 lbl_engine_load: 'Engine Load',
                 lbl_fuel_level: 'Fuel Level',
@@ -1889,10 +1894,14 @@
                 lock_locked: 'ЗАБЛОКОВАНО',
                 lock_unlocked: 'РОЗБЛОКОВАНО',
                 lock_not_fitted: '— не встановлено',
-                h_boost_rail: 'Шина 24В',
-                lbl_boost_rail: 'Шина 24В:',
-                boost_rail_hint: 'Живить драйвер керма - вимикається лише коли запалювання ВИМК.',
-                lbl_rail_24v: 'Напруга 24В',
+                bat12_hint: 'АКБ 12 В вимірюється через X10 (плати boost на цій машині немає). Калібрування: виміряйте напругу на клемах АКБ мультиметром, введіть значення (В) і натисніть «Калібрувати» — прошивка збереже коефіцієнт поправки (0,80–1,20). «Скинути» повертає 1,000. Попередження про низьку напругу АКБ не показується під час прокрутки стартера і 2 с після.',
+                lbl_bat_cal: 'Показ мультиметра (В)',
+                btn_bat_cal: 'Калібрувати',
+                btn_bat_cal_reset: 'Скинути',
+                bat_raw_line: 'raw %s В × cal %s',
+                bat_not_connected: 'не підключено',
+                invalid_bat_cal: 'Введіть виміряну напругу, 8–16 В',
+                bat_cal_sending: 'Калібрування…',
                 unit_volt: 'В',
                 lbl_io_health: 'Ввід-вивід плати',
                 io_ok: 'Норма',
@@ -1928,7 +1937,7 @@
                 lbl_oil_temp: 'Темп. оливи',
                 lbl_throttle_pos: 'Полож. дроселя',
                 lbl_map: 'MAP',
-                lbl_ecu_voltage: 'Напруга ЕБК',
+                lbl_ecu_voltage: 'АКБ 12 В',
                 lbl_intake_temp: 'Темп. впуск. повітря',
                 lbl_engine_load: 'Навантаження двигуна',
                 lbl_fuel_level: 'Рівень пального',
@@ -2179,7 +2188,6 @@
             updateLightButton(lightState);
             updateWheelLockButton(wheelLockState);
             renderRelayTest();
-            updateBoostRailButton(boostRailState);
             const boostStatus = document.getElementById('boost-test-status');
             if (boostStatus) boostStatus.textContent = boostTestActive ? t('on') : t('off');
             const dbgBtn = document.getElementById('debug-toggle-btn');
@@ -2341,6 +2349,9 @@
                                     data.success ? 'var(--success)' : 'var(--danger)');
                 }
                 // CAN sniffer refusal / start
+                if (data.message && data.message.startsWith('Battery')) {
+                    batCalStatus(data.message, data.success ? 'var(--success)' : 'var(--danger)');
+                }
                 if (data.message && data.message.startsWith('CAN sniffer')) {
                     sniffReply(data.success, data.message);
                 }
@@ -2471,7 +2482,6 @@
 
                 document.getElementById('can-fuel').textContent = (data.fuel_level || 0) + '%';
                 document.getElementById('can-map').textContent = (data.map_kpa != null ? data.map_kpa : '--') + ' kPa';
-                document.getElementById('can-ecu-voltage').textContent = (data.ecu_voltage != null ? data.ecu_voltage.toFixed(2) : '--') + ' V';
                 document.getElementById('can-intake-temp').textContent = (data.intake_temp != null ? data.intake_temp : '--') + '°C';
                 document.getElementById('can-engine-load').textContent = (data.engine_load != null ? data.engine_load : '--') + '%';
 
@@ -2483,7 +2493,6 @@
                 document.getElementById('can-oil').textContent = '--°C';
                 document.getElementById('can-throttle-pos').textContent = '--%';
                 document.getElementById('can-map').textContent = '-- kPa';
-                document.getElementById('can-ecu-voltage').textContent = '-- V';
                 document.getElementById('can-intake-temp').textContent = '--°C';
                 document.getElementById('can-engine-load').textContent = '--%';
                 document.getElementById('can-fuel').textContent = '--%';
@@ -2608,23 +2617,25 @@
                 renderRelayTest();
             }
 
-            // 24V boost rail — the button reflects the commanded state from telemetry,
-            // not the last click (a disable can be refused by the interlock).
-            if (data.boost_on !== undefined) {
-                boostRailState = data.boost_on;
-                updateBoostRailButton(data.boost_on);
-            }
-            if (data.rail_24v !== undefined) {
-                const railEl = document.getElementById('telemetry-rail-24v');
-                if (railEl) {
-                    railEl.textContent = Number(data.rail_24v).toFixed(1) + ' ' + t('unit_volt');
-                    if (data.boost_on === false) {
-                        railEl.style.color = 'var(--muted-foreground)';   // deliberately disabled
-                    } else if (data.rail_low) {
-                        railEl.style.color = 'var(--warning)';
+            // 12 V battery (X10 sense) — always present in telemetry, not gated on CAN
+            if (data.bat_v_valid !== undefined) {
+                const batEl = document.getElementById('bat-voltage');
+                const rawEl = document.getElementById('bat-voltage-raw');
+                const cal = Number(data.bat_v_cal);
+                const raw = Number(data.bat_v_raw);
+                if (batEl) {
+                    if (data.bat_v_valid) {
+                        batEl.textContent = Number(data.ecu_voltage).toFixed(2) + ' ' + t('unit_volt');
+                        batEl.style.color = data.ecu_voltage_low ? 'var(--warning)' : 'var(--success)';
                     } else {
-                        railEl.style.color = 'var(--success)';
+                        batEl.textContent = t('bat_not_connected');
+                        batEl.style.color = 'var(--muted-foreground)';
                     }
+                }
+                if (rawEl) {
+                    rawEl.textContent = t('bat_raw_line',
+                        Number.isFinite(raw) ? raw.toFixed(2) : '--',
+                        Number.isFinite(cal) ? cal.toFixed(3) : '--');
                 }
             }
 
@@ -3597,19 +3608,25 @@
             }, 5000);
         }
 
-        // ---- 24V boost rail (guarded: disable refused unless ignition is OFF) ----
-        let boostRailState = true;
-        function toggleBoostRail() {
-            // No optimistic update: the firmware may refuse a disable, and telemetry
-            // (`boost_on`) is the source of truth for the button state.
-            sendCommand('set_boost', !boostRailState);
+        // ---- 12 V battery calibration (multimeter reading → firmware computes the factor) ----
+        function batCalStatus(text, color) {
+            const el = document.getElementById('bat-cal-status');
+            if (!el) return;
+            el.textContent = text;
+            el.style.color = color;
         }
-        function updateBoostRailButton(on) {
-            const btn = document.getElementById('boost-rail-btn');
-            const status = document.getElementById('boost-rail-status');
-            if (!btn || !status) return;
-            status.textContent = on ? t('on') : t('off');
-            btn.style.background = on ? 'color-mix(in srgb, var(--success) 65%, black)' : 'var(--secondary)';
+        function calibrateBattery() {
+            const val = parseFloat(document.getElementById('bat-cal-input').value);
+            if (isNaN(val) || val < 8 || val > 16) {
+                batCalStatus(t('invalid_bat_cal'), 'var(--danger)');
+                return;
+            }
+            sendCommand('cal_bat_v', val);
+            batCalStatus(t('bat_cal_sending'), 'var(--muted-foreground)');
+        }
+        function resetBatteryCal() {
+            sendCommand('reset_bat_v_cal', true);
+            batCalStatus(t('bat_cal_sending'), 'var(--muted-foreground)');
         }
 
         // ---- Web-control latched takeover ----
@@ -4073,12 +4090,12 @@
                 const v = Number.isFinite(data.steer_vin) ? data.steer_vin.toFixed(1) : '--';
                 items.push([t('att_steer_vin', v), 'warn']);
             }
-            if (data.can_status === 'connected') {
-                if (data.ecu_voltage_low === true) {
-                    const v = Number.isFinite(data.ecu_voltage) ? data.ecu_voltage.toFixed(1) : '--';
-                    items.push([t('att_ecu_volt', v), 'warn']);
-                }
-            } else {
+            // 12 V battery (X10 sense): not gated on CAN, only when a battery is seen
+            if (data.bat_v_valid === true && data.ecu_voltage_low === true) {
+                const v = Number.isFinite(data.ecu_voltage) ? data.ecu_voltage.toFixed(1) : '--';
+                items.push([t('att_ecu_volt', v), 'warn']);
+            }
+            if (data.can_status !== 'connected') {
                 items.push([t('att_can'), 'warn']);
             }
             const box = document.getElementById('attention-box');

@@ -78,9 +78,10 @@ it. Cards are shown in one column.
 **Діагностика / Diagnostics** (read-only; the only button is "Probe ECU"):
 - **Увага / Attention** box, shown only while something is wrong: steering sensor unhealthy (jog
   without stall protection), steering VESC down or faulted, a steering limit beyond ±550°, MAVLink
-  inactive, board I/O fault, low steering VESC input voltage, low 12 V (ECU) voltage, no ECU link.
-  The voltage thresholds are firmware constants (`STEER_VIN_LOW_V`, `ECU_VOLTAGE_LOW_V` in
-  `include/Constants.h`); the page only shows the flags the firmware sends.
+  inactive, board I/O fault, low steering VESC input voltage, low 12 V battery (X10 sense; shown
+  whether or not the ECU link is up, only while a battery is seen), no ECU link.
+  The voltage thresholds are firmware constants (`STEER_VIN_LOW_V`, `BAT12_LOW_V` /
+  `BAT12_LOW_CLEAR_V` in `include/Constants.h`); the page only shows the flags the firmware sends.
 - **Telemetry**: gear and its sensor code, servo position, brake, throttle (µs), steering, speed,
   MAVLink link.
 - **Кермо: стан / Steering: state**: tiles for angle, rate, left/right limits, sensor state (with
@@ -118,8 +119,10 @@ it. Cards are shown in one column.
 **Тести / Tests** (bench checks):
 - **Manual control**: Take / Release control, gear buttons, steering, throttle and brake sliders.
   Disabled while MAVLink control is active.
-- **Ignition & lighting**: ignition OFF / ACC / START, front light, wheel lock (if fitted), 24 V
-  boost rail, and their telemetry.
+- **Ignition & lighting**: ignition OFF / ACC / START, front light, wheel lock (if fitted), the
+  **12 V battery** tile and its calibration, and their telemetry. (aztec has no boost board: the
+  24 V rail button and reading are gone; `set_boost` is still accepted but only replies "Boost rail
+  not fitted".)
 - **Relay test**: eight buttons "Relay 1…8" with the relay function (quad bike labels when the
   wheel lock is fitted, aztec labels otherwise); an energised relay is highlighted. Switching a
   relay on needs ignition OFF, light off, the wheel lock released (if fitted) and a healthy relay
@@ -161,6 +164,20 @@ floor, speed above limit"** when the ceiling has been at the floor for 2 s while
 above the limit (`speed_limit_sat`), and reads "Limiter was at floor…" for 10 s after it clears
 (`speed_limit_sat_held`, held by the firmware so every client shows it). It means the floor is too
 high or the vehicle is going downhill — the limiter does not brake.
+
+**12 V battery (Ignition & lighting card):** the battery (+) is wired to X10 pin 3 and measured on
+GPIO9 through the 200K/24K divider (÷9.33); it is the "ECU voltage" (`ecu_voltage`, V, calibrated)
+because the Delphi MT05 ECU never answers OBD PID 0x42, and it is reported **whether or not CAN is
+connected**. Telemetry: `ecu_voltage`, `ecu_voltage_low`, `bat_v_raw` (V before calibration),
+`bat_v_cal` (factor), `bat_v_valid` (false = nothing on X10, raw ≤ 5 V; the tile then reads "not
+connected"). The tile shows the calibrated voltage and "raw X.XX V × cal 1.000". **Calibrate:**
+measure the battery terminals with a multimeter, type the reading (8–16 V, step 0.01) and press
+**Calibrate** — the page sends `cal_bat_v` with `value` = the measured volts; the firmware computes
+`cal = measured / raw` from its current averaged raw reading, refuses a factor outside 0.80–1.20 or a
+missing battery, saves it to NVS `"bat12"` / `cal` and applies it at once. **Reset** sends
+`reset_bat_v_cal` (factor 1.0, saved). The "Attention" box shows "12 V voltage low" below 11.8 V
+(cleared above 12.1 V) only while `bat_v_valid`, never while the starter relay is on and for 2 s
+after.
 
 **Measuring pulses per revolution (Speed sensor card):** lift the wheel off the ground, put the
 transmission in neutral and put a chalk mark on the tyre. Enter the number of turns (1–20, default

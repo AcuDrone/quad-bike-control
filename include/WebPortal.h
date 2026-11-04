@@ -132,10 +132,8 @@ public:
         uint8_t throttle_position; // Throttle position % (0-100)
         uint8_t fuel_level;       // Fuel tank level % (0-100)
         uint8_t map_kpa;          // Manifold absolute pressure, kPa (0-255)
-        uint16_t module_voltage_mv; // Control module supply voltage, mV
         int8_t intake_temp;       // Intake air temperature °C (-40 to +215)
         uint8_t engine_load;      // Calculated engine load % (0-100)
-        bool ecu_voltage_low;     // module voltage < ECU_VOLTAGE_LOW_V (only meaningful when connected)
         String can_status;        // CAN status: "connected", "disconnected"
 
         // MAVLink command channel + link data
@@ -155,10 +153,12 @@ public:
         bool wheel_lock_fitted;   // False on aztec: no relay behind the wheel-lock function
         uint8_t relay_test;       // Web relay test bits, bit0 = Relay_1 … bit7 = Relay_8
 
-        // 24V boost rail (Control_v0)
-        float rail_24v;           // Measured rail voltage (V, 200K/24K divider)
-        bool boost_on;            // Commanded state of the boost enable line
-        bool rail_low;            // Rail below RAIL_24V_LOW_THRESHOLD (warning only)
+        // 12 V battery (X10 / GPIO9 sense; aztec has no boost board). Not gated on CAN.
+        uint16_t module_voltage_mv; // CALIBRATED battery voltage, mV → JSON "ecu_voltage" (V)
+        bool ecu_voltage_low;     // battery low (hysteresis 11.8/12.1 V, crank-suppressed), only with bat_v_valid
+        float bat_v_raw;          // battery voltage before the user calibration factor, V
+        float bat_v_cal;          // user calibration factor (1.0 = uncalibrated)
+        bool bat_v_valid;         // something is wired to X10 (raw > BAT12_PRESENT_MIN_V)
 
         // Board I/O expander health
         bool io_input_fault;      // Opto-input expander U10 (0x1A, I2C2) unreachable/stale

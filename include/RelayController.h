@@ -195,6 +195,13 @@ public:
     }
 
     /**
+     * @brief True while the starter relay output bit is set in the port shadow — a crank
+     * (IgnitionState::CRANKING) or a web relay test of the starter relay. Used to suppress
+     * the 12 V battery low warning during the cranking sag.
+     */
+    bool isStarterEnergized() const { return (outputShadow_ & RELAY_MASK_STARTER) != 0; }
+
+    /**
      * @brief Get current front light state
      * @return true if light is ON, false if OFF
      */

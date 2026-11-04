@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include "Constants.h"
+#include "BatteryVoltage.h"
 #include "ServoController.h"
 #include "ThrottleController.h"
 #include "SteeringController.h"
@@ -35,11 +36,11 @@ public:
                       SpeedSensor& speedSensor);
 
     /**
-     * @brief Record that the 24V boost rail was enabled in setup() and prepare the
-     * rail ADC. `main.cpp` drives `PIN_BOOST_EN` HIGH as its first hardware action;
-     * this starts the startup grace window and the sampling schedule.
+     * @brief Prepare the 12 V battery sense on X10 / GPIO9 (ADC attenuation) and load the
+     * user calibration factor from NVS (absent / out of range → 1.0). `main.cpp` still
+     * drives `PIN_BOOST_EN` HIGH (no boost board on aztec — harmless).
      */
-    void initBoostRail();
+    void initBatterySense();
 
     /**
      * @brief Load the engine hour meter from NVS. Call once from setup().
@@ -174,14 +175,20 @@ public:
         return snap.valid && snap.brakeReleased;
     }
 
-    /** @brief Latest averaged 24V rail voltage (V) */
-    float getRail24V() const { return rail24V_; }
+    /** @brief Latest calibrated 12 V battery voltage (V); meaningful only when isBatteryValid() */
+    float getBatteryV() const { return batteryV_; }
 
-    /** @brief Commanded state of the 24V boost enable line */
-    bool isBoostOn() const { return boostEnabled_; }
+    /** @brief Latest averaged battery voltage BEFORE the user calibration factor (V) */
+    float getBatteryRawV() const { return batteryRawV_; }
 
-    /** @brief True when the rail is below RAIL_24V_LOW_THRESHOLD (warning only) */
-    bool isRailLow() const { return railLow_; }
+    /** @brief User calibration factor in use (1.0 = uncalibrated) */
+    float getBatteryCal() const { return batteryCal_; }
+
+    /** @brief True once a sample shows something wired to X10 (raw > BAT12_PRESENT_MIN_V) */
+    bool isBatteryValid() const { return batteryValid_; }
+
+    /** @brief Low-battery warning (hysteresis, suppressed while cranking + 2 s); warning only */
+    bool isBatteryLow() const { return batteryLow_; }
 
     /** @brief Opto-input expander fault state (telemetry `io_input_fault`) */
     bool isInputFault() const { return boardInputs_.isFaulted(); }
@@ -399,13 +406,16 @@ private:
     EngineHourMeter engineHours_;  // OWNED by value: a counter, not a shared device
     CANController canController_;  // CAN bus controller (owned, not reference)
 
-    // 24V boost rail state
-    bool     boostEnabled_;        // commanded state of PIN_BOOST_EN
-    uint32_t boostEnabledAtMs_;    // millis() of the last enable (startup grace)
-    float    rail24V_;             // last averaged rail voltage (V)
-    bool     railLow_;             // rail below threshold outside the grace window
-    uint32_t lastRailSampleMs_;
-    uint32_t lastRailWarnMs_;      // rate limit for the low-rail log
+    // 12 V battery sense (X10 / GPIO9)
+    float    batteryV_;            // last calibrated battery voltage (V)
+    float    batteryRawV_;         // last averaged voltage before calibration (V)
+    bool     batteryValid_;        // last sample showed something wired (raw > BAT12_PRESENT_MIN_V)
+    bool     batteryLow_;          // published low flag (hysteresis, crank-suppressed)
+    bool     batteryLowRaw_;       // hysteresis state before the crank suppression
+    float    batteryCal_;          // user calibration factor (NVS "bat12"/"cal")
+    uint32_t lastBatterySampleMs_;
+    uint32_t lastStarterOnMs_;     // millis() the starter relay was last seen energized (0 = never)
+    uint32_t lastBatteryWarnMs_;   // rate limit for the low-battery log
 
     // State tracking
     InputSource currentInputSource_;
@@ -589,16 +599,29 @@ private:
     void processRelayTestCommand(int32_t relayNumber, bool on, WebPortal& webPortal);
 
     /**
-     * @brief Process the 24V boost rail command (`set_boost`).
-     * Enabling is always allowed and restarts the startup grace window; disabling
-     * is refused unless ignition is OFF, because the rail powers the steering VESC.
+     * @brief `set_boost`: still accepted, but aztec has no boost board on X10 — replies
+     * "boost rail not fitted" and does nothing.
      */
     void processBoostCommand(bool on, WebPortal& webPortal);
 
     /**
-     * @brief Sample and average the 24V rail (non-blocking, every RAIL_SAMPLE_INTERVAL_MS)
+     * @brief `cal_bat_v`: compute the battery calibration factor from the user's multimeter
+     * reading and the CURRENT averaged raw value, validate (measured 8–16 V, battery present,
+     * factor 0.80–1.20), persist to NVS, then apply.
      */
-    void updateRailMonitor();
+    void processBatteryCalCommand(float measuredV, WebPortal& webPortal);
+
+    /** @brief `reset_bat_v_cal`: calibration factor back to 1.0 (persisted) */
+    void processBatteryCalResetCommand(WebPortal& webPortal);
+
+    /**
+     * @brief Sample and average the 12 V battery on X10 (non-blocking, every
+     * BAT12_SAMPLE_INTERVAL_MS); low flag with hysteresis, suppressed while cranking + 2 s.
+     */
+    void updateBatteryMonitor();
+
+    /** @brief BatteryVoltage.h parameters from Constants.h */
+    static BatParams batteryParams();
 
     /**
      * @brief Steering calibration commands (web-only, any input source).

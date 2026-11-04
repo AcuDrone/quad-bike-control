@@ -64,7 +64,6 @@ CANController::CANController()
     vehicleData_.throttlePosition = 0;
     vehicleData_.fuelLevel = 0;
     vehicleData_.mapKpa = 0;
-    vehicleData_.moduleVoltageMv = 0;
     vehicleData_.intakeTemp = 0;
     vehicleData_.engineLoad = 0;
     vehicleData_.lastUpdateTime = 0;
@@ -83,9 +82,8 @@ CANController::CANController()
     pidTable_[1] = {PID_COOLANT_TEMP, CAN_POLL_INTERVAL_TEMP, 0, 0};
     pidTable_[2] = {PID_THROTTLE_POS, CAN_POLL_INTERVAL_TEMP, 0, 0};
     pidTable_[3] = {PID_MAP,          CAN_POLL_INTERVAL_TEMP, 0, 0};
-    pidTable_[4] = {PID_MODULE_VOLTAGE, CAN_POLL_INTERVAL_TEMP, 0, 0};
-    pidTable_[5] = {PID_INTAKE_TEMP,    CAN_POLL_INTERVAL_TEMP, 0, 0};
-    pidTable_[6] = {PID_ENGINE_LOAD,    CAN_POLL_INTERVAL_TEMP, 0, 0};
+    pidTable_[4] = {PID_INTAKE_TEMP,  CAN_POLL_INTERVAL_TEMP, 0, 0};
+    pidTable_[5] = {PID_ENGINE_LOAD,  CAN_POLL_INTERVAL_TEMP, 0, 0};
 }
 
 CANController::~CANController() {
@@ -171,7 +169,7 @@ bool CANController::begin(gpio_num_t csPin, gpio_num_t sckPin, gpio_num_t mosiPi
 
     initialized_ = true;
 
-    // Stagger the three added slow PIDs. At power-on every entry is due at once and
+    // Stagger the two added slow PIDs (IAT, load). At power-on every entry is due at once and
     // selectNextPID() breaks exact ties by highest index (`overdue >= mostOverdue`),
     // so RPM (index 0) is served last; offsetting the new entries keeps them out of
     // that burst. Done here, not in the constructor: the constructor runs before boot
@@ -182,7 +180,6 @@ bool CANController::begin(gpio_num_t csPin, gpio_num_t sckPin, gpio_num_t mosiPi
     lastReinitTime_ = staggerBase;
     pidTable_[4].nextPollTime = staggerBase + 150;
     pidTable_[5].nextPollTime = staggerBase + 300;
-    pidTable_[6].nextPollTime = staggerBase + 450;
 
     Debug::printlnFeature(DebugFeature::CAN,"[CAN] MCP2515 initialized at 500 kbps");
     Debug::printfFeature(DebugFeature::CAN,
@@ -307,11 +304,9 @@ void CANController::update() {
                 if (millis() - lastDataLog >= 1000) {
                     lastDataLog = millis();
                     Debug::printfFeature(DebugFeature::CAN,
-                        "[CAN] RPM=%u coolant=%dC throttle=%u%% volt=%u.%03uV IAT=%dC load=%u%%\n",
+                        "[CAN] RPM=%u coolant=%dC throttle=%u%% IAT=%dC load=%u%%\n",
                         vehicleData_.engineRPM, vehicleData_.coolantTemp,
                         vehicleData_.throttlePosition,
-                        vehicleData_.moduleVoltageMv / 1000,
-                        vehicleData_.moduleVoltageMv % 1000,
                         vehicleData_.intakeTemp, vehicleData_.engineLoad);
                 }
             } else if (millis() - requestSentTime_ >= CAN_RESPONSE_TIMEOUT) {
@@ -482,13 +477,6 @@ void CANController::parseAndStore(uint8_t index, const uint8_t* data, uint8_t le
         case PID_MAP:
             if (len >= 1) {
                 vehicleData_.mapKpa = data[0];  // kPa absolute (0-255)
-            }
-            break;
-        case PID_MODULE_VOLTAGE:
-            if (len >= 2) {
-                // Raw (A*256)+B is already millivolts; kept as-is and divided by 1000
-                // only at the JSON/MAVLink presentation edge (no floats on this path).
-                vehicleData_.moduleVoltageMv = (data[0] * 256) + data[1];
             }
             break;
         case PID_INTAKE_TEMP:

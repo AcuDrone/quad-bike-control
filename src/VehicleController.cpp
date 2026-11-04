@@ -18,12 +18,15 @@ VehicleController::VehicleController(SteeringController& steering,
       relayController_(relayController),
       boardInputs_(boardInputs),
       speedSensor_(speedSensor),
-      boostEnabled_(true),
-      boostEnabledAtMs_(0),
-      rail24V_(0.0f),
-      railLow_(false),
-      lastRailSampleMs_(0),
-      lastRailWarnMs_(0),
+      batteryV_(0.0f),
+      batteryRawV_(0.0f),
+      batteryValid_(false),
+      batteryLow_(false),
+      batteryLowRaw_(false),
+      batteryCal_(1.0f),
+      lastBatterySampleMs_(0),
+      lastStarterOnMs_(0),
+      lastBatteryWarnMs_(0),
       currentInputSource_(InputSource::FAILSAFE),
       steerMode_(SteerMode::BLOCKED),   // the sensor starts unhealthy (no frames yet)
       lastMavCmdCount_(0),
@@ -68,18 +71,38 @@ VehicleController::VehicleController(SteeringController& steering,
       steerZeroResponsePortal_(nullptr) {
 }
 
-void VehicleController::initBoostRail() {
-    // main.cpp already drove PIN_BOOST_EN HIGH as the first hardware action; this
-    // records the enable so the low-rail warning is suppressed while the TL494 ramps.
-    pinMode(PIN_BOOST_EN, OUTPUT);
-    digitalWrite(PIN_BOOST_EN, HIGH);
-    boostEnabled_ = true;
-    boostEnabledAtMs_ = millis();
-    railLow_ = false;
-    lastRailSampleMs_ = 0;
+BatParams VehicleController::batteryParams() {
+    return BatParams{
+        BAT12_DIVIDER_RATIO, BAT12_PRESENT_MIN_V, BAT12_LOW_V, BAT12_LOW_CLEAR_V,
+        BAT12_CAL_MIN, BAT12_CAL_MAX, BAT12_CAL_MEASURED_MIN_V, BAT12_CAL_MEASURED_MAX_V};
+}
 
-    // GPIO9 is ADC1 (unaffected by WiFi). 24V through the 200K/24K divider is
-    // ~2.57V, so the widest attenuation is required.
+void VehicleController::initBatterySense() {
+    // aztec has NO Buck-Boost board: X10 pin 3 carries the 12 V battery + into the on-board
+    // 200K/24K divider → GPIO9. main.cpp still drives PIN_BOOST_EN (GPIO46) HIGH — harmless
+    // with nothing fitted, and the same pin state as master.
+    batteryValid_ = false;
+    batteryLow_ = false;
+    batteryLowRaw_ = false;
+    lastBatterySampleMs_ = 0;
+
+    // User calibration factor (cal_bat_v). Absent key / NaN / out of range → 1.0, never rewritten.
+    Preferences prefs;
+    float cal = 1.0f;
+    if (prefs.begin(BAT12_CAL_NVS_NS, true)) {
+        cal = prefs.getFloat(BAT12_CAL_NVS_KEY, 1.0f);
+        prefs.end();
+    }
+    if (!batCalValid(cal, batteryParams())) {
+        Debug::printfFeature(DebugFeature::VEHICLE,
+            "[BAT] Stored calibration %.4f out of range (%.2f-%.2f) — using 1.000\n",
+            cal, BAT12_CAL_MIN, BAT12_CAL_MAX);
+        cal = 1.0f;
+    }
+    batteryCal_ = cal;
+
+    // GPIO9 is ADC1 (unaffected by WiFi). 16 V through the 200K/24K divider is ~1.7 V,
+    // so the widest attenuation is required.
     //
     // Order matters: analogSetPinAttenuation() only RE-configures a channel that
     // is already attached to the ADC oneshot unit. Called on a fresh pin the core
@@ -91,39 +114,113 @@ void VehicleController::initBoostRail() {
     analogSetPinAttenuation(PIN_ADC_24V, ADC_11db);
 
     Debug::printfFeature(DebugFeature::VEHICLE,
-        "[RAIL] 24V boost enabled (GPIO%d), monitoring GPIO%d every %d ms\n",
-        (int)PIN_BOOST_EN, (int)PIN_ADC_24V, RAIL_SAMPLE_INTERVAL_MS);
+        "[BAT] 12 V battery sense on X10/GPIO%d every %d ms, cal %.4f\n",
+        (int)PIN_ADC_24V, BAT12_SAMPLE_INTERVAL_MS, batteryCal_);
 }
 
-void VehicleController::updateRailMonitor() {
+void VehicleController::updateBatteryMonitor() {
     uint32_t now = millis();
-    if (lastRailSampleMs_ != 0 && (now - lastRailSampleMs_) < RAIL_SAMPLE_INTERVAL_MS) {
+
+    // Track the starter relay on every call (not only at sample time) so a short crank
+    // is never missed: the low warning is suppressed while it is on and BAT12_CRANK_HOLDOFF_MS after.
+    if (relayController_.isStarterEnergized()) {
+        lastStarterOnMs_ = (now == 0) ? 1 : now;
+    }
+
+    if (lastBatterySampleMs_ != 0 && (now - lastBatterySampleMs_) < BAT12_SAMPLE_INTERVAL_MS) {
         return;
     }
-    lastRailSampleMs_ = now;
+    lastBatterySampleMs_ = (now == 0) ? 1 : now;
 
     // ADC1 on the S3 is noisy and the divider is high-impedance, so average a few
     // calibrated readings. Eight conversions are a few hundred microseconds — short
     // enough for the cooperative loop.
     uint32_t sumMv = 0;
-    for (uint8_t i = 0; i < RAIL_ADC_SAMPLE_COUNT; i++) {
+    for (uint8_t i = 0; i < BAT12_ADC_SAMPLE_COUNT; i++) {
         sumMv += analogReadMilliVolts(PIN_ADC_24V);
     }
-    float vAdc = (sumMv / (float)RAIL_ADC_SAMPLE_COUNT) / 1000.0f;
-    rail24V_ = vAdc * RAIL_24V_DIVIDER_RATIO;
+    const BatParams p = batteryParams();
+    batteryRawV_ = batRawVolts(sumMv / (float)BAT12_ADC_SAMPLE_COUNT, p);
+    batteryV_ = batVolts(batteryRawV_, batteryCal_);
+    batteryValid_ = batPresent(batteryRawV_, p);
 
-    bool inGrace = (now - boostEnabledAtMs_) < BOOST_STARTUP_GRACE_MS;
-    bool low = boostEnabled_ && !inGrace && (rail24V_ < RAIL_24V_LOW_THRESHOLD);
-
-    railLow_ = low;
-    if (low && (lastRailWarnMs_ == 0 || (now - lastRailWarnMs_) >= 5000)) {
-        lastRailWarnMs_ = now;
-        Debug::printfFeature(DebugFeature::VEHICLE,
-            "[RAIL] WARNING: 24V rail low (%.1f V < %.1f V) — steering VESC, Jetson and cameras are on this rail\n",
-            rail24V_, RAIL_24V_LOW_THRESHOLD);
-    } else if (!low) {
-        lastRailWarnMs_ = 0;
+    if (!batteryValid_) {
+        batteryLowRaw_ = false;   // nothing wired is not a low battery
+        batteryLow_ = false;
+        lastBatteryWarnMs_ = 0;
+        return;
     }
+
+    batteryLowRaw_ = batLowStep(batteryLowRaw_, batteryV_, p);
+    bool cranking = relayController_.isStarterEnergized() ||
+                    (lastStarterOnMs_ != 0 && (now - lastStarterOnMs_) < BAT12_CRANK_HOLDOFF_MS);
+    batteryLow_ = batteryLowRaw_ && !cranking;
+
+    if (batteryLow_ && (lastBatteryWarnMs_ == 0 || (now - lastBatteryWarnMs_) >= 5000)) {
+        lastBatteryWarnMs_ = now;
+        Debug::printfFeature(DebugFeature::VEHICLE,
+            "[BAT] WARNING: 12 V battery low (%.2f V < %.1f V)\n", batteryV_, BAT12_LOW_V);
+    } else if (!batteryLow_) {
+        lastBatteryWarnMs_ = 0;
+    }
+}
+
+void VehicleController::processBatteryCalCommand(float measuredV, WebPortal& webPortal) {
+    float cal = batteryCal_;
+    const float rawV = batteryRawV_;   // the CURRENT averaged reading
+    BatCalResult r = batComputeCal(measuredV, rawV, batteryParams(), cal);
+    if (r == BatCalResult::MEASURED_OUT_OF_RANGE) {
+        webPortal.sendResponse(false, "Battery: measured voltage out of range (" +
+                                      String(BAT12_CAL_MEASURED_MIN_V, 0) + "-" +
+                                      String(BAT12_CAL_MEASURED_MAX_V, 0) + " V)");
+        return;
+    }
+    if (r == BatCalResult::NOT_CONNECTED) {
+        webPortal.sendResponse(false, "Battery: nothing on X10 (raw " + String(rawV, 2) + " V) - nothing to calibrate");
+        return;
+    }
+    if (r == BatCalResult::FACTOR_OUT_OF_RANGE) {
+        webPortal.sendResponse(false, "Battery: correction " + String(measuredV / rawV, 3) + " out of range (" +
+                                      String(BAT12_CAL_MIN, 2) + "-" + String(BAT12_CAL_MAX, 2) +
+                                      ") - check the value or the wiring");
+        return;
+    }
+
+    // Persist first: if the write fails, the RAM value is left as it was.
+    Preferences prefs;
+    bool ok = false;
+    if (prefs.begin(BAT12_CAL_NVS_NS, false)) {
+        ok = prefs.putFloat(BAT12_CAL_NVS_KEY, cal) == sizeof(float);
+        prefs.end();
+    }
+    if (!ok) {
+        webPortal.sendResponse(false, "Battery: failed to save the calibration");
+        return;
+    }
+
+    batteryCal_ = cal;
+    batteryV_ = batVolts(batteryRawV_, batteryCal_);
+    webPortal.sendResponse(true, "Battery calibrated: cal " + String(cal, 4) + ", " +
+                                 String(batteryV_, 2) + " V");
+    Debug::printfFeature(DebugFeature::VEHICLE,
+        "[BAT] Calibrated: measured %.2f V, raw %.3f V -> cal %.4f\n", measuredV, rawV, cal);
+}
+
+void VehicleController::processBatteryCalResetCommand(WebPortal& webPortal) {
+    Preferences prefs;
+    bool ok = false;
+    if (prefs.begin(BAT12_CAL_NVS_NS, false)) {
+        ok = prefs.putFloat(BAT12_CAL_NVS_KEY, 1.0f) == sizeof(float);
+        prefs.end();
+    }
+    if (!ok) {
+        webPortal.sendResponse(false, "Battery: failed to save the calibration");
+        return;
+    }
+    batteryCal_ = 1.0f;
+    batteryV_ = batteryRawV_;
+    webPortal.sendResponse(true, "Battery calibration reset: cal 1.0000, " + String(batteryV_, 2) + " V");
+    Debug::printlnFeature(DebugFeature::VEHICLE, "[BAT] Calibration reset to 1.0");
 }
 
 void VehicleController::initEngineHourMeter() {
@@ -190,8 +287,8 @@ void VehicleController::update() {
     // Update CAN controller (read vehicle data from ECU)
     canController_.update();
 
-    // Sample the 24V boost rail (rate-limited internally)
-    updateRailMonitor();
+    // Sample the 12 V battery on X10 (rate-limited internally)
+    updateBatteryMonitor();
 
     // Restore transmission state once, on first engine-running detection
     if (!transmissionInitialized_ && isEngineRunning()) {
@@ -389,8 +486,15 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
         processRelayTestCommand(cmd.relay, cmd.boolValue, webPortal);
         return;
     } else if (cmd.cmd == "set_boost") {
-        // 24V boost rail always available (guarded: disable needs ignition OFF)
+        // Kept for old clients: no boost board on X10 (aztec) — replies "not fitted"
         processBoostCommand(cmd.boolValue, webPortal);
+        return;
+    } else if (cmd.cmd == "cal_bat_v") {
+        // 12 V battery calibration from a multimeter reading: any input source
+        processBatteryCalCommand(cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "reset_bat_v_cal") {
+        processBatteryCalResetCommand(webPortal);
         return;
     } else if (cmd.cmd == "steer_cal_center" || cmd.cmd == "steer_cal_left" || cmd.cmd == "steer_cal_right") {
         processSteerCalCommand(cmd.cmd, webPortal);
@@ -1375,32 +1479,10 @@ void VehicleController::processRelayTestCommand(int32_t relayNumber, bool on, We
 }
 
 void VehicleController::processBoostCommand(bool on, WebPortal& webPortal) {
-    if (!on) {
-        // The rail feeds the steering VESC — dropping it on a live vehicle would
-        // remove steering authority, so a disable is only allowed with ignition OFF.
-        if (getIgnitionState() != RelayController::IgnitionState::OFF) {
-            Debug::printlnFeature(DebugFeature::VEHICLE,
-                "[RAIL] 24V disable refused — ignition is not OFF");
-            webPortal.sendResponse(false,
-                "24V rail powers the steering driver - turn ignition OFF first");
-            return;
-        }
-        digitalWrite(PIN_BOOST_EN, LOW);
-        boostEnabled_ = false;
-        railLow_ = false;   // a deliberately disabled rail is not a fault
-        lastRailWarnMs_ = 0;
-        Debug::printlnFeature(DebugFeature::VEHICLE, "[RAIL] 24V boost DISABLED");
-        webPortal.sendResponse(true, "24V rail OFF");
-        return;
-    }
-
-    digitalWrite(PIN_BOOST_EN, HIGH);
-    boostEnabled_ = true;
-    boostEnabledAtMs_ = millis();   // restart the startup grace window
-    railLow_ = false;
-    lastRailWarnMs_ = 0;
-    Debug::printlnFeature(DebugFeature::VEHICLE, "[RAIL] 24V boost ENABLED");
-    webPortal.sendResponse(true, "24V rail ON");
+    (void)on;
+    // aztec has no Buck-Boost board: X10 pin 3 is the 12 V battery sense. GPIO46 stays HIGH.
+    Debug::printlnFeature(DebugFeature::VEHICLE, "[BAT] set_boost ignored — boost rail not fitted");
+    webPortal.sendResponse(false, "Boost rail not fitted (X10 is the 12 V battery sense)");
 }
 
 void VehicleController::processSteerCalCommand(const String& which, WebPortal& webPortal) {

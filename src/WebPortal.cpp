@@ -682,8 +682,6 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
         doc["throttle_position"] = telemetry.throttle_position;
         doc["fuel_level"] = telemetry.fuel_level;
         doc["map_kpa"] = telemetry.map_kpa;
-        doc["ecu_voltage"] = serialized(String(telemetry.module_voltage_mv / 1000.0f, 2));
-        doc["ecu_voltage_low"] = telemetry.ecu_voltage_low;
         doc["intake_temp"] = telemetry.intake_temp;
         doc["engine_load"] = telemetry.engine_load;
     }
@@ -709,11 +707,13 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["wheel_lock_fitted"] = telemetry.wheel_lock_fitted;   // false on aztec → UI shows "not fitted"
     doc["relay_test"] = telemetry.relay_test;   // web relay test, bit0 = Relay_1 … bit7 = Relay_8
 
-    // 24V boost rail + board I/O health — emitted unconditionally (independent of
-    // CAN / MAVLink status) so a failing expander is always visible.
-    doc["rail_24v"] = serialized(String(telemetry.rail_24v, 1));
-    doc["boost_on"] = telemetry.boost_on;
-    doc["rail_low"] = telemetry.rail_low;
+    // 12 V battery (X10 sense) + board I/O health — emitted unconditionally (independent of
+    // CAN / MAVLink status). "ecu_voltage" keeps its key name for the UI; it is the battery.
+    doc["ecu_voltage"] = serialized(String(telemetry.module_voltage_mv / 1000.0f, 2));
+    doc["ecu_voltage_low"] = telemetry.ecu_voltage_low;
+    doc["bat_v_raw"] = serialized(String(telemetry.bat_v_raw, 2));
+    doc["bat_v_cal"] = serialized(String(telemetry.bat_v_cal, 4));
+    doc["bat_v_valid"] = telemetry.bat_v_valid;
     doc["io_input_fault"] = telemetry.io_input_fault;
     doc["io_raw"] = telemetry.io_raw;
     doc["io_relay_fault"] = telemetry.io_relay_fault;

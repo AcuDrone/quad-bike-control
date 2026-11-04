@@ -3,7 +3,7 @@
 **Hardware:** custom control PCB `Control_v0` — ESP32-S3-WROOM-1U (external antenna), `qio_qspi` mode
 **Vehicle (branch `aztec`):** ODES JUNGLECROSS 800 EFI/EPS buggy — the quad bike on the same board is documented on `master`
 **Schematic:** `Control_v0.PrjPcb` (7 sheets, Altium) — Alexandr Tulusha, 14.06.2026
-**Companion boards:** `Buck Boost.PrjPcb` (→ X10), `Relay.PrjPcb` (→ **X15 / I2C2**, bench-verified)
+**Companion boards:** `Buck Boost.PrjPcb` (→ X10; **not fitted on aztec** — X10 pin 3 is the 12 V battery sense), `Relay.PrjPcb` (→ **X15 / I2C2**, bench-verified)
 **Pin Definitions:** `include/Constants.h`
 **Supersedes:** [`GPIO_PINOUT_S3.md`](GPIO_PINOUT_S3.md) (ESP32-S3-DevKitC-1 + hand wiring)
 
@@ -17,7 +17,7 @@
 4. [Peripheral / Bus Summary](#4-peripheral--bus-summary)
 5. [Opto-Isolated Input Assignment](#5-opto-isolated-input-assignment)
 6. [Relay Board Assignment](#6-relay-board-assignment)
-7. [24V Boost Subsystem](#7-24v-boost-subsystem)
+7. [X10 battery sense (aztec)](#7-x10-battery-sense-aztec)
 8. [⚠ Warnings & Bring-Up Checklist](#8--warnings--bring-up-checklist)
 9. [Firmware Migration Summary](#9-firmware-migration-summary)
 
@@ -34,7 +34,7 @@
 | Analog current sense | 8× BTS7960 IS channels → CD4051 8:1 mux → GPIO3 (ADC1) |
 | Digital inputs | 8× 5V opto-isolated (PC817) → PCA9557 U10 on **I2C2** (scan-verified, §4) |
 | Relays | off-board `Relay` PCB — 8× SRD-12VDC + PCA9557 @ 0x1F on **X15 / I2C2** (scan-verified, all relay functions bench-tested) |
-| 24V rail | off-board `Buck Boost` PCB — TL494 two-phase 12V→24V, 0-26V / 0-15A, INA180 current sense (X10) |
+| 24V rail | master: off-board `Buck Boost` PCB — TL494 two-phase 12V→24V, 0-26V / 0-15A, INA180 current sense (X10). **aztec: no boost board** — the steering VESC runs from a 7s LiFePO4 pack; X10 pin 3 measures the 12 V battery |
 | CAN | MCP2515 + TJA1051T/3, **8 MHz** crystal |
 | Wired LAN | CH9121T + RJ45 (X18) — **disconnected on the aztec board** (R63/R64 removed; UART0 now drives the steering VESC on X1) |
 
@@ -57,7 +57,7 @@ document is the wiring / pin reference only.
 | **6** | PWM_3 → X7 pin 2 (L_PWM) | `PIN_BRAKE_LPWM` — LEDC ch5 | same | UNCHANGED |
 | **7** | PWM_4 → X7 pin 3 (R_PWM) | `PIN_BRAKE_RPWM` — LEDC ch4 | same | UNCHANGED |
 | **8** | Opto-isolated input via 6N137 (X2, ex-"S-BUS") | `PIN_SPEED_SENSOR` — driveline speed (PCNT) ⚠ inverted, see §3/§8.9 | `PIN_MAVLINK_RX` | RE-PINNED |
-| **9** | 24V rail via 200K/24K divider | `PIN_ADC_24V` — ADC1 | `PIN_TRANS_SERVO` | NEW feature |
+| **9** | X10 pin 3 via 200K/24K divider (aztec: 12 V battery +) | `PIN_ADC_24V` — ADC1, 12 V battery sense | `PIN_TRANS_SERVO` | NEW feature |
 | **10** | Hall_3 channel A (X5) | spare | `PIN_CAN_CS` | SPARE |
 | **11** | Hall_3 channel B (X5) | spare | `PIN_CAN_MOSI` | SPARE |
 | **12** | Hall_2 channel A (X4) | spare | `PIN_CAN_SCK` | SPARE |
@@ -81,7 +81,7 @@ document is the wiring / pin reference only.
 | **43** | UART0 TX → Prog X1 TxD (510Ω R13); R63 → CH9121T **removed** on aztec | `PIN_VESC_TX` — VESC UART0 TX (X1) → VESC RX | console TX | NEW (aztec, needs R63/R64 removed) |
 | **44** | UART0 RX ← Prog X1 RxD (510Ω R14); R64 → CH9121T **removed** on aztec | `PIN_VESC_RX` — VESC UART0 RX (X1) ← VESC TX | console RX | NEW (aztec, needs R63/R64 removed) |
 | **45** | `CFG_CH9121T` via BSS138 | LAN config-mode toggle — unused (CH9121T disconnected on aztec) | FREE | RESERVED ⚠ strapping |
-| **46** | `Bust_On/OFF` → X10 pin 1 | `PIN_BOOST_EN` — boost enable output | FREE | NEW ⚠ strapping |
+| **46** | `Bust_On/OFF` → X10 pin 1 | `PIN_BOOST_EN` — boost enable output (driven HIGH; nothing fitted on aztec) | FREE | NEW ⚠ strapping |
 | **47** | I2C2 SCL (BSS138 level shift) | On-board U10/U2 + X15 bus SCL (relay board) | `PIN_GEAR_HIGH` | NEW |
 | **48** | I2C2 SDA (BSS138 level shift) | On-board U10/U2 + X15 bus SDA (relay board) | FREE | NEW |
 
@@ -106,7 +106,7 @@ document is the wiring / pin reference only.
 | **X7** | Brake BTS7960 | 1=5V(fused), 2=L_PWM (GPIO6), 3=R_PWM (GPIO7), 4=L_IS, 5=R_IS, 6=GND |
 | **X8** | Servos | 1=5V(fused, servo supply), 2=throttle PWM (GPIO15), 3=transmission PWM (GPIO16 — GXservo HS-1005SGT 150KG on aztec), 4/5=IS, 6=GND |
 | **X9** | MAVLink → Pixhawk TELEM | 2 → Pixhawk RX (GPIO17 TX), 3 ← Pixhawk TX (GPIO18 RX), 6=GND. ⚠ **Do NOT connect pin 1 (5V)**; leave 4/5 unconnected |
-| **X10** | Buck Boost board | 1 = Boost On/Off (GPIO46), 2 = GND, 3 = +24V measure → divider → GPIO9 |
+| **X10** | Buck Boost board (master) / none (aztec) | 1 = Boost On/Off (GPIO46, unused on aztec), 2 = GND, 3 = 12 V battery + sense (no boost board on aztec; +24V measure on master) → divider → GPIO9 |
 | **X11** | Power in | 3× +12V, 3× GND (main 12V input) |
 | **X12** | LAN UART2 | CH9121T's second UART — LAN-side, **not** an ESP UART |
 | **X13** | CAN | CANL, GND, CANH — TJA1051T/3, split termination 2×60Ω + 47n, common-mode choke. One 500 kbit/s bus shared by the **engine ECU** (OBD-II) and the **Bosch LWS steering-angle sensor** (0x305) — see §4 "SPI (CAN)" for termination |
@@ -119,7 +119,7 @@ document is the wiring / pin reference only.
 
 ⚠ **Transmission servo supply (aztec):** the GXservo HS-1005SGT 150KG (180°, 500–2500 µs capable;
 firmware uses the verified 800–2200 µs range) is rated for **16.8 V max**. It must **not** be
-powered from the 24V boost rail.
+powered from the 24 V supply (boost rail on master, the 7s LiFePO4 VESC pack on aztec).
 
 **Hall input conditioning (X3/X4/X5):** ferrite bead (1 kΩ @ 100 MHz) → 1.2K / 2.2K divider (×0.65)
 → PESD3V3L1UA TVS + 100n. Designed for **5V** sensors. All three channels are **spare** — the
@@ -248,7 +248,7 @@ Channel numbers are unchanged; only the throttle/transmission pins move to 15/16
 | GPIO | Source | Scaling |
 |------|--------|---------|
 | 3 | BTS7960 IS current sense, 8 channels via CD4051 (channel select A/B/C + enable on PCA9557 U2, I2C2) | per-channel 4.7K/10K + clamp |
-| 9 | 24V boost rail | 200K/24K → V24 = Vadc × 224/24 ≈ **Vadc × 9.33** (24V → ~2.57V) |
+| 9 | 12 V battery (aztec, X10 pin 3) | 200K/24K → V = Vadc × 224/24 ≈ **Vadc × 9.33** (12.6V → ~1.35V), × user calibration factor (0.80–1.20, NVS `bat12`/`cal`) |
 
 ### PCNT
 
@@ -365,19 +365,24 @@ through the same shadow byte and read-back as the functions; telemetry `relay_te
 
 ---
 
-## 7. 24V Boost Subsystem
+## 7. X10 battery sense (aztec)
 
-`Buck Boost.PrjPcb` — TL494 two-phase converter, 12V → 24V, adjustable 0-26V / 0-15A, INA180 current
-sense.
+The aztec buggy has **no** `Buck Boost.PrjPcb`: the steering VESC runs from its own 7s LiFePO4 pack.
+X10 is reused to measure the **12 V lead-acid battery**.
 
 | Aspect | Detail |
 |--------|--------|
-| Enable | GPIO46 → X10 pin 1 (`Bust_On/OFF`), 100K pulldown R7 on the control board |
-| Measurement | X10 pin 3 → 200K/24K divider → GPIO9 (÷9.33) |
-| Loads | Steering VESC (Flipsky 75200), Starlink, Nvidia Jetson, cameras |
-| Firmware to add | Enable control (on at boot), rail-voltage telemetry, correlation with steering driver-ok |
+| Wiring | Battery (+) → X10 pin 3 → on-board 200K/24K divider → GPIO9 (ADC1, 11 dB); X10 pin 2 = GND |
+| Scaling | V = Vadc × 9.33 × cal; 8 readings averaged every 500 ms |
+| Calibration | Web console: type the multimeter reading → `cal_bat_v`; factor 0.80–1.20 in NVS `bat12`/`cal`; `reset_bat_v_cal` → 1.0 |
+| "Not connected" | raw ≤ 5 V → `bat_v_valid` false, no warning, MAVLink `ignition_voltage` NaN |
+| Low warning | < 11.8 V, cleared > 12.1 V; suppressed while the starter relay is on and 2 s after; warning only |
+| Consumers | Telemetry `ecu_voltage` / `ecu_voltage_low` (the MT05 ECU never answers PID 0x42), MAVLink `EFI_STATUS.ignition_voltage` |
+| GPIO46 | Still driven HIGH at boot (X10 pin 1 is unconnected on aztec — harmless) |
 
-A separate 7s LiFePO4 battery also exists in the vehicle power system.
+**master (quad bike)** keeps the boost semantics: `Buck Boost.PrjPcb` (TL494 two-phase 12V → 24V,
+0-26V / 0-15A, INA180) on X10, GPIO46 = enable, X10 pin 3 = +24V rail measurement into the same
+divider. This section describes the aztec branch only.
 
 ---
 
@@ -390,7 +395,7 @@ A separate 7s LiFePO4 battery also exists in the vehicle power system.
    (the VESC ignores unframed bytes; runtime core/IDF logs are kept off UART0 by the firmware), and X1
    can no longer be used for UART flashing — flash over USB-C (X1 RESET/BOOT still work).
 2. **Strapping pins:** GPIO0 (boot / LED), GPIO45 (`CFG_CH9121T`), GPIO46 (boost enable — 100K pulldown
-   keeps the boost off through reset; verify there is no enable glitch at boot), GPIO3 (JTAG source
+   keeps the boost off through reset; verify there is no enable glitch at boot; nothing fitted on aztec), GPIO3 (JTAG source
    select strap — used as an ADC **input only**, which is fine).
 3. **PWM-header UART link (X9 MAVLink)** runs through BSS138 bidirectional level shifters with
    10K pull-ups to 5V, 1K series and 100pF. Verified workable at 115200: a logic low arrives at ~0.5V at
@@ -470,8 +475,8 @@ A separate 7s LiFePO4 battery also exists in the vehicle power system.
 | Constant | GPIO | Purpose |
 |----------|------|---------|
 | `PIN_CAN_INT` | 38 | MCP2515 interrupt (optional — firmware polls today) |
-| `PIN_BOOST_EN` | 46 | 24V boost enable → X10 |
-| `PIN_ADC_24V` | 9 | 24V rail measurement (÷9.33) |
+| `PIN_BOOST_EN` | 46 | Boost enable → X10 pin 1 (driven HIGH; no board on aztec) |
+| `PIN_ADC_24V` | 9 | 12 V battery sense on aztec, X10 pin 3 (÷9.33 × cal) |
 | `PIN_ADC_IS_MUX` | 3 | CD4051 common output — BTS7960 IS channels |
 | `PIN_SPEED_SENSOR` | 8 | Driveline speed sensor (PCNT) via the X2 6N137 opto input, inverted — from the pending speed-sensor change |
 
@@ -496,7 +501,7 @@ A separate 7s LiFePO4 battery also exists in the vehicle power system.
 |------|------|
 | PCA9557 input reader | New driver on **I2C2** @ 0x1A (U10) — supplies gear switches and the brake limit sensor to `TransmissionController` / brake logic (replaces `digitalRead`) |
 | `RelayController` | Rewrite from direct GPIO to the relay-board PCA9557 @ 0x1F — bus passed in by `main.cpp` (**`Wire1`/I2C2** via X15) |
-| Boost control / telemetry | `PIN_BOOST_EN` on at boot; `PIN_ADC_24V` rail voltage into telemetry |
+| Battery sense / telemetry | `PIN_BOOST_EN` HIGH at boot (harmless); `PIN_ADC_24V` = 12 V battery → `ecu_voltage` telemetry and MAVLink `EFI_STATUS.ignition_voltage`, web calibration `cal_bat_v` |
 | Console | Add `ARDUINO_USB_CDC_ON_BOOT=1` build flag (USB-CDC over USB-C) |
 | CD4051 IS mux (future) | PCA9557 U2 @ 0x1C drives A/B/C + enable; read on `PIN_ADC_IS_MUX` — brake-motor current monitoring |
 
