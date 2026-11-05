@@ -531,6 +531,8 @@ struct ServoChannelConfig {
 #define TRANS_GEAR_CHECK_INTERVAL           500        // ms - physical gear verification period
 #define TRANS_GEAR_READ_INTERVAL_MS         100        // ms - GPIO debounce cache for getPhysicalGear()
 #define TRANS_GEAR_READ_RETRY_COUNT         3          // extra reads when all switches read inactive while servo is idle
+#define TRANS_RESYNC_CONFIRM_CHECKS         2          // consecutive idle checks with the same sensor gear != target before adopting it
+#define TRANS_INIT_SETTLE_MS                1500       // ms - init-step overshoot move from an unknown servo position (max 20 % + 1 % overshoot ≈ 0.75 s at 35 ms/%, doubled)
 
 // ============================================================================
 // BRAKE SYSTEM CONFIGURATION
@@ -819,7 +821,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.13"
+#define FIRMWARE_VERSION "1.5.14"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

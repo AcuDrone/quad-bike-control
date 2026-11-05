@@ -4,6 +4,7 @@
 #include "ServoController.h"
 #include "Constants.h"
 #include "BoardInputs.h"
+#include "TransmissionLaw.h"
 #include <Preferences.h>
 
 /**
@@ -51,7 +52,7 @@ public:
     /**
      * @brief Set transmission to target gear
      * @param gear Target gear
-     * @return true if gear change initiated
+     * @return true if gear change initiated (or queued); false while not initialised
      */
     bool setGear(Gear gear);
 
@@ -112,9 +113,24 @@ public:
     void update();
 
     /**
-     * @brief Restore servo position from NVS; return true to skip legacy autohome
+     * @brief True once the expected gear is known (targetGear_ != GEAR_UNKNOWN).
+     *
+     * GEAR_UNKNOWN as the expected gear only ever means "never initialised":
+     * startGearChange() never writes it.
      */
-    bool restoreStateIfValid();
+    bool isInitialised() const { return targetGear_ != Gear::GEAR_UNKNOWN; }
+
+    /**
+     * @brief Initialise the expected gear once (no-op when already initialised).
+     *
+     * Source, in order (decided by chooseTransmissionInit() in TransmissionLaw.h):
+     * the physical sensor reading exactly one gear (direct move to that gear's position,
+     * state saved valid); else a valid, plausible NVS state (direct move to state_pct);
+     * else a real shift step into NEUTRAL (overshoot with TRANS_INIT_SETTLE_MS, dwell,
+     * return) whose overshoot direction comes from the invalid NVS record.
+     * Always leaves the controller initialised.
+     */
+    void initialise();
 
     /**
      * @brief Load user-configured gear positions from NVS
@@ -195,6 +211,8 @@ private:
     uint32_t lastGearCheckTime_;
     uint32_t lastStatusLogTime_;
     bool lastGearMismatch_;
+    TransmissionResync resync_;     // idle consecutive-mismatch counter
+    bool initStepActive_;           // the initialisation step into NEUTRAL is running
     Gear lastLoggedGear_;
     bool lastLoggedMoving_;
 
@@ -216,6 +234,8 @@ private:
     uint32_t computeSettleMs(float fromPct, float toPct) const;
     void saveDefaultPosition(Gear gear, float positionPct);
     void startGearChange(Gear gear);
+    void startInitStep(float direction);
+    void markStateInvalid();
     static Gear nextGearToward(Gear from, Gear to);
 };
 
