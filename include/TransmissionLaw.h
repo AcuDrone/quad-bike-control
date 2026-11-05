@@ -2,7 +2,8 @@
 // TransmissionLaw.h — pure logic of the transmission gear sync (change
 // fix-transmission-gear-sync): the choice of initialisation source (physical sensor, else a
 // plausible NVS state, else an initialisation step into NEUTRAL), the overshoot-direction hint
-// for that step, and the idle resync consecutive-mismatch counter.
+// for that step, and the idle resync consecutive-mismatch counter; plus (change
+// speed-up-gear-change-with-sensor) the sensor confirmation that ends the gear-change waits.
 //
 // NO Arduino / Constants.h dependency: compiled by the native unit tests
 // (test/test_transmission_sync). TransmissionController feeds the sensor reading, the gear
@@ -123,5 +124,39 @@ struct TransmissionResync {
       return true;
     }
     return false;
+  }
+};
+
+// Sensor-confirmed gear-change wait (overshoot dwell and inter-step pause). The wait ends
+// CONFIRMED once the sensor has matched the expected gear on every step for `confirmMs`,
+// measured from the first matching step; any non-matching step (another gear or UNKNOWN)
+// restarts the window. Otherwise it ends TIMEOUT `timeoutMs` after `startMs` (the fixed wait
+// before this change). Times in ms (millis(), wrap-safe unsigned differences).
+enum class ShiftConfirmResult : uint8_t {
+  WAIT,
+  CONFIRMED,
+  TIMEOUT,
+};
+
+struct ShiftConfirm {
+  bool armed = false;     // a confirmation window is running
+  uint32_t sinceMs = 0;   // time of the first matching read of the running window
+
+  void reset() {
+    armed = false;
+    sinceMs = 0;
+  }
+
+  ShiftConfirmResult step(uint32_t now, uint32_t startMs, bool sensorMatches, uint32_t confirmMs,
+                          uint32_t timeoutMs) {
+    if (!sensorMatches) {
+      armed = false;
+    } else if (!armed) {
+      armed = true;
+      sinceMs = now;
+    }
+    if (armed && now - sinceMs >= confirmMs) return ShiftConfirmResult::CONFIRMED;
+    if (now - startMs >= timeoutMs) return ShiftConfirmResult::TIMEOUT;
+    return ShiftConfirmResult::WAIT;
   }
 };

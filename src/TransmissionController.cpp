@@ -18,6 +18,8 @@ TransmissionController::TransmissionController()
     , settleMs_(TRANS_SERVO_SETTLE_MIN_MS)
     , queuedGear_(Gear::GEAR_UNKNOWN)
     , sequenceStepDwellStart_(0)
+    , shiftStartMs_(0)
+    , shiftFromGear_(Gear::GEAR_UNKNOWN)
     , boardInputs_(nullptr)
     , cachedPhysicalGear_(Gear::GEAR_UNKNOWN)
     , lastGearReadTime_(0)
@@ -137,6 +139,8 @@ void TransmissionController::startInitStep(float direction) {
     gearPhaseStartTime_ = millis();
     initStepActive_ = true;
     resync_.reset();
+    shiftFromGear_ = Gear::GEAR_UNKNOWN;
+    shiftStartMs_ = gearPhaseStartTime_;
 
     commandServo(overshootPct);
 
@@ -234,6 +238,8 @@ bool TransmissionController::setGear(Gear finalGear) {
             getGearName(targetGear_), getGearName(finalGear), getGearName(nextStep));
     }
 
+    shiftFromGear_ = targetGear_;
+    shiftStartMs_ = millis();
     startGearChange(nextStep);
     return true;
 }
@@ -352,7 +358,11 @@ TransmissionController::Gear TransmissionController::getPhysicalGear() const {
     // Ambiguous result while the servo is idle: consume the NEXT expander poll
     // instead of issuing back-to-back I2C reads (filters transient bounces without
     // blocking the control loop). At most TRANS_GEAR_READ_RETRY_COUNT deferrals.
+    // Not while a sequence step is queued: the inter-step pause runs in phase NONE and
+    // is ended by sensor confirmation, so a stale cached gear must never stand in for a
+    // fresh reading there (decoded immediately, as during a gear change).
     if (activeCount != 1 && gearChangePhase_ == GearChangePhase::NONE
+        && queuedGear_ == Gear::GEAR_UNKNOWN
         && gearReadRetries_ < TRANS_GEAR_READ_RETRY_COUNT) {
         if ((now - lastGearRetryTime_) >= BOARD_INPUT_POLL_MS) {
             lastGearRetryTime_ = now;
@@ -424,13 +434,31 @@ void TransmissionController::update() {
                 queuedGear_ = Gear::GEAR_UNKNOWN;
                 sequenceStepDwellStart_ = 0;
             } else if (canChangeGear(queuedGear_)) {
-                // Arm dwell on first entry after a step completes
+                // Arm the pause on first entry after a step completes (or after setGear()
+                // re-armed it). It ends once the sensor confirms the completed step's gear
+                // for TRANS_DWELL_CONFIRM_MS, else after TRANS_SEQUENCE_STEP_DWELL_MS.
                 if (sequenceStepDwellStart_ == 0) {
                     sequenceStepDwellStart_ = now;
+                    pauseConfirm_.reset();
                     Debug::printfFeature(DebugFeature::TRANSMISSION,
-                        "[TRANS] Step assumed at %s, dwell %ums before next step\n",
+                        "[TRANS] Step assumed at %s, pause up to %ums before next step\n",
                         getGearName(targetGear_), TRANS_SEQUENCE_STEP_DWELL_MS);
-                } else if (now - sequenceStepDwellStart_ >= TRANS_SEQUENCE_STEP_DWELL_MS) {
+                }
+                ShiftConfirmResult r = pauseConfirm_.step(now, sequenceStepDwellStart_,
+                                                          physicalGear == targetGear_,
+                                                          TRANS_DWELL_CONFIRM_MS,
+                                                          TRANS_SEQUENCE_STEP_DWELL_MS);
+                if (r != ShiftConfirmResult::WAIT) {
+                    uint32_t waited = now - sequenceStepDwellStart_;
+                    if (r == ShiftConfirmResult::CONFIRMED) {
+                        Debug::printfFeature(DebugFeature::TRANSMISSION,
+                            "[TRANS] Step %s confirmed after %lu ms\n",
+                            getGearName(targetGear_), (unsigned long)waited);
+                    } else {
+                        Debug::printfFeature(DebugFeature::TRANSMISSION,
+                            "[TRANS] Step %s pause timeout %lu ms\n",
+                            getGearName(targetGear_), (unsigned long)waited);
+                    }
                     sequenceStepDwellStart_ = 0;
                     Gear nextStep = nextGearToward(targetGear_, queuedGear_);
                     startGearChange(nextStep);
@@ -478,6 +506,7 @@ void TransmissionController::update() {
         if (now - gearPhaseStartTime_ >= settleMs_) {
             gearPhaseStartTime_ = now;
             gearChangePhase_ = GearChangePhase::OVERSHOOT_DWELL;
+            dwellConfirm_.reset();
             Debug::printfFeature(DebugFeature::TRANSMISSION,
                 "[TRANS] OVERSHOOT_DWELL: waiting up to %ums for %s\n",
                 TRANS_OVERSHOOT_DWELL_MS, getGearName(targetGear_));
@@ -485,9 +514,24 @@ void TransmissionController::update() {
         return;
     }
 
-    // ── OVERSHOOT_DWELL phase: hold at overshoot for TRANS_OVERSHOOT_DWELL_MS then assume engaged ──
+    // ── OVERSHOOT_DWELL phase: hold at overshoot until the sensor confirms the step's gear
+    //    for TRANS_DWELL_CONFIRM_MS, else TRANS_OVERSHOOT_DWELL_MS (timeout) then assume engaged.
+    //    needsThrottleBoost() is true exactly in this phase, so boost / idle hold follow it. ──
     if (gearChangePhase_ == GearChangePhase::OVERSHOOT_DWELL) {
-        if (now - gearPhaseStartTime_ < TRANS_OVERSHOOT_DWELL_MS) return;
+        ShiftConfirmResult r = dwellConfirm_.step(now, gearPhaseStartTime_,
+                                                  physicalGear == targetGear_,
+                                                  TRANS_DWELL_CONFIRM_MS,
+                                                  TRANS_OVERSHOOT_DWELL_MS);
+        if (r == ShiftConfirmResult::WAIT) return;
+
+        uint32_t waited = now - gearPhaseStartTime_;
+        if (r == ShiftConfirmResult::CONFIRMED) {
+            Debug::printfFeature(DebugFeature::TRANSMISSION,
+                "[TRANS] Dwell confirmed after %lu ms\n", (unsigned long)waited);
+        } else {
+            Debug::printfFeature(DebugFeature::TRANSMISSION,
+                "[TRANS] Dwell timeout %lu ms, gear assumed\n", (unsigned long)waited);
+        }
 
         settleMs_ = computeSettleMs(getCurrentServoPct(), finalGearPositionPct_);
         gearPhaseStartTime_ = now;
@@ -518,6 +562,13 @@ void TransmissionController::update() {
         Debug::printfFeature(DebugFeature::TRANSMISSION,
             "[TRANS] Gear %s engaged at %.1f%%\n",
             getGearName(targetGear_), getCurrentServoPct());
+        // Single step, or the last step of a sequence: log the whole shift's duration.
+        if (queuedGear_ == Gear::GEAR_UNKNOWN || queuedGear_ == targetGear_) {
+            Debug::printfFeature(DebugFeature::TRANSMISSION,
+                "[TRANS] Shift %s -> %s took %lu ms\n",
+                getGearName(shiftFromGear_), getGearName(targetGear_),
+                (unsigned long)(now - shiftStartMs_));
+        }
     }
 }
 

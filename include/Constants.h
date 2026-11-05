@@ -517,8 +517,9 @@ struct ServoChannelConfig {
 #define TRANS_GEAR_OVERSHOOT_L_PCT          5.0f
 #define TRANS_GEAR_OVERSHOOT_H_PCT          5.0f
 
-#define TRANS_OVERSHOOT_DWELL_MS            2000    // ms to hold at overshoot position before assuming gear engaged
-#define TRANS_SEQUENCE_STEP_DWELL_MS        1000    // ms to dwell after a step completes before starting the next step
+#define TRANS_OVERSHOOT_DWELL_MS            2000    // ms - overshoot dwell TIMEOUT: ends earlier on sensor confirmation, else gear assumed engaged
+#define TRANS_SEQUENCE_STEP_DWELL_MS        1000    // ms - inter-step pause TIMEOUT: ends earlier when the sensor confirms the completed step
+#define TRANS_DWELL_CONFIRM_MS              200     // ms - sensor must read the expected gear continuously this long to end a dwell / pause early (300–400 if the linkage bounces)
 
 // Default gear positions (percent: 0.0 = 800µs, 100.0 = 2200µs)
 #define TRANS_GEAR_DEFAULT_REVERSE_PCT      40.0f
@@ -821,7 +822,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.14"
+#define FIRMWARE_VERSION "1.5.15"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

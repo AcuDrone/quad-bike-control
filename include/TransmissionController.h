@@ -101,7 +101,7 @@ public:
      * @brief Read the physical gear from the opto-input snapshot.
      *
      * Cached for `TRANS_GEAR_READ_INTERVAL_MS`. An ambiguous reading (none or more
-     * than one switch asserted) while the servo is idle defers to the next expander
+     * than one switch asserted) while the servo is idle and no sequence step is queued defers to the next expander
      * poll instead of issuing back-to-back reads; an invalid (stale) snapshot
      * reports `GEAR_UNKNOWN`, which is the intended degraded mode.
      */
@@ -193,7 +193,7 @@ private:
     enum class GearChangePhase {
         NONE,
         OVERSHOOT,        // servo moving to overshoot position
-        OVERSHOOT_DWELL,  // dwelling at overshoot for TRANS_OVERSHOOT_DWELL_MS
+        OVERSHOOT_DWELL,  // dwelling at overshoot until sensor-confirmed (TRANS_DWELL_CONFIRM_MS) or TRANS_OVERSHOOT_DWELL_MS
         RETURN            // servo moving back to final position (gear assumed engaged)
     };
 
@@ -218,6 +218,10 @@ private:
 
     Gear queuedGear_;               // GEAR_UNKNOWN = no sequence pending, else = final destination
     uint32_t sequenceStepDwellStart_;  // millis() when step-dwell armed, 0 = not armed
+    ShiftConfirm dwellConfirm_;     // sensor confirmation of the overshoot dwell
+    ShiftConfirm pauseConfirm_;     // sensor confirmation of the inter-step pause
+    uint32_t shiftStartMs_;         // millis() when the current single step / sequence started
+    Gear shiftFromGear_;            // gear the current single step / sequence started from
 
     BoardInputs*     boardInputs_;         // gear switches In1-In4 (not owned)
 

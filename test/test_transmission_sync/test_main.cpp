@@ -158,6 +158,102 @@ static void test_resync_reset_clears_count() {
     TEST_ASSERT_TRUE(r.step(L, N, 2));
 }
 
+// ── ShiftConfirm (speed-up-gear-change-with-sensor) ─────────────────────────
+
+static const uint32_t CONFIRM_MS = 200;
+static const uint32_t DWELL_TIMEOUT_MS = 2000;
+static const uint32_t PAUSE_TIMEOUT_MS = 1000;
+
+// Feeds a read every `stepMs` from `from` to `to` (inclusive) with the given match; returns
+// the first non-WAIT result and its time in *atMs (or WAIT / to+1 if none).
+static ShiftConfirmResult runReads(ShiftConfirm& c, uint32_t startMs, uint32_t from, uint32_t to,
+                                   uint32_t stepMs, bool match, uint32_t timeoutMs,
+                                   uint32_t* atMs) {
+    for (uint32_t t = from; t <= to; t += stepMs) {
+        ShiftConfirmResult r = c.step(t, startMs, match, CONFIRM_MS, timeoutMs);
+        if (r != ShiftConfirmResult::WAIT) { *atMs = t; return r; }
+    }
+    *atMs = to + 1;
+    return ShiftConfirmResult::WAIT;
+}
+
+void test_confirm_exactly_at_window() {
+    ShiftConfirm c;
+    uint32_t start = 1000, at = 0;
+    // Match from the first read: CONFIRMED exactly 200 ms after it, not before.
+    ShiftConfirmResult r = runReads(c, start, start, start + DWELL_TIMEOUT_MS, 10, true,
+                                    DWELL_TIMEOUT_MS, &at);
+    TEST_ASSERT_EQUAL(ShiftConfirmResult::CONFIRMED, r);
+    TEST_ASSERT_EQUAL_UINT32(start + CONFIRM_MS, at);
+}
+
+void test_confirm_window_from_first_matching_read() {
+    ShiftConfirm c;
+    uint32_t start = 0;
+    TEST_ASSERT_EQUAL(ShiftConfirmResult::WAIT, c.step(100, start, false, CONFIRM_MS, DWELL_TIMEOUT_MS));
+    TEST_ASSERT_EQUAL(ShiftConfirmResult::WAIT, c.step(500, start, true, CONFIRM_MS, DWELL_TIMEOUT_MS));
+    TEST_ASSERT_EQUAL(ShiftConfirmResult::WAIT, c.step(699, start, true, CONFIRM_MS, DWELL_TIMEOUT_MS));
+    TEST_ASSERT_EQUAL(ShiftConfirmResult::CONFIRMED, c.step(700, start, true, CONFIRM_MS, DWELL_TIMEOUT_MS));
+}
+
+void test_confirm_mismatch_restarts_window() {
+    ShiftConfirm c;
+    uint32_t start = 0, at = 0;
+    TEST_ASSERT_EQUAL(ShiftConfirmResult::WAIT, c.step(0, start, true, CONFIRM_MS, DWELL_TIMEOUT_MS));
+    TEST_ASSERT_EQUAL(ShiftConfirmResult::WAIT, c.step(100, start, true, CONFIRM_MS, DWELL_TIMEOUT_MS));
+    // Mismatch (other gear or UNKNOWN) at 150 ms restarts the window.
+    TEST_ASSERT_EQUAL(ShiftConfirmResult::WAIT, c.step(150, start, false, CONFIRM_MS, DWELL_TIMEOUT_MS));
+    TEST_ASSERT_FALSE(c.armed);
+    // 200 ms after the original start is no longer enough.
+    ShiftConfirmResult r = runReads(c, start, 200, DWELL_TIMEOUT_MS, 50, true, DWELL_TIMEOUT_MS, &at);
+    TEST_ASSERT_EQUAL(ShiftConfirmResult::CONFIRMED, r);
+    TEST_ASSERT_EQUAL_UINT32(400, at);   // window from the read at 200 ms
+}
+
+void test_confirm_timeout_dwell_without_match() {
+    ShiftConfirm c;
+    uint32_t start = 5000, at = 0;
+    ShiftConfirmResult r = runReads(c, start, start, start + 3000, 100, false, DWELL_TIMEOUT_MS, &at);
+    TEST_ASSERT_EQUAL(ShiftConfirmResult::TIMEOUT, r);
+    TEST_ASSERT_EQUAL_UINT32(start + DWELL_TIMEOUT_MS, at);
+}
+
+void test_confirm_timeout_pause_without_match() {
+    ShiftConfirm c;
+    uint32_t start = 5000, at = 0;
+    ShiftConfirmResult r = runReads(c, start, start, start + 3000, 100, false, PAUSE_TIMEOUT_MS, &at);
+    TEST_ASSERT_EQUAL(ShiftConfirmResult::TIMEOUT, r);
+    TEST_ASSERT_EQUAL_UINT32(start + PAUSE_TIMEOUT_MS, at);
+}
+
+void test_confirm_late_match_still_times_out() {
+    ShiftConfirm c;
+    uint32_t start = 0;
+    for (uint32_t t = 0; t < 1900; t += 100) {
+        TEST_ASSERT_EQUAL(ShiftConfirmResult::WAIT, c.step(t, start, false, CONFIRM_MS, DWELL_TIMEOUT_MS));
+    }
+    TEST_ASSERT_EQUAL(ShiftConfirmResult::WAIT, c.step(1900, start, true, CONFIRM_MS, DWELL_TIMEOUT_MS));
+    TEST_ASSERT_EQUAL(ShiftConfirmResult::TIMEOUT, c.step(2000, start, true, CONFIRM_MS, DWELL_TIMEOUT_MS));
+}
+
+void test_confirm_millis_wrap() {
+    ShiftConfirm c;
+    uint32_t start = 0xFFFFFF00u;   // wraps 256 ms later
+    TEST_ASSERT_EQUAL(ShiftConfirmResult::WAIT, c.step(start + 50, start, true, CONFIRM_MS, DWELL_TIMEOUT_MS));
+    TEST_ASSERT_EQUAL(ShiftConfirmResult::WAIT, c.step(start + 249, start, true, CONFIRM_MS, DWELL_TIMEOUT_MS));
+    TEST_ASSERT_EQUAL(ShiftConfirmResult::CONFIRMED, c.step(start + 250, start, true, CONFIRM_MS, DWELL_TIMEOUT_MS));
+}
+
+void test_confirm_reset_clears_window() {
+    ShiftConfirm c;
+    c.step(0, 0, true, CONFIRM_MS, DWELL_TIMEOUT_MS);
+    c.reset();
+    TEST_ASSERT_FALSE(c.armed);
+    // New wait starting at 1000: the old window (from 0) must not count.
+    TEST_ASSERT_EQUAL(ShiftConfirmResult::WAIT, c.step(1000, 1000, true, CONFIRM_MS, DWELL_TIMEOUT_MS));
+    TEST_ASSERT_EQUAL(ShiftConfirmResult::CONFIRMED, c.step(1200, 1000, true, CONFIRM_MS, DWELL_TIMEOUT_MS));
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_sensor_wins_over_valid_nvs);
@@ -174,5 +270,13 @@ int main(int, char**) {
     RUN_TEST(test_resync_restarts_on_different_gear);
     RUN_TEST(test_resync_never_when_sensor_matches);
     RUN_TEST(test_resync_reset_clears_count);
+    RUN_TEST(test_confirm_exactly_at_window);
+    RUN_TEST(test_confirm_window_from_first_matching_read);
+    RUN_TEST(test_confirm_mismatch_restarts_window);
+    RUN_TEST(test_confirm_timeout_dwell_without_match);
+    RUN_TEST(test_confirm_timeout_pause_without_match);
+    RUN_TEST(test_confirm_late_match_still_times_out);
+    RUN_TEST(test_confirm_millis_wrap);
+    RUN_TEST(test_confirm_reset_clears_window);
     return UNITY_END();
 }
