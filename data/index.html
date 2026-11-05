@@ -498,6 +498,7 @@
         }
         .relay-btn:hover:not(:disabled) { background: var(--accent); transform: translateY(-2px); }
         .relay-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        #steer-angle-input:disabled, #steer-angle-go:disabled, #steer-angle-zero:disabled { opacity: 0.5; cursor: not-allowed; }
         .relay-btn.active { background: color-mix(in srgb, var(--success) 40%, var(--card)); border-color: var(--success); }
         .relay-btn-name { font-size: 1.25em; line-height: 1.15; }
         .relay-btn-desc { font-size: 0.8em; font-weight: normal; color: var(--muted-foreground); line-height: 1.3; }
@@ -909,10 +910,22 @@
                 </div>
                 <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 16px; font-size: 0.85em; color: var(--muted-foreground);">
                     <span data-i18n="lbl_jog_speed">Jog&nbsp;speed</span>
-                    <input type="range" min="140" max="255" value="180" id="steer-jog-speed" style="flex:1; height: 28px;"
+                    <input type="range" min="80" max="255" value="120" id="steer-jog-speed" style="flex:1; height: 28px;"
                            oninput="document.getElementById('steer-jog-speed-val').textContent = this.value">
-                    <span id="steer-jog-speed-val" style="color:var(--foreground); min-width:2.2em; text-align:right;">180</span>
+                    <span id="steer-jog-speed-val" style="color:var(--foreground); min-width:2.2em; text-align:right;">120</span>
                 </div>
+                <!-- Exact target angle (steer_angle, degrees): closed loop, needs web control and Position mode -->
+                <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 4px; font-size: 0.85em; color: var(--muted-foreground);">
+                    <label for="steer-angle-input" data-i18n="lbl_steer_target_angle">Target angle, °</label>
+                    <input type="number" id="steer-angle-input" step="0.1" value="0" inputmode="decimal"
+                           style="flex:1; min-width:0; padding:10px 8px; border-radius:6px; border:1px solid var(--border); background:var(--input, var(--secondary)); color:var(--foreground); font-size:1em;"
+                           onkeydown="if (event.key === 'Enter') steerAngleGo()">
+                    <button id="steer-angle-go" onclick="steerAngleGo()" data-i18n="btn_steer_angle_go" style="padding:12px 14px; border-radius:6px; border:none; background:var(--primary, var(--accent)); color:var(--primary-foreground, var(--foreground)); cursor:pointer;">Go</button>
+                    <button id="steer-angle-zero" onclick="steerAngleZero()" data-i18n="btn_steer_angle_zero" style="padding:12px 14px; border-radius:6px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">0°</button>
+                </div>
+                <div data-i18n="steer_angle_hint" style="margin-bottom: 4px; font-size: 0.75em; color: var(--muted-foreground);">Steering drives to the target angle within about 0.3°; one Nudge ≈ 0.4°</div>
+                <div id="steer-angle-lock-hint" style="display: none; margin-bottom: 8px; font-size: 0.8em; color: var(--warning);"></div>
+                <div style="margin-bottom: 12px;"></div>
                 <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 8px;">
                     <button onclick="steerCapture('steer_cal_left')" data-i18n="btn_set_left" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Set Left</button>
                     <button onclick="steerCapture('steer_cal_right')" data-i18n="btn_set_right" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Set Right</button>
@@ -1381,6 +1394,12 @@
                 btn_nudge_left: '◂ Nudge',
                 btn_nudge_right: 'Nudge ▸',
                 lbl_jog_speed: 'Jog speed',
+                lbl_steer_target_angle: 'Target angle, °',
+                btn_steer_angle_go: 'Go',
+                btn_steer_angle_zero: '0°',
+                steer_angle_hint: 'Steering drives to the target angle within about 0.3°; one Nudge ≈ 0.4°',
+                steer_angle_need_web: 'Target angle needs web control (Take Control in Manual Control).',
+                invalid_steer_angle: 'Enter an angle in degrees',
                 btn_set_left: 'Set Left',
                 btn_set_right: 'Set Right',
                 btn_steer_zero: 'Set sensor zero',
@@ -1803,6 +1822,12 @@
                 btn_nudge_left: '◂ Підштовхнути',
                 btn_nudge_right: 'Підштовхнути ▸',
                 lbl_jog_speed: 'Швидкість провороту',
+                lbl_steer_target_angle: 'Кут, °',
+                btn_steer_angle_go: 'Перейти',
+                btn_steer_angle_zero: '0°',
+                steer_angle_hint: 'Кермо доїжджає до заданого кута з точністю близько 0,3°; один Nudge ≈ 0,4°',
+                steer_angle_need_web: 'Для заданого кута потрібне веб-керування («Взяти керування» в Ручному керуванні).',
+                invalid_steer_angle: 'Введіть кут у градусах',
                 btn_set_left: 'Задати ліво',
                 btn_set_right: 'Задати право',
                 btn_steer_zero: 'Задати нуль датчика',
@@ -2331,7 +2356,11 @@
                 // Steering calibration status
                 if (data.message && (data.message.includes('Steering left limit') ||
                     data.message.includes('Steering right limit') || data.message.includes('Capture ') ||
-                    data.message.startsWith('Sensor zero') || data.message.startsWith('Jog'))) {
+                    data.message.startsWith('Sensor zero') || data.message.startsWith('Jog') ||
+                    (Date.now() < steerAngleReplyUntil && (data.message.startsWith('Steering') ||
+                     data.message.startsWith('Invalid steering') || data.message.startsWith('MAVLink control'))))) {
+                    if (data.message.startsWith('Steering') || data.message.startsWith('Invalid steering') ||
+                        data.message.startsWith('MAVLink control')) steerAngleReplyUntil = 0;
                     steerCenterStatus(data.success ? data.message : t('error_prefix') + data.message,
                                       data.success ? 'var(--success)' : 'var(--danger)');
                 }
@@ -2862,6 +2891,26 @@
             document.getElementById('steer-test-left').disabled = !steerEnabled;
             document.getElementById('steer-test-center').disabled = !steerEnabled;
             document.getElementById('steer-test-right').disabled = !steerEnabled;
+            // Exact target angle (Calibration card): same conditions as the percent slider
+            ['steer-angle-input', 'steer-angle-go', 'steer-angle-zero'].forEach((id) => {
+                const el = document.getElementById(id);
+                if (el) el.disabled = !steerEnabled;
+            });
+            {
+                const lim = steerAngleLimits();
+                const inp = document.getElementById('steer-angle-input');
+                if (inp) {
+                    if (lim.left !== null) inp.min = lim.left; else inp.removeAttribute('min');
+                    if (lim.right !== null) inp.max = lim.right; else inp.removeAttribute('max');
+                }
+            }
+            const angleLockHint = document.getElementById('steer-angle-lock-hint');
+            if (angleLockHint) {
+                const msg = steerLocked ? t(lastSteerMode === 'rate' ? 'steer_lock_rate' : 'steer_lock_blocked')
+                          : (!controlsEnabled ? t('steer_angle_need_web') : '');
+                angleLockHint.textContent = msg;
+                angleLockHint.style.display = msg ? 'block' : 'none';
+            }
             const lockHint = document.getElementById('steer-lock-hint');
             if (lockHint) {
                 lockHint.textContent = steerLocked ? t(lastSteerMode === 'rate' ? 'steer_lock_rate' : 'steer_lock_blocked') : '';
@@ -3663,12 +3712,46 @@
         let steerJogTimer = null;
         function steerJogSpeed() {
             const el = document.getElementById('steer-jog-speed');
-            return el ? parseInt(el.value, 10) : 180;
+            return el ? parseInt(el.value, 10) : 120;
         }
         function steerJogSend(dir) {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ cmd: 'steer_jog', value: dir * steerJogSpeed() }));
             }
+        }
+        // Exact target angle: the firmware converts degrees to 0.1° and clamps to the captured
+        // limits (steer_angle). Replies arriving shortly after go to the calibration status line.
+        let steerAngleReplyUntil = 0;
+        function steerAngleLimits() {
+            const num = (id) => {
+                const el = document.querySelector('[data-bind="' + id + '"]');
+                const v = el ? parseFloat(el.textContent) : NaN;
+                return isFinite(v) ? v : null;
+            };
+            return { left: num('steer-left-cur'), right: num('steer-right-cur') };
+        }
+        function steerAngleSend(deg) {
+            if (!(ws && ws.readyState === WebSocket.OPEN)) return;
+            steerAngleReplyUntil = Date.now() + 2000;
+            ws.send(JSON.stringify({ cmd: 'steer_angle', value: deg }));
+        }
+        function steerAngleGo() {
+            const el = document.getElementById('steer-angle-input');
+            if (!el || el.disabled) return;
+            let deg = parseFloat(String(el.value).replace(',', '.'));
+            if (!isFinite(deg)) { steerCenterStatus(t('invalid_steer_angle'), 'var(--danger)'); return; }
+            const lim = steerAngleLimits();   // clamp in the UI too, so the field shows what is sent
+            if (lim.left !== null && deg < lim.left) deg = lim.left;
+            if (lim.right !== null && deg > lim.right) deg = lim.right;
+            deg = Math.round(deg * 10) / 10;
+            el.value = deg.toFixed(1);
+            steerAngleSend(deg);
+        }
+        function steerAngleZero() {
+            const el = document.getElementById('steer-angle-input');
+            if (!el || el.disabled) return;
+            el.value = '0.0';
+            steerAngleSend(0);
         }
         function steerNudge(dir) {
             if (ws && ws.readyState === WebSocket.OPEN) {

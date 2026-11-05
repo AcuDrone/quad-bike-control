@@ -4,13 +4,14 @@
 #include <Arduino.h>
 #include "IMotorDriver.h"
 #include "VescProtocol.h"
+#include "Constants.h"
 
 /**
  * @brief IMotorDriver backed by a Flipsky 75200 VESC over a dedicated UART.
  *
  * `setSpeed(-255..+255)` maps to COMM_SET_DUTY (duty = speed/255, clamped
  * -1..+1); `stop()` sends zero duty (coast). `poll()` issues COMM_GET_VALUES at
- * ~STEER_VESC_TELEM_MS and pumps the UART receiver.
+ * ~STEER_VESC_TELEM_MS (setTelemetryPeriodMs() changes it) and pumps the UART receiver.
  *
  * The receiver is fully NON-BLOCKING: `poll()` only consumes bytes already
  * buffered by the UART (a byte-pump state machine) and never busy-waits on
@@ -37,6 +38,9 @@ public:
     float fetTempC() const override { return values_.fetTempC; }
     float inputVoltageV() const override { return values_.inputVoltageV; }
     uint8_t faultCode() const override { return values_.faultCode; }
+    int16_t lastSpeed() const override { return lastSpeed_; }
+    /** @brief COMM_GET_VALUES period: STEER_VESC_TELEM_MS normally, STEER_DIAG_VESC_TELEM_MS in USB diag mode */
+    void setTelemetryPeriodMs(uint32_t ms) override { telemPeriodMs_ = ms ? ms : STEER_VESC_TELEM_MS; }
 
 private:
     void sendGetValues();
@@ -49,6 +53,7 @@ private:
     // Command state
     int16_t lastSpeed_;
     uint32_t lastRequestTime_;
+    uint32_t telemPeriodMs_;
 
     // Telemetry state
     VescProtocol::Values values_;

@@ -465,6 +465,8 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
         processGearCommand(cmd.strValue, webPortal);
     } else if (cmd.cmd == "set_steering") {
         processSteeringCommand(cmd.floatValue, webPortal);
+    } else if (cmd.cmd == "steer_angle") {
+        processSteerAngleCommand(cmd.floatValue, webPortal);
     } else if (cmd.cmd == "set_throttle") {
         processThrottleCommand(cmd.floatValue, webPortal);
     } else if (cmd.cmd == "set_brake") {
@@ -713,6 +715,10 @@ void VehicleController::processGearCommand(const String& gearStr, WebPortal& web
 }
 
 void VehicleController::processSteeringCommand(float value, WebPortal& webPortal) {
+    if (steering_.isDiagLocked()) {
+        webPortal.sendResponse(false, "Steering is held by the USB diagnostics console — send \"diag off\" first");
+        return;
+    }
     if (!steering_.isSensorOk()) {
         // Defence in depth: the web UI locks the slider while steer_mode != position.
         webPortal.sendResponse(false, "Steering rejected: no steering sensor — use Jog/Nudge");
@@ -723,6 +729,28 @@ void VehicleController::processSteeringCommand(float value, WebPortal& webPortal
         return;
     }
     webPortal.sendResponse(true, "Steering set");
+}
+
+void VehicleController::processSteerAngleCommand(float deg, WebPortal& webPortal) {
+    // Same gating as processSteeringCommand() (web control is checked by the caller).
+    if (steering_.isDiagLocked()) {
+        webPortal.sendResponse(false, "Steering is held by the USB diagnostics console — send \"diag off\" first");
+        return;
+    }
+    if (!steering_.isSensorOk()) {
+        // Defence in depth: the web UI locks the angle input while steer_mode != position.
+        webPortal.sendResponse(false, "Steering rejected: no steering sensor — use Jog/Nudge");
+        return;
+    }
+    if (!isfinite(deg)) {
+        webPortal.sendResponse(false, "Invalid steering angle");
+        return;
+    }
+    if (!steering_.setSteeringAngleDeg(deg)) {
+        webPortal.sendResponse(false, "Steering rejected (not calibrated or sensor fault)");
+        return;
+    }
+    webPortal.sendResponse(true, "Steering angle set: " + String(deg, 1) + "°");
 }
 
 bool VehicleController::shouldClipThrottle() const {
@@ -1372,6 +1400,10 @@ void VehicleController::processBoostCommand(bool on, WebPortal& webPortal) {
 }
 
 void VehicleController::processSteerCalCommand(const String& which, WebPortal& webPortal) {
+    if (steering_.isDiagLocked()) {
+        webPortal.sendResponse(false, "Steering is held by the USB diagnostics console — send \"diag off\" first");
+        return;
+    }
     if (which == "steer_cal_center") {
         // The center is the steering sensor's own stored zero: there is no center capture.
         webPortal.sendResponse(false,
@@ -1407,6 +1439,10 @@ void VehicleController::processSteerCalCommand(const String& which, WebPortal& w
 }
 
 void VehicleController::processSteerZeroCommand(WebPortal& webPortal) {
+    if (steering_.isDiagLocked()) {
+        webPortal.sendResponse(false, "Steering is held by the USB diagnostics console — send \"diag off\" first");
+        return;
+    }
     if (!steering_.requestSensorZero()) {
         const char* why = steering_.getZeroRefusal();
         webPortal.sendResponse(false, "Sensor zero refused: " + String(why ? why : "unknown"));
@@ -1417,6 +1453,10 @@ void VehicleController::processSteerZeroCommand(WebPortal& webPortal) {
 }
 
 void VehicleController::processSteerJogCommand(float value, WebPortal& webPortal) {
+    if (steering_.isDiagLocked()) {
+        webPortal.sendResponse(false, "Steering is held by the USB diagnostics console — send \"diag off\" first");
+        return;
+    }
     // value encodes direction and speed: sign = direction, |value| = PWM duty.
     // |value| <= 1 (legacy -1/0/1 form) uses the default jog duty.
     int8_t direction = (value > 0.0f) ? 1 : (value < 0.0f) ? -1 : 0;
@@ -1427,6 +1467,10 @@ void VehicleController::processSteerJogCommand(float value, WebPortal& webPortal
 }
 
 void VehicleController::processSteerNudgeCommand(int8_t direction, WebPortal& webPortal) {
+    if (steering_.isDiagLocked()) {
+        webPortal.sendResponse(false, "Steering is held by the USB diagnostics console — send \"diag off\" first");
+        return;
+    }
     if (direction == 0) {
         webPortal.sendResponse(false, "Nudge needs a direction");
         return;

@@ -6,3 +6,4 @@
 .vscode/ipch
 __pycache__/
 *.pyc
+diag-logs/

@@ -535,6 +535,13 @@ private:
     void processSteeringCommand(float value, WebPortal& webPortal);
 
     /**
+     * @brief Process exact steering angle command (steer_angle, web control only)
+     * @param deg Target angle in degrees (+ = right), clamped to the captured limits
+     * @param webPortal Reference to web portal for sending responses
+     */
+    void processSteerAngleCommand(float deg, WebPortal& webPortal);
+
+    /**
      * @brief Process throttle command
      * @param value Throttle percentage (0 to 100)
      * @param webPortal Reference to web portal for sending responses
