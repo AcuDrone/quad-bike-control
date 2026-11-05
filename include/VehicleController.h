@@ -265,6 +265,11 @@ public:
     float getSpeedLimitFloorPct() const { return limiterFloorPct_; }
 
     /**
+     * @brief Speed-limiter ceiling slew in use (%/s, both directions), NVS "speed"/thr_slew
+     */
+    float getSpeedLimitSlewPctS() const { return limiterSlewPctS_; }
+
+    /**
      * @brief Live saturation: ceiling at the floor while the speed stays more than
      * SPEED_LIMIT_SAT_MARGIN_MS above the limit, continuously for SPEED_LIMIT_SAT_HOLD_MS.
      */
@@ -454,6 +459,7 @@ private:
     SpeedLimiterState limiter_;     // applied ceiling (%, 100 = inactive), integral trim, primed
     uint32_t limiterLastMs_;        // millis() of the last limiter evaluation (0 = first call)
     float    limiterFloorPct_;      // floor in use (%), from NVS "speed"/thr_floor or the default
+    float    limiterSlewPctS_;      // ceiling slew in use (%/s), from NVS "speed"/thr_slew or the default
 
     // Saturation indicator (web console only — no log line, no MAVLink message)
     uint32_t satSinceMs_;           // millis() the raw condition started holding (0 = not holding)
@@ -660,16 +666,18 @@ private:
 
     /**
      * @brief Speed-sensor calibration commands (`speed_cal_ppr`, `speed_cal_circ`) and the
-     * speed-limiter floor (`set_speed_limit_floor`).
+     * speed-limiter floor (`set_speed_limit_floor`) and throttle rate (`set_speed_limit_slew`).
      * Accepted regardless of the active input source, like the other calibration commands.
      * There is deliberately no limiter CEILING command: the ceiling is the autopilot's alone.
-     * The floor is the one limiter setting: it shapes how the limit is enforced and never
-     * imposes a limit by itself.
+     * The floor and the throttle rate are the limiter settings: they shape how the limit is
+     * enforced and never impose a limit by themselves.
      */
     void processSpeedCalPprCommand(float value, WebPortal& webPortal);
     void processSpeedCalCircCommand(float value, WebPortal& webPortal);
     /** @brief Validate (NaN, 0–20 %), persist to NVS "speed"/thr_floor, then apply in RAM. */
     void processSetSpeedLimitFloorCommand(float value, WebPortal& webPortal);
+    /** @brief Validate (NaN, 10–200 %/s), persist to NVS "speed"/thr_slew, then apply in RAM. */
+    void processSetSpeedLimitSlewCommand(float value, WebPortal& webPortal);
 
     /**
      * @brief Steering speed-scaling commands (`set_steer_sca_base`, `set_test_speed`).
@@ -721,7 +729,7 @@ private:
      * the slew), so the throttle keeps closing toward the floor; below the limit it rises at
      * Ki × deficit, capped at SPEED_LIMIT_TRIM_RISE_PCT_S, so the speed settles AT the limit
      * instead of drooping inside the band. The ceiling clamp(taper + trim, floor, 100) is then
-     * slew-limited at SPEED_LIMIT_CEILING_SLEW_PCT_S (dt capped at 1 s), so it never steps —
+     * slew-limited at the per-vehicle slew (limiterSlewPctS_, dt capped at 1 s), so it never steps —
      * it reaches the floor (default 0 % = calibrated idle) only gradually.
      *
      * Anti-windup: the trim is clamped to [0, 100 − floor]; it rises only while the limiter

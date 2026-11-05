@@ -554,9 +554,10 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // Capacity headroom: ~80 top-level fields (incl. 4 steering-VESC fields, 20 steering
     // angle-sensor / mode fields (steer_mode: one more slot, static token stored by pointer;
     // steer_sensor_inv: one bool slot, ~25 B of JSON), wheel_lock_fitted, the relay_test bitfield, the
-    // 5 rail / board-I/O fields, the 16 hall-speed / limiter / distance fields (incl. speed_limit_floor /
+    // 5 rail / board-I/O fields, the 17 hall-speed / limiter / distance fields (incl. speed_limit_floor /
     // speed_limit_sat / speed_limit_sat_held: 3 slots + one ~4 B copied string; speed_pulse_total: one
-    // more slot, key stored by pointer, ~30 B of JSON) and the
+    // more slot, key stored by pointer, ~30 B of JSON; speed_limit_slew since 1.5.12: one slot + a
+    // ~6 B copied string) and the
     // 4 steering speed-scaling fields, steer_vin / steer_vin_low / ecu_voltage_low,
     // wifi_ssid / wifi_ip) + a 16-element
     // array + the nested probe / po / bm / dtc / gearDefaults objects, plus copied
@@ -639,6 +640,7 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["speed_limit_kmh"] = serialized(String(telemetry.speed_limit_ms * MS_TO_KMH, 1));
     doc["speed_limit_ceil"] = serialized(String(telemetry.speed_limit_ceil, 0));
     doc["speed_limit_floor"] = serialized(String(telemetry.speed_limit_floor, 1));
+    doc["speed_limit_slew"] = serialized(String(telemetry.speed_limit_slew, 1));
     doc["speed_limit_sat"] = telemetry.speed_limit_sat;
     doc["speed_limit_sat_held"] = telemetry.speed_limit_sat_held;
     // Steering speed scaling. These four stay in m/s, NOT km/h: the base is the same quantity

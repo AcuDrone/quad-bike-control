@@ -53,6 +53,7 @@ VehicleController::VehicleController(SteeringController& steering,
       limiter_(),
       limiterLastMs_(0),
       limiterFloorPct_(SPEED_LIMIT_FLOOR_DEFAULT_PCT),
+      limiterSlewPctS_(SPEED_LIMIT_SLEW_DEFAULT_PCT_S),
       satSinceMs_(0),
       satActive_(false),
       satClearedMs_(0),
@@ -164,6 +165,7 @@ bool VehicleController::initCAN() {
     // the default; NaN or anything outside 0–20 % is ignored (and never rewritten).
     if (prefs.begin("speed", true)) {
         float floorPct = prefs.getFloat(SPEED_LIMIT_FLOOR_NVS_KEY, SPEED_LIMIT_FLOOR_DEFAULT_PCT);
+        float slewPctS = prefs.getFloat(SPEED_LIMIT_SLEW_NVS_KEY, SPEED_LIMIT_SLEW_DEFAULT_PCT_S);
         prefs.end();
         if (isnan(floorPct) || floorPct < SPEED_LIMIT_FLOOR_MIN_PCT ||
             floorPct > SPEED_LIMIT_FLOOR_MAX_PCT) {
@@ -173,8 +175,18 @@ bool VehicleController::initCAN() {
             floorPct = SPEED_LIMIT_FLOOR_DEFAULT_PCT;
         }
         limiterFloorPct_ = floorPct;
+        // The ceiling slew, same rules: absent = default, NaN or outside 10–200 %/s ignored.
+        if (isnan(slewPctS) || slewPctS < SPEED_LIMIT_SLEW_MIN_PCT_S ||
+            slewPctS > SPEED_LIMIT_SLEW_MAX_PCT_S) {
+            Debug::printfFeature(DebugFeature::VEHICLE,
+                "[SPEED] Stored limiter slew %.1f out of range (%.0f-%.0f %%/s) — ignored\n",
+                slewPctS, SPEED_LIMIT_SLEW_MIN_PCT_S, SPEED_LIMIT_SLEW_MAX_PCT_S);
+            slewPctS = SPEED_LIMIT_SLEW_DEFAULT_PCT_S;
+        }
+        limiterSlewPctS_ = slewPctS;
     }
-    Debug::printfFeature(DebugFeature::VEHICLE, "[SPEED] Limiter floor: %.1f %%\n", limiterFloorPct_);
+    Debug::printfFeature(DebugFeature::VEHICLE, "[SPEED] Limiter floor: %.1f %%, slew: %.1f %%/s\n",
+                         limiterFloorPct_, limiterSlewPctS_);
 
     bool result = canController_.begin();
     canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM);
@@ -437,6 +449,9 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
         return;
     } else if (cmd.cmd == "set_speed_limit_floor") {
         processSetSpeedLimitFloorCommand(cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_speed_limit_slew") {
+        processSetSpeedLimitSlewCommand(cmd.floatValue, webPortal);
         return;
     } else if (cmd.cmd == "set_steer_sca_base") {
         processSetSteerScaBaseCommand(cmd.floatValue, webPortal);
@@ -862,7 +877,7 @@ float VehicleController::applySpeedLimit(float throttlePct) {
     params.floorPct = limiterFloorPct_;
     params.kiPctSPerMs = SPEED_LIMIT_TRIM_KI_PCT_S_PER_MS;
     params.risePctS = SPEED_LIMIT_TRIM_RISE_PCT_S;
-    params.slewPctS = SPEED_LIMIT_CEILING_SLEW_PCT_S;
+    params.slewPctS = limiterSlewPctS_;   // also caps the trim's fall (step ≤ slew), intended
     params.bindMarginPct = SPEED_LIMIT_BIND_MARGIN_PCT;
 
     float dt = 0.0f;
@@ -1077,6 +1092,32 @@ void VehicleController::processSetSpeedLimitFloorCommand(float value, WebPortal&
     limiterFloorPct_ = value;   // the law re-clamps trim and ceiling on its next evaluation
     webPortal.sendResponse(true, "Speed-limiter floor set to " + String(value, 1) + " %");
     Debug::printfFeature(DebugFeature::VEHICLE, "[SPEED] Limiter floor set to %.1f %%\n", value);
+}
+
+void VehicleController::processSetSpeedLimitSlewCommand(float value, WebPortal& webPortal) {
+    if (isnan(value) || value < SPEED_LIMIT_SLEW_MIN_PCT_S || value > SPEED_LIMIT_SLEW_MAX_PCT_S) {
+        webPortal.sendResponse(false, "Speed-limiter throttle rate out of range (" +
+                                      String(SPEED_LIMIT_SLEW_MIN_PCT_S, 0) + "-" +
+                                      String(SPEED_LIMIT_SLEW_MAX_PCT_S, 0) + " %/s)");
+        return;
+    }
+
+    // Persist first, exactly like the floor: RAM only changes once NVS holds the new value.
+    // One key in the shared "speed" namespace — never clear() it.
+    Preferences prefs;
+    bool ok = false;
+    if (prefs.begin("speed", false)) {
+        ok = prefs.putFloat(SPEED_LIMIT_SLEW_NVS_KEY, value) == sizeof(float);
+        prefs.end();
+    }
+    if (!ok) {
+        webPortal.sendResponse(false, "Failed to save the speed-limiter throttle rate");
+        return;
+    }
+
+    limiterSlewPctS_ = value;   // used from the law's next evaluation
+    webPortal.sendResponse(true, "Speed-limiter throttle rate set to " + String(value, 1) + " %/s");
+    Debug::printfFeature(DebugFeature::VEHICLE, "[SPEED] Limiter slew set to %.1f %%/s\n", value);
 }
 
 void VehicleController::processSetSteerScaBaseCommand(float value, WebPortal& webPortal) {

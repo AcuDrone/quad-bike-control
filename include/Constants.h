@@ -611,7 +611,10 @@ struct ServoChannelConfig {
 //    authority that holds the limit — no proportional droop, whatever the engine, CVT or grade.
 //  - The floor defaults to 0 % = the CALIBRATED IDLE position (ThrottleController::percentToUs(0)),
 //    persisted per vehicle (0–20 %). That is not a hard cut: the ceiling only reaches the floor
-//    through the taper, the trim and the 80 %/s slew (100 → 0 takes ≥ 1.25 s), never as a step.
+//    through the taper, the trim and the ceiling slew, never as a step.
+//  - The ceiling slew (both directions) is also persisted per vehicle (10–200 %/s, default 80 %/s:
+//    100 → 0 takes ≥ 1.25 s); lower = gentler closing and return of the throttle. It caps the
+//    trim's fall as well (inside the law), so a gentler slew also slows how fast it can close.
 #define SPEED_LIMIT_TAPER_FRACTION     0.20f  // band = 0.20 × limit — the limiter takes the last fifth
 #define SPEED_LIMIT_TAPER_MIN_MS       0.5f   // m/s - ≈3.5 speed quanta (0.142 m/s); narrower hunts
 #define SPEED_LIMIT_TAPER_MAX_MS       1.4f   // m/s (≈5 km/h) - the old fixed band, proven at road limits
@@ -619,13 +622,16 @@ struct ServoChannelConfig {
 #define SPEED_LIMIT_FLOOR_MIN_PCT      0.0f   // % - accepted floor range (web command / NVS validation)
 #define SPEED_LIMIT_FLOOR_MAX_PCT      20.0f  // % - above this the floor itself becomes a hidden speed floor
 #define SPEED_LIMIT_FLOOR_NVS_KEY      "thr_floor"  // NVS "speed" namespace, float % (owned by VehicleController)
+#define SPEED_LIMIT_SLEW_DEFAULT_PCT_S 80.0f  // %/s - default max ceiling movement (both directions) — no servo snap.
+                                              // Applied to the CEILING, not the demand: the driver's own
+                                              // stick moves are never slowed by the limiter.
+#define SPEED_LIMIT_SLEW_MIN_PCT_S     10.0f  // %/s - accepted slew range (web command / NVS validation)
+#define SPEED_LIMIT_SLEW_MAX_PCT_S     200.0f // %/s - 100 → 0 in 0.5 s; faster is a step in all but name
+#define SPEED_LIMIT_SLEW_NVS_KEY       "thr_slew"   // NVS "speed" namespace, float %/s (owned by VehicleController)
 #define SPEED_LIMIT_TRIM_KI_PCT_S_PER_MS 30.0f // %/s per m/s - 1.4 m/s over takes the trim 100 → 0 in ≈2.4 s
 #define SPEED_LIMIT_TRIM_RISE_PCT_S    10.0f  // %/s - trim recovery cap; far below the slew, never a surge
 #define SPEED_LIMIT_BIND_MARGIN_PCT    1.0f   // % - demand within this of the ceiling = limiter binding
                                               // (the trim only rises while binding: anti-windup)
-#define SPEED_LIMIT_CEILING_SLEW_PCT_S 80.0f // %/s - max ceiling movement (both directions) — no servo snap.
-                                              // Applied to the CEILING, not the demand: the driver's own
-                                              // stick moves are never slowed by the limiter.
 // Saturation indicator (web console only — no serial log line, no MAVLink message): the ceiling is
 // at the floor yet the vehicle stays above the limit, i.e. the floor is too high or it is downhill.
 #define SPEED_LIMIT_SAT_MARGIN_MS      0.3f   // m/s (≈1 km/h, ~2 speed quanta) above the limit to count
