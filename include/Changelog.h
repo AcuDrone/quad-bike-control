@@ -14,6 +14,16 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.15","date":"2026-11-06","uk":[
+"Перемикання передач швидше: очікування в крайньому положенні та пауза між кроками закінчуються, щойно датчик ≈0,2 с стабільно показує потрібну передачу (N→L ≈2,6 с замість ≈6,7 с); без датчика — як раніше (2 с і 1 с), перегазовка/холостий хід тримаються лише на час очікування"
+],"en":[
+"Faster gear changes: the overshoot wait and the pause between steps end as soon as the gear sensor steadily reports the expected gear for ≈0.2 s (N→L ≈2.6 s instead of ≈6.7 s); without the sensor they time out as before (2 s and 1 s), and the RPM boost / idle hold only lasts for the wait"
+]},
+{"version":"1.5.14","date":"2026-11-06","uk":[
+"Передача звіряється з датчиком положення: при старті вона береться з датчика (або зі збереженого стану, якщо датчик мовчить; інакше — один повний крок у нейтраль замість сліпого стрибка), а якщо в спокої датчик ≈1 с стабільно показує іншу передачу — прошивка приймає її; до ініціалізації передача показується як «?» і газ обмежено"
+],"en":[
+"The gear is reconciled with the gear sensor: at start it comes from the sensor (or the saved state if the sensor is silent; otherwise one full step into neutral instead of a blind jump), and when idle the firmware adopts the gear the sensor steadily reports for ≈1 s; until initialised the gear shows as “?” and throttle is capped"
+]},
 {"version":"1.5.13","date":"2026-11-05","uk":[
 "Перегазовку при перемиканні передач можна вимкнути у веб-панелі (картка «Положення передач»); коли вимкнено, газ на час перемикання тримається на холостому ходу"
 ],"en":[

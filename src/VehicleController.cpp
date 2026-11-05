@@ -51,7 +51,6 @@ VehicleController::VehicleController(SteeringController& steering,
       lastPIDThrottleUs_(THROTTLE_DEFAULT_IDLE_US),
       previousIgnitionState_(MavlinkInterface::IgnitionState::OFF),
       lastCommandedGear_(TransmissionController::Gear::GEAR_UNKNOWN),
-      transmissionInitialized_(false),
       lastSpeedLimitWarnMs_(0),
       lastSpeedLimitMs_(NAN),
       lastSpeedLimitLogMs_(0),
@@ -374,12 +373,10 @@ void VehicleController::update() {
     // Sample the 12 V battery on X10 (rate-limited internally)
     updateBatteryMonitor();
 
-    // Restore transmission state once, on first engine-running detection
-    if (!transmissionInitialized_ && isEngineRunning()) {
-        transmissionInitialized_ = true;
-        if (!transmission_.restoreStateIfValid()) {
-            transmission_.setGear(TransmissionController::Gear::GEAR_NEUTRAL);
-        }
+    // Initialise the transmission once, on first engine-running detection (unless a web
+    // gear command already did): sensor, else valid NVS state, else a step into NEUTRAL.
+    if (!transmission_.isInitialised() && isEngineRunning()) {
+        transmission_.initialise();
         Debug::printlnFeature(DebugFeature::VEHICLE, "[VEHICLE] Transmission initialized on engine start");
     }
 
@@ -720,7 +717,7 @@ String VehicleController::getTargetGearString() const {
         case TransmissionController::Gear::GEAR_NEUTRAL: return "N";
         case TransmissionController::Gear::GEAR_LOW: return "L";
         case TransmissionController::Gear::GEAR_HIGH: return "H";
-        default: return "N";
+        default: return "?";   // GEAR_UNKNOWN: not initialised
     }
 }
 
@@ -731,7 +728,7 @@ String VehicleController::getFromGearString() const {
         case TransmissionController::Gear::GEAR_NEUTRAL: return "N";
         case TransmissionController::Gear::GEAR_LOW: return "L";
         case TransmissionController::Gear::GEAR_HIGH: return "H";
-        default: return "N";
+        default: return "?";   // GEAR_UNKNOWN: not initialised
     }
 }
 
@@ -918,6 +915,13 @@ void VehicleController::processGearCommand(const String& gearStr, WebPortal& web
         return;
     }
 
+    // Allowed with the engine off (gear calibration). An uninitialised transmission is
+    // initialised first, so the shift starts from the real gear / servo position; during the
+    // initialisation step into NEUTRAL setGear() queues the request like any active step.
+    if (!transmission_.isInitialised()) {
+        transmission_.initialise();
+    }
+
     if (transmission_.setGear(targetGear)) {
         Debug::printfFeature(DebugFeature::VEHICLE, "[WEB] Moving %s\n", gearName);
         webPortal.sendResponse(true, "Moving to " + gearName + " gear");
@@ -971,6 +975,8 @@ bool VehicleController::shouldClipThrottle() const {
         return true;
     if (transmission_.getTargetGear() == TransmissionController::Gear::GEAR_NEUTRAL)
         return true;
+    if (transmission_.getTargetGear() == TransmissionController::Gear::GEAR_UNKNOWN)
+        return true;   // not initialised: expected gear unknown
     return false;
 }
 

@@ -599,8 +599,9 @@ struct ServoChannelConfig {
 #define TRANS_GEAR_OVERSHOOT_L_PCT          5.0f
 #define TRANS_GEAR_OVERSHOOT_H_PCT          5.0f
 
-#define TRANS_OVERSHOOT_DWELL_MS            2000    // ms to hold at overshoot position before assuming gear engaged
-#define TRANS_SEQUENCE_STEP_DWELL_MS        1000    // ms to dwell after a step completes before starting the next step
+#define TRANS_OVERSHOOT_DWELL_MS            2000    // ms - overshoot dwell TIMEOUT: ends earlier on sensor confirmation, else gear assumed engaged
+#define TRANS_SEQUENCE_STEP_DWELL_MS        1000    // ms - inter-step pause TIMEOUT: ends earlier when the sensor confirms the completed step
+#define TRANS_DWELL_CONFIRM_MS              200     // ms - sensor must read the expected gear continuously this long to end a dwell / pause early (300–400 if the linkage bounces)
 
 // Default gear positions (percent: 0.0 = 800µs, 100.0 = 2200µs)
 #define TRANS_GEAR_DEFAULT_REVERSE_PCT      40.0f
@@ -613,6 +614,8 @@ struct ServoChannelConfig {
 #define TRANS_GEAR_CHECK_INTERVAL           500        // ms - physical gear verification period
 #define TRANS_GEAR_READ_INTERVAL_MS         100        // ms - GPIO debounce cache for getPhysicalGear()
 #define TRANS_GEAR_READ_RETRY_COUNT         3          // extra snapshot reads while the gear code is UNKNOWN and the servo is idle
+#define TRANS_RESYNC_CONFIRM_CHECKS         2          // consecutive idle checks with the same sensor gear != target before adopting it
+#define TRANS_INIT_SETTLE_MS                1500       // ms - init-step overshoot move from an unknown servo position (max 20 % + 1 % overshoot ≈ 0.75 s at 35 ms/%, doubled)
 
 // ============================================================================
 // BRAKE SYSTEM CONFIGURATION
@@ -899,7 +902,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.13"
+#define FIRMWARE_VERSION "1.5.15"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

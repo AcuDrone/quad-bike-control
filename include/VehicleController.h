@@ -487,8 +487,6 @@ private:
     MavlinkInterface::IgnitionState previousIgnitionState_;  // Track previous state for transition detection
     TransmissionController::Gear lastCommandedGear_;         // Last gear requested via MAVLink (dedup guard)
 
-    bool transmissionInitialized_;  // True after first engine-running restore
-
     uint32_t lastSpeedLimitWarnMs_; // rate limit for the "limiter armed, speed invalid" log
 
     // Limiter ceiling tracking (log on change only)
@@ -846,9 +844,9 @@ private:
     /** @brief End the live saturation (no-limit / fail-open paths); starts the display hold. */
     void clearSpeedLimitSaturation(uint32_t now);
 
-    // Returns true when throttle should be clamped to TRANS_UNKNOWN_GEAR_THROTTLE_MAX.
-    // Clips when gear position is invalid and physical gear is not neutral
-    // (neutral is safe — drivetrain disconnected).
+    // Returns true when throttle should be clamped to TRANS_UNKNOWN_GEAR_THROTTLE_MAX:
+    // while a gear change is active, the expected gear is NEUTRAL, or the transmission is
+    // not initialised (expected gear GEAR_UNKNOWN).
     bool shouldClipThrottle() const;
 };
 

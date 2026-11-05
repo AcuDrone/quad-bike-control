@@ -1,9 +1,16 @@
 #include "TransmissionController.h"
 #include "Debug.h"
 
+// TransmissionLaw.h mirrors the Gear values so the pure logic can be tested natively.
+static_assert((int)TransmissionController::Gear::GEAR_HIGH    == (int)TransGear::GEAR_HIGH,    "gear enum mirror");
+static_assert((int)TransmissionController::Gear::GEAR_LOW     == (int)TransGear::GEAR_LOW,     "gear enum mirror");
+static_assert((int)TransmissionController::Gear::GEAR_NEUTRAL == (int)TransGear::GEAR_NEUTRAL, "gear enum mirror");
+static_assert((int)TransmissionController::Gear::GEAR_REVERSE == (int)TransGear::GEAR_REVERSE, "gear enum mirror");
+static_assert((int)TransmissionController::Gear::GEAR_UNKNOWN == (int)TransGear::GEAR_UNKNOWN, "gear enum mirror");
+
 TransmissionController::TransmissionController()
-    : targetGear_(Gear::GEAR_NEUTRAL)
-    , fromGear_(Gear::GEAR_NEUTRAL)
+    : targetGear_(Gear::GEAR_UNKNOWN)   // not initialised until initialise()
+    , fromGear_(Gear::GEAR_UNKNOWN)
     , gearChangePhase_(GearChangePhase::NONE)
     , finalGearPositionPct_(TRANS_GEAR_DEFAULT_NEUTRAL_PCT)
     , overshootDirection_(1.0f)
@@ -11,6 +18,8 @@ TransmissionController::TransmissionController()
     , settleMs_(TRANS_SERVO_SETTLE_MIN_MS)
     , queuedGear_(Gear::GEAR_UNKNOWN)
     , sequenceStepDwellStart_(0)
+    , shiftStartMs_(0)
+    , shiftFromGear_(Gear::GEAR_UNKNOWN)
     , boardInputs_(nullptr)
     , cachedPhysicalGear_(Gear::GEAR_UNKNOWN)
     , lastGearReadTime_(0)
@@ -20,6 +29,7 @@ TransmissionController::TransmissionController()
     , lastGearCheckTime_(0)
     , lastStatusLogTime_(0)
     , lastGearMismatch_(false)
+    , initStepActive_(false)
     , lastLoggedGear_(Gear::GEAR_UNKNOWN)
     , lastLoggedMoving_(false)
 {
@@ -104,6 +114,7 @@ void TransmissionController::startGearChange(Gear gear) {
     gearChangePhase_ = GearChangePhase::OVERSHOOT;
     settleMs_ = computeSettleMs(getCurrentServoPct(), overshootPct);
     gearPhaseStartTime_ = millis();
+    resync_.reset();
 
     commandServo(overshootPct);
 
@@ -112,9 +123,84 @@ void TransmissionController::startGearChange(Gear gear) {
         getGearName(gear), overshootPct, targetPct, settleMs_);
 }
 
+// Initialisation step into NEUTRAL from an unknown lever / servo position. Same state machine
+// as any step (so the boost PID / shift idle hold apply), but the overshoot direction comes
+// from the NVS hint and the overshoot move uses a fixed settle: the servo has had no pulse, so
+// getCurrentServoPct() is meaningless.
+void TransmissionController::startInitStep(float direction) {
+    const Gear gear = Gear::GEAR_NEUTRAL;
+    float targetPct = getGearPosition(gear);
+    markStateInvalid();   // keep state_gear / state_pct: the hint for the next boot
+
+    overshootDirection_ = (direction >= 0.0f) ? 1.0f : -1.0f;
+    float overshootPct = constrain(targetPct + overshootDirection_ * overshootPcts_[(int)gear], 0.0f, 100.0f);
+
+    fromGear_ = Gear::GEAR_UNKNOWN;
+    targetGear_ = gear;   // initialised from here on; a shift is active
+    finalGearPositionPct_ = targetPct;
+    gearChangePhase_ = GearChangePhase::OVERSHOOT;
+    settleMs_ = TRANS_INIT_SETTLE_MS;
+    gearPhaseStartTime_ = millis();
+    initStepActive_ = true;
+    resync_.reset();
+    shiftFromGear_ = Gear::GEAR_UNKNOWN;
+    shiftStartMs_ = gearPhaseStartTime_;
+
+    commandServo(overshootPct);
+
+    Debug::printfFeature(DebugFeature::TRANSMISSION,
+        "[TRANS] Init step NEUTRAL: overshoot %.1f%% (dir %+.0f) -> final %.1f%% (settle %lums)\n",
+        overshootPct, overshootDirection_, targetPct, settleMs_);
+}
+
+void TransmissionController::initialise() {
+    if (isInitialised()) return;
+
+    Gear nvsGear = Gear::GEAR_UNKNOWN;
+    float nvsPct = NAN;
+    bool nvsValid = false;
+    bool nvsFound = loadState(nvsGear, nvsPct, nvsValid);
+
+    TransInitDecision d = chooseTransmissionInit((TransGear)(int)getPhysicalGear(), gearPositions_,
+                                                 nvsFound, nvsValid, (TransGear)(int)nvsGear, nvsPct);
+    Gear gear = (Gear)(int)d.gear;
+
+    switch (d.source) {
+        case TransInitSource::SENSOR:
+            commandServo(d.pct);
+            targetGear_ = gear;
+            fromGear_ = gear;
+            saveState(gear, getCurrentServoPct(), true);
+            Debug::printfFeature(DebugFeature::TRANSMISSION,
+                "[TRANS] Initialised from sensor: %s\n", getGearName(gear));
+            break;
+        case TransInitSource::NVS:
+            commandServo(d.pct);
+            targetGear_ = gear;
+            fromGear_ = gear;
+            Debug::printfFeature(DebugFeature::TRANSMISSION,
+                "[TRANS] Initialised from NVS: %s at %.1f%%\n", getGearName(gear), d.pct);
+            break;
+        case TransInitSource::STEP_TO_NEUTRAL:
+        default:
+            Debug::printlnFeature(DebugFeature::TRANSMISSION,
+                "[TRANS] Init: sensor unknown, stepping to NEUTRAL");
+            startInitStep(d.direction);
+            break;
+    }
+}
+
 bool TransmissionController::setGear(Gear finalGear) {
     if (finalGear == Gear::GEAR_UNKNOWN) {
         Debug::printlnFeature(DebugFeature::TRANSMISSION, "[TRANS] ERROR: Cannot set UNKNOWN gear");
+        return false;
+    }
+
+    // Not initialised: the current gear is unknown, so there is no step to compute. The
+    // caller initialises first (web) or retries (MAVLink).
+    if (!isInitialised()) {
+        Debug::printfFeature(DebugFeature::TRANSMISSION,
+            "[TRANS] Gear %s refused: transmission not initialised\n", getGearName(finalGear));
         return false;
     }
 
@@ -156,6 +242,8 @@ bool TransmissionController::setGear(Gear finalGear) {
             getGearName(targetGear_), getGearName(finalGear), getGearName(nextStep));
     }
 
+    shiftFromGear_ = targetGear_;
+    shiftStartMs_ = millis();
     startGearChange(nextStep);
     return true;
 }
@@ -482,7 +570,11 @@ TransmissionController::Gear TransmissionController::getPhysicalGear() const {
     // Code decodes to UNKNOWN while the servo is idle: consume the NEXT expander
     // poll instead of issuing back-to-back I2C reads (filters transient bounces
     // without blocking the control loop). At most TRANS_GEAR_READ_RETRY_COUNT deferrals.
+    // Not while a sequence step is queued: the inter-step pause runs in phase NONE and
+    // is ended by sensor confirmation, so a stale cached gear must never stand in for a
+    // fresh reading there (decoded immediately, as during a gear change).
     if (decoded == Gear::GEAR_UNKNOWN && gearChangePhase_ == GearChangePhase::NONE
+        && queuedGear_ == Gear::GEAR_UNKNOWN
         && gearReadRetries_ < TRANS_GEAR_READ_RETRY_COUNT) {
         if ((now - lastGearRetryTime_) >= BOARD_INPUT_POLL_MS) {
             lastGearRetryTime_ = now;
@@ -539,13 +631,31 @@ void TransmissionController::update() {
                 queuedGear_ = Gear::GEAR_UNKNOWN;
                 sequenceStepDwellStart_ = 0;
             } else if (canChangeGear(queuedGear_)) {
-                // Arm dwell on first entry after a step completes
+                // Arm the pause on first entry after a step completes (or after setGear()
+                // re-armed it). It ends once the sensor confirms the completed step's gear
+                // for TRANS_DWELL_CONFIRM_MS, else after TRANS_SEQUENCE_STEP_DWELL_MS.
                 if (sequenceStepDwellStart_ == 0) {
                     sequenceStepDwellStart_ = now;
+                    pauseConfirm_.reset();
                     Debug::printfFeature(DebugFeature::TRANSMISSION,
-                        "[TRANS] Step assumed at %s, dwell %ums before next step\n",
+                        "[TRANS] Step assumed at %s, pause up to %ums before next step\n",
                         getGearName(targetGear_), TRANS_SEQUENCE_STEP_DWELL_MS);
-                } else if (now - sequenceStepDwellStart_ >= TRANS_SEQUENCE_STEP_DWELL_MS) {
+                }
+                ShiftConfirmResult r = pauseConfirm_.step(now, sequenceStepDwellStart_,
+                                                          physicalGear == targetGear_,
+                                                          TRANS_DWELL_CONFIRM_MS,
+                                                          TRANS_SEQUENCE_STEP_DWELL_MS);
+                if (r != ShiftConfirmResult::WAIT) {
+                    uint32_t waited = now - sequenceStepDwellStart_;
+                    if (r == ShiftConfirmResult::CONFIRMED) {
+                        Debug::printfFeature(DebugFeature::TRANSMISSION,
+                            "[TRANS] Step %s confirmed after %lu ms\n",
+                            getGearName(targetGear_), (unsigned long)waited);
+                    } else {
+                        Debug::printfFeature(DebugFeature::TRANSMISSION,
+                            "[TRANS] Step %s pause timeout %lu ms\n",
+                            getGearName(targetGear_), (unsigned long)waited);
+                    }
                     sequenceStepDwellStart_ = 0;
                     Gear nextStep = nextGearToward(targetGear_, queuedGear_);
                     startGearChange(nextStep);
@@ -554,8 +664,8 @@ void TransmissionController::update() {
             return;
         }
 
-        // Check for mismatch when idle
-        if (now - lastGearCheckTime_ >= TRANS_GEAR_CHECK_INTERVAL) {
+        // Check for mismatch when idle (only once the expected gear is known)
+        if (isInitialised() && now - lastGearCheckTime_ >= TRANS_GEAR_CHECK_INTERVAL) {
             lastGearCheckTime_ = now;
             if (physicalGear != Gear::GEAR_UNKNOWN && physicalGear != targetGear_) {
                 if (!lastGearMismatch_) {
@@ -571,6 +681,19 @@ void TransmissionController::update() {
                     lastGearMismatch_ = false;
                 }
             }
+
+            // Resync: the same single sensor gear != target on TRANS_RESYNC_CONFIRM_CHECKS
+            // consecutive checks → adopt it. The servo is not moved.
+            if (resync_.step((TransGear)(int)physicalGear, (TransGear)(int)targetGear_,
+                             TRANS_RESYNC_CONFIRM_CHECKS)) {
+                Debug::printfFeature(DebugFeature::TRANSMISSION,
+                    "[TRANS] Resynced from sensor: target=%s -> %s\n",
+                    getGearName(targetGear_), getGearName(physicalGear));
+                targetGear_ = physicalGear;
+                fromGear_ = physicalGear;
+                saveState(physicalGear, getCurrentServoPct(), true);
+                lastGearMismatch_ = false;
+            }
         }
         return;
     }
@@ -580,6 +703,7 @@ void TransmissionController::update() {
         if (now - gearPhaseStartTime_ >= settleMs_) {
             gearPhaseStartTime_ = now;
             gearChangePhase_ = GearChangePhase::OVERSHOOT_DWELL;
+            dwellConfirm_.reset();
             Debug::printfFeature(DebugFeature::TRANSMISSION,
                 "[TRANS] OVERSHOOT_DWELL: waiting up to %ums for %s\n",
                 TRANS_OVERSHOOT_DWELL_MS, getGearName(targetGear_));
@@ -587,9 +711,24 @@ void TransmissionController::update() {
         return;
     }
 
-    // ── OVERSHOOT_DWELL phase: hold at overshoot for TRANS_OVERSHOOT_DWELL_MS then assume engaged ──
+    // ── OVERSHOOT_DWELL phase: hold at overshoot until the sensor confirms the step's gear
+    //    for TRANS_DWELL_CONFIRM_MS, else TRANS_OVERSHOOT_DWELL_MS (timeout) then assume engaged.
+    //    needsThrottleBoost() is true exactly in this phase, so boost / idle hold follow it. ──
     if (gearChangePhase_ == GearChangePhase::OVERSHOOT_DWELL) {
-        if (now - gearPhaseStartTime_ < TRANS_OVERSHOOT_DWELL_MS) return;
+        ShiftConfirmResult r = dwellConfirm_.step(now, gearPhaseStartTime_,
+                                                  physicalGear == targetGear_,
+                                                  TRANS_DWELL_CONFIRM_MS,
+                                                  TRANS_OVERSHOOT_DWELL_MS);
+        if (r == ShiftConfirmResult::WAIT) return;
+
+        uint32_t waited = now - gearPhaseStartTime_;
+        if (r == ShiftConfirmResult::CONFIRMED) {
+            Debug::printfFeature(DebugFeature::TRANSMISSION,
+                "[TRANS] Dwell confirmed after %lu ms\n", (unsigned long)waited);
+        } else {
+            Debug::printfFeature(DebugFeature::TRANSMISSION,
+                "[TRANS] Dwell timeout %lu ms, gear assumed\n", (unsigned long)waited);
+        }
 
         settleMs_ = computeSettleMs(getCurrentServoPct(), finalGearPositionPct_);
         gearPhaseStartTime_ = now;
@@ -605,12 +744,28 @@ void TransmissionController::update() {
     if (gearChangePhase_ == GearChangePhase::RETURN) {
         if (now - gearPhaseStartTime_ < settleMs_) return;
 
+        if (initStepActive_) {
+            initStepActive_ = false;
+            if (getPhysicalGear() == Gear::GEAR_UNKNOWN) {
+                // No sensor confirmation: NEUTRAL is the working assumption (throttle stays
+                // capped by the NEUTRAL target); the idle resync corrects it later.
+                Debug::printlnFeature(DebugFeature::TRANSMISSION,
+                    "[TRANS] Init: sensor silent, assuming NEUTRAL");
+            }
+        }
         saveState(targetGear_, getCurrentServoPct(), true);
         gearChangePhase_ = GearChangePhase::NONE;
         lastGearMismatch_ = false;
         Debug::printfFeature(DebugFeature::TRANSMISSION,
             "[TRANS] Gear %s engaged at %.1f%%\n",
             getGearName(targetGear_), getCurrentServoPct());
+        // Single step, or the last step of a sequence: log the whole shift's duration.
+        if (queuedGear_ == Gear::GEAR_UNKNOWN || queuedGear_ == targetGear_) {
+            Debug::printfFeature(DebugFeature::TRANSMISSION,
+                "[TRANS] Shift %s -> %s took %lu ms\n",
+                getGearName(shiftFromGear_), getGearName(targetGear_),
+                (unsigned long)(now - shiftStartMs_));
+        }
     }
 }
 
@@ -625,13 +780,20 @@ void TransmissionController::saveState(Gear gear, float positionPct, bool valid)
     prefs.end();
 }
 
+void TransmissionController::markStateInvalid() {
+    Preferences prefs;
+    if (!prefs.begin("transmission", false)) return;
+    prefs.putBool("state_valid", false);
+    prefs.end();
+}
+
 bool TransmissionController::loadState(Gear& gear, float& positionPct, bool& valid) {
     Preferences prefs;
     if (!prefs.begin("transmission", true)) return false;
     if (!prefs.isKey("state_valid")) { prefs.end(); return false; }
     valid       = prefs.getBool("state_valid", false);
     gear        = (Gear)prefs.getInt("state_gear", (int)Gear::GEAR_UNKNOWN);
-    positionPct = prefs.getFloat("state_pct", TRANS_GEAR_DEFAULT_NEUTRAL_PCT);
+    positionPct = prefs.getFloat("state_pct", NAN);   // missing → implausible (no hint)
     prefs.end();
     return true;
 }
@@ -684,29 +846,4 @@ void TransmissionController::loadGearOvershoots() {
         "[TRANS] Overshoots loaded: H=%.1f%% L=%.1f%% N=%.1f%% R=%.1f%%\n",
         overshootPcts_[(int)Gear::GEAR_HIGH], overshootPcts_[(int)Gear::GEAR_LOW],
         overshootPcts_[(int)Gear::GEAR_NEUTRAL], overshootPcts_[(int)Gear::GEAR_REVERSE]);
-}
-
-bool TransmissionController::restoreStateIfValid() {
-    Gear savedGear;
-    float savedPct;
-    bool valid;
-
-    if (!loadState(savedGear, savedPct, valid)) {
-        Debug::printlnFeature(DebugFeature::TRANSMISSION,
-            "[TRANS] No saved state, moving to NEUTRAL default");
-        commandServo(gearPositions_[(int)Gear::GEAR_NEUTRAL]);
-        return false;
-    }
-    if (!valid) {
-        Debug::printlnFeature(DebugFeature::TRANSMISSION,
-            "[TRANS] Saved state invalid (mid-change power loss), moving to NEUTRAL default");
-        commandServo(gearPositions_[(int)Gear::GEAR_NEUTRAL]);
-        return false;
-    }
-
-    commandServo(savedPct);
-    targetGear_ = savedGear;
-    Debug::printfFeature(DebugFeature::TRANSMISSION,
-        "[TRANS] Restored state: %s at %.1f%%\n", getGearName(savedGear), savedPct);
-    return true;
 }
