@@ -7,6 +7,7 @@ VescMotorDriver::VescMotorDriver(uint8_t uartNum)
       initialized_(false),
       lastSpeed_(0),
       lastRequestTime_(0),
+      telemPeriodMs_(STEER_VESC_TELEM_MS),
       haveReply_(false),
       lastValidReplyTime_(0),
       rxState_(RX_START),
@@ -54,7 +55,7 @@ void VescMotorDriver::poll() {
     if (!initialized_) return;
 
     uint32_t now = millis();
-    if (now - lastRequestTime_ >= STEER_VESC_TELEM_MS) {
+    if (now - lastRequestTime_ >= telemPeriodMs_) {
         lastRequestTime_ = now;
         sendGetValues();
     }

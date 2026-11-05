@@ -133,9 +133,10 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     // The one and only ceiling: the autopilot's SPEED_MAX. 0 means no limit.
     telemetry.speed_limit_ms = vehicleController_.getSpeedLimitMs();
     telemetry.speed_limit_ceil = vehicleController_.getSpeedLimitCeilingPct();
-    // The one persisted limiter setting, and the saturation indicator (live flag + the firmware's
+    // The persisted limiter settings, and the saturation indicator (live flag + the firmware's
     // display hold, so every client — including one that joins late — shows the same state).
     telemetry.speed_limit_floor = vehicleController_.getSpeedLimitFloorPct();
+    telemetry.speed_limit_slew = vehicleController_.getSpeedLimitSlewPctS();
     telemetry.speed_limit_sat = vehicleController_.isSpeedLimitSaturated();
     telemetry.speed_limit_sat_held = vehicleController_.isSpeedLimitSatHeld();
     // Steering speed scaling: the applied scale, the base actually in use, which source that
@@ -248,6 +249,7 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.gear_default_h = trans.getGearPosition(TransmissionController::Gear::GEAR_HIGH);
 
     telemetry.boost_target_rpm = vehicleController_.getBoostTargetRpm();
+    telemetry.boost_enabled = vehicleController_.isGearBoostEnabled();
 
     return telemetry;
 }

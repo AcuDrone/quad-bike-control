@@ -113,6 +113,7 @@ public:
         float speed_limit_ms;     // Enforced ceiling (m/s) from SPEED_MAX, 0 = no limit — km/h in JSON
         float speed_limit_ceil;   // Throttle ceiling the limiter is applying (taper + trim, %, 100 = inactive)
         float speed_limit_floor;  // Limiter throttle floor in use (%, 0 = calibrated idle)
+        float speed_limit_slew;   // Limiter ceiling slew in use (%/s, both directions)
         bool speed_limit_sat;     // Limiter saturated: ceiling at the floor, speed still above the limit
         bool speed_limit_sat_held; // speed_limit_sat, or within SPEED_LIMIT_SAT_UI_HOLD_MS after it cleared
         // Steering speed scaling — so "the steering feels weak" is diagnosable from the portal.
@@ -196,6 +197,7 @@ public:
 
         // Boost PID configuration
         int32_t boost_target_rpm; // RPM target for gear boost PID
+        bool boost_enabled;       // Gear-change RPM boost switch in use (NVS "boost"/enabled)
 
         // ECU capability probe results (emitted transiently while fresh)
         bool probe_present;                 // true when the probe object should be serialized

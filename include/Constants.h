@@ -463,8 +463,10 @@ struct ServoChannelConfig {
 //  - Percent commands need a healthy sensor + both limits; jog/nudge only need the VESC link
 //    (sensorless open loop is allowed, with no stall backstop).
 // The values marked bench-tune were converted from AS5600 counts (1 count ≈ 0.88 × 0.1°).
-#define STEER_POSITION_TOLERANCE  10    // 0.1° (1.0°) - park window: driving stops (coast, the worm holds) within this — bench-tune
-#define STEER_RESTART_TOLERANCE   30    // 0.1° (3.0°) - a parked loop drives again only beyond this (stop hysteresis) — bench-tune 2–5°
+#define STEER_POSITION_TOLERANCE  4     // 0.1° (0.4°) - park window: driving stops (coast, the worm holds) within this;
+                                        //      measured 2026-11-05 on the quad: coast after cut ≈ 0, with 1.0° goto 0 stopped 0.2–0.6° short
+#define STEER_RESTART_TOLERANCE   10    // 0.1° (1.0°) - a parked loop drives again only beyond this (stop hysteresis);
+                                        //      measured 2026-11-05 on the quad: no overshoot / no restarts from ±9.3°, 3.0° blocked small moves
 #define STEER_MOVE_TIMEOUT        7500  // ms - max time continuously behind the target by more than STEER_RESTART_TOLERANCE
                                         //      (re-armed whenever within it) — bench-check a full lock-to-lock move
 #define STEER_STALL_THRESHOLD     5     // 0.1° (0.5°) - progress below this over STEER_STALL_TIMEOUT = stall — bench-tune
@@ -486,9 +488,11 @@ struct ServoChannelConfig {
 // floor = STEER_PWM_MIN_DUTY (break-away) from rest / after a reversal until 0.3° of progress
 // (STEER_BOOST_MIN_PROGRESS), then STEER_PWM_TRACK_MIN_DUTY while tracking.
 #define STEER_KP                  1.15f // PWM duty (0-255) per 0.1° of error (saturates at ≈22°) — bench-tune
-#define STEER_PWM_MIN_DUTY        140   // break-away floor: overcomes the worm's static friction (bench: no movement at 70);
+#define STEER_PWM_MIN_DUTY        80    // break-away floor: overcomes the worm's static friction (measured 2026-11-05 on the quad:
+                                        // sustained break-away L 46–50 / R 42–44, 140 was ~3× too high);
                                         // used from rest until 0.3° of progress; also the rate-mode and jog floor
-#define STEER_PWM_TRACK_MIN_DUTY  100   // floor while driving after break-away; must exceed the worm's running friction — bench-tune 90–120
+#define STEER_PWM_TRACK_MIN_DUTY  70    // floor while driving after break-away; must exceed the worm's running friction
+                                        // (measured 2026-11-05 on the quad: break-away 42–50, coast after cut ≈ 0)
 #define STEER_PWM_MAX_DUTY        255   // full speed for large errors
 
 // Anti-stall boost: steering load rises toward the locks; when commanded motion
@@ -499,10 +503,11 @@ struct ServoChannelConfig {
 #define STEER_BOOST_STEP          30    // duty added (stalled) or removed (moving) per check
 
 // Calibration jog (momentary open-loop drive from the web UI)
-#define STEER_JOG_DUTY            180   // PWM duty while jogging (default when the UI sends no speed; min working duty is ~140)
+#define STEER_JOG_DUTY            120   // PWM duty while jogging (default when the UI sends no speed; measured 2026-11-05 on the quad:
+                                        // break-away 42–50, so 120 is a controllable jog)
 #define STEER_JOG_TIMEOUT_MS      500   // ms - auto-stop if the jog command is not refreshed
-#define STEER_NUDGE_DUTY          150   // PWM duty for a precision nudge pulse (just above friction)
-#define STEER_NUDGE_MS            70    // ms - nudge pulse length (a degree or two per tap)
+#define STEER_NUDGE_DUTY          100   // PWM duty for a precision nudge pulse (measured 2026-11-05 on the quad: ≤ 100 × 70 ms does nothing)
+#define STEER_NUDGE_MS            100   // ms - nudge pulse length (measured 2026-11-05 on the quad: 100 duty × 100 ms = 0.4–0.6° per tap)
 
 // Sensorless rate mode (aztec, include/SteerRate.h): with the LWS unhealthy, the source MAVLink
 // and the autopilot in MANUAL/unknown, the stick is a rotation-rate command. It adds NO tunable:
@@ -528,6 +533,32 @@ struct ServoChannelConfig {
 // no control action). 21.5 V ≈ 3.58 V/cell on a 6s NMC pack, ≈ 3.07 V/cell on a 7s LiFePO4 pack —
 // low but not yet harmful for either. Adjust per vehicle build.
 #define STEER_VIN_LOW_V             21.5f // V
+
+// ----------------------------------------------------------------------------
+// STEERING DIAGNOSTICS (USB serial) — include/SteerDiag.h, include/SteerDiagLaw.h,
+// host script tools/steer_diag.py (change add-steering-serial-diagnostics).
+// Line commands on the USB-CDC `Serial` console only (never UART0 / UART2). While
+// `diag on` the console owns the steering: external commands are refused.
+// ----------------------------------------------------------------------------
+#define STEER_DIAG_LINE_MAX          96     // bytes — longest accepted command line (longer lines are dropped)
+#define STEER_DIAG_LOG_MS            20     // ms — D-line period (50 Hz) while an experiment runs
+#define STEER_DIAG_KEEPALIVE_MS        100    // ms — `K` line period inside the keepalive window (HWCDC stuck-TX workaround)
+#define STEER_DIAG_KEEPALIVE_WINDOW_MS 30000  // ms — keepalive while diag on and this long after the last command line
+#define STEER_DIAG_REFRESH_MS        100    // ms — open-loop duty re-sent to the VESC at least this often
+#define STEER_DIAG_VESC_TELEM_MS     50     // ms — COMM_GET_VALUES period while diag is on (normal: STEER_VESC_TELEM_MS)
+#define STEER_DIAG_IDLE_TIMEOUT_MS   60000  // ms — automatic `diag off` (motor stopped) without any command line
+#define STEER_DIAG_HOST_LOST_MS      500    // ms — `(bool)Serial` false this long (after it was true once since diag on) = USB host lost
+#define STEER_DIAG_MAX_SPEED_KMH     0.5f   // km/h — diag on / experiments refused, running ones aborted, above this
+#define STEER_DIAG_LIMIT_MARGIN      20     // 0.1° (2.0°) — abort when driving to within this of a captured limit
+#define STEER_DIAG_MOVE_POS          5      // 0.1° (0.5°) — ramp: |angle − start| at which the wheel counts as moving
+#define STEER_DIAG_MOVE_RATE         5      // °/s — ramp: LWS rate (toward the drive) at which the wheel counts as moving
+#define STEER_DIAG_SETTLE_MS         600    // ms — logging after the duty is cut (coast) / after the loop stops (goto)
+#define STEER_DIAG_RAMP_TIMEOUT_MS   15000  // ms — ramp hard timeout
+#define STEER_DIAG_RAMP_MAXHOLD_MS   1000   // ms — ramp ends "no_move" after this long at its max duty without movement
+#define STEER_DIAG_GOTO_TIMEOUT_MS   12000  // ms — goto hard timeout (longer than STEER_MOVE_TIMEOUT)
+#define STEER_DIAG_PULSE_MAX_MS      1000   // ms — longest `pulse`
+#define STEER_DIAG_HOLD_MAX_MS       1500   // ms — longest `hold`
+#define STEER_DIAG_GOTO_MAX_DEG      60.0f  // °  — |goto| target bound (the targets are also clamped to the limits)
 
 // Throttle Servo Parameters
 #define THROTTLE_SERVO_MIN_US    800   // Minimum servo pulse width (µs) — mechanical range floor / slider bound
@@ -662,7 +693,10 @@ struct ServoChannelConfig {
 //    authority that holds the limit — no proportional droop, whatever the engine, CVT or grade.
 //  - The floor defaults to 0 % = the CALIBRATED IDLE position (ThrottleController::percentToUs(0)),
 //    persisted per vehicle (0–20 %). That is not a hard cut: the ceiling only reaches the floor
-//    through the taper, the trim and the 80 %/s slew (100 → 0 takes ≥ 1.25 s), never as a step.
+//    through the taper, the trim and the ceiling slew, never as a step.
+//  - The ceiling slew (both directions) is also persisted per vehicle (10–200 %/s, default 80 %/s:
+//    100 → 0 takes ≥ 1.25 s); lower = gentler closing and return of the throttle. It caps the
+//    trim's fall as well (inside the law), so a gentler slew also slows how fast it can close.
 #define SPEED_LIMIT_TAPER_FRACTION     0.20f  // band = 0.20 × limit — the limiter takes the last fifth
 #define SPEED_LIMIT_TAPER_MIN_MS       0.5f   // m/s - ≈3.5 speed quanta (0.142 m/s); narrower hunts
 #define SPEED_LIMIT_TAPER_MAX_MS       1.4f   // m/s (≈5 km/h) - the old fixed band, proven at road limits
@@ -670,13 +704,16 @@ struct ServoChannelConfig {
 #define SPEED_LIMIT_FLOOR_MIN_PCT      0.0f   // % - accepted floor range (web command / NVS validation)
 #define SPEED_LIMIT_FLOOR_MAX_PCT      20.0f  // % - above this the floor itself becomes a hidden speed floor
 #define SPEED_LIMIT_FLOOR_NVS_KEY      "thr_floor"  // NVS "speed" namespace, float % (owned by VehicleController)
+#define SPEED_LIMIT_SLEW_DEFAULT_PCT_S 80.0f  // %/s - default max ceiling movement (both directions) — no servo snap.
+                                              // Applied to the CEILING, not the demand: the driver's own
+                                              // stick moves are never slowed by the limiter.
+#define SPEED_LIMIT_SLEW_MIN_PCT_S     10.0f  // %/s - accepted slew range (web command / NVS validation)
+#define SPEED_LIMIT_SLEW_MAX_PCT_S     200.0f // %/s - 100 → 0 in 0.5 s; faster is a step in all but name
+#define SPEED_LIMIT_SLEW_NVS_KEY       "thr_slew"   // NVS "speed" namespace, float %/s (owned by VehicleController)
 #define SPEED_LIMIT_TRIM_KI_PCT_S_PER_MS 30.0f // %/s per m/s - 1.4 m/s over takes the trim 100 → 0 in ≈2.4 s
 #define SPEED_LIMIT_TRIM_RISE_PCT_S    10.0f  // %/s - trim recovery cap; far below the slew, never a surge
 #define SPEED_LIMIT_BIND_MARGIN_PCT    1.0f   // % - demand within this of the ceiling = limiter binding
                                               // (the trim only rises while binding: anti-windup)
-#define SPEED_LIMIT_CEILING_SLEW_PCT_S 80.0f // %/s - max ceiling movement (both directions) — no servo snap.
-                                              // Applied to the CEILING, not the demand: the driver's own
-                                              // stick moves are never slowed by the limiter.
 // Saturation indicator (web console only — no serial log line, no MAVLink message): the ceiling is
 // at the floor yet the vehicle stays above the limit, i.e. the floor is too high or it is downhill.
 #define SPEED_LIMIT_SAT_MARGIN_MS      0.3f   // m/s (≈1 km/h, ~2 speed quanta) above the limit to count
@@ -852,6 +889,8 @@ enum class InputSource {
 #define TRANS_GEAR_BOOST_PID_KI          0.01f // integral gain (tunable)
 #define TRANS_GEAR_BOOST_PID_KD          0.0f  // derivative gain (0 = disabled; noisy on RPM signal)
 #define TRANS_GEAR_BOOST_SLEW_RATE_US    16    // µs per CAN update
+#define BOOST_ENABLED_NVS_KEY            "enabled" // NVS "boost" namespace, bool — gear-change RPM boost on/off
+#define BOOST_ENABLED_DEFAULT            true  // absent key → boost on (quad behaviour); off → idle hold during the shift
 
 // ============================================================================
 // FIRMWARE VERSION
@@ -860,7 +899,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.11"
+#define FIRMWARE_VERSION "1.5.13"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

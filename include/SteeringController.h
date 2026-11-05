@@ -54,6 +54,12 @@ class CANController;
  *    zero-duty command arms it after disarmRate()). It reuses the jog refresh timeout
  *    (STEER_JOG_TIMEOUT_MS), the stall latch and the VESC fault / comm stops; position
  *    stall detection, boost, move timeout and range guard never apply to it.
+ *  - USB diagnostics lock (SteerDiag, change add-steering-serial-diagnostics): while
+ *    setDiagLock(true) is in force every external steering entry point — setSteeringPercent()
+ *    (MAVLink, web slider, failsafe centre, boot centring), setRateCommand(), jog(), nudge(),
+ *    the limit captures and the sensor zero-set — is refused. The diagnostics drive the motor
+ *    open loop through diagDrive() or run one closed-loop move through diagGoto(). Stop paths
+ *    (stop(), stopRate(), the sensor / VESC monitors) are never gated.
  *  - Jog ownership: an active jog is owned by WEB (jog()/nudge()) or RATE
  *    (setRateCommand()). Rate commands never stop or override a WEB jog/nudge; a zero
  *    rate command and stopRate() stop only a RATE-owned drive; jog(0) and stop() stop
@@ -133,12 +139,59 @@ public:
     float getSteeringPercent() const;
 
     /**
+     * @brief Closed-loop move to an absolute angle in degrees (+ = right), for the web
+     * "Target angle" control. Converted to 0.1° and sent through the same path as
+     * setSteeringPercent() (commandTarget(): clamped to the captured limits and the safe
+     * range, same gates, same stall latch, continuous tracking).
+     * @return false if rejected (diag lock, not calibrated, sensor unhealthy, VESC down,
+     * non-finite value, stall latch from idle)
+     */
+    bool setSteeringAngleDeg(float deg);
+
+    /**
      * @brief Request a one-shot move to center once it becomes possible
      * (calibrated, sensor healthy, VESC link up). Issued from update();
      * dropped silently after STEER_BOOT_CENTER_TIMEOUT_MS, and cancelled by any
      * accepted steering/jog/nudge command, capture or zero-set made before it fires.
      */
     void requestBootCenter();
+
+    // === USB steering diagnostics (SteerDiag) ===
+
+    /**
+     * @brief Take (true) / release (false) exclusive ownership for the USB diagnostics.
+     * Both directions stop the motor and cancel any move, jog or pending boot centring.
+     */
+    void setDiagLock(bool on);
+    bool isDiagLocked() const { return diagLock_; }
+
+    /**
+     * @brief Open-loop drive for the diagnostics: setSpeed(speed) with no duty floor, no stall
+     * latch and no refresh timeout (the caller refreshes and bounds it). Drops the closed loop
+     * and any jog to idle first. Needs the diag lock and the VESC link.
+     * @return false if refused
+     */
+    bool diagDrive(int16_t speed);
+
+    /**
+     * @brief One closed-loop move to an absolute target (0.1°, firmware sign) under the diag
+     * lock, through the same path as setSteeringPercent() (clamped to the limits and the safe
+     * range, same gates, same stall latch).
+     * @return false if refused
+     */
+    bool diagGoto(int32_t targetPos);
+
+    /** @brief Last effort sent to the motor driver (-255..+255, 0 = coast) */
+    int16_t getLastDriveCommand() const { return motor_.lastSpeed(); }
+
+    /** @brief Closed-loop target, 0.1° (meaningful while the loop is active) */
+    int32_t getTargetPos() const { return targetRel_; }
+
+    /** @brief Closed-loop state */
+    SteerPosState getPosState() const { return posState_; }
+
+    /** @brief Closed-loop state token: idle, drive, park */
+    static const char* posStateToken(SteerPosState s);
 
     // === Calibration ===
 
@@ -321,6 +374,9 @@ private:
     // VESC driver health / monitors
     bool steerDriverOk_;         // mirrors driver link health (false until first good reply)
 
+    // USB diagnostics lock: external steering commands refused while true
+    bool diagLock_;
+
     // One-shot boot centering (deferred until sensor + VESC link are up)
     bool bootCenterPending_;
     uint32_t bootCenterRequestMs_;
@@ -361,6 +417,12 @@ private:
 
     /** @brief Issue the pending boot centering once possible, or drop it on timeout */
     void serviceBootCenter(uint32_t now, bool driverReady);
+
+    /**
+     * @brief Shared closed-loop command path (setSteeringPercent(), diagGoto()): clamp the
+     * target to the limits and the safe range, then track it or start from idle.
+     */
+    bool commandTarget(int32_t target);
 
     /** @brief Shared capture path for the two limits */
     bool captureLimit(bool left);

@@ -280,6 +280,11 @@ public:
     float getSpeedLimitFloorPct() const { return limiterFloorPct_; }
 
     /**
+     * @brief Speed-limiter ceiling slew in use (%/s, both directions), NVS "speed"/thr_slew
+     */
+    float getSpeedLimitSlewPctS() const { return limiterSlewPctS_; }
+
+    /**
      * @brief Live saturation: ceiling at the floor while the speed stays more than
      * SPEED_LIMIT_SAT_MARGIN_MS above the limit, continuously for SPEED_LIMIT_SAT_HOLD_MS.
      */
@@ -391,6 +396,12 @@ public:
     int32_t getBoostTargetRpm() const { return boostTargetRpm_; }
 
     /**
+     * @brief Gear-change RPM boost switch in use (NVS "boost"/enabled, default true).
+     * Off: a gear change holds the throttle at idle instead of running the PID.
+     */
+    bool isGearBoostEnabled() const { return boostGearEnabled_; }
+
+    /**
      * @brief Engine running, from the EFFECTIVE RPM (tacho when fitted, CAN otherwise).
      * @return true if the effective RPM is valid and >= ENGINE_RUNNING_RPM_THRESHOLD (800 on
      *         aztec: above cranking speed, below the ≈1500 RPM idle)
@@ -459,10 +470,12 @@ private:
 
     // Gear boost configuration (NVS-backed, runtime-editable)
     int32_t boostTargetRpm_;            // RPM target for gear boost PID (default TRANS_GEAR_BOOST_TARGET_RPM)
+    bool boostGearEnabled_;             // Gear-change boost switch (NVS "boost"/enabled, default BOOST_ENABLED_DEFAULT)
 
     // Gear boost PID state
     bool gearBoostActive_;              // True while PID is holding RPM during gear change
     bool boostManualActive_;            // True when boost is triggered manually via web for testing
+    bool shiftIdleHold_;                // True while a gear change holds the throttle at idle (boost switched off)
     uint32_t gearBoostStartTime_;       // millis() when boost activated (for timeout)
     uint32_t pidLastUpdateTime_;        // millis() of last PID compute (for dt)
     uint32_t lastRpmSampleMs_;          // effective-RPM sample timestamp seen on previous PID iteration
@@ -487,6 +500,7 @@ private:
     SpeedLimiterState limiter_;     // applied ceiling (%, 100 = inactive), integral trim, primed
     uint32_t limiterLastMs_;        // millis() of the last limiter evaluation (0 = first call)
     float    limiterFloorPct_;      // floor in use (%), from NVS "speed"/thr_floor or the default
+    float    limiterSlewPctS_;      // ceiling slew in use (%/s), from NVS "speed"/thr_slew or the default
 
     // Saturation indicator (web console only — no log line, no MAVLink message)
     uint32_t satSinceMs_;           // millis() the raw condition started holding (0 = not holding)
@@ -554,6 +568,19 @@ private:
     void updateGearBoostPID();
 
     /**
+     * @brief Throttle owned by the gear change: the boost PID is active or the idle hold is on.
+     * MAVLink throttle, the web re-limit and the web `throttle` command stay clear while true.
+     */
+    bool isThrottleLockedForShift() const { return gearBoostActive_ || shiftIdleHold_; }
+
+    /**
+     * @brief Idle hold for a gear change while the boost switch is off: holds throttle_.idle()
+     * as long as needsThrottleBoost() is true (no CAN/RPM precondition, poll rate untouched),
+     * then releases with throttle_.idle() and the web demand zeroed.
+     */
+    void updateShiftIdleHold();
+
+    /**
      * @brief Process gear change command
      * @param gearStr Gear string ("R", "N", "L", "H")
      * @param webPortal Reference to web portal for sending responses
@@ -566,6 +593,13 @@ private:
      * @param webPortal Reference to web portal for sending responses
      */
     void processSteeringCommand(float value, WebPortal& webPortal);
+
+    /**
+     * @brief Process exact steering angle command (steer_angle, web control only)
+     * @param deg Target angle in degrees (+ = right), clamped to the captured limits
+     * @param webPortal Reference to web portal for sending responses
+     */
+    void processSteerAngleCommand(float deg, WebPortal& webPortal);
 
     /**
      * @brief Process throttle command
@@ -705,6 +739,8 @@ private:
     void processGearCodeCommand(const String& which, const String& gear, WebPortal& webPortal);
     void processBoostTestCommand(bool enable, WebPortal& webPortal);
     void processSetBoostRpmCommand(int32_t rpm, WebPortal& webPortal);
+    /** @brief Persist NVS "boost"/enabled, then apply; turning off mid-boost releases the PID into the idle hold. */
+    void processSetBoostEnabledCommand(bool enabled, WebPortal& webPortal);
 
     /**
      * @brief Process can_probe command — trigger a one-shot ECU capability probe.
@@ -722,16 +758,18 @@ private:
 
     /**
      * @brief Speed-sensor calibration commands (`speed_cal_ppr`, `speed_cal_circ`) and the
-     * speed-limiter floor (`set_speed_limit_floor`).
+     * speed-limiter floor (`set_speed_limit_floor`) and throttle rate (`set_speed_limit_slew`).
      * Accepted regardless of the active input source, like the other calibration commands.
      * There is deliberately no limiter CEILING command: the ceiling is the autopilot's alone.
-     * The floor is the one limiter setting: it shapes how the limit is enforced and never
-     * imposes a limit by itself.
+     * The floor and the throttle rate are the limiter settings: they shape how the limit is
+     * enforced and never impose a limit by themselves.
      */
     void processSpeedCalPprCommand(float value, WebPortal& webPortal);
     void processSpeedCalCircCommand(float value, WebPortal& webPortal);
     /** @brief Validate (NaN, 0–20 %), persist to NVS "speed"/thr_floor, then apply in RAM. */
     void processSetSpeedLimitFloorCommand(float value, WebPortal& webPortal);
+    /** @brief Validate (NaN, 10–200 %/s), persist to NVS "speed"/thr_slew, then apply in RAM. */
+    void processSetSpeedLimitSlewCommand(float value, WebPortal& webPortal);
 
     /**
      * @brief Steering speed-scaling commands (`set_steer_sca_base`, `set_test_speed`).
@@ -783,7 +821,7 @@ private:
      * the slew), so the throttle keeps closing toward the floor; below the limit it rises at
      * Ki × deficit, capped at SPEED_LIMIT_TRIM_RISE_PCT_S, so the speed settles AT the limit
      * instead of drooping inside the band. The ceiling clamp(taper + trim, floor, 100) is then
-     * slew-limited at SPEED_LIMIT_CEILING_SLEW_PCT_S (dt capped at 1 s), so it never steps —
+     * slew-limited at the per-vehicle slew (limiterSlewPctS_, dt capped at 1 s), so it never steps —
      * it reaches the floor (default 0 % = calibrated idle) only gradually.
      *
      * Anti-windup: the trim is clamped to [0, 100 − floor]; it rises only while the limiter

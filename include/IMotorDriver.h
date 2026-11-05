@@ -48,6 +48,12 @@ public:
 
     /** @brief Last reported driver fault code (0 = no fault) */
     virtual uint8_t faultCode() const { return 0; }
+
+    /** @brief Last effort passed to setSpeed() (-255..+255; 0 after stop()), for diagnostics */
+    virtual int16_t lastSpeed() const { return 0; }
+
+    /** @brief Telemetry poll period in ms (USB steering diagnostics speeds it up; no-op without telemetry) */
+    virtual void setTelemetryPeriodMs(uint32_t ms) { (void)ms; }
 };
 
 #endif // IMOTOR_DRIVER_H

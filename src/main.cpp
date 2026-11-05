@@ -14,6 +14,7 @@
 #include "RelayController.h"
 #include "BoardInputs.h"
 #include "SpeedSensor.h"
+#include "SteerDiag.h"
 #include "nvs_flash.h"
 #include "esp_log.h"
 #include "esp32-hal-uart.h"
@@ -70,6 +71,9 @@ WebPortal webPortal;
 
 // Telemetry Manager (collects and broadcasts telemetry data)
 TelemetryManager telemetryManager(vehicleController, webPortal, mavlinkInterface);
+
+// Steering diagnostics console on the USB-CDC Serial (tools/steer_diag.py). Never UART0/UART2.
+SteerDiag steerDiag(steeringActuator, steeringVesc, speedSensor);
 
 // ============================================================================
 // BRING-UP HELPERS
@@ -270,6 +274,7 @@ void setup() {
     }
 
     Debug::println("\n✓ Ready");
+    Serial.printf("I,steer_diag,ready,fw=%s\n", FIRMWARE_VERSION);   // banner for tools/steer_diag.py (may be lost before the host enumerates)
 }
 
 // ============================================================================
@@ -304,6 +309,10 @@ void loop() {
 
     // Update vehicle controller (failsafe, actuators, etc.)
     vehicleController.update();
+
+    // USB steering diagnostics: command lines, experiment step + safety checks. After
+    // vehicleController.update() so it sees this iteration's LWS frame and VESC telemetry.
+    steerDiag.update();
 
     // Report vehicle state back to the MAVLink network (rate-limited internally)
     CANController::VehicleData vd = vehicleController.getVehicleData();

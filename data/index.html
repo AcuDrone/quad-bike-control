@@ -498,6 +498,7 @@
         }
         .relay-btn:hover:not(:disabled) { background: var(--accent); transform: translateY(-2px); }
         .relay-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        #steer-angle-input:disabled, #steer-angle-go:disabled, #steer-angle-zero:disabled { opacity: 0.5; cursor: not-allowed; }
         .relay-btn.active { background: color-mix(in srgb, var(--success) 40%, var(--card)); border-color: var(--success); }
         .relay-btn-name { font-size: 1.25em; line-height: 1.15; }
         .relay-btn-desc { font-size: 0.8em; font-weight: normal; color: var(--muted-foreground); line-height: 1.3; }
@@ -907,10 +908,22 @@
                 </div>
                 <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 16px; font-size: 0.85em; color: var(--muted-foreground);">
                     <span data-i18n="lbl_jog_speed">Jog&nbsp;speed</span>
-                    <input type="range" min="140" max="255" value="180" id="steer-jog-speed" style="flex:1; height: 28px;"
+                    <input type="range" min="80" max="255" value="120" id="steer-jog-speed" style="flex:1; height: 28px;"
                            oninput="document.getElementById('steer-jog-speed-val').textContent = this.value">
-                    <span id="steer-jog-speed-val" style="color:var(--foreground); min-width:2.2em; text-align:right;">180</span>
+                    <span id="steer-jog-speed-val" style="color:var(--foreground); min-width:2.2em; text-align:right;">120</span>
                 </div>
+                <!-- Exact target angle (steer_angle, degrees): closed loop, needs web control and Position mode -->
+                <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 4px; font-size: 0.85em; color: var(--muted-foreground);">
+                    <label for="steer-angle-input" data-i18n="lbl_steer_target_angle">Target angle, °</label>
+                    <input type="number" id="steer-angle-input" step="0.1" value="0" inputmode="decimal"
+                           style="flex:1; min-width:0; padding:10px 8px; border-radius:6px; border:1px solid var(--border); background:var(--input, var(--secondary)); color:var(--foreground); font-size:1em;"
+                           onkeydown="if (event.key === 'Enter') steerAngleGo()">
+                    <button id="steer-angle-go" onclick="steerAngleGo()" data-i18n="btn_steer_angle_go" style="padding:12px 14px; border-radius:6px; border:none; background:var(--primary, var(--accent)); color:var(--primary-foreground, var(--foreground)); cursor:pointer;">Go</button>
+                    <button id="steer-angle-zero" onclick="steerAngleZero()" data-i18n="btn_steer_angle_zero" style="padding:12px 14px; border-radius:6px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">0°</button>
+                </div>
+                <div data-i18n="steer_angle_hint" style="margin-bottom: 4px; font-size: 0.75em; color: var(--muted-foreground);">Steering drives to the target angle within about 0.3°; one Nudge ≈ 0.4°</div>
+                <div id="steer-angle-lock-hint" style="display: none; margin-bottom: 8px; font-size: 0.8em; color: var(--warning);"></div>
+                <div style="margin-bottom: 12px;"></div>
                 <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 8px;">
                     <button onclick="steerCapture('steer_cal_left')" data-i18n="btn_set_left" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Set Left</button>
                     <button onclick="steerCapture('steer_cal_right')" data-i18n="btn_set_right" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Set Right</button>
@@ -984,6 +997,9 @@
                         <input type="number" id="boost-rpm-input" min="500" max="5000" step="50" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
                         <button onclick="saveBoostRpm()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
                     </div>
+                    <button class="upload-btn" id="gear-boost-btn" onclick="toggleGearBoost()" style="background: var(--secondary); width: 100%; margin-top: 8px;">
+                        <span data-i18n="lbl_gear_boost_enabled">Gear-change RPM boost</span>: <span id="gear-boost-status">--</span>
+                    </button>
                 </div>
                 <div id="gear-default-status" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
             </div>
@@ -1048,13 +1064,21 @@
             </div>
             <!-- Speed limit and steering (limiter floor, speed-limit readout, steering authority, scaling base, bench test speed) -->
             <div class="card" id="speed-limit-card">
-                <h2 class="card-title"><span data-i18n="card_speed_limit_steer">🚦 Speed limit and steering</span><button type="button" class="help-btn" onclick="openHelp('speed_limit_help,speed_limiter_hint,speed_limit_floor_hint,steer_scale_hint,steer_test_speed_hint', 'card_speed_limit_steer')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <h2 class="card-title"><span data-i18n="card_speed_limit_steer">🚦 Speed limit and steering</span><button type="button" class="help-btn" onclick="openHelp('speed_limit_help,speed_limiter_hint,speed_limit_floor_hint,speed_limit_slew_help,steer_scale_hint,steer_test_speed_hint', 'card_speed_limit_steer')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
                 <div style="margin-top: 14px;">
                     <label data-i18n="lbl_speed_limit_floor" style="font-size: 0.8em; color: var(--muted-foreground);">Limiter floor (%)</label>
                     <div style="display: flex; gap: 6px; margin-top: 4px;">
                         <input type="number" id="speed-limit-floor-input" min="0" max="20" step="0.5" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
                         <button onclick="saveSpeedLimitFloor()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
                     </div>
+                </div>
+                <div style="margin-top: 10px;">
+                    <label data-i18n="lbl_speed_limit_slew" style="font-size: 0.8em; color: var(--muted-foreground);">Limiter throttle rate (%/s)</label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px;">
+                        <input type="number" id="speed-limit-slew-input" min="10" max="200" step="5" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button onclick="saveSpeedLimitSlew()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                    </div>
+                    <div data-i18n="speed_limit_slew_note" style="margin-top: 4px; font-size: 0.75em; color: var(--muted-foreground);">Lower = gentler closing and return of the throttle; 80 = previous behaviour</div>
                 </div>
                 <div style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px;">
                     <div style="display: flex; justify-content: space-between; align-items: baseline; font-size: 0.85em;">
@@ -1420,10 +1444,11 @@
                 gear_codes_confirm_reset: 'Restore the default gear codes?',
                 gear_codes_saving: 'Saving current code as %s…',
                 card_gear_defaults: '⚙️ Gear Position Defaults',
-                gear_defaults_help: 'Transmission servo position for each gear (0.0–100.0 %). Press <b>Start</b>, drag the slider until the lever sits in the wanted gear, then press <b>Save as &lt;gear&gt;</b>. Saving does not move the servo, so it also works without Start. The <b>▶</b> buttons move the servo to a saved position for checking; <b>Done</b> locks the slider again.',
+                gear_defaults_help: 'Transmission servo position for each gear (0.0–100.0 %). Press <b>Start</b>, drag the slider until the lever sits in the wanted gear, then press <b>Save as &lt;gear&gt;</b>. Saving does not move the servo, so it also works without Start. The <b>▶</b> buttons move the servo to a saved position for checking; <b>Done</b> locks the slider again. <b>Gear-change RPM boost</b> turns the RPM blip on gear changes on or off; with it off the throttle is still held at idle while the gear shifts, and the manual RPM boost test is not affected.',
                 btn_save: 'Save',
                 btn_cancel: 'Cancel',
                 lbl_boost_rpm_target: 'RPM Boost Target',
+                lbl_gear_boost_enabled: 'Gear-change RPM boost',
                 invalid_position: 'Invalid position (0.0–100.0)',
                 moving_to: 'Moving to %s%...',
                 invalid_value: 'Invalid value (0.0–100.0)',
@@ -1441,6 +1466,12 @@
                 btn_nudge_left: '◂ Nudge',
                 btn_nudge_right: 'Nudge ▸',
                 lbl_jog_speed: 'Jog speed',
+                lbl_steer_target_angle: 'Target angle, °',
+                btn_steer_angle_go: 'Go',
+                btn_steer_angle_zero: '0°',
+                steer_angle_hint: 'Steering drives to the target angle within about 0.3°; one Nudge ≈ 0.4°',
+                steer_angle_need_web: 'Target angle needs web control (Take Control in Manual Control).',
+                invalid_steer_angle: 'Enter an angle in degrees',
                 btn_set_left: 'Set Left',
                 btn_set_right: 'Set Right',
                 btn_steer_zero: 'Set sensor zero',
@@ -1639,6 +1670,10 @@
                 speed_limit_floor_hint: 'Limiter floor: the lowest throttle the speed limiter may leave at and above the limit. 0 % means idle and holds the limit most tightly; a higher floor (up to 20 %) softens engine braking at the cost of a limit that may not hold. The "Limiter at floor, speed above limit" badge (kept for 10 s after it clears) means the floor is too high or the vehicle is going downhill — the limiter does not brake.',
                 lbl_speed_limit_floor: 'Limiter floor (%)',
                 invalid_speed_limit_floor: 'Limiter floor must be 0-20 %',
+                lbl_speed_limit_slew: 'Limiter throttle rate (%/s)',
+                speed_limit_slew_note: 'Lower = gentler closing and return of the throttle; 80 = previous behaviour',
+                speed_limit_slew_help: 'Limiter throttle rate: how fast the limiter may close and give back the throttle, 10–200 %/s (default 80); lower is gentler but lets the speed overshoot the limit a little more.',
+                invalid_speed_limit_slew: 'Limiter throttle rate must be 10-200 %/s',
                 speed_limit_at_floor: 'at floor',
                 speed_limit_sat: 'Limiter at floor, speed above limit',
                 speed_limit_sat_held: 'Limiter was at floor, speed above limit',
@@ -1869,10 +1904,11 @@
                 gear_codes_confirm_reset: 'Відновити типові коди передач?',
                 gear_codes_saving: 'Збереження поточного коду як %s…',
                 card_gear_defaults: '⚙️ Типові положення передач',
-                gear_defaults_help: 'Положення серво трансмісії для кожної передачі (0.0–100.0 %). Натисніть <b>Почати</b>, повзунком доведіть важіль у потрібну передачу, потім натисніть <b>Зберегти як &lt;передача&gt;</b>. Збереження не рухає серво, тому працює і без «Почати». Кнопки <b>▶</b> переводять серво в збережене положення для перевірки; <b>Готово</b> знову блокує повзунок.',
+                gear_defaults_help: 'Положення серво трансмісії для кожної передачі (0.0–100.0 %). Натисніть <b>Почати</b>, повзунком доведіть важіль у потрібну передачу, потім натисніть <b>Зберегти як &lt;передача&gt;</b>. Збереження не рухає серво, тому працює і без «Почати». Кнопки <b>▶</b> переводять серво в збережене положення для перевірки; <b>Готово</b> знову блокує повзунок. <b>Перегазовка при перемиканні</b> вмикає або вимикає підгазовку під час перемикання передач; коли її вимкнено, газ однаково тримається на холостому ходу, поки передача перемикається, а ручний тест буста обертів працює як раніше.',
                 btn_save: 'Зберегти',
                 btn_cancel: 'Скасувати',
                 lbl_boost_rpm_target: 'Цільові оберти буста',
+                lbl_gear_boost_enabled: 'Перегазовка при перемиканні',
                 invalid_position: 'Неприпустиме положення (0.0–100.0)',
                 moving_to: 'Переміщення до %s%...',
                 invalid_value: 'Неприпустиме значення (0.0–100.0)',
@@ -1890,6 +1926,12 @@
                 btn_nudge_left: '◂ Підштовхнути',
                 btn_nudge_right: 'Підштовхнути ▸',
                 lbl_jog_speed: 'Швидкість провороту',
+                lbl_steer_target_angle: 'Кут, °',
+                btn_steer_angle_go: 'Перейти',
+                btn_steer_angle_zero: '0°',
+                steer_angle_hint: 'Кермо доїжджає до заданого кута з точністю близько 0,3°; один Nudge ≈ 0,4°',
+                steer_angle_need_web: 'Для заданого кута потрібне веб-керування («Взяти керування» в Ручному керуванні).',
+                invalid_steer_angle: 'Введіть кут у градусах',
                 btn_set_left: 'Задати ліво',
                 btn_set_right: 'Задати право',
                 btn_steer_zero: 'Задати нуль датчика',
@@ -2087,6 +2129,10 @@
                 speed_limit_floor_hint: 'Мінімальний газ обмежувача: найменший газ, який обмежувач швидкості може залишити на ліміті й вище нього. 0 % — це холостий хід, і ліміт утримується найточніше; вищий мінімум (до 20 %) пом\'якшує гальмування двигуном, але ліміт може не втриматися. Позначка «Обмежувач на мінімумі, швидкість вища за ліміт» (лишається ще 10 с після зникнення умови) означає, що мінімум зависокий або машина їде з гори — обмежувач не гальмує.',
                 lbl_speed_limit_floor: 'Мінімальний газ обмежувача (%)',
                 invalid_speed_limit_floor: 'Мінімальний газ обмежувача має бути 0-20 %',
+                lbl_speed_limit_slew: 'Плавність обмежувача (%/с)',
+                speed_limit_slew_note: 'Менше = плавніше прибирає й повертає газ; 80 = як раніше',
+                speed_limit_slew_help: 'Плавність обмежувача: як швидко обмежувач може прибирати й повертати газ, 10–200 %/с (типово 80); менше — м\'якше, але швидкість трохи більше перевищує ліміт.',
+                invalid_speed_limit_slew: 'Плавність обмежувача має бути 10-200 %/с',
                 speed_limit_at_floor: 'на мінімумі',
                 speed_limit_sat: 'Обмежувач на мінімумі, швидкість вища за ліміт',
                 speed_limit_sat_held: 'Обмежувач був на мінімумі, швидкість була вища за ліміт',
@@ -2293,6 +2339,7 @@
             updateLightButton(lightState);
             updateWheelLockButton(wheelLockState);
             renderRelayTest();
+            updateGearBoostButton(gearBoostState);
             const boostStatus = document.getElementById('boost-test-status');
             if (boostStatus) boostStatus.textContent = boostTestActive ? t('on') : t('off');
             const dbgBtn = document.getElementById('debug-toggle-btn');
@@ -2431,7 +2478,8 @@
                 showCalibrationStatus(data.success, data.message);
                 // Also show in gear defaults status if relevant
                 const statusEl = document.getElementById('gear-default-status');
-                if (statusEl && data.message && data.message.includes('Default for')) {
+                if (statusEl && data.message && (data.message.includes('Default for') ||
+                    data.message.toLowerCase().includes('gear boost'))) {
                     statusEl.textContent = data.success ? data.message : t('error_prefix') + data.message;
                     statusEl.style.color = data.success ? 'var(--success)' : 'var(--danger)';
                 }
@@ -2444,7 +2492,11 @@
                 // Steering calibration status
                 if (data.message && (data.message.includes('Steering left limit') ||
                     data.message.includes('Steering right limit') || data.message.includes('Capture ') ||
-                    data.message.startsWith('Sensor zero') || data.message.startsWith('Jog'))) {
+                    data.message.startsWith('Sensor zero') || data.message.startsWith('Jog') ||
+                    (Date.now() < steerAngleReplyUntil && (data.message.startsWith('Steering') ||
+                     data.message.startsWith('Invalid steering') || data.message.startsWith('MAVLink control'))))) {
+                    if (data.message.startsWith('Steering') || data.message.startsWith('Invalid steering') ||
+                        data.message.startsWith('MAVLink control')) steerAngleReplyUntil = 0;
                     steerCenterStatus(data.success ? data.message : t('error_prefix') + data.message,
                                       data.success ? 'var(--success)' : 'var(--danger)');
                 }
@@ -2472,7 +2524,7 @@
                 // Speed sensor calibration / limiter status
                 if (data.message && (data.message.includes('Pulses/rev') ||
                     data.message.includes('Wheel circumference') || data.message.includes('Speed limit') ||
-                    data.message.includes('Speed limiter') ||
+                    data.message.includes('Speed limiter') || data.message.toLowerCase().includes('speed-limiter') ||
                     data.message.startsWith('Steering scale base') || data.message.startsWith('Test speed'))) {
                     speedStatusMsg(data.success ? data.message : t('error_prefix') + data.message,
                                    data.success ? 'var(--success)' : 'var(--danger)');
@@ -2684,6 +2736,10 @@
                 if (el && document.activeElement !== el) {
                     el.value = data.boost_target_rpm;
                 }
+            }
+            if (data.boost_enabled !== undefined) {
+                gearBoostState = data.boost_enabled;
+                updateGearBoostButton(data.boost_enabled);
             }
 
             // Update gear button active state
@@ -2983,6 +3039,26 @@
             document.getElementById('steer-test-left').disabled = !steerEnabled;
             document.getElementById('steer-test-center').disabled = !steerEnabled;
             document.getElementById('steer-test-right').disabled = !steerEnabled;
+            // Exact target angle (Calibration card): same conditions as the percent slider
+            ['steer-angle-input', 'steer-angle-go', 'steer-angle-zero'].forEach((id) => {
+                const el = document.getElementById(id);
+                if (el) el.disabled = !steerEnabled;
+            });
+            {
+                const lim = steerAngleLimits();
+                const inp = document.getElementById('steer-angle-input');
+                if (inp) {
+                    if (lim.left !== null) inp.min = lim.left; else inp.removeAttribute('min');
+                    if (lim.right !== null) inp.max = lim.right; else inp.removeAttribute('max');
+                }
+            }
+            const angleLockHint = document.getElementById('steer-angle-lock-hint');
+            if (angleLockHint) {
+                const msg = steerLocked ? t(lastSteerMode === 'rate' ? 'steer_lock_rate' : 'steer_lock_blocked')
+                          : (!controlsEnabled ? t('steer_angle_need_web') : '');
+                angleLockHint.textContent = msg;
+                angleLockHint.style.display = msg ? 'block' : 'none';
+            }
             const lockHint = document.getElementById('steer-lock-hint');
             if (lockHint) {
                 lockHint.textContent = steerLocked ? t(lastSteerMode === 'rate' ? 'steer_lock_rate' : 'steer_lock_blocked') : '';
@@ -3432,6 +3508,26 @@
             }
         }
 
+        // ---- Gear-change RPM boost switch (persisted per vehicle, NVS boost/enabled) ----
+        // No optimistic update: telemetry (`boost_enabled`) is the source of truth; null = unknown.
+        let gearBoostState = null;
+        function toggleGearBoost() {
+            if (gearBoostState === null) return;
+            sendCommand('set_boost_enabled', !gearBoostState);
+        }
+        function updateGearBoostButton(on) {
+            const btn = document.getElementById('gear-boost-btn');
+            const status = document.getElementById('gear-boost-status');
+            if (!btn || !status) return;
+            if (on === null) {
+                status.textContent = '--';
+                btn.style.background = 'var(--secondary)';
+                return;
+            }
+            status.textContent = on ? t('on') : t('off');
+            btn.style.background = on ? 'color-mix(in srgb, var(--success) 65%, black)' : 'var(--secondary)';
+        }
+
         // ── Speed sensor (hall pulse input, independent of CAN) ─────────────
         // Two cards share this helper: each save sets the target to its own card's status line
         // first, and the firmware reply goes to the card whose control was used last.
@@ -3485,6 +3581,8 @@
 
             syncSpeedInput('speed-limit-floor-input',
                 Number.isFinite(data.speed_limit_floor) ? data.speed_limit_floor.toFixed(1) : undefined);
+            syncSpeedInput('speed-limit-slew-input',
+                Number.isFinite(data.speed_limit_slew) ? data.speed_limit_slew.toFixed(0) : undefined);
             updateSpeedLimitRow(data);
 
             updateSteerScaleDisplay(data);
@@ -3539,6 +3637,17 @@
                 return;
             }
             sendCommand('set_speed_limit_floor', val);
+            speedStatusMsg(t('speed_saving'), 'var(--muted-foreground)');
+        }
+
+        function saveSpeedLimitSlew() {
+            speedStatusTarget = 'speed-limit-status-msg';
+            const val = parseFloat(document.getElementById('speed-limit-slew-input').value);
+            if (isNaN(val) || val < 10 || val > 200) {
+                speedStatusMsg(t('invalid_speed_limit_slew'), 'var(--danger)');
+                return;
+            }
+            sendCommand('set_speed_limit_slew', val);
             speedStatusMsg(t('speed_saving'), 'var(--muted-foreground)');
         }
 
@@ -3860,12 +3969,46 @@
         let steerJogTimer = null;
         function steerJogSpeed() {
             const el = document.getElementById('steer-jog-speed');
-            return el ? parseInt(el.value, 10) : 180;
+            return el ? parseInt(el.value, 10) : 120;
         }
         function steerJogSend(dir) {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ cmd: 'steer_jog', value: dir * steerJogSpeed() }));
             }
+        }
+        // Exact target angle: the firmware converts degrees to 0.1° and clamps to the captured
+        // limits (steer_angle). Replies arriving shortly after go to the calibration status line.
+        let steerAngleReplyUntil = 0;
+        function steerAngleLimits() {
+            const num = (id) => {
+                const el = document.querySelector('[data-bind="' + id + '"]');
+                const v = el ? parseFloat(el.textContent) : NaN;
+                return isFinite(v) ? v : null;
+            };
+            return { left: num('steer-left-cur'), right: num('steer-right-cur') };
+        }
+        function steerAngleSend(deg) {
+            if (!(ws && ws.readyState === WebSocket.OPEN)) return;
+            steerAngleReplyUntil = Date.now() + 2000;
+            ws.send(JSON.stringify({ cmd: 'steer_angle', value: deg }));
+        }
+        function steerAngleGo() {
+            const el = document.getElementById('steer-angle-input');
+            if (!el || el.disabled) return;
+            let deg = parseFloat(String(el.value).replace(',', '.'));
+            if (!isFinite(deg)) { steerCenterStatus(t('invalid_steer_angle'), 'var(--danger)'); return; }
+            const lim = steerAngleLimits();   // clamp in the UI too, so the field shows what is sent
+            if (lim.left !== null && deg < lim.left) deg = lim.left;
+            if (lim.right !== null && deg > lim.right) deg = lim.right;
+            deg = Math.round(deg * 10) / 10;
+            el.value = deg.toFixed(1);
+            steerAngleSend(deg);
+        }
+        function steerAngleZero() {
+            const el = document.getElementById('steer-angle-input');
+            if (!el || el.disabled) return;
+            el.value = '0.0';
+            steerAngleSend(0);
         }
         function steerNudge(dir) {
             if (ws && ws.readyState === WebSocket.OPEN) {

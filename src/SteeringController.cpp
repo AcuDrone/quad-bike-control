@@ -62,6 +62,7 @@ SteeringController::SteeringController(IMotorDriver& motor)
       stallLatchDir_(0),
       stallLatchTime_(0),
       steerDriverOk_(false),
+      diagLock_(false),
       bootCenterPending_(false),
       bootCenterRequestMs_(0) {
 }
@@ -175,6 +176,38 @@ void SteeringController::stopRate() {
     }
 }
 
+// === USB steering diagnostics ===
+
+void SteeringController::setDiagLock(bool on) {
+    stop();                       // coast, closed loop idle, jog cancelled
+    bootCenterPending_ = false;   // never centre by itself after a diagnostics session
+    diagLock_ = on;
+    Debug::printfFeature(DebugFeature::SERVO, "[STEER] USB diagnostics %s\n",
+                         on ? "own the steering (external commands refused)" : "released the steering");
+}
+
+bool SteeringController::diagDrive(int16_t speed) {
+    if (!diagLock_ || !steerDriverOk_) return false;
+    if (speed > STEER_PWM_MAX_DUTY) speed = STEER_PWM_MAX_DUTY;
+    if (speed < -STEER_PWM_MAX_DUTY) speed = -STEER_PWM_MAX_DUTY;
+    posState_ = SteerPosState::IDLE;   // update() must not drive the loop or a jog meanwhile
+    jogDir_ = 0;
+    jogPulseUntil_ = 0;
+    jogOwner_ = JogOwner::NONE;
+    if (speed != 0) lastDriveDir_ = speed > 0 ? 1 : -1;
+    motor_.setSpeed(speed);
+    return true;
+}
+
+const char* SteeringController::posStateToken(SteerPosState s) {
+    switch (s) {
+        case SteerPosState::IDLE:    return "idle";
+        case SteerPosState::DRIVING: return "drive";
+        case SteerPosState::PARKED:  return "park";
+    }
+    return "idle";
+}
+
 bool SteeringController::webJogActive(uint32_t now) const {
     if (jogDir_ == 0 || jogOwner_ != JogOwner::WEB) return false;
     if (jogPulseUntil_ != 0) return (int32_t)(now - jogPulseUntil_) < 0;   // nudge pulse running
@@ -203,6 +236,7 @@ bool SteeringController::driveJog(int8_t d, uint8_t duty, JogOwner owner, uint32
 }
 
 void SteeringController::jog(int8_t direction, uint8_t duty) {
+    if (diagLock_) return;   // USB diagnostics own the steering
     // Sensorless allowed: only the VESC link (and below, the stall latch) gates a jog.
     if (direction != 0 && !steerDriverOk_) return;
     if (direction != 0) bootCenterPending_ = false;   // operator command supersedes boot centering
@@ -216,6 +250,7 @@ void SteeringController::jog(int8_t direction, uint8_t duty) {
 }
 
 void SteeringController::nudge(int8_t direction) {
+    if (diagLock_) return;   // USB diagnostics own the steering
     // Sensorless allowed: only the VESC link (and the stall latch) gates a nudge.
     if (direction == 0 || !steerDriverOk_) return;
     bootCenterPending_ = false;   // operator command supersedes boot centering
@@ -226,7 +261,7 @@ void SteeringController::nudge(int8_t direction) {
 bool SteeringController::setRateCommand(float pct) {
     // Rate driving is impossible while a position is available (defence in depth: the
     // vehicle layer only calls this in RATE mode, which requires an unhealthy sensor).
-    if (sensorOk_ || !steerDriverOk_) return false;
+    if (diagLock_ || sensorOk_ || !steerDriverOk_) return false;
 
     const int16_t duty = steerRateDuty(pct, RC_STEERING_DEADBAND, STEER_PWM_MIN_DUTY, STEER_PWM_MAX_DUTY);
     if (duty == 0) {
@@ -427,10 +462,11 @@ bool SteeringController::serviceDriver(uint32_t now) {
 // === Steering interface ===
 
 bool SteeringController::setSteeringPercent(float percent) {
+    // USB diagnostics own the steering: MAVLink, web, failsafe and boot centring are refused.
+    if (diagLock_) return false;
     if (!calibrated_ || !sensorOk_ || !steerDriverOk_) {
         return false;   // a rejected command leaves a pending boot centering in place
     }
-    bootCenterPending_ = false;   // an accepted command supersedes boot centering
 
     if (percent < -100.0f) percent = -100.0f;
     if (percent > 100.0f) percent = 100.0f;
@@ -442,6 +478,29 @@ bool SteeringController::setSteeringPercent(float percent) {
     } else {
         target = (int32_t)((-percent / 100.0f) * (float)limLeft_);
     }
+    return commandTarget(target);
+}
+
+bool SteeringController::setSteeringAngleDeg(float deg) {
+    // Same gates as setSteeringPercent(); commandTarget() clamps to the limits / safe range.
+    if (diagLock_) return false;
+    if (!calibrated_ || !sensorOk_ || !steerDriverOk_) return false;
+    if (!isfinite(deg)) return false;
+    // Pre-clamp before the int conversion (commandTarget() clamps precisely afterwards)
+    if (deg < -1000.0f) deg = -1000.0f;
+    if (deg > 1000.0f) deg = 1000.0f;
+    int32_t target = (int32_t)lroundf(deg * 10.0f);   // 0.1° units
+    return commandTarget(target);
+}
+
+bool SteeringController::diagGoto(int32_t targetPos) {
+    if (!diagLock_) return false;
+    if (!calibrated_ || !sensorOk_ || !steerDriverOk_) return false;
+    return commandTarget(targetPos);
+}
+
+bool SteeringController::commandTarget(int32_t target) {
+    bootCenterPending_ = false;   // an accepted command supersedes boot centering
 
     // Clamp to the calibrated limits, then to the safe range (a limit stored beyond
     // 550° maps ±100 % to ±550° instead).
@@ -535,7 +594,9 @@ bool SteeringController::captureLimit(bool left) {
     lastCaptureToggled_ = false;
 
     SteerDirResult r = {SteerDirAction::REFUSE_TOO_CLOSE, inv_, 0, false};
-    if (!sensorOk_) {
+    if (diagLock_) {
+        captureError_ = "steering held by USB diagnostics";
+    } else if (!sensorOk_) {
         captureError_ = "sensor fault";
     } else {
         const bool oppositeSet = (left ? limRight_ : limLeft_) != POS_UNSET;
@@ -601,6 +662,10 @@ bool SteeringController::captureLimit(bool left) {
 
 bool SteeringController::requestSensorZero() {
     zeroRefusal_ = nullptr;
+    if (diagLock_) {
+        zeroRefusal_ = "diag";   // USB diagnostics own the steering
+        return false;
+    }
     if (zeroState_ == ZeroState::RUNNING) {
         zeroRefusal_ = "busy";
         return false;

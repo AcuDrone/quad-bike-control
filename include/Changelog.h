@@ -14,6 +14,22 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.13","date":"2026-11-05","uk":[
+"Перегазовку при перемиканні передач можна вимкнути у веб-панелі (картка «Положення передач»); коли вимкнено, газ на час перемикання тримається на холостому ходу"
+],"en":[
+"The gear-change RPM boost can be switched off from the web (Gear Position Defaults card); when off, the throttle is held at idle while the gear shifts"
+]},
+{"version":"1.5.12","date":"2026-11-05","uk":[
+"Діагностика керма через USB: консоль на USB-порту (скрипт tools/steer_diag.py) вимірює мінімальну потужність зрушення, вибіг, кут за імпульс і точність повернення в центр; поки вона увімкнена, інші команди керма не виконуються (лише на місці)",
+"Налаштування керма за вимірами на машині: зона зупинки 0,4°, повторний рух від 1,0°, мінімальна потужність 80 (зрушення) / 70 (рух), точний імпульс 100 × 100 мс, ручний рух 120",
+"Веб-панель: швидкість провороту 80–255 (типово 120), поле точного кута керма з кнопками «Перейти» та «0°», один Nudge ≈ 0,4°",
+"Плавність обмежувача швидкості (як швидко він прибирає й повертає газ) налаштовується у веб-панелі: 10–200 %/с, типово 80"
+],"en":[
+"USB steering diagnostics: a console on the USB port (script tools/steer_diag.py) measures the break-away duty, coast, degrees per pulse and centring accuracy; while it is on, other steering commands are ignored (standing still only)",
+"Steering tuning from measurements on the vehicle: park window 0.4°, restart beyond 1.0°, duty floors 80 (break-away) / 70 (tracking), nudge 100 × 100 ms, jog 120",
+"Web UI: jog speed 80–255 (default 120), exact target angle input with Go and 0° buttons, one nudge ≈ 0.4°",
+"Speed limiter throttle rate (how fast it closes and returns the throttle) adjustable from the web: 10–200 %/s, default 80"
+]},
 {"version":"1.5.11","date":"2026-11-04","uk":[
 "Оберти з тахометра: імпульс приймається лише тоді, коли і низький, і високий рівень тривають щонайменше 2 мс — дрижання на фронтах і короткі завади відкидаються",
 "Прибрано «вікно захоплення» з 1.5.10: воно могло зачепитися за подвоєний період і відкидати справжні імпульси",
