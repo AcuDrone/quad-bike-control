@@ -999,6 +999,9 @@
                         <input type="number" id="boost-rpm-input" min="500" max="5000" step="50" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
                         <button onclick="saveBoostRpm()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
                     </div>
+                    <button class="upload-btn" id="gear-boost-btn" onclick="toggleGearBoost()" style="background: var(--secondary); width: 100%; margin-top: 8px;">
+                        <span data-i18n="lbl_gear_boost_enabled">Gear-change RPM boost</span>: <span id="gear-boost-status">--</span>
+                    </button>
                 </div>
                 <div id="gear-default-status" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
             </div>
@@ -1381,10 +1384,11 @@
                 gear_codes_confirm_reset: 'Restore the default gear codes?',
                 gear_codes_saving: 'Saving current code as %s…',
                 card_gear_defaults: '⚙️ Gear Position Defaults',
-                gear_defaults_help: 'Transmission servo position for each gear (0.0–100.0 %). Press <b>Start</b>, drag the slider until the lever sits in the wanted gear, then press <b>Save as &lt;gear&gt;</b>. Saving does not move the servo, so it also works without Start. The <b>▶</b> buttons move the servo to a saved position for checking; <b>Done</b> locks the slider again.',
+                gear_defaults_help: 'Transmission servo position for each gear (0.0–100.0 %). Press <b>Start</b>, drag the slider until the lever sits in the wanted gear, then press <b>Save as &lt;gear&gt;</b>. Saving does not move the servo, so it also works without Start. The <b>▶</b> buttons move the servo to a saved position for checking; <b>Done</b> locks the slider again. <b>Gear-change RPM boost</b> turns the RPM blip on gear changes on or off; with it off the throttle is still held at idle while the gear shifts, and the manual RPM boost test is not affected.',
                 btn_save: 'Save',
                 btn_cancel: 'Cancel',
                 lbl_boost_rpm_target: 'RPM Boost Target',
+                lbl_gear_boost_enabled: 'Gear-change RPM boost',
                 invalid_position: 'Invalid position (0.0–100.0)',
                 moving_to: 'Moving to %s%...',
                 invalid_value: 'Invalid value (0.0–100.0)',
@@ -1813,10 +1817,11 @@
                 gear_codes_confirm_reset: 'Відновити типові коди передач?',
                 gear_codes_saving: 'Збереження поточного коду як %s…',
                 card_gear_defaults: '⚙️ Типові положення передач',
-                gear_defaults_help: 'Положення серво трансмісії для кожної передачі (0.0–100.0 %). Натисніть <b>Почати</b>, повзунком доведіть важіль у потрібну передачу, потім натисніть <b>Зберегти як &lt;передача&gt;</b>. Збереження не рухає серво, тому працює і без «Почати». Кнопки <b>▶</b> переводять серво в збережене положення для перевірки; <b>Готово</b> знову блокує повзунок.',
+                gear_defaults_help: 'Положення серво трансмісії для кожної передачі (0.0–100.0 %). Натисніть <b>Почати</b>, повзунком доведіть важіль у потрібну передачу, потім натисніть <b>Зберегти як &lt;передача&gt;</b>. Збереження не рухає серво, тому працює і без «Почати». Кнопки <b>▶</b> переводять серво в збережене положення для перевірки; <b>Готово</b> знову блокує повзунок. <b>Перегазовка при перемиканні</b> вмикає або вимикає підгазовку під час перемикання передач; коли її вимкнено, газ однаково тримається на холостому ходу, поки передача перемикається, а ручний тест буста обертів працює як раніше.',
                 btn_save: 'Зберегти',
                 btn_cancel: 'Скасувати',
                 lbl_boost_rpm_target: 'Цільові оберти буста',
+                lbl_gear_boost_enabled: 'Перегазовка при перемиканні',
                 invalid_position: 'Неприпустиме положення (0.0–100.0)',
                 moving_to: 'Переміщення до %s%...',
                 invalid_value: 'Неприпустиме значення (0.0–100.0)',
@@ -2221,6 +2226,7 @@
             updateWheelLockButton(wheelLockState);
             renderRelayTest();
             updateBoostRailButton(boostRailState);
+            updateGearBoostButton(gearBoostState);
             const boostStatus = document.getElementById('boost-test-status');
             if (boostStatus) boostStatus.textContent = boostTestActive ? t('on') : t('off');
             const dbgBtn = document.getElementById('debug-toggle-btn');
@@ -2359,7 +2365,8 @@
                 showCalibrationStatus(data.success, data.message);
                 // Also show in gear defaults status if relevant
                 const statusEl = document.getElementById('gear-default-status');
-                if (statusEl && data.message && data.message.includes('Default for')) {
+                if (statusEl && data.message && (data.message.includes('Default for') ||
+                    data.message.toLowerCase().includes('gear boost'))) {
                     statusEl.textContent = data.success ? data.message : t('error_prefix') + data.message;
                     statusEl.style.color = data.success ? 'var(--success)' : 'var(--danger)';
                 }
@@ -2610,6 +2617,10 @@
                 if (el && document.activeElement !== el) {
                     el.value = data.boost_target_rpm;
                 }
+            }
+            if (data.boost_enabled !== undefined) {
+                gearBoostState = data.boost_enabled;
+                updateGearBoostButton(data.boost_enabled);
             }
 
             // Update gear button active state
@@ -3374,6 +3385,26 @@
                 document.getElementById('gear-default-status').textContent = t('boost_rpm_saving');
                 document.getElementById('gear-default-status').style.color = 'var(--muted-foreground)';
             }
+        }
+
+        // ---- Gear-change RPM boost switch (persisted per vehicle, NVS boost/enabled) ----
+        // No optimistic update: telemetry (`boost_enabled`) is the source of truth; null = unknown.
+        let gearBoostState = null;
+        function toggleGearBoost() {
+            if (gearBoostState === null) return;
+            sendCommand('set_boost_enabled', !gearBoostState);
+        }
+        function updateGearBoostButton(on) {
+            const btn = document.getElementById('gear-boost-btn');
+            const status = document.getElementById('gear-boost-status');
+            if (!btn || !status) return;
+            if (on === null) {
+                status.textContent = '--';
+                btn.style.background = 'var(--secondary)';
+                return;
+            }
+            status.textContent = on ? t('on') : t('off');
+            btn.style.background = on ? 'color-mix(in srgb, var(--success) 65%, black)' : 'var(--secondary)';
         }
 
         // ── Speed sensor (hall pulse input, independent of CAN) ─────────────

@@ -173,6 +173,7 @@ public:
 
         // Boost PID configuration
         int32_t boost_target_rpm; // RPM target for gear boost PID
+        bool boost_enabled;       // Gear-change RPM boost switch in use (NVS "boost"/enabled)
 
         // ECU capability probe results (emitted transiently while fresh)
         bool probe_present;                 // true when the probe object should be serialized

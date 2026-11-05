@@ -809,6 +809,8 @@ enum class InputSource {
 #define TRANS_GEAR_BOOST_PID_KI          0.01f // integral gain (tunable)
 #define TRANS_GEAR_BOOST_PID_KD          0.0f  // derivative gain (0 = disabled; noisy on RPM signal)
 #define TRANS_GEAR_BOOST_SLEW_RATE_US    16    // µs per CAN update
+#define BOOST_ENABLED_NVS_KEY            "enabled" // NVS "boost" namespace, bool — gear-change RPM boost on/off
+#define BOOST_ENABLED_DEFAULT            true  // absent key → boost on (quad behaviour); off → idle hold during the shift
 
 // ============================================================================
 // FIRMWARE VERSION
@@ -817,7 +819,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.12"
+#define FIRMWARE_VERSION "1.5.13"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

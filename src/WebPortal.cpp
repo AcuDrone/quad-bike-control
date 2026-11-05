@@ -557,7 +557,7 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // 5 rail / board-I/O fields, the 17 hall-speed / limiter / distance fields (incl. speed_limit_floor /
     // speed_limit_sat / speed_limit_sat_held: 3 slots + one ~4 B copied string; speed_pulse_total: one
     // more slot, key stored by pointer, ~30 B of JSON; speed_limit_slew since 1.5.12: one slot + a
-    // ~6 B copied string) and the
+    // ~6 B copied string; boost_enabled since 1.5.13: one bool slot, ~21 B of JSON) and the
     // 4 steering speed-scaling fields, steer_vin / steer_vin_low / ecu_voltage_low,
     // wifi_ssid / wifi_ip) + a 16-element
     // array + the nested probe / po / bm / dtc / gearDefaults objects, plus copied
@@ -724,6 +724,7 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     gearDefaults["H"] = telemetry.gear_default_h;
 
     doc["boost_target_rpm"] = telemetry.boost_target_rpm;
+    doc["boost_enabled"] = telemetry.boost_enabled;
 
     // ECU capability probe results — emitted only while running or freshly completed.
     if (telemetry.probe_present) {

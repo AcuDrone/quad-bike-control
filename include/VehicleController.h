@@ -381,6 +381,12 @@ public:
     int32_t getBoostTargetRpm() const { return boostTargetRpm_; }
 
     /**
+     * @brief Gear-change RPM boost switch in use (NVS "boost"/enabled, default true).
+     * Off: a gear change holds the throttle at idle instead of running the PID.
+     */
+    bool isGearBoostEnabled() const { return boostGearEnabled_; }
+
+    /**
      * @brief Check if engine is running based on CAN RPM data
      * @return true if CAN data is valid and RPM >= 1000
      */
@@ -431,10 +437,12 @@ private:
 
     // Gear boost configuration (NVS-backed, runtime-editable)
     int32_t boostTargetRpm_;            // RPM target for gear boost PID (default TRANS_GEAR_BOOST_TARGET_RPM)
+    bool boostGearEnabled_;             // Gear-change boost switch (NVS "boost"/enabled, default BOOST_ENABLED_DEFAULT)
 
     // Gear boost PID state
     bool gearBoostActive_;              // True while PID is holding RPM during gear change
     bool boostManualActive_;            // True when boost is triggered manually via web for testing
+    bool shiftIdleHold_;                // True while a gear change holds the throttle at idle (boost switched off)
     uint32_t gearBoostStartTime_;       // millis() when boost activated (for timeout)
     uint32_t pidLastUpdateTime_;        // millis() of last PID compute (for dt)
     uint32_t lastCanUpdateTime_;        // CAN lastUpdateTime seen on previous PID iteration
@@ -525,6 +533,19 @@ private:
      * Overrides MAVLink/web throttle while gear change is active.
      */
     void updateGearBoostPID();
+
+    /**
+     * @brief Throttle owned by the gear change: the boost PID is active or the idle hold is on.
+     * MAVLink throttle, the web re-limit and the web `throttle` command stay clear while true.
+     */
+    bool isThrottleLockedForShift() const { return gearBoostActive_ || shiftIdleHold_; }
+
+    /**
+     * @brief Idle hold for a gear change while the boost switch is off: holds throttle_.idle()
+     * as long as needsThrottleBoost() is true (no CAN/RPM precondition, poll rate untouched),
+     * then releases with throttle_.idle() and the web demand zeroed.
+     */
+    void updateShiftIdleHold();
 
     /**
      * @brief Process gear change command
@@ -649,6 +670,8 @@ private:
 
     void processBoostTestCommand(bool enable, WebPortal& webPortal);
     void processSetBoostRpmCommand(int32_t rpm, WebPortal& webPortal);
+    /** @brief Persist NVS "boost"/enabled, then apply; turning off mid-boost releases the PID into the idle hold. */
+    void processSetBoostEnabledCommand(bool enabled, WebPortal& webPortal);
 
     /**
      * @brief Process can_probe command — trigger a one-shot ECU capability probe.

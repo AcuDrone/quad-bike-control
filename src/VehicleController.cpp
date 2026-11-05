@@ -36,8 +36,10 @@ VehicleController::VehicleController(SteeringController& steering,
       brakeSensorTriggerTime_(0),
       brakeIsMoving_(false),
       boostTargetRpm_(TRANS_GEAR_BOOST_TARGET_RPM),
+      boostGearEnabled_(BOOST_ENABLED_DEFAULT),
       gearBoostActive_(false),
       boostManualActive_(false),
+      shiftIdleHold_(false),
       gearBoostStartTime_(0),
       pidLastUpdateTime_(0),
       lastCanUpdateTime_(0),
@@ -135,6 +137,7 @@ bool VehicleController::initCAN() {
     Preferences prefs;
     if (prefs.begin("boost", true)) {
         boostTargetRpm_ = prefs.getInt("target_rpm", TRANS_GEAR_BOOST_TARGET_RPM);
+        boostGearEnabled_ = prefs.getBool(BOOST_ENABLED_NVS_KEY, BOOST_ENABLED_DEFAULT);
         prefs.end();
     }
 
@@ -290,8 +293,9 @@ void VehicleController::update() {
     // already re-reads its channel every iteration, so it was always re-limited; the web path
     // used to clamp only at command time, which meant a vehicle accelerating past the ceiling on
     // an unchanged 80 % slider was never clamped until the operator touched the slider again.
-    // Calibration owns the servo directly, and the gear-boost PID writes µs — both stay clear.
-    if (currentInputSource_ == InputSource::WEB && !gearBoostActive_ && !throttle_.isCalibrating()) {
+    // Calibration owns the servo directly, and the gear-boost PID writes µs (or the shift idle
+    // hold keeps idle) — both stay clear.
+    if (currentInputSource_ == InputSource::WEB && !isThrottleLockedForShift() && !throttle_.isCalibrating()) {
         float demandPct = webThrottleDemandPct_;
         if (shouldClipThrottle()) {
             demandPct = min(TRANS_UNKNOWN_GEAR_THROTTLE_MAX, demandPct);
@@ -299,10 +303,17 @@ void VehicleController::update() {
         throttle_.setThrottlePercent(applySpeedLimit(demandPct));
     }
 
-    // PID-controlled RPM boost during gear changes or manual test (overrides MAVLink/web throttle)
-    if (transmission_.needsThrottleBoost() || gearBoostActive_ || boostManualActive_) {
+    // PID-controlled RPM boost during gear changes or manual test (overrides MAVLink/web throttle).
+    // A gear change starts the PID only with the boost switch on and no idle hold in progress
+    // (switching it on mid-shift keeps the hold; the PID runs from the next gear change). The
+    // manual test ignores the switch.
+    if (gearBoostActive_ || boostManualActive_ ||
+        (transmission_.needsThrottleBoost() && boostGearEnabled_ && !shiftIdleHold_)) {
         updateGearBoostPID();
     }
+
+    // Boost switched off: the gear change holds the throttle at idle instead
+    updateShiftIdleHold();
 
     // Update steering position control (after canController_.update(): it sees this
     // iteration's angle frames)
@@ -425,6 +436,9 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
         return;
     } else if (cmd.cmd == "set_boost_rpm") {
         processSetBoostRpmCommand((int32_t)cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_boost_enabled") {
+        processSetBoostEnabledCommand(cmd.boolValue, webPortal);
         return;
     } else if (cmd.cmd == "throttle_cal_begin") {
         processThrottleCalBegin(webPortal);
@@ -633,8 +647,8 @@ void VehicleController::processMavlinkCommands() {
         steering_.setSteeringPercent(steeringPct);
     }
 
-    // Apply throttle — skipped when gear boost PID is active (PID overrides)
-    if (!gearBoostActive_) {
+    // Apply throttle — skipped while the gear change owns it (boost PID or shift idle hold)
+    if (!isThrottleLockedForShift()) {
         float throttlePct = mavlink_.getThrottle();
         if (shouldClipThrottle()) {
             throttlePct = min(TRANS_UNKNOWN_GEAR_THROTTLE_MAX, throttlePct);
@@ -777,8 +791,8 @@ bool VehicleController::shouldClipThrottle() const {
 }
 
 void VehicleController::processThrottleCommand(float value, WebPortal& webPortal) {
-    if (gearBoostActive_) {
-        webPortal.sendResponse(false, "Gear boost active");
+    if (isThrottleLockedForShift()) {
+        webPortal.sendResponse(false, "Gear change active");
         return;
     }
     if (shouldClipThrottle()) {
@@ -1285,6 +1299,41 @@ void VehicleController::processSetBoostRpmCommand(int32_t rpm, WebPortal& webPor
     webPortal.sendResponse(true, "Boost RPM set to " + String(rpm));
 }
 
+void VehicleController::processSetBoostEnabledCommand(bool enabled, WebPortal& webPortal) {
+    // Persist first: RAM only changes once NVS holds the new value. One key in the shared
+    // "boost" namespace (beside target_rpm) — never clear() it.
+    Preferences prefs;
+    bool ok = false;
+    if (prefs.begin("boost", false)) {
+        ok = prefs.putBool(BOOST_ENABLED_NVS_KEY, enabled) == sizeof(uint8_t);
+        prefs.end();
+    }
+    if (!ok) {
+        webPortal.sendResponse(false, "Failed to save gear boost setting");
+        return;
+    }
+
+    boostGearEnabled_ = enabled;
+
+    // Switched off while the PID holds RPM for a gear change (not the manual test): release it
+    // exactly like the normal end of a gear change, then let the idle hold own the rest of the
+    // shift. Switching on mid-shift keeps any idle hold; update() starts no PID while it lasts.
+    if (!enabled && gearBoostActive_ && !boostManualActive_) {
+        Debug::printlnFeature(DebugFeature::VEHICLE, "[BOOST] Switched off, releasing PID");
+        canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM);
+        throttle_.idle();
+        webThrottleDemandPct_ = 0.0f;
+        gearBoostActive_ = false;
+        if (transmission_.needsThrottleBoost()) {
+            shiftIdleHold_ = true;
+            Debug::printlnFeature(DebugFeature::VEHICLE, "[BOOST] Idle hold for the rest of the gear change");
+        }
+    }
+
+    Debug::printfFeature(DebugFeature::VEHICLE, "[BOOST] Gear-change boost %s\n", enabled ? "enabled" : "disabled");
+    webPortal.sendResponse(true, enabled ? "Gear boost enabled" : "Gear boost disabled");
+}
+
 
 void VehicleController::processCanProbeCommand(WebPortal& webPortal) {
     // Defer while a gear change is active to protect the high-rate RPM feedback the shift relies on.
@@ -1674,6 +1723,31 @@ void VehicleController::updateBrakeControl() {
 
         // Hold position against cylinder hydraulic preassure return
         brake_.setSpeed(BRAKE_HOLD_SPEED);
+    }
+}
+
+void VehicleController::updateShiftIdleHold() {
+    bool shifting = transmission_.needsThrottleBoost();
+
+    if (shiftIdleHold_) {
+        // A manual boost test started mid-hold owns the servo (gearBoostActive_): don't fight it.
+        if (!shifting) {
+            Debug::printlnFeature(DebugFeature::VEHICLE, "[BOOST] Gear change complete, releasing idle hold");
+            if (!gearBoostActive_) throttle_.idle();
+            webThrottleDemandPct_ = 0.0f;  // the hold ended at IDLE — don't let the old web demand undo it
+            shiftIdleHold_ = false;
+            return;
+        }
+        if (!gearBoostActive_) throttle_.idle();
+        return;
+    }
+
+    // Start only with the switch off and nothing else owning the throttle (PID / manual test).
+    // Idle is always safe: no CAN / engine-RPM precondition, the RPM poll rate is left alone.
+    if (shifting && !boostGearEnabled_ && !gearBoostActive_ && !boostManualActive_) {
+        shiftIdleHold_ = true;
+        throttle_.idle();
+        Debug::printlnFeature(DebugFeature::VEHICLE, "[BOOST] Boost off, holding idle during gear change");
     }
 }
 
