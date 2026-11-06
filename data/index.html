@@ -908,9 +908,9 @@
                 </div>
                 <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 16px; font-size: 0.85em; color: var(--muted-foreground);">
                     <span data-i18n="lbl_jog_speed">Jog&nbsp;speed</span>
-                    <input type="range" min="80" max="255" value="120" id="steer-jog-speed" style="flex:1; height: 28px;"
+                    <input type="range" min="20" max="255" value="50" id="steer-jog-speed" style="flex:1; height: 28px;"
                            oninput="document.getElementById('steer-jog-speed-val').textContent = this.value">
-                    <span id="steer-jog-speed-val" style="color:var(--foreground); min-width:2.2em; text-align:right;">120</span>
+                    <span id="steer-jog-speed-val" style="color:var(--foreground); min-width:2.2em; text-align:right;">50</span>
                 </div>
                 <!-- Exact target angle (steer_angle, degrees): closed loop, needs web control and Position mode -->
                 <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 4px; font-size: 0.85em; color: var(--muted-foreground);">
@@ -922,7 +922,7 @@
                     <button id="steer-angle-go" onclick="steerAngleGo()" data-i18n="btn_steer_angle_go" style="padding:12px 14px; border-radius:6px; border:none; background:var(--primary, var(--accent)); color:var(--primary-foreground, var(--foreground)); cursor:pointer;">Go</button>
                     <button id="steer-angle-zero" onclick="steerAngleZero()" data-i18n="btn_steer_angle_zero" style="padding:12px 14px; border-radius:6px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">0°</button>
                 </div>
-                <div data-i18n="steer_angle_hint" style="margin-bottom: 4px; font-size: 0.75em; color: var(--muted-foreground);">Steering drives to the target angle within about 0.3°; negative = left; one Nudge ≈ 0.4°</div>
+                <div data-i18n="steer_angle_hint" style="margin-bottom: 4px; font-size: 0.75em; color: var(--muted-foreground);">Steering drives to the target angle within about 0.3°; negative = left; one Nudge ≈ 0.3°</div>
                 <div id="steer-angle-lock-hint" style="display: none; margin-bottom: 8px; font-size: 0.8em; color: var(--warning);"></div>
                 <div style="margin-bottom: 12px;"></div>
                 <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 8px;">
@@ -1529,7 +1529,7 @@
                 btn_steer_angle_go: 'Go',
                 btn_steer_angle_zero: '0°',
                 btn_steer_angle_flip: '±',
-                steer_angle_hint: 'Steering drives to the target angle within about 0.3°; negative = left; one Nudge ≈ 0.4°',
+                steer_angle_hint: 'Steering drives to the target angle within about 0.3°; negative = left; one Nudge ≈ 0.3°',
                 steer_angle_need_web: 'Target angle needs web control (Take Control in Manual Control).',
                 invalid_steer_angle: 'Enter an angle in degrees',
                 btn_set_left: 'Set Left',
@@ -2014,7 +2014,7 @@
                 btn_steer_angle_go: 'Перейти',
                 btn_steer_angle_zero: '0°',
                 btn_steer_angle_flip: '±',
-                steer_angle_hint: 'Кермо доїжджає до заданого кута з точністю близько 0,3°; від\'ємний = ліворуч; один Nudge ≈ 0,4°',
+                steer_angle_hint: 'Кермо доїжджає до заданого кута з точністю близько 0,3°; від\'ємний = ліворуч; один Nudge ≈ 0,3°',
                 steer_angle_need_web: 'Для заданого кута потрібне веб-керування («Взяти керування» в Ручному керуванні).',
                 invalid_steer_angle: 'Введіть кут у градусах',
                 btn_set_left: 'Задати ліво',
@@ -4236,7 +4236,7 @@
         let steerJogTimer = null;
         function steerJogSpeed() {
             const el = document.getElementById('steer-jog-speed');
-            return el ? parseInt(el.value, 10) : 120;
+            return el ? parseInt(el.value, 10) : 50;
         }
         function steerJogSend(dir) {
             if (ws && ws.readyState === WebSocket.OPEN) {

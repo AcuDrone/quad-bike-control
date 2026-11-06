@@ -488,10 +488,15 @@ struct ServoChannelConfig {
 // floor = STEER_PWM_MIN_DUTY (break-away) from rest / after a reversal until 0.3° of progress
 // (STEER_BOOST_MIN_PROGRESS), then STEER_PWM_TRACK_MIN_DUTY while tracking.
 #define STEER_KP                  1.15f // PWM duty (0-255) per 0.1° of error (saturates at ≈22°) — bench-tune
-#define STEER_PWM_MIN_DUTY        80    // break-away floor: overcomes the worm's static friction (measured 2026-11-05 on the quad:
+// aztec (rack steering) measured 2026-11-06: break-away L 18 / R 14, 40×50 ms = 0.3°, 100×100 = 5.6°
+// (50×50 = 0.65°, 70×80 = 2.4°). The quad values below (80 / 70 / 100×100 / 120) were 2–3× too strong:
+// centring from ±10° overshot 0.7–1.2° past zero (≈44°/s approach at TRACK_MIN 70) and a restart floor
+// of 80 gave a ±1.1° limit cycle. Park window 0.4° / restart 1.0° / STEER_KP unchanged; at KP 1.15 the
+// P term exceeds the 30 floor only beyond ≈2.6° of error. STEER_PWM_MAX_DUTY 255 kept (large moves only).
+#define STEER_PWM_MIN_DUTY        30    // aztec (was 80 on the quad); break-away floor: overcomes the worm's static friction (measured 2026-11-05 on the quad:
                                         // sustained break-away L 46–50 / R 42–44, 140 was ~3× too high);
-                                        // used from rest until 0.3° of progress; also the rate-mode and jog floor
-#define STEER_PWM_TRACK_MIN_DUTY  70    // floor while driving after break-away; must exceed the worm's running friction
+                                        // used from rest until 0.3° of progress; also the rate-mode, jog and nudge floor
+#define STEER_PWM_TRACK_MIN_DUTY  30    // aztec (was 70 on the quad); floor while driving after break-away; must exceed the worm's running friction
                                         // (measured 2026-11-05 on the quad: break-away 42–50, coast after cut ≈ 0)
 #define STEER_PWM_MAX_DUTY        255   // full speed for large errors
 
@@ -503,11 +508,11 @@ struct ServoChannelConfig {
 #define STEER_BOOST_STEP          30    // duty added (stalled) or removed (moving) per check
 
 // Calibration jog (momentary open-loop drive from the web UI)
-#define STEER_JOG_DUTY            120   // PWM duty while jogging (default when the UI sends no speed; measured 2026-11-05 on the quad:
+#define STEER_JOG_DUTY            50    // aztec (was 120 on the quad); PWM duty while jogging (default when the UI sends no speed; measured 2026-11-05 on the quad:
                                         // break-away 42–50, so 120 is a controllable jog)
 #define STEER_JOG_TIMEOUT_MS      500   // ms - auto-stop if the jog command is not refreshed
-#define STEER_NUDGE_DUTY          100   // PWM duty for a precision nudge pulse (measured 2026-11-05 on the quad: ≤ 100 × 70 ms does nothing)
-#define STEER_NUDGE_MS            100   // ms - nudge pulse length (measured 2026-11-05 on the quad: 100 duty × 100 ms = 0.4–0.6° per tap)
+#define STEER_NUDGE_DUTY          40    // aztec (was 100; 40×50 ms ≈ 0.3° on the buggy); PWM duty for a precision nudge pulse (measured 2026-11-05 on the quad: ≤ 100 × 70 ms does nothing)
+#define STEER_NUDGE_MS            50    // aztec (was 100 on the quad); ms - nudge pulse length (measured 2026-11-05 on the quad: 100 duty × 100 ms = 0.4–0.6° per tap)
 
 // Sensorless rate mode (aztec, include/SteerRate.h): with the LWS unhealthy, the source MAVLink
 // and the autopilot in MANUAL/unknown, the stick is a rotation-rate command. It adds NO tunable:
@@ -540,12 +545,14 @@ struct ServoChannelConfig {
 #define STEER_PARK_MOVE_MIN       1     // 0.1° (0.1°) — smaller position change = "did not move" (escalate)
 // Web settings (NVS "steering", owned by SteeringController): defaults and bounds
 #define STEER_PARK_ENABLED_DEFAULT     true
-#define STEER_PARK_DUTY1_DEFAULT       70    // rung 1 duty (0-255)
-#define STEER_PARK_DUTY2_DEFAULT       85
-#define STEER_PARK_DUTY3_DEFAULT       100
-#define STEER_PARK_MS1_DEFAULT         80    // rung 1 length, ms
-#define STEER_PARK_MS2_DEFAULT         90
-#define STEER_PARK_MS3_DEFAULT         100
+// aztec (rack steering, 2026-11-06): 40×40 / 40×50 / 40×60 (quad: 70×80 / 85×90 / 100×100, which
+// gives 2.4–5.6° per pulse on the buggy). Applies to a fresh NVS only; saved web values win.
+#define STEER_PARK_DUTY1_DEFAULT       40    // rung 1 duty (0-255); = STEER_PARK_DUTY_MIN
+#define STEER_PARK_DUTY2_DEFAULT       40
+#define STEER_PARK_DUTY3_DEFAULT       40
+#define STEER_PARK_MS1_DEFAULT         40    // rung 1 length, ms; = STEER_PARK_MS_MIN
+#define STEER_PARK_MS2_DEFAULT         50
+#define STEER_PARK_MS3_DEFAULT         60
 #define STEER_PARK_DONE_TOL_DEFAULT    2     // 0.1° (0.2°) — a correction ends within this
 #define STEER_PARK_MAX_PULSES_DEFAULT  5     // pulses per parking (a done does not refill the budget)
 #define STEER_PARK_DUTY_MIN            40
