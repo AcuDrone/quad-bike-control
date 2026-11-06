@@ -774,7 +774,7 @@ static_assert(STEER_PWM_MIN_DUTY >= STEER_PWM_TRACK_MIN_DUTY, "break-away floor 
 // WiFi ACCESS POINT CONFIGURATION
 // ============================================================================
 
-#define WIFI_AP_SSID          "QuadBike-Control"  // WiFi AP SSID
+#define WIFI_AP_SSID          "QuadBike-Control"  // WiFi AP SSID base; "-XXXX" chip suffix (eFuse MAC) appended at boot
 #define WIFI_AP_PASSWORD      ""                  // No password (open network)
 #define WIFI_AP_CHANNEL       1                   // WiFi channel (1-13)
 #define WIFI_AP_MAX_CLIENTS   5                   // Maximum simultaneous clients
@@ -795,7 +795,7 @@ static_assert(STEER_PWM_MIN_DUTY >= STEER_PWM_TRACK_MIN_DUTY, "break-away floor 
 // OTA UPDATE CONFIGURATION
 // ============================================================================
 
-#define OTA_HOSTNAME          "quadbike-control"  // OTA hostname for identification
+#define OTA_HOSTNAME          "quadbike-control"  // OTA hostname base; "-xxxx" chip suffix appended at boot
 #define OTA_PASSWORD          ""                  // OTA password (empty = no password)
 
 // ============================================================================
@@ -895,7 +895,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.20"
+#define FIRMWARE_VERSION "1.5.21"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

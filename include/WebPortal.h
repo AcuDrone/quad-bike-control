@@ -174,7 +174,7 @@ public:
         // Firmware information
         String firmware_version;  // Firmware version string (e.g., "1.0.0")
         String board;             // Target board name (BOARD_NAME, e.g. "Control_v0")
-        const char* wifi_ssid;    // WIFI_AP_SSID (static string, stored by pointer)
+        const char* wifi_ssid;    // broadcast SSID WIFI_AP_SSID-XXXX (static string, stored by pointer)
         char wifi_ip[16];         // WIFI_AP_IP as a dotted string, e.g. "192.168.10.1"
 
         // Gear default positions (user-configurable NVS values, 0.0–100.0 %)
@@ -248,7 +248,16 @@ public:
      */
     String getAPIP();
 
+    /**
+     * Broadcast AP SSID with the chip suffix (WIFI_AP_SSID-XXXX). Static storage, filled
+     * once in begin(); valid for the program's lifetime (empty before begin()).
+     */
+    static const char* getApSsid() { return apSsid_; }
+
 private:
+    static char apSsid_[33];         // WIFI_AP_SSID-XXXX (DeviceId::NAME_CAP)
+    static char otaHostname_[33];    // OTA_HOSTNAME-xxxx
+
     AsyncWebServer server;           // Async HTTP web server
     AsyncWebSocket ws;               // WebSocket for real-time communication
     DNSServer dnsServer;             // DNS server for captive portal
