@@ -264,7 +264,7 @@ static_assert(GEAR_CODE_LOW != 0b000 && GEAR_CODE_HIGH != 0b000 && GEAR_CODE_NEU
 #define BAT12_CAL_NVS_KEY          "cal"   // float factor; absent / invalid → 1.0
 
 // Cranking Parameters
-#define CRANKING_TIMEOUT           2000  // ms - maximum cranking duration
+#define CRANKING_TIMEOUT           5000  // ms - maximum cranking duration per start attempt; the starter is released earlier as soon as engineRpm ≥ ENGINE_RUNNING_RPM_THRESHOLD (2026-11-06: 2 s was too short)
 #define ACC_PRECRANK_DWELL_MS      2000  // ms - ignition/ECU line (Relay_1+Relay_2) must be powered this long before the starter (Relay_3) engages
 // 800 on aztec (change add-tacho-rpm-input): above the starter's cranking speed (≈250–400 RPM)
 // and safely BELOW the ≈1500 RPM warm idle, so an idling engine always counts as running
@@ -982,7 +982,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.21"
+#define FIRMWARE_VERSION "1.5.22"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry
