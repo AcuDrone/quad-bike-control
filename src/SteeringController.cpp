@@ -76,6 +76,7 @@ SteeringController::SteeringController(IMotorDriver& motor)
       parkSettleStartMs_(0),
       parkPulseActive_(false),
       parkPulseEndMs_(0),
+      parkBlocked_(false),
       parkLast_(),
       jogDir_(0),
       lastJogRefresh_(0),
@@ -407,9 +408,25 @@ void SteeringController::update() {
             stop();
             return;
         case SteerPosEvent::RESTARTED:
-            // The main loop keeps priority over the park correction (a pulse's overshoot
-            // beyond STEER_RESTART_TOLERANCE included): cancel it, then drive from rest.
-            parkCancel(true, error);
+            // The main loop keeps priority over the park correction: cancel it, then drive from
+            // rest. A restart after a park pulse (its overshoot beyond STEER_RESTART_TOLERANCE)
+            // disables the correction until the next stick command — re-arming here would loop
+            // pulse → restart → re-park → pulse and shake the wheels.
+            if (parkState_.pulses > 0) {
+                parkLast_.outcome = ParkOutcome::GAVE_UP;
+                parkLast_.note = SteerParkNote::OVERSHOOT_RESTART;
+                parkLast_.pulses = parkState_.pulses;
+                parkLast_.residual = error;
+                parkLast_.duty = parkState_.lastDuty;
+                parkLast_.ms = parkState_.lastMs;
+                parkBlocked_ = true;
+                Debug::printlnFeature(DebugFeature::SERVO,
+                                      "[STEER] park correction disabled until the next stick command: "
+                                      "pulse overshot the restart band");
+                parkCancel();
+            } else {
+                parkCancel(true, error);
+            }
             Debug::printfFeature(DebugFeature::SERVO, "[STEER] parked -> drive err=%ld\n", (long)error);
             break;
         case SteerPosEvent::NONE:
@@ -564,6 +581,7 @@ bool SteeringController::commandTarget(int32_t target) {
             parkCancel(true, targetRel_ - getPosition());
             parkRestartSettle(millis());
             parkRefTarget_ = target;
+            parkBlocked_ = false;   // a new stick command re-arms the correction
         }
         targetRel_ = target;
         return true;
@@ -585,6 +603,7 @@ bool SteeringController::commandTarget(int32_t target) {
     jogPulseUntil_ = 0;
     parkCancel();
     parkRestartSettle(now);   // a command from idle is a new park entry
+    parkBlocked_ = false;     // ... and re-arms a correction disabled by an overshoot restart
     if (steerPosStart(posState_, posTimers_, POS_PARAMS, target, rel, now) == SteerPosState::PARKED) {
         motor_.stop();   // already there: coast (also ends a cancelled jog's drive)
         Debug::printfFeature(DebugFeature::SERVO, "[STEER] parked err=%ld\n", (long)(target - rel));
@@ -939,6 +958,7 @@ void SteeringController::parkCancel(bool record, int32_t residual) {
         parkLast_.residual = residual;
         parkLast_.duty = parkState_.lastDuty;
         parkLast_.ms = parkState_.lastMs;
+        parkLast_.note = SteerParkNote::NONE;
         Debug::printfFeature(DebugFeature::SERVO,
                              "[STEER] park correction cancelled at %.2f deg (%u pulses)\n",
                              parkDeg(residual), (unsigned)parkState_.pulses);
@@ -954,7 +974,7 @@ void SteeringController::parkRestartSettle(uint32_t now) {
 void SteeringController::serviceParkCorrection(uint32_t now, int32_t pos, int32_t err) {
     // Position mode is implied here (update() reaches PARKED only with a healthy, calibrated
     // sensor and the VESC link up); the switch and the USB diagnostics lock gate the rest.
-    if (!parkEnabled_ || diagLock_) return;
+    if (!parkEnabled_ || diagLock_ || parkBlocked_) return;
 
     if (parkPulseActive_) {
         if ((int32_t)(now - parkPulseEndMs_) < 0) return;   // pulse still running
@@ -974,6 +994,10 @@ void SteeringController::serviceParkCorrection(uint32_t now, int32_t pos, int32_
                              (unsigned)r.evalDuty, (unsigned)r.evalMs, parkDeg(r.moved), parkDeg(err));
         if (r.note == SteerParkNote::OVERSHOOT) {
             Debug::printfFeature(DebugFeature::SERVO, "[STEER] park overshoot -> rung 1, reversing (err %.2f)\n",
+                                 parkDeg(err));
+        } else if (r.note == SteerParkNote::TOO_STRONG) {
+            Debug::printfFeature(DebugFeature::SERVO,
+                                 "[STEER] park pulse too strong (overshot to %.2f deg) -> giving up until the next stick command\n",
                                  parkDeg(err));
         } else if (r.note == SteerParkNote::WRONG_WAY) {
             Debug::printfFeature(DebugFeature::SERVO, "[STEER] park nudge moved the wrong way -> rung 1 (err %.2f)\n",
@@ -997,6 +1021,8 @@ void SteeringController::serviceParkCorrection(uint32_t now, int32_t pos, int32_
             parkLast_.residual = err;
             parkLast_.duty = parkState_.lastDuty;
             parkLast_.ms = parkState_.lastMs;
+            parkLast_.note = r.note;
+            if (r.note == SteerParkNote::TOO_STRONG) parkBlocked_ = true;   // until the next stick command
             Debug::printfFeature(DebugFeature::SERVO, "[STEER] park correction %s at %.2f deg (%u pulses)\n",
                                  done ? "done" : "gave up", parkDeg(err), (unsigned)parkState_.pulses);
             break;

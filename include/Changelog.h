@@ -14,6 +14,11 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.19","date":"2026-11-06","uk":[
+"Доводка центру: захист від петлі (переліт → перезапуск → знову імпульс); після занадто сильного імпульсу доводка чекає нової команди стіка"
+],"en":[
+"Steering park correction: loop protection (overshoot → restart → pulse again); after a too-strong pulse the correction waits for the next stick command"
+]},
 {"version":"1.5.18","date":"2026-11-06","uk":[
 "Доводка керма в центр: якщо після повороту колесо зупинилось за 0,4–1,0° від цілі, прошивка через ≈1 с доводить його короткими імпульсами до 0,2° (до 5 імпульсів); налаштовується в новій картці «Доводка центру керма» (можна вимкнути)"
 ],"en":[

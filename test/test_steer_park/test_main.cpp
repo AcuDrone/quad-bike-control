@@ -225,6 +225,37 @@ static void test_wrong_way_resets_to_rung1() {
   assertPulse(r, 70, 80, -1);
 }
 
+static void test_too_strong_pulse_gives_up() {
+  uint32_t t = 1000;
+  assertPulse(step(t, 6), 70, 80, -1);     // err −0.6°
+  t = evalAt(t, 80);
+  SteerParkResult r = step(t, -9);         // overshot to +0.9° error: |0.9| > |0.6| + 0.2
+  TEST_ASSERT_TRUE(r.evaluated);
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)SteerParkNote::TOO_STRONG, (uint8_t)r.note);
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)SteerParkAction::GIVE_UP, (uint8_t)r.action);
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)SteerParkPhase::GAVE_UP, (uint8_t)st.phase);
+  TEST_ASSERT_EQUAL_UINT8(1, st.pulses);
+  // Stays given up while parked: no further pulse
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)SteerParkAction::NONE, (uint8_t)step(t + 5000, -9).action);
+}
+
+static void test_small_overshoot_still_reverses() {
+  uint32_t t = 1000;
+  assertPulse(step(t, 6), 70, 80, -1);
+  t = evalAt(t, 80);
+  SteerParkResult r = step(t, -8);         // |0.8| ≤ |0.6| + 0.2: within the band, reverse
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)SteerParkNote::OVERSHOOT, (uint8_t)r.note);
+  assertPulse(r, 70, 80, +1);
+  // Overshoot smaller than the starting error reverses too
+  setUp();
+  t = 1000;
+  assertPulse(step(t, 6), 70, 80, -1);
+  t = evalAt(t, 80);
+  r = step(t, -4);
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)SteerParkNote::OVERSHOOT, (uint8_t)r.note);
+  assertPulse(r, 70, 80, +1);
+}
+
 // ─── Budget per parking ───────────────────────────────────────────────────
 
 static void test_settle_reset_cancels_and_rearms_budget() {
@@ -323,6 +354,8 @@ int main(int, char**) {
   RUN_TEST(test_give_up_after_custom_max);
   RUN_TEST(test_overshoot_reverses_at_rung1_and_counts);
   RUN_TEST(test_wrong_way_resets_to_rung1);
+  RUN_TEST(test_too_strong_pulse_gives_up);
+  RUN_TEST(test_small_overshoot_still_reverses);
   RUN_TEST(test_settle_reset_cancels_and_rearms_budget);
   RUN_TEST(test_done_does_not_refill_budget);
   RUN_TEST(test_custom_ladder_is_used);
