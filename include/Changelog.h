@@ -14,6 +14,11 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.20","date":"2026-11-06","uk":[
+"Кермо: прибрано ривки на повороті (буст додається поверх мінімальної потужності, тримається до 2° від цілі й лише тоді скидається, мінімальна потужність 85) і недоїзд до центру на 0,3–0,4° (зупинка в межах 0,2°)"
+],"en":[
+"Steering: no stop-go jerks on a turn (the anti-stall boost adds on top of the duty floor, is held until 2° from the target and only then is shed, floor 85) and no 0.3–0.4° undershoot of centre (parks within 0.2°)"
+]},
 {"version":"1.5.19","date":"2026-11-06","uk":[
 "Доводка центру: захист від петлі (переліт → перезапуск → знову імпульс); після занадто сильного імпульсу доводка чекає нової команди стіка"
 ],"en":[

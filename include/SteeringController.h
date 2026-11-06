@@ -40,10 +40,13 @@ class Preferences;
  *  - Closed loop (SteerPositionLaw.h): states IDLE / DRIVING / PARKED. Continuous target
  *    tracking — while driving or parked a percent command only replaces the target (the
  *    former 5° re-command guard, STEER_RETARGET_TOLERANCE, is removed). Stop hysteresis —
- *    park (one coast; the self-locking 1:40 worm holds) within STEER_POSITION_TOLERANCE,
- *    drive again only beyond STEER_RESTART_TOLERANCE. Two duty floors — STEER_PWM_MIN_DUTY
- *    (break-away) from rest / after a reversal until 0.3° of progress, then
- *    STEER_PWM_TRACK_MIN_DUTY. Every stop / fault path coasts and goes to IDLE.
+ *    park (one coast; the self-locking 1:40 worm holds) within STEER_POSITION_TOLERANCE
+ *    (0.2° on the quad), drive again only beyond STEER_RESTART_TOLERANCE (1.0°). Two duty
+ *    floors — STEER_PWM_MIN_DUTY (break-away) from rest / after a reversal until 0.3° of
+ *    progress, then STEER_PWM_TRACK_MIN_DUTY; duty = clamp(max(|err| × STEER_KP, floor) +
+ *    boost, floor, STEER_PWM_MAX_DUTY), the anti-stall boost adds on top of the floor
+ *    (+STEER_BOOST_STEP per stalled check, −STEER_BOOST_DECAY per moving check, ≥ 0).
+ *    Every stop / fault path coasts and goes to IDLE.
  *  - Range guard: percent-driven (closed-loop) targets are clamped to the limits, then to
  *    ±STEER_LWS_SAFE_RANGE, and a closed-loop move driving outward at |pos| ≥ that range
  *    is stopped. Jog, nudge and captures are not guarded.
@@ -51,7 +54,7 @@ class Preferences;
  *    sensor is healthy (closed loop, setSteeringPercent()); RATE while it is not, the
  *    source is MAVLink and the autopilot is in MANUAL/unknown; BLOCKED otherwise.
  *  - Rate drive (RATE mode only): setRateCommand(pct) is a continuous jog with variable
- *    duty (steerRateDuty(): deadband → 0, else 140..255 quadratic). Refused while the
+ *    duty (steerRateDuty(): deadband → 0, else STEER_PWM_MIN_DUTY..255 quadratic). Refused while the
  *    sensor is healthy, the VESC is down, or the path is disarmed (centre-to-arm: one
  *    zero-duty command arms it after disarmRate()). It reuses the jog refresh timeout
  *    (STEER_JOG_TIMEOUT_MS), the stall latch and the VESC fault / comm stops; position
@@ -65,7 +68,7 @@ class Preferences;
  *  - Park correction (SteerParkLaw.h, change add-steering-park-correction): a sub-mode of
  *    PARKED (the state stays PARKED, no jog). Once the loop has been parked with a target stable
  *    within STEER_PARK_TARGET_STABLE for STEER_PARK_SETTLE_MS and |err| exceeds
- *    max(STEER_POSITION_TOLERANCE, done tolerance), short pulses from a 3-rung ladder
+ *    max(STEER_PARK_TRIGGER_TOL (0.4°, independent of the park window), done tolerance), short pulses from a 3-rung ladder
  *    (motor_.setSpeed(dir × duty) then motor_.stop(), no duty floor) finish the move to the done
  *    tolerance, at most max-pulses per parking. Any target move beyond the stable band, any exit
  *    from PARKED, jog / nudge / rate, captures, zero-set, the diag lock or a park setting change
@@ -116,10 +119,11 @@ public:
      * @brief Sensor health, zero-set and position control — call every loop
      * iteration, after CANController::update().
      *
-     * Closed loop (steerPosStep()): DRIVING applies duty = clamp(|err| × STEER_KP + boost,
-     * floor, STEER_PWM_MAX_DUTY), floor = STEER_PWM_MIN_DUTY until the wheel has moved 0.3°
-     * since the drive started or last reversed, then STEER_PWM_TRACK_MIN_DUTY. At
-     * |err| ≤ STEER_POSITION_TOLERANCE it parks (one stop(), no further commands); a parked
+     * Closed loop (steerPosStep()): DRIVING applies duty = clamp(max(|err| × STEER_KP, floor)
+     * + boost, floor, STEER_PWM_MAX_DUTY), floor = STEER_PWM_MIN_DUTY until the wheel has moved
+     * 0.3° since the drive started or last reversed, then STEER_PWM_TRACK_MIN_DUTY; the boost
+     * rises by STEER_BOOST_STEP per stalled check and decays by STEER_BOOST_DECAY per moving
+     * check. At |err| ≤ STEER_POSITION_TOLERANCE (0.2°) it parks (one stop(), no further commands); a parked
      * loop restarts only at |err| > STEER_RESTART_TOLERANCE. Stall (DRIVING only; window
      * restarts from rest or on a direction flip), move timeout (time continuously behind by
      * more than STEER_RESTART_TOLERANCE) and the range guard end in a coast and IDLE.

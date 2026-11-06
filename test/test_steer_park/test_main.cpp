@@ -6,7 +6,7 @@
 
 // Mirror of the defaults in include/Constants.h (which needs Arduino.h and cannot be built natively).
 static const SteerParkParams P = {
-    4,      // triggerTol  STEER_POSITION_TOLERANCE (0.4°)
+    4,      // triggerTol  STEER_PARK_TRIGGER_TOL (0.4°), NOT the 0.2° park window STEER_POSITION_TOLERANCE
     2,      // doneTol     STEER_PARK_DONE_TOL_DEFAULT (0.2°)
     1,      // moveMin     STEER_PARK_MOVE_MIN (0.1°)
     1000,   // settleMs    STEER_PARK_SETTLE_MS
@@ -57,6 +57,25 @@ static void test_no_pulse_within_trigger() {
   p.doneTol = 5;
   TEST_ASSERT_EQUAL_UINT8((uint8_t)SteerParkAction::NONE, (uint8_t)stepAt(p, 2000, 5).action);
   assertPulse(stepAt(p, 2000, 6), 70, 80, -1);
+}
+
+// fix-steering-jerk-and-centre-undershoot D5: the position loop now parks within 0.2°
+// (STEER_POSITION_TOLERANCE 2), but the correction trigger stays at 0.4°: a 0.3° residual
+// gets no pulse, 0.5° still does.
+static void test_trigger_stays_0p4_with_0p2_park_window() {
+  const int32_t posTol = 2;   // STEER_POSITION_TOLERANCE on the quad
+  TEST_ASSERT_TRUE(P.triggerTol > posTol);
+  TEST_ASSERT_EQUAL_INT32(4, steerParkTrigger(P));
+  for (int32_t pos = -4; pos <= 4; pos++) {
+    if (pos >= -posTol && pos <= posTol) continue;   // the loop would not even park here
+    setUp();
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)SteerParkAction::NONE, (uint8_t)step(2000, pos).action);
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)SteerParkPhase::ARMED, (uint8_t)st.phase);
+  }
+  setUp();
+  assertPulse(step(2000, 5), 70, 80, -1);
+  setUp();
+  assertPulse(step(2000, -5), 70, 80, 1);
 }
 
 static void test_first_pulse_rung1_toward_error_both_signs() {
@@ -343,6 +362,7 @@ int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_no_pulse_before_settle);
   RUN_TEST(test_no_pulse_within_trigger);
+  RUN_TEST(test_trigger_stays_0p4_with_0p2_park_window);
   RUN_TEST(test_first_pulse_rung1_toward_error_both_signs);
   RUN_TEST(test_settle_counts_from_caller_clock);
   RUN_TEST(test_nothing_evaluated_before_gap);
