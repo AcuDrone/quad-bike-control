@@ -788,6 +788,17 @@ private:
     void processSetTestSpeedCommand(float value, WebPortal& webPortal);
 
     /**
+     * @brief Steering park correction settings (`set_steer_park_enabled` bool,
+     * `set_steer_park_rung` value = rung 1–3 + strValue "D,T", `set_steer_park_tol` degrees,
+     * `set_steer_park_max` count). Accepted from any input source; SteeringController validates,
+     * persists to NVS "steering" first, then applies.
+     */
+    void processSetSteerParkEnabledCommand(bool on, WebPortal& webPortal);
+    void processSetSteerParkRungCommand(float rung, const String& strValue, WebPortal& webPortal);
+    void processSetSteerParkTolCommand(float deg, WebPortal& webPortal);
+    void processSetSteerParkMaxCommand(float count, WebPortal& webPortal);
+
+    /**
      * @brief Speed-scale the AUTOPILOT steering command. ArduPilot's own formula,
      * `scale = min(1, base / speed)`, applied as `steeringPct *= scale` — the percentage is
      * already signed about a centre of zero, so this scales the DEVIATION FROM CENTRE and

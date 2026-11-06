@@ -949,6 +949,56 @@
                 </div>
                 <div id="steer-center-status" style="margin-top: 8px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
             </div>
+            <!-- Steering park correction: finish a parking with short pulses (NVS "steering" park_*, telemetry steer_park_*) -->
+            <div class="card" id="steer-park-card">
+                <h2 class="card-title"><span data-i18n="card_steer_park">🎯 Steering park correction</span><button type="button" class="help-btn" onclick="openHelp('steer_park_help', 'card_steer_park')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <button class="upload-btn" id="steer-park-btn" onclick="toggleSteerPark()" style="background: var(--secondary); width: 100%;">
+                    <span data-i18n="lbl_steer_park_enabled">Park correction</span>: <span id="steer-park-status">--</span>
+                </button>
+                <div style="margin-top: 10px;">
+                    <label style="font-size: 0.8em; color: var(--muted-foreground);"><span data-i18n="lbl_steer_park_rung">Rung</span> 1 <span data-i18n="lbl_steer_park_rung_units">(duty × ms)</span></label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px; align-items: center;">
+                        <input type="number" id="steer-park-d1" min="40" max="150" step="1" inputmode="numeric" aria-label="duty" style="flex:1; min-width:0; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <span style="color: var(--muted-foreground);">×</span>
+                        <input type="number" id="steer-park-t1" min="40" max="200" step="5" inputmode="numeric" aria-label="ms" style="flex:1; min-width:0; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button onclick="saveSteerParkRung(1)" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                    </div>
+                </div>
+                <div style="margin-top: 10px;">
+                    <label style="font-size: 0.8em; color: var(--muted-foreground);"><span data-i18n="lbl_steer_park_rung">Rung</span> 2 <span data-i18n="lbl_steer_park_rung_units">(duty × ms)</span></label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px; align-items: center;">
+                        <input type="number" id="steer-park-d2" min="40" max="150" step="1" inputmode="numeric" aria-label="duty" style="flex:1; min-width:0; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <span style="color: var(--muted-foreground);">×</span>
+                        <input type="number" id="steer-park-t2" min="40" max="200" step="5" inputmode="numeric" aria-label="ms" style="flex:1; min-width:0; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button onclick="saveSteerParkRung(2)" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                    </div>
+                </div>
+                <div style="margin-top: 10px;">
+                    <label style="font-size: 0.8em; color: var(--muted-foreground);"><span data-i18n="lbl_steer_park_rung">Rung</span> 3 <span data-i18n="lbl_steer_park_rung_units">(duty × ms)</span></label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px; align-items: center;">
+                        <input type="number" id="steer-park-d3" min="40" max="150" step="1" inputmode="numeric" aria-label="duty" style="flex:1; min-width:0; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <span style="color: var(--muted-foreground);">×</span>
+                        <input type="number" id="steer-park-t3" min="40" max="200" step="5" inputmode="numeric" aria-label="ms" style="flex:1; min-width:0; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button onclick="saveSteerParkRung(3)" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                    </div>
+                </div>
+                <div style="margin-top: 10px;">
+                    <label data-i18n="lbl_steer_park_tol" style="font-size: 0.8em; color: var(--muted-foreground);">Done tolerance (°)</label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px;">
+                        <input type="number" id="steer-park-tol" min="0.1" max="0.5" step="0.1" inputmode="decimal" style="flex:1; min-width:0; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button onclick="saveSteerParkTol()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                    </div>
+                </div>
+                <div style="margin-top: 10px;">
+                    <label data-i18n="lbl_steer_park_max" style="font-size: 0.8em; color: var(--muted-foreground);">Max pulses per parking</label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px;">
+                        <input type="number" id="steer-park-max" min="1" max="10" step="1" inputmode="numeric" style="flex:1; min-width:0; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button onclick="saveSteerParkMax()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                    </div>
+                </div>
+                <div id="steer-park-last" style="margin-top: 12px; font-size: 0.8em; color: var(--muted-foreground);">--</div>
+                <div id="steer-park-status-msg" style="margin-top: 8px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
+            </div>
             <!-- Throttle Calibration -->
             <div class="card">
                 <h2 class="card-title"><span data-i18n="card_throttle_cal">🎚️ Throttle Calibration</span><button type="button" class="help-btn" onclick="openHelp('throttle_cal_help', 'card_throttle_cal')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
@@ -1547,6 +1597,24 @@
                 relay_fn_q_8: 'spare',
                 relay_test_blocked: 'Available only with ignition OFF, light off, wheel lock released (if fitted) and the relay board healthy.',
 
+                // Steering park correction card
+                card_steer_park: '🎯 Steering park correction',
+                steer_park_help: 'After a turn the firmware finishes centring the wheel with short pulses (duty × ms; rung 1 first, the next rung only when the wheel did not move): <b>lower the first rung if a pulse overshoots</b>, <b>raise the rungs if the correction gives up</b>.',
+                lbl_steer_park_enabled: 'Park correction',
+                lbl_steer_park_rung: 'Rung',
+                lbl_steer_park_rung_units: '(duty × ms)',
+                lbl_steer_park_tol: 'Done tolerance (°)',
+                lbl_steer_park_max: 'Max pulses per parking',
+                steer_park_last_done: 'Last parking: %s %s, residual %s°, last %s×%s',
+                steer_park_last_gave_up: 'Gave up at %s° after %s %s',
+                steer_park_last_cancelled: 'Cancelled by stick movement',
+                steer_park_last_none: 'Last parking: none yet',
+                invalid_steer_park_rung: 'Rung must be duty 40-150 and 40-200 ms (whole numbers)',
+                invalid_steer_park_ladder: 'The ladder must not decrease (rung %s): save the higher rung first',
+                invalid_steer_park_tol: 'Done tolerance must be 0.1-0.5°',
+                invalid_steer_park_max: 'Max pulses must be a whole number 1-10',
+                steer_park_saving: 'Saving the park correction setting...',
+
                 // Throttle calibration card
                 card_throttle_cal: '🎚️ Throttle Calibration',
                 throttle_cal_help: 'Throttle servo endpoints (µs). <b>Engine must be OFF.</b> Press <b>Start</b>, drag a slider — the servo follows live — then <b>Save</b>. Full may be below idle (mirrored servo).',
@@ -1992,6 +2060,24 @@
                 driver_fault: 'НЕСПРАВНІСТЬ',
                 driver_down: 'НЕДОСТУПНИЙ',
 
+                // Steering park correction card
+                card_steer_park: '🎯 Доводка центру керма',
+                steer_park_help: 'Після повороту прошивка доводить кермо в ціль короткими імпульсами (потужність × мс; спершу ступінь 1, наступний — лише якщо колесо не зрушило): <b>якщо імпульс перескакує ціль, зменште перший ступінь</b>, <b>якщо доводка здається — збільште ступені</b>.',
+                lbl_steer_park_enabled: 'Доводка центру',
+                lbl_steer_park_rung: 'Ступінь',
+                lbl_steer_park_rung_units: '(потужність × мс)',
+                lbl_steer_park_tol: 'Точність доводки (°)',
+                lbl_steer_park_max: 'Макс. імпульсів за паркування',
+                steer_park_last_done: 'Останнє паркування: %s %s, залишок %s°, останній %s×%s',
+                steer_park_last_gave_up: 'Здалось на %s° після %s %s',
+                steer_park_last_cancelled: 'Скасовано рухом стіка',
+                steer_park_last_none: 'Останнє паркування: ще не було',
+                invalid_steer_park_rung: 'Ступінь: потужність 40-150 і 40-200 мс (цілі числа)',
+                invalid_steer_park_ladder: 'Ступені не можуть спадати (ступінь %s): спершу збережіть вищий ступінь',
+                invalid_steer_park_tol: 'Точність доводки має бути 0.1-0.5°',
+                invalid_steer_park_max: 'Макс. імпульсів — ціле число 1-10',
+                steer_park_saving: 'Збереження налаштування доводки...',
+
                 // Throttle calibration card
                 card_relay_test: '🧪 Перевірка реле',
                 relay_test_help: 'Перевірка проводки: вмикайте по одному реле. <b>Запалювання має бути ВИМК</b>, світло вимкнене, блокування колеса відпущене (якщо встановлене). Кожне реле вимикається само через 30 с (стартер: 2 с); будь-яка команда запалювання / світла / блокування колеса вимикає всі тестові реле. Реле з пари (запалювання, блокування колеса) перевіряється окремо — один контакт живить навантаження до 30 с.',
@@ -2363,6 +2449,7 @@
             updateWheelLockButton(wheelLockState);
             renderRelayTest();
             updateGearBoostButton(gearBoostState);
+            updateSteerParkButton(steerParkState);
             const boostStatus = document.getElementById('boost-test-status');
             if (boostStatus) boostStatus.textContent = boostTestActive ? t('on') : t('off');
             const dbgBtn = document.getElementById('debug-toggle-btn');
@@ -2522,6 +2609,12 @@
                         data.message.startsWith('MAVLink control')) steerAngleReplyUntil = 0;
                     steerCenterStatus(data.success ? data.message : t('error_prefix') + data.message,
                                       data.success ? 'var(--success)' : 'var(--danger)');
+                }
+                // Steering park correction card
+                if (data.message && (data.message.startsWith('Park ') || data.message.startsWith('Invalid park') ||
+                    data.message === 'Failed to save the park correction setting')) {
+                    steerParkStatus(data.success ? data.message : t('error_prefix') + data.message,
+                                    data.success ? 'var(--success)' : 'var(--danger)');
                 }
                 // Gear code calibration status
                 if (data.message && (data.message.startsWith('Gear code') || data.message.startsWith('Gear codes'))) {
@@ -2765,6 +2858,7 @@
                 gearBoostState = data.boost_enabled;
                 updateGearBoostButton(data.boost_enabled);
             }
+            updateSteerParkCard(data);
 
             // Update gear button active state
             updateGearButtons(data.gear);
@@ -3550,6 +3644,122 @@
             }
             status.textContent = on ? t('on') : t('off');
             btn.style.background = on ? 'color-mix(in srgb, var(--success) 65%, black)' : 'var(--secondary)';
+        }
+
+        // ---- Steering park correction card (NVS "steering" park_*, telemetry steer_park_*) ----
+        // No optimistic update: telemetry (`steer_park_enabled`) is the source of truth; null = unknown.
+        let steerParkState = null;
+        let steerParkLadder = null;   // [[d1,t1],[d2,t2],[d3,t3]] as stored, from telemetry
+        function steerParkStatus(text, color) {
+            const el = document.getElementById('steer-park-status-msg');
+            if (!el) return;
+            el.textContent = text;
+            el.style.color = color;
+        }
+        function toggleSteerPark() {
+            if (steerParkState === null) return;
+            sendCommand('set_steer_park_enabled', !steerParkState);
+        }
+        function updateSteerParkButton(on) {
+            const btn = document.getElementById('steer-park-btn');
+            const status = document.getElementById('steer-park-status');
+            if (!btn || !status) return;
+            if (on === null) {
+                status.textContent = '--';
+                btn.style.background = 'var(--secondary)';
+                return;
+            }
+            status.textContent = on ? t('on') : t('off');
+            btn.style.background = on ? 'color-mix(in srgb, var(--success) 65%, black)' : 'var(--secondary)';
+        }
+        // "pulse(s)" with the language's plural form; genitive = after "після" (uk)
+        function steerParkPulsesWord(n, genitive) {
+            if (currentLang === 'uk') {
+                const m10 = n % 10, m100 = n % 100;
+                if (genitive) return (m10 === 1 && m100 !== 11) ? 'імпульсу' : 'імпульсів';
+                if (m10 === 1 && m100 !== 11) return 'імпульс';
+                if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return 'імпульси';
+                return 'імпульсів';
+            }
+            return n === 1 ? 'pulse' : 'pulses';
+        }
+        function steerParkLastText(last) {
+            if (!last || typeof last !== 'object') return '--';
+            const n = Number.isFinite(last.pulses) ? last.pulses : 0;
+            const res = Number.isFinite(last.residual) ? last.residual : null;
+            switch (last.outcome) {
+                case 'done':
+                    return t('steer_park_last_done', n, steerParkPulsesWord(n, false),
+                             res !== null ? res.toFixed(2) : '--', last.duty, last.ms);
+                case 'gave_up':
+                    return t('steer_park_last_gave_up', res !== null ? res.toFixed(1) : '--', n,
+                             steerParkPulsesWord(n, true));
+                case 'cancelled':
+                    return t('steer_park_last_cancelled');
+                case 'none':
+                    return t('steer_park_last_none');
+                default:
+                    return '--';
+            }
+        }
+        function updateSteerParkCard(data) {
+            if (data.steer_park_enabled === undefined) return;   // older firmware: card stays "--"
+            steerParkState = data.steer_park_enabled === true;
+            updateSteerParkButton(steerParkState);
+            steerParkLadder = [1, 2, 3].map(function (n) {
+                return [data['steer_park_d' + n], data['steer_park_t' + n]];
+            });
+            [1, 2, 3].forEach(function (n) {
+                syncSpeedInput('steer-park-d' + n, data['steer_park_d' + n]);
+                syncSpeedInput('steer-park-t' + n, data['steer_park_t' + n]);
+            });
+            syncSpeedInput('steer-park-tol',
+                Number.isFinite(data.steer_park_tol) ? data.steer_park_tol.toFixed(1) : undefined);
+            syncSpeedInput('steer-park-max', data.steer_park_max);
+            const lastEl = document.getElementById('steer-park-last');
+            if (lastEl) lastEl.textContent = steerParkLastText(data.steer_park_last);
+        }
+        function saveSteerParkRung(n) {
+            const dRaw = document.getElementById('steer-park-d' + n).value;
+            const tRaw = document.getElementById('steer-park-t' + n).value;
+            const d = Number(dRaw), ms = Number(tRaw);
+            if (dRaw === '' || tRaw === '' || !Number.isInteger(d) || !Number.isInteger(ms) ||
+                d < 40 || d > 150 || ms < 40 || ms > 200) {
+                steerParkStatus(t('invalid_steer_park_rung'), 'var(--danger)');
+                return;
+            }
+            // Non-decreasing ladder, checked against the stored neighbours (as the firmware does)
+            if (steerParkLadder) {
+                const prev = n > 1 ? steerParkLadder[n - 2] : null;
+                const next = n < 3 ? steerParkLadder[n] : null;
+                if ((prev && (d < prev[0] || ms < prev[1])) || (next && (d > next[0] || ms > next[1]))) {
+                    steerParkStatus(t('invalid_steer_park_ladder', n), 'var(--danger)');
+                    return;
+                }
+            }
+            if (!wsConnected) return;
+            ws.send(JSON.stringify({ cmd: 'set_steer_park_rung', value: n, strValue: d + ',' + ms }));
+            steerParkStatus(t('steer_park_saving'), 'var(--muted-foreground)');
+        }
+        function saveSteerParkTol() {
+            const raw = parseFloat(document.getElementById('steer-park-tol').value);
+            const val = Math.round(raw * 10) / 10;
+            if (!Number.isFinite(raw) || val < 0.1 || val > 0.5) {
+                steerParkStatus(t('invalid_steer_park_tol'), 'var(--danger)');
+                return;
+            }
+            sendCommand('set_steer_park_tol', val);
+            steerParkStatus(t('steer_park_saving'), 'var(--muted-foreground)');
+        }
+        function saveSteerParkMax() {
+            const raw = document.getElementById('steer-park-max').value;
+            const val = Number(raw);
+            if (raw === '' || !Number.isInteger(val) || val < 1 || val > 10) {
+                steerParkStatus(t('invalid_steer_park_max'), 'var(--danger)');
+                return;
+            }
+            sendCommand('set_steer_park_max', val);
+            steerParkStatus(t('steer_park_saving'), 'var(--muted-foreground)');
         }
 
         // ── Speed sensor (hall pulse input, independent of CAN) ─────────────

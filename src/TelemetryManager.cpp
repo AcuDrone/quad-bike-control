@@ -102,6 +102,19 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.steer_driver_ok = steering.isDriverOk();
     telemetry.steer_vin = steering.getInputVoltage();
     telemetry.steer_vin_low = telemetry.steer_driver_ok && telemetry.steer_vin < STEER_VIN_LOW_V;
+    telemetry.steer_park_enabled = steering.isParkEnabled();
+    for (uint8_t i = 0; i < 3; i++) {
+        telemetry.steer_park_d[i] = steering.getParkRung(i).duty;
+        telemetry.steer_park_t[i] = steering.getParkRung(i).ms;
+    }
+    telemetry.steer_park_tol = (float)steering.getParkDoneTol() / 10.0f;
+    telemetry.steer_park_max = steering.getParkMaxPulses();
+    const SteeringController::ParkLastResult& parkLast = steering.getParkLast();
+    telemetry.steer_park_last_outcome = SteeringController::parkOutcomeToken(parkLast.outcome);
+    telemetry.steer_park_last_pulses = parkLast.pulses;
+    telemetry.steer_park_last_residual = (float)parkLast.residual / 10.0f;
+    telemetry.steer_park_last_duty = parkLast.duty;
+    telemetry.steer_park_last_ms = parkLast.ms;
     telemetry.throttle_us = vehicleController_.getThrottleUs();
     telemetry.throttle_idle_us = vehicleController_.getThrottleIdleUs();
     telemetry.throttle_full_us = vehicleController_.getThrottleFullUs();

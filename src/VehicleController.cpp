@@ -654,6 +654,18 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
     } else if (cmd.cmd == "set_steer_sca_base") {
         processSetSteerScaBaseCommand(cmd.floatValue, webPortal);
         return;
+    } else if (cmd.cmd == "set_steer_park_enabled") {
+        processSetSteerParkEnabledCommand(cmd.boolValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_steer_park_rung") {
+        processSetSteerParkRungCommand(cmd.floatValue, cmd.strValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_steer_park_tol") {
+        processSetSteerParkTolCommand(cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_steer_park_max") {
+        processSetSteerParkMaxCommand(cmd.floatValue, webPortal);
+        return;
     } else if (cmd.cmd == "set_test_speed") {
         processSetTestSpeedCommand(cmd.floatValue, webPortal);
         return;
@@ -1373,6 +1385,101 @@ void VehicleController::processSetSteerScaBaseCommand(float value, WebPortal& we
     }
     Debug::printfFeature(DebugFeature::VEHICLE,
         "[STEER] Speed-scaling base (local) set to %.2f m/s\n", value);
+}
+
+// === Steering park correction settings (SteeringController owns them, NVS "steering") ===
+
+static const char* const PARK_SAVE_FAILED = "Failed to save the park correction setting";
+
+void VehicleController::processSetSteerParkEnabledCommand(bool on, WebPortal& webPortal) {
+    if (steering_.setParkEnabled(on) != SteeringController::ParkSetResult::OK) {
+        webPortal.sendResponse(false, PARK_SAVE_FAILED);
+        return;
+    }
+    webPortal.sendResponse(true, on ? "Park correction enabled" : "Park correction disabled");
+}
+
+// Strict non-negative integer (digits only, at most 5 of them); false otherwise
+static bool parseParkInt(const String& s, int32_t& out) {
+    if (s.length() == 0 || s.length() > 5) return false;
+    int32_t v = 0;
+    for (unsigned i = 0; i < s.length(); i++) {
+        const char c = s[i];
+        if (c < '0' || c > '9') return false;
+        v = v * 10 + (c - '0');
+    }
+    out = v;
+    return true;
+}
+
+void VehicleController::processSetSteerParkRungCommand(float rung, const String& strValue, WebPortal& webPortal) {
+    static const char* const OUT_OF_RANGE = "Park rung out of range (duty 40-150, 40-200 ms)";
+    if (isnan(rung) || rung != roundf(rung) || rung < 1.0f || rung > (float)STEER_PARK_RUNGS) {
+        webPortal.sendResponse(false, "Invalid park rung (use 1-3)");
+        return;
+    }
+    const uint8_t n = (uint8_t)rung;
+    // strValue "D,T": two whole numbers, duty and ms
+    String v = strValue;
+    v.trim();
+    const int comma = v.indexOf(',');
+    int32_t duty = 0, ms = 0;
+    String ds = comma > 0 ? v.substring(0, comma) : String();
+    String ts = comma > 0 ? v.substring(comma + 1) : String();
+    ds.trim();
+    ts.trim();
+    if (comma <= 0 || !parseParkInt(ds, duty) || !parseParkInt(ts, ms)) {
+        webPortal.sendResponse(false, OUT_OF_RANGE);
+        return;
+    }
+    switch (steering_.setParkRung(n, duty, ms)) {
+        case SteeringController::ParkSetResult::OK:
+            webPortal.sendResponse(true, "Park rung " + String(n) + " set to " + String(duty) + "×" + String(ms));
+            return;
+        case SteeringController::ParkSetResult::OUT_OF_RANGE:
+            webPortal.sendResponse(false, OUT_OF_RANGE);
+            return;
+        case SteeringController::ParkSetResult::NOT_MONOTONIC:
+            webPortal.sendResponse(false, "Park ladder must not decrease (rung " + String(n) + ")");
+            return;
+        case SteeringController::ParkSetResult::SAVE_FAILED:
+        default:
+            webPortal.sendResponse(false, PARK_SAVE_FAILED);
+            return;
+    }
+}
+
+void VehicleController::processSetSteerParkTolCommand(float deg, WebPortal& webPortal) {
+    // Degrees from the page, rounded to the repo's 0.1° unit
+    const int32_t tol = isfinite(deg) ? (int32_t)lroundf(deg * 10.0f) : -1;
+    switch (steering_.setParkDoneTol(tol)) {
+        case SteeringController::ParkSetResult::OK:
+            webPortal.sendResponse(true, "Park tolerance set to " + String((float)tol / 10.0f, 1) + "°");
+            return;
+        case SteeringController::ParkSetResult::SAVE_FAILED:
+            webPortal.sendResponse(false, PARK_SAVE_FAILED);
+            return;
+        default:
+            webPortal.sendResponse(false, "Park tolerance out of range (0.1-0.5°)");
+            return;
+    }
+}
+
+void VehicleController::processSetSteerParkMaxCommand(float count, WebPortal& webPortal) {
+    // Whole numbers only: 2.5 is refused, not rounded
+    const bool whole = isfinite(count) && count == roundf(count) && count >= -1000.0f && count <= 1000.0f;
+    const int32_t n = whole ? (int32_t)count : -1;
+    switch (steering_.setParkMaxPulses(n)) {
+        case SteeringController::ParkSetResult::OK:
+            webPortal.sendResponse(true, "Park max pulses set to " + String(n));
+            return;
+        case SteeringController::ParkSetResult::SAVE_FAILED:
+            webPortal.sendResponse(false, PARK_SAVE_FAILED);
+            return;
+        default:
+            webPortal.sendResponse(false, "Park max pulses out of range (1-10)");
+            return;
+    }
 }
 
 void VehicleController::processSetTestSpeedCommand(float value, WebPortal& webPortal) {

@@ -558,7 +558,11 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // speed_limit_sat / speed_limit_sat_held: 3 slots + one ~4 B copied string; speed_pulse_total: one
     // more slot, key stored by pointer, ~30 B of JSON; speed_limit_slew since 1.5.12: one slot + a
     // ~6 B copied string; boost_enabled since 1.5.13: one bool slot, ~21 B of JSON;
-    // throttle_open_slew since 1.5.16: one integer slot, key stored by pointer, ~25 B of JSON) and the
+    // throttle_open_slew since 1.5.16: one integer slot, key stored by pointer, ~25 B of JSON;
+    // the park correction since 1.5.18: 9 top-level slots (steer_park_enabled / _d1..3 / _t1..3 /
+    // _tol / _max) + the nested steer_park_last object (1 slot + 5 member slots), keys by
+    // pointer, two copied strings (tol ~4 B, residual ~6 B), ≈ 15 slots × 16 B ≈ 250 B of memory
+    // and ≈ 270 B of JSON) and the
     // 4 steering speed-scaling fields, gear_code / gear_sensed / gear_codes_custom, steer_vin /
     // steer_vin_low / ecu_voltage_low, wifi_ssid / wifi_ip) + a 16-element
     // array + the nested probe / po / bm / dtc / gearDefaults / gear_codes objects, plus copied
@@ -570,6 +574,9 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // 1.5.9 adds 4 tacho / RPM-source slots (two short copied strings, ~60 B) — still in budget.
     // 9216 since 1.5.10: 6 tacho diagnostic slots + the copied period string (~200 B) on top of
     // a document whose sniff + probe worst case already sat close to 8 KB; +1 KB of .bss buys margin.
+    // 1.5.18 (park correction, ≈ 250 B): master's count puts the worst case — CAN connected, `probe`
+    // with all 11 PIDs answered and a full 32-row `sniff` — at ≈ 8.24 KB with the park fields; with
+    // the aztec tacho / gear_codes fields on top (≈ 0.25 KB) it is ≈ 8.5 KB, still ≈ 0.7 KB under 9216.
     // Static (single caller: the main-loop broadcast) so the larger document is off the stack.
     static StaticJsonDocument<9216> doc;
     doc.clear();
@@ -636,6 +643,27 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // VESC input voltage (V) + low flag; the UI ignores both while steer_driver_ok is false.
     doc["steer_vin"] = serialized(String(isfinite(telemetry.steer_vin) ? telemetry.steer_vin : 0.0f, 1));
     doc["steer_vin_low"] = telemetry.steer_vin_low;
+    // Steering park correction: settings (the card fills from these) + the last result (RAM only).
+    // Keys are literals (stored by pointer); tokens are static strings (by pointer).
+    doc["steer_park_enabled"] = telemetry.steer_park_enabled;
+    doc["steer_park_d1"] = telemetry.steer_park_d[0];
+    doc["steer_park_d2"] = telemetry.steer_park_d[1];
+    doc["steer_park_d3"] = telemetry.steer_park_d[2];
+    doc["steer_park_t1"] = telemetry.steer_park_t[0];
+    doc["steer_park_t2"] = telemetry.steer_park_t[1];
+    doc["steer_park_t3"] = telemetry.steer_park_t[2];
+    doc["steer_park_tol"] = serialized(String(telemetry.steer_park_tol, 1));
+    doc["steer_park_max"] = telemetry.steer_park_max;
+    {
+        JsonObject parkLast = doc.createNestedObject("steer_park_last");
+        parkLast["outcome"] = telemetry.steer_park_last_outcome;
+        parkLast["pulses"] = telemetry.steer_park_last_pulses;
+        const bool none = strcmp(telemetry.steer_park_last_outcome, "none") == 0;
+        if (none) parkLast["residual"] = (const char*)nullptr;
+        else      parkLast["residual"] = serialized(String(telemetry.steer_park_last_residual, 2));
+        parkLast["duty"] = telemetry.steer_park_last_duty;
+        parkLast["ms"] = telemetry.steer_park_last_ms;
+    }
     doc["input_source"] = telemetry.input_source;
     doc["mav_active"] = telemetry.mav_active;
     doc["web_control"] = telemetry.web_control;

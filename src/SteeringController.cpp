@@ -27,6 +27,25 @@ static const SteerPosParams POS_PARAMS = {
     STEER_BOOST_STEP,
 };
 
+// Park correction defaults (include/SteerParkLaw.h); doneTol / maxPulses / rungs are web settings
+static const SteerParkParams PARK_DEFAULTS = {
+    STEER_POSITION_TOLERANCE,
+    STEER_PARK_DONE_TOL_DEFAULT,
+    STEER_PARK_MOVE_MIN,
+    STEER_PARK_SETTLE_MS,
+    STEER_PARK_PULSE_GAP_MS,
+    STEER_PARK_MAX_PULSES_DEFAULT,
+    {{STEER_PARK_DUTY1_DEFAULT, STEER_PARK_MS1_DEFAULT},
+     {STEER_PARK_DUTY2_DEFAULT, STEER_PARK_MS2_DEFAULT},
+     {STEER_PARK_DUTY3_DEFAULT, STEER_PARK_MS3_DEFAULT}},
+};
+static const char* const PARK_DUTY_KEYS[STEER_PARK_RUNGS] = {
+    STEER_PARK_D1_NVS_KEY, STEER_PARK_D2_NVS_KEY, STEER_PARK_D3_NVS_KEY};
+static const char* const PARK_MS_KEYS[STEER_PARK_RUNGS] = {
+    STEER_PARK_T1_NVS_KEY, STEER_PARK_T2_NVS_KEY, STEER_PARK_T3_NVS_KEY};
+
+static inline double parkDeg(int32_t v) { return (double)v / 10.0; }
+
 SteeringController::SteeringController(IMotorDriver& motor)
     : motor_(motor),
       can_(nullptr),
@@ -50,6 +69,14 @@ SteeringController::SteeringController(IMotorDriver& motor)
       targetRel_(0),
       posState_(SteerPosState::IDLE),
       posTimers_(),
+      parkParams_(PARK_DEFAULTS),
+      parkEnabled_(STEER_PARK_ENABLED_DEFAULT),
+      parkState_(),
+      parkRefTarget_(0),
+      parkSettleStartMs_(0),
+      parkPulseActive_(false),
+      parkPulseEndMs_(0),
+      parkLast_(),
       jogDir_(0),
       lastJogRefresh_(0),
       jogPulseUntil_(0),
@@ -157,12 +184,14 @@ void SteeringController::refreshSensor(uint32_t now) {
 // === Movement ===
 
 void SteeringController::loopToIdle() {
+    parkCancel();   // leaving PARKED (or a jog / nudge / rate drive taking over)
     if (posState_ == SteerPosState::IDLE) return;
     motor_.stop();
     posState_ = SteerPosState::IDLE;
 }
 
 void SteeringController::stop() {
+    parkCancel();
     motor_.stop();
     posState_ = SteerPosState::IDLE;
     jogDir_ = 0;
@@ -190,6 +219,7 @@ bool SteeringController::diagDrive(int16_t speed) {
     if (!diagLock_ || !steerDriverOk_) return false;
     if (speed > STEER_PWM_MAX_DUTY) speed = STEER_PWM_MAX_DUTY;
     if (speed < -STEER_PWM_MAX_DUTY) speed = -STEER_PWM_MAX_DUTY;
+    parkCancel();
     posState_ = SteerPosState::IDLE;   // update() must not drive the loop or a jog meanwhile
     jogDir_ = 0;
     jogPulseUntil_ = 0;
@@ -364,6 +394,8 @@ void SteeringController::update() {
     switch (ev) {
         case SteerPosEvent::PARKED:
             motor_.stop();   // coast once; the self-locking worm holds the shaft
+            parkCancel();
+            parkRestartSettle(now);   // new park entry: settle clock, ladder and budget re-armed
             Debug::printfFeature(DebugFeature::SERVO, "[STEER] parked err=%ld\n", (long)error);
             return;
         case SteerPosEvent::STALL:
@@ -375,12 +407,19 @@ void SteeringController::update() {
             stop();
             return;
         case SteerPosEvent::RESTARTED:
+            // The main loop keeps priority over the park correction (a pulse's overshoot
+            // beyond STEER_RESTART_TOLERANCE included): cancel it, then drive from rest.
+            parkCancel(true, error);
             Debug::printfFeature(DebugFeature::SERVO, "[STEER] parked -> drive err=%ld\n", (long)error);
             break;
         case SteerPosEvent::NONE:
             break;
     }
-    if (posState_ != SteerPosState::DRIVING) return;   // PARKED: no motor commands
+    if (posState_ != SteerPosState::DRIVING) {
+        // PARKED: no motor commands, except the bounded park correction
+        if (posState_ == SteerPosState::PARKED) serviceParkCorrection(now, rel, error);
+        return;
+    }
 
     // Motor positive = wheel right = position increasing. THE sign-critical spot: this relies
     // on the sensor sign (direction flag inv_) matching the motor sign. It is gated by
@@ -406,6 +445,7 @@ bool SteeringController::latchBlocks(int8_t d, uint32_t now) const {
 }
 
 void SteeringController::triggerStallStop(int8_t dir, const char* reason) {
+    parkCancel();
     motor_.stop();
     posState_ = SteerPosState::IDLE;
     jogDir_ = 0;
@@ -431,6 +471,7 @@ bool SteeringController::serviceDriver(uint32_t now) {
                                   "[STEER] VESC driver fault (no telemetry) — motor stopped");
         }
         steerDriverOk_ = false;
+        parkCancel();
         motor_.stop();
         posState_ = SteerPosState::IDLE;
         jogDir_ = 0;
@@ -447,9 +488,11 @@ bool SteeringController::serviceDriver(uint32_t now) {
     // fault on Absolute Max Current (and on over-temperature), and clamps at Motor
     // Current Max below that.
     if (motor_.hasFault()) {
-        if (posState_ == SteerPosState::DRIVING || jogDir_ != 0) {
+        // A park pulse is a drive in progress too: latch its direction (lastDriveDir_).
+        if (posState_ == SteerPosState::DRIVING || jogDir_ != 0 || parkPulseActive_) {
             triggerStallStop(lastDriveDir_, "vesc-fault");
         } else {
+            parkCancel();
             motor_.stop();   // idle or parked: coast, no latch (no drive was in progress)
             posState_ = SteerPosState::IDLE;
         }
@@ -515,6 +558,13 @@ bool SteeringController::commandTarget(int32_t target) {
     // update() by the stop hysteresis. The latch is never set while tracking (a stall ends
     // in IDLE), so it is not checked here.
     if (loopActive()) {
+        if (abs(target - parkRefTarget_) > STEER_PARK_TARGET_STABLE) {
+            // Target moved beyond the stable band: cancel a correction (recorded when it had
+            // pulsed, residual against the old target) and restart the settle clock.
+            parkCancel(true, targetRel_ - getPosition());
+            parkRestartSettle(millis());
+            parkRefTarget_ = target;
+        }
         targetRel_ = target;
         return true;
     }
@@ -533,6 +583,8 @@ bool SteeringController::commandTarget(int32_t target) {
     targetRel_ = target;
     jogDir_ = 0;
     jogPulseUntil_ = 0;
+    parkCancel();
+    parkRestartSettle(now);   // a command from idle is a new park entry
     if (steerPosStart(posState_, posTimers_, POS_PARAMS, target, rel, now) == SteerPosState::PARKED) {
         motor_.stop();   // already there: coast (also ends a cancelled jog's drive)
         Debug::printfFeature(DebugFeature::SERVO, "[STEER] parked err=%ld\n", (long)(target - rel));
@@ -814,6 +866,7 @@ void SteeringController::loadCalibration() {
                                  "recalibration required (sensor zero + Left/Right)\n",
                                  (long)ver, (long)STEER_CAL_VERSION, removed);
         }
+        loadParkSettings(prefs);   // park_* keys: never touched by the migration above
         prefs.end();
     }
     lws_.setInverted(inv_);
@@ -861,4 +914,236 @@ void SteeringController::eraseLimits() {
     limLeft_ = POS_UNSET;
     limRight_ = POS_UNSET;
     revalidateCalibration();
+}
+
+// === Park correction (include/SteerParkLaw.h, change add-steering-park-correction) ===
+
+const char* SteeringController::parkOutcomeToken(ParkOutcome o) {
+    switch (o) {
+        case ParkOutcome::NONE:      return "none";
+        case ParkOutcome::DONE:      return "done";
+        case ParkOutcome::GAVE_UP:   return "gave_up";
+        case ParkOutcome::CANCELLED: return "cancelled";
+    }
+    return "none";
+}
+
+void SteeringController::parkCancel(bool record, int32_t residual) {
+    if (parkPulseActive_) {
+        motor_.stop();   // end a running pulse at once (coast)
+        parkPulseActive_ = false;
+    }
+    if (record && parkState_.phase == SteerParkPhase::WAIT && parkState_.pulses > 0) {
+        parkLast_.outcome = ParkOutcome::CANCELLED;
+        parkLast_.pulses = parkState_.pulses;
+        parkLast_.residual = residual;
+        parkLast_.duty = parkState_.lastDuty;
+        parkLast_.ms = parkState_.lastMs;
+        Debug::printfFeature(DebugFeature::SERVO,
+                             "[STEER] park correction cancelled at %.2f deg (%u pulses)\n",
+                             parkDeg(residual), (unsigned)parkState_.pulses);
+    }
+    parkState_.reset();
+}
+
+void SteeringController::parkRestartSettle(uint32_t now) {
+    parkRefTarget_ = targetRel_;
+    parkSettleStartMs_ = now;
+}
+
+void SteeringController::serviceParkCorrection(uint32_t now, int32_t pos, int32_t err) {
+    // Position mode is implied here (update() reaches PARKED only with a healthy, calibrated
+    // sensor and the VESC link up); the switch and the USB diagnostics lock gate the rest.
+    if (!parkEnabled_ || diagLock_) return;
+
+    if (parkPulseActive_) {
+        if ((int32_t)(now - parkPulseEndMs_) < 0) return;   // pulse still running
+        motor_.stop();   // pulse length reached: coast; the worm holds the shaft
+        parkPulseActive_ = false;
+    }
+
+    // Stall latch: a pulse toward a direction latched within STEER_STALL_COOLDOWN_MS is not
+    // sent and not counted — the law is simply not stepped until the cooldown has passed.
+    const int8_t errDir = err > 0 ? 1 : (err < 0 ? -1 : 0);
+    if (latchBlocks(errDir, now)) return;
+
+    const SteerParkResult r = steerParkStep(parkState_, parkParams_, now, err, pos,
+                                            now - parkSettleStartMs_);
+    if (r.evaluated) {
+        Debug::printfFeature(DebugFeature::SERVO, "[STEER] park nudge %ux%u -> moved %.2f deg (err %.2f)\n",
+                             (unsigned)r.evalDuty, (unsigned)r.evalMs, parkDeg(r.moved), parkDeg(err));
+        if (r.note == SteerParkNote::OVERSHOOT) {
+            Debug::printfFeature(DebugFeature::SERVO, "[STEER] park overshoot -> rung 1, reversing (err %.2f)\n",
+                                 parkDeg(err));
+        } else if (r.note == SteerParkNote::WRONG_WAY) {
+            Debug::printfFeature(DebugFeature::SERVO, "[STEER] park nudge moved the wrong way -> rung 1 (err %.2f)\n",
+                                 parkDeg(err));
+        }
+    }
+
+    switch (r.action) {
+        case SteerParkAction::PULSE:
+            // Straight to the driver, NOT driveJog(): no STEER_PWM_MIN_DUTY floor, no jog state.
+            lastDriveDir_ = r.dir;   // a VESC fault during the pulse latches this direction
+            motor_.setSpeed((int16_t)(r.dir * (int16_t)r.duty));
+            parkPulseActive_ = true;
+            parkPulseEndMs_ = now + r.ms;
+            break;
+        case SteerParkAction::DONE:
+        case SteerParkAction::GIVE_UP: {
+            const bool done = (r.action == SteerParkAction::DONE);
+            parkLast_.outcome = done ? ParkOutcome::DONE : ParkOutcome::GAVE_UP;
+            parkLast_.pulses = parkState_.pulses;
+            parkLast_.residual = err;
+            parkLast_.duty = parkState_.lastDuty;
+            parkLast_.ms = parkState_.lastMs;
+            Debug::printfFeature(DebugFeature::SERVO, "[STEER] park correction %s at %.2f deg (%u pulses)\n",
+                                 done ? "done" : "gave up", parkDeg(err), (unsigned)parkState_.pulses);
+            break;
+        }
+        case SteerParkAction::NONE:
+            break;
+    }
+}
+
+void SteeringController::loadParkSettings(Preferences& prefs) {
+    // Missing key → default (NVS not written). Out of range / non-monotonic → logged, default
+    // in RAM, NVS not rewritten.
+    SteerParkParams p = PARK_DEFAULTS;
+    parkEnabled_ = prefs.isKey(STEER_PARK_EN_NVS_KEY) ? prefs.getBool(STEER_PARK_EN_NVS_KEY, STEER_PARK_ENABLED_DEFAULT)
+                                                     : STEER_PARK_ENABLED_DEFAULT;
+
+    for (uint8_t i = 0; i < STEER_PARK_RUNGS; i++) {
+        if (prefs.isKey(PARK_DUTY_KEYS[i])) {
+            const uint8_t d = prefs.getUChar(PARK_DUTY_KEYS[i], p.rung[i].duty);
+            if (d >= STEER_PARK_DUTY_MIN && d <= STEER_PARK_DUTY_MAX) {
+                p.rung[i].duty = d;
+            } else {
+                Debug::printfFeature(DebugFeature::SERVO, "[STEER] NVS %s=%u out of range (%d-%d) — default %u used\n",
+                                     PARK_DUTY_KEYS[i], (unsigned)d, STEER_PARK_DUTY_MIN, STEER_PARK_DUTY_MAX,
+                                     (unsigned)p.rung[i].duty);
+            }
+        }
+        if (prefs.isKey(PARK_MS_KEYS[i])) {
+            const uint16_t t = prefs.getUShort(PARK_MS_KEYS[i], p.rung[i].ms);
+            if (t >= STEER_PARK_MS_MIN && t <= STEER_PARK_MS_MAX) {
+                p.rung[i].ms = t;
+            } else {
+                Debug::printfFeature(DebugFeature::SERVO, "[STEER] NVS %s=%u out of range (%d-%d ms) — default %u used\n",
+                                     PARK_MS_KEYS[i], (unsigned)t, STEER_PARK_MS_MIN, STEER_PARK_MS_MAX,
+                                     (unsigned)p.rung[i].ms);
+            }
+        }
+    }
+    if (!steerParkLadderValid(p)) {
+        Debug::printfFeature(DebugFeature::SERVO,
+                             "[STEER] NVS park ladder %ux%u / %ux%u / %ux%u decreases — default ladder used\n",
+                             (unsigned)p.rung[0].duty, (unsigned)p.rung[0].ms, (unsigned)p.rung[1].duty,
+                             (unsigned)p.rung[1].ms, (unsigned)p.rung[2].duty, (unsigned)p.rung[2].ms);
+        for (uint8_t i = 0; i < STEER_PARK_RUNGS; i++) p.rung[i] = PARK_DEFAULTS.rung[i];
+    }
+
+    if (prefs.isKey(STEER_PARK_TOL_NVS_KEY)) {
+        const int32_t tol = prefs.getInt(STEER_PARK_TOL_NVS_KEY, p.doneTol);
+        if (tol >= STEER_PARK_DONE_TOL_MIN && tol <= STEER_PARK_DONE_TOL_MAX) {
+            p.doneTol = tol;
+        } else {
+            Debug::printfFeature(DebugFeature::SERVO, "[STEER] NVS %s=%ld out of range (%d-%d) — default %ld used\n",
+                                 STEER_PARK_TOL_NVS_KEY, (long)tol, STEER_PARK_DONE_TOL_MIN, STEER_PARK_DONE_TOL_MAX,
+                                 (long)p.doneTol);
+        }
+    }
+    if (prefs.isKey(STEER_PARK_MAX_NVS_KEY)) {
+        const uint8_t m = prefs.getUChar(STEER_PARK_MAX_NVS_KEY, p.maxPulses);
+        if (m >= STEER_PARK_MAX_PULSES_MIN && m <= STEER_PARK_MAX_PULSES_MAX) {
+            p.maxPulses = m;
+        } else {
+            Debug::printfFeature(DebugFeature::SERVO, "[STEER] NVS %s=%u out of range (%d-%d) — default %u used\n",
+                                 STEER_PARK_MAX_NVS_KEY, (unsigned)m, STEER_PARK_MAX_PULSES_MIN,
+                                 STEER_PARK_MAX_PULSES_MAX, (unsigned)p.maxPulses);
+        }
+    }
+    parkParams_ = p;
+
+    Debug::printfFeature(DebugFeature::SERVO,
+                         "[STEER] Park correction %s: ladder %ux%u / %ux%u / %ux%u, done %.1f deg, max %u pulses\n",
+                         parkEnabled_ ? "ON" : "OFF", (unsigned)p.rung[0].duty, (unsigned)p.rung[0].ms,
+                         (unsigned)p.rung[1].duty, (unsigned)p.rung[1].ms, (unsigned)p.rung[2].duty,
+                         (unsigned)p.rung[2].ms, parkDeg(p.doneTol), (unsigned)p.maxPulses);
+}
+
+SteeringController::ParkSetResult SteeringController::setParkEnabled(bool on) {
+    // Persist first: RAM changes only once NVS holds the value. One key in the shared
+    // "steering" namespace — never clear() it.
+    Preferences prefs;
+    bool ok = false;
+    if (prefs.begin(NVS_NS, false)) {
+        ok = prefs.putBool(STEER_PARK_EN_NVS_KEY, on) == sizeof(uint8_t);
+        prefs.end();
+    }
+    if (!ok) return ParkSetResult::SAVE_FAILED;
+    parkCancel();                  // a running correction ends (pulse coasts) ...
+    parkRestartSettle(millis());   // ... and the next one waits a full settle time
+    parkEnabled_ = on;
+    Debug::printfFeature(DebugFeature::SERVO, "[STEER] Park correction %s\n", on ? "enabled" : "disabled");
+    return ParkSetResult::OK;
+}
+
+SteeringController::ParkSetResult SteeringController::setParkRung(uint8_t rung, int32_t duty, int32_t ms) {
+    if (rung < 1 || rung > STEER_PARK_RUNGS ||
+        duty < STEER_PARK_DUTY_MIN || duty > STEER_PARK_DUTY_MAX ||
+        ms < STEER_PARK_MS_MIN || ms > STEER_PARK_MS_MAX) {
+        return ParkSetResult::OUT_OF_RANGE;
+    }
+    SteerParkParams candidate = parkParams_;
+    candidate.rung[rung - 1].duty = (uint8_t)duty;
+    candidate.rung[rung - 1].ms = (uint16_t)ms;
+    if (!steerParkLadderValid(candidate)) return ParkSetResult::NOT_MONOTONIC;
+
+    Preferences prefs;
+    bool ok = false;
+    if (prefs.begin(NVS_NS, false)) {
+        ok = prefs.putUChar(PARK_DUTY_KEYS[rung - 1], (uint8_t)duty) == sizeof(uint8_t);
+        ok = ok && prefs.putUShort(PARK_MS_KEYS[rung - 1], (uint16_t)ms) == sizeof(uint16_t);
+        prefs.end();
+    }
+    if (!ok) return ParkSetResult::SAVE_FAILED;
+    parkCancel();                  // a running correction ends (pulse coasts) ...
+    parkRestartSettle(millis());   // ... and the next one waits a full settle time
+    parkParams_ = candidate;
+    Debug::printfFeature(DebugFeature::SERVO, "[STEER] Park rung %u set to %ldx%ld\n",
+                         (unsigned)rung, (long)duty, (long)ms);
+    return ParkSetResult::OK;
+}
+
+SteeringController::ParkSetResult SteeringController::setParkDoneTol(int32_t tol) {
+    if (tol < STEER_PARK_DONE_TOL_MIN || tol > STEER_PARK_DONE_TOL_MAX) return ParkSetResult::OUT_OF_RANGE;
+    Preferences prefs;
+    bool ok = false;
+    if (prefs.begin(NVS_NS, false)) {
+        ok = prefs.putInt(STEER_PARK_TOL_NVS_KEY, tol) == sizeof(int32_t);
+        prefs.end();
+    }
+    if (!ok) return ParkSetResult::SAVE_FAILED;
+    parkCancel();                  // a running correction ends (pulse coasts) ...
+    parkRestartSettle(millis());   // ... and the next one waits a full settle time
+    parkParams_.doneTol = tol;
+    Debug::printfFeature(DebugFeature::SERVO, "[STEER] Park tolerance set to %.1f deg\n", parkDeg(tol));
+    return ParkSetResult::OK;
+}
+
+SteeringController::ParkSetResult SteeringController::setParkMaxPulses(int32_t count) {
+    if (count < STEER_PARK_MAX_PULSES_MIN || count > STEER_PARK_MAX_PULSES_MAX) return ParkSetResult::OUT_OF_RANGE;
+    Preferences prefs;
+    bool ok = false;
+    if (prefs.begin(NVS_NS, false)) {
+        ok = prefs.putUChar(STEER_PARK_MAX_NVS_KEY, (uint8_t)count) == sizeof(uint8_t);
+        prefs.end();
+    }
+    if (!ok) return ParkSetResult::SAVE_FAILED;
+    parkCancel();                  // a running correction ends (pulse coasts) ...
+    parkRestartSettle(millis());   // ... and the next one waits a full settle time
+    parkParams_.maxPulses = (uint8_t)count;
+    Debug::printfFeature(DebugFeature::SERVO, "[STEER] Park max pulses set to %ld\n", (long)count);
+    return ParkSetResult::OK;
 }
