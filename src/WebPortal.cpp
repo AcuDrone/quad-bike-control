@@ -592,6 +592,9 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // 1.5.18 (park correction, ≈ 250 B): master's count puts the worst case — CAN connected, `probe`
     // with all 11 PIDs answered and a full 32-row `sniff` — at ≈ 8.24 KB with the park fields; with
     // the aztec tacho / gear_codes fields on top (≈ 0.25 KB) it is ≈ 8.5 KB, still ≈ 0.7 KB under 9216.
+    // Brake tuning since 1.5.23: brake_travel_ms / brake_hold_pwm / brake_released, 3 scalar
+    // slots (keys by pointer, ≈ 48 B of memory, ≈ 60 B of JSON; brake_pct already existed) —
+    // aztec worst case ≈ 8.55 KB, still ≈ 0.65 KB under 9216 (size unchanged).
     // Static (single caller: the main-loop broadcast) so the larger document is off the stack.
     static StaticJsonDocument<9216> doc;
     doc.clear();
@@ -610,7 +613,10 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
         doc["gear_codes_custom"] = telemetry.gear_codes_custom;  // bit0 R, bit1 N, bit2 H, bit3 L
     }
     doc["hall_position"] = telemetry.hall_position;
-    doc["brake_pct"] = telemetry.brake_pct;
+    doc["brake_pct"] = telemetry.brake_pct;             // position estimate, 0-100 %
+    doc["brake_travel_ms"] = telemetry.brake_travel_ms; // ms
+    doc["brake_hold_pwm"] = telemetry.brake_hold_pwm;   // 0-100, 0 = no hold push
+    doc["brake_released"] = telemetry.brake_released;   // In5 endstop
     doc["throttle_us"] = telemetry.throttle_us;
     doc["throttle_idle_us"] = telemetry.throttle_idle_us;
     doc["throttle_full_us"] = telemetry.throttle_full_us;

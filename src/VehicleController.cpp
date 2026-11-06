@@ -1,5 +1,14 @@
 #include "VehicleController.h"
 #include "Debug.h"
+#include "BrakeLaw.h"
+
+// BrakeLaw.h cannot include Constants.h (native tests): keep its literals in sync.
+static_assert(BRAKE_LAW_TRAVEL_MS_MIN == BRAKE_TRAVEL_MS_MIN, "BrakeLaw.h travel min out of sync");
+static_assert(BRAKE_LAW_TRAVEL_MS_MAX == BRAKE_TRAVEL_MS_MAX, "BrakeLaw.h travel max out of sync");
+static_assert(BRAKE_LAW_TRAVEL_MS_DEFAULT == BRAKE_FULL_TRAVEL_TIME, "BrakeLaw.h travel default out of sync");
+static_assert(BRAKE_LAW_HOLD_PWM_MIN == BRAKE_HOLD_PWM_MIN, "BrakeLaw.h hold min out of sync");
+static_assert(BRAKE_LAW_HOLD_PWM_MAX == BRAKE_HOLD_PWM_MAX, "BrakeLaw.h hold max out of sync");
+static_assert(BRAKE_LAW_HOLD_PWM_DEFAULT == BRAKE_HOLD_SPEED, "BrakeLaw.h hold default out of sync");
 #include <Preferences.h>
 
 VehicleController::VehicleController(SteeringController& steering,
@@ -38,6 +47,8 @@ VehicleController::VehicleController(SteeringController& steering,
       lastBrakeUpdateTime_(0),
       brakeSensorTriggerTime_(0),
       brakeIsMoving_(false),
+      brakeTravelMs_(BRAKE_FULL_TRAVEL_TIME),
+      brakeHoldPwm_(BRAKE_HOLD_SPEED),
       boostTargetRpm_(TRANS_GEAR_BOOST_TARGET_RPM),
       boostGearEnabled_(BOOST_ENABLED_DEFAULT),
       gearBoostActive_(false),
@@ -343,6 +354,29 @@ bool VehicleController::initCAN() {
     }
     Debug::printfFeature(DebugFeature::VEHICLE, "[SPEED] Limiter floor: %.1f %%, slew: %.1f %%/s\n",
                          limiterFloorPct_, limiterSlewPctS_);
+
+    // Brake full travel time and hold drive, NVS "brake" (VehicleController owns the brake
+    // estimate). A missing key reads as the default; an out-of-range stored value is logged and
+    // ignored (default used, never rewritten).
+    if (prefs.begin(BRAKE_NVS_NAMESPACE, true)) {
+        int32_t travel = prefs.getUShort(BRAKE_TRAVEL_NVS_KEY, BRAKE_FULL_TRAVEL_TIME);
+        int32_t hold = prefs.getUChar(BRAKE_HOLD_NVS_KEY, BRAKE_HOLD_SPEED);
+        prefs.end();
+        if (!brakeTravelMsValid(travel)) {
+            Debug::printfFeature(DebugFeature::VEHICLE,
+                "[BRAKE] Stored travel time %ld ms out of range (%d-%d ms) — ignored\n",
+                (long)travel, BRAKE_TRAVEL_MS_MIN, BRAKE_TRAVEL_MS_MAX);
+        }
+        if (!brakeHoldPwmValid(hold)) {
+            Debug::printfFeature(DebugFeature::VEHICLE,
+                "[BRAKE] Stored hold drive %ld out of range (%d-%d) — ignored\n",
+                (long)hold, BRAKE_HOLD_PWM_MIN, BRAKE_HOLD_PWM_MAX);
+        }
+        brakeTravelMs_ = (uint16_t)brakeTravelMsOrDefault(travel);
+        brakeHoldPwm_ = (uint8_t)brakeHoldPwmOrDefault(hold);
+    }
+    Debug::printfFeature(DebugFeature::VEHICLE, "[BRAKE] Travel time: %u ms, hold drive: %u\n",
+                         (unsigned)brakeTravelMs_, (unsigned)brakeHoldPwm_);
 
     bool result = canController_.begin();
     canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM);
@@ -665,6 +699,12 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
         return;
     } else if (cmd.cmd == "set_steer_park_max") {
         processSetSteerParkMaxCommand(cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_brake_travel_ms") {
+        processSetBrakeTravelMsCommand(cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_brake_hold_pwm") {
+        processSetBrakeHoldPwmCommand(cmd.floatValue, webPortal);
         return;
     } else if (cmd.cmd == "set_test_speed") {
         processSetTestSpeedCommand(cmd.floatValue, webPortal);
@@ -1359,6 +1399,71 @@ void VehicleController::processSetThrottleOpenSlewCommand(float value, WebPortal
     }
 }
 
+bool VehicleController::setBrakeTravelMs(uint16_t ms) {
+    if (!brakeTravelMsValid(ms)) return false;
+    // Persist first: RAM only changes once NVS holds the new value. Own namespace, one key.
+    Preferences prefs;
+    bool ok = false;
+    if (prefs.begin(BRAKE_NVS_NAMESPACE, false)) {
+        ok = prefs.putUShort(BRAKE_TRAVEL_NVS_KEY, ms) == sizeof(uint16_t);
+        prefs.end();
+    }
+    if (!ok) return false;
+    brakeTravelMs_ = ms;   // the estimate's rate changes from the next updateBrakeControl(); no rescale
+    Debug::printfFeature(DebugFeature::BRAKE, "[BRAKE] Travel time set to %u ms\n", (unsigned)ms);
+    return true;
+}
+
+bool VehicleController::setBrakeHoldPwm(uint8_t pwm) {
+    if (!brakeHoldPwmValid(pwm)) return false;
+    Preferences prefs;
+    bool ok = false;
+    if (prefs.begin(BRAKE_NVS_NAMESPACE, false)) {
+        ok = prefs.putUChar(BRAKE_HOLD_NVS_KEY, pwm) == sizeof(uint8_t);
+        prefs.end();
+    }
+    if (!ok) return false;
+    brakeHoldPwm_ = pwm;   // read every hold cycle
+    Debug::printfFeature(DebugFeature::BRAKE, "[BRAKE] Hold drive set to %u\n", (unsigned)pwm);
+    return true;
+}
+
+void VehicleController::processSetBrakeTravelMsCommand(float value, WebPortal& webPortal) {
+    if (!isnan(value)) value = roundf(value);   // whole ms
+    if (isnan(value) || !brakeTravelMsValid((int32_t)value)) {
+        webPortal.sendResponse(false, "Brake travel time out of range (" +
+                                      String(BRAKE_TRAVEL_MS_MIN) + "-" +
+                                      String(BRAKE_TRAVEL_MS_MAX) + " ms)");
+        return;
+    }
+    const uint16_t ms = (uint16_t)value;
+    if (!setBrakeTravelMs(ms)) {
+        webPortal.sendResponse(false, "Failed to save the brake setting");
+        return;
+    }
+    webPortal.sendResponse(true, "Brake travel time set to " + String(ms) + " ms");
+}
+
+void VehicleController::processSetBrakeHoldPwmCommand(float value, WebPortal& webPortal) {
+    if (!isnan(value)) value = roundf(value);   // whole PWM step
+    if (isnan(value) || !brakeHoldPwmValid((int32_t)value)) {
+        webPortal.sendResponse(false, "Brake hold out of range (" +
+                                      String(BRAKE_HOLD_PWM_MIN) + "-" +
+                                      String(BRAKE_HOLD_PWM_MAX) + ")");
+        return;
+    }
+    const uint8_t pwm = (uint8_t)value;
+    if (!setBrakeHoldPwm(pwm)) {
+        webPortal.sendResponse(false, "Failed to save the brake setting");
+        return;
+    }
+    if (pwm == 0) {
+        webPortal.sendResponse(true, "Brake hold off");
+    } else {
+        webPortal.sendResponse(true, "Brake hold set to " + String(pwm));
+    }
+}
+
 void VehicleController::processSetSteerScaBaseCommand(float value, WebPortal& webPortal) {
     if (isnan(value) || value < 0.0f || value > STEER_SCALE_BASE_MAX_MS) {
         webPortal.sendResponse(false, "Steering scale base out of range (0-" +
@@ -2012,7 +2117,7 @@ void VehicleController::updateBrakeControl() {
 
         // Calculate movement rate based on speed
         float speedFraction = abs(speed) / 255.0f;
-        float movementRate = (100.0f / BRAKE_FULL_TRAVEL_TIME) * speedFraction;  // %/ms
+        float movementRate = brakeRatePctPerMs(brakeTravelMs_) * speedFraction;  // %/ms
         float expectedMovement = movementRate * dt;
 
         currentBrakePosition_ += direction * expectedMovement;
@@ -2052,7 +2157,12 @@ void VehicleController::updateBrakeControl() {
         }
 
         // Hold position against cylinder hydraulic preassure return
-        brake_.setSpeed(BRAKE_HOLD_SPEED);
+        // (configured hold drive; 0 = no push, the actuator coasts)
+        if (brakeHoldPwm_ > 0) {
+            brake_.setSpeed(brakeHoldPwm_);
+        } else {
+            brake_.stop();
+        }
     }
 }
 

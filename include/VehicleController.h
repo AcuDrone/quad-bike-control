@@ -183,6 +183,22 @@ public:
         return snap.valid && snap.brakeReleased;
     }
 
+    /** @brief Current open-loop brake position estimate, 0–100 % (telemetry `brake_pct`) */
+    float getBrakePositionPct() const { return currentBrakePosition_; }
+    /** @brief Brake full travel time in use, ms (NVS "brake"/travel_ms, default BRAKE_FULL_TRAVEL_TIME) */
+    uint16_t getBrakeTravelMs() const { return brakeTravelMs_; }
+    /** @brief Brake hold drive in use, PWM 0–100 on the 0–255 scale, 0 = no push (NVS "brake"/hold_pwm) */
+    uint8_t getBrakeHoldPwm() const { return brakeHoldPwm_; }
+
+    /**
+     * @brief Set the brake full travel time / hold drive. Validated (BrakeLaw.h), persisted to
+     * NVS "brake" FIRST, then applied; false (value in use unchanged) on an invalid value or a
+     * failed NVS write. A new travel time changes the estimate's rate from the next
+     * updateBrakeControl() without rescaling the estimate; a new hold applies at the next hold cycle.
+     */
+    bool setBrakeTravelMs(uint16_t ms);
+    bool setBrakeHoldPwm(uint8_t pwm);
+
     /** @brief Latest calibrated 12 V battery voltage (V); meaningful only when isBatteryValid() */
     float getBatteryV() const { return batteryV_; }
 
@@ -472,6 +488,8 @@ private:
     uint32_t lastBrakeUpdateTime_;      // Last position update timestamp
     uint32_t brakeSensorTriggerTime_;   // Time when brake sensor detected release (0 = not triggered)
     bool brakeIsMoving_;
+    uint16_t brakeTravelMs_;            // full travel time in use, ms (NVS "brake"/travel_ms)
+    uint8_t brakeHoldPwm_;              // hold drive in use, 0–100 PWM, 0 = coast (NVS "brake"/hold_pwm)
 
     // Gear boost configuration (NVS-backed, runtime-editable)
     int32_t boostTargetRpm_;            // RPM target for gear boost PID (default TRANS_GEAR_BOOST_TARGET_RPM)
@@ -797,6 +815,14 @@ private:
     void processSetSteerParkRungCommand(float rung, const String& strValue, WebPortal& webPortal);
     void processSetSteerParkTolCommand(float deg, WebPortal& webPortal);
     void processSetSteerParkMaxCommand(float count, WebPortal& webPortal);
+
+    /**
+     * @brief Brake tuning (`set_brake_travel_ms` ms, `set_brake_hold_pwm` 0–100). Rounded to a
+     * whole number, validated, persisted to NVS "brake" first, then applied. Accepted from any
+     * input source (settings, not the brake command).
+     */
+    void processSetBrakeTravelMsCommand(float value, WebPortal& webPortal);
+    void processSetBrakeHoldPwmCommand(float value, WebPortal& webPortal);
 
     /**
      * @brief Speed-scale the AUTOPILOT steering command. ArduPilot's own formula,
