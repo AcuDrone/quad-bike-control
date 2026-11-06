@@ -545,13 +545,15 @@ struct ServoChannelConfig {
 #define STEER_PARK_MOVE_MIN       1     // 0.1° (0.1°) — smaller position change = "did not move" (escalate)
 // Web settings (NVS "steering", owned by SteeringController): defaults and bounds
 #define STEER_PARK_ENABLED_DEFAULT     true
-// aztec (rack steering, 2026-11-06): 40×40 / 40×50 / 40×60 (quad: 70×80 / 85×90 / 100×100, which
-// gives 2.4–5.6° per pulse on the buggy). Applies to a fresh NVS only; saved web values win.
+// aztec (rack steering, bench-verified on the buggy 2026-11-06): 40×50 / 40×60 / 50×60, measured
+// 0.3° / 0.55° / 1.0° per pulse (40×40 ≈ 0.1°, barely moves the rack). Non-decreasing in both duty
+// and ms, as the ladder requires. Quad: 70×80 / 85×90 / 100×100, which gives 2.4–5.6° per pulse on
+// the buggy. Applies to a fresh NVS only; saved web values win.
 #define STEER_PARK_DUTY1_DEFAULT       40    // rung 1 duty (0-255); = STEER_PARK_DUTY_MIN
 #define STEER_PARK_DUTY2_DEFAULT       40
-#define STEER_PARK_DUTY3_DEFAULT       40
-#define STEER_PARK_MS1_DEFAULT         40    // rung 1 length, ms; = STEER_PARK_MS_MIN
-#define STEER_PARK_MS2_DEFAULT         50
+#define STEER_PARK_DUTY3_DEFAULT       50
+#define STEER_PARK_MS1_DEFAULT         50    // rung 1 length, ms
+#define STEER_PARK_MS2_DEFAULT         60
 #define STEER_PARK_MS3_DEFAULT         60
 #define STEER_PARK_DONE_TOL_DEFAULT    2     // 0.1° (0.2°) — a correction ends within this
 #define STEER_PARK_MAX_PULSES_DEFAULT  5     // pulses per parking (a done does not refill the budget)

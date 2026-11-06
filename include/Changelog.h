@@ -21,10 +21,10 @@ static const char CHANGELOG_JSON[] = R"JSON({"releases":[
 ]},
 {"version":"1.5.18","date":"2026-11-06","uk":[
 "Доводка керма в центр: якщо після повороту колесо зупинилось за 0,4–1,0° від цілі, прошивка через ≈1 с доводить його короткими імпульсами до 0,2° (до 5 імпульсів); налаштовується в новій картці «Доводка центру керма» (можна вимкнути)",
-"Баггі (рейкове кермо): потужності керма підібрані за вимірами через USB — мінімальна 30 (зрушення і рух, було 80 / 70), точний імпульс 40 × 50 мс ≈ 0,3°, ручний рух 50 (повзунок 20–255), типові імпульси доводки 40 × 40 / 50 / 60 мс; квадроциклові значення були в 2–3 рази завеликі й давали перескок 0,7–1,2° за центр"
+"Баггі (рейкове кермо): потужності керма підібрані за вимірами через USB — мінімальна 30 (зрушення і рух, було 80 / 70), точний імпульс 40 × 50 мс ≈ 0,3°, ручний рух 50 (повзунок 20–255), типові імпульси доводки 40 × 50 / 40 × 60 / 50 × 60 мс; квадроциклові значення були в 2–3 рази завеликі й давали перескок 0,7–1,2° за центр"
 ],"en":[
 "Steering park correction: when the wheel parks 0.4–1.0° off target after a turn, the firmware finishes the move after ≈1 s with short pulses to within 0.2° (up to 5 pulses); set it in the new “Steering park correction” card (can be switched off)",
-"Buggy (rack steering): steering duties tuned from USB measurements — floor 30 (break-away and tracking, was 80 / 70), nudge 40 × 50 ms ≈ 0.3°, jog 50 (slider 20–255), park-correction defaults 40 × 40 / 50 / 60 ms; the quad values were 2–3× too strong and overshot the centre by 0.7–1.2°"
+"Buggy (rack steering): steering duties tuned from USB measurements — floor 30 (break-away and tracking, was 80 / 70), nudge 40 × 50 ms ≈ 0.3°, jog 50 (slider 20–255), park-correction defaults 40 × 50 / 40 × 60 / 50 × 60 ms; the quad values were 2–3× too strong and overshot the centre by 0.7–1.2°"
 ]},
 {"version":"1.5.17","date":"2026-11-06","uk":[
 "Поле точного кута керма на телефоні приймає від'ємні (ліві) кути: кнопка «±» змінює знак, а клавіатура тепер має мінус"
