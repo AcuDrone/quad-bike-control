@@ -101,7 +101,12 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     // Transmission servo position (0.0–100.0 %)
     telemetry.hall_position = vehicleController_.getTransmission().getCurrentServoPct();
 
-    telemetry.brake_pct = 0.0f;
+    // Brake: the open-loop position estimate the firmware acts on (not the target), the tuning
+    // values in use and the released endstop (In5; false on an invalid expander snapshot).
+    telemetry.brake_pct = vehicleController_.getBrakePositionPct();
+    telemetry.brake_travel_ms = vehicleController_.getBrakeTravelMs();
+    telemetry.brake_hold_pwm = vehicleController_.getBrakeHoldPwm();
+    telemetry.brake_released = vehicleController_.isBrakeReleased();
     telemetry.mav_active = mavlink_.isSignalValid();
     telemetry.web_control = vehicleController_.isWebControl();
 

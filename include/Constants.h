@@ -613,10 +613,24 @@ static_assert(STEER_PWM_MIN_DUTY >= STEER_PWM_TRACK_MIN_DUTY, "break-away floor 
 // ============================================================================
 
 // Brake Movement Parameters
-#define BRAKE_FULL_TRAVEL_TIME 1500  // ms - estimated time for 0-100% brake travel
+// BRAKE_FULL_TRAVEL_TIME and BRAKE_HOLD_SPEED are the DEFAULTS of the per-vehicle, web-tunable
+// values (change add-brake-tuning-card; NVS "brake"/travel_ms and hold_pwm, owned by
+// VehicleController, law in include/BrakeLaw.h — keep its literals in sync).
+#define BRAKE_FULL_TRAVEL_TIME 1500  // ms - default estimated time for 0-100% brake travel (measured on the quad)
 #define BRAKE_TOLERANCE        1  // % - position tolerance for "at target"
 #define BRAKE_SENSOR_OVERRUN_TIME 1000  // ms - continue moving after sensor triggers (full retraction)
-#define BRAKE_HOLD_SPEED          30    // PWM (0-255) applied against spring return when at target position
+#define BRAKE_HOLD_SPEED          30    // PWM (0-255) default push against the hydraulic return when at target position
+// Travel 1000–3000 ms around the measured 1500 ms: covers a faster or slower actuator on the other
+// vehicle; the cap also bounds how long a too-long setting stalls the actuator at full drive.
+#define BRAKE_TRAVEL_MS_MIN    1000  // ms
+#define BRAKE_TRAVEL_MS_MAX    3000  // ms
+// Hold 0–100 on the 0–255 PWM scale: 0 = no push (coast); above ~100 the stalled actuator and the
+// BTS7960 heat up for as long as the brake is held, so the cap is well below full drive.
+#define BRAKE_HOLD_PWM_MIN     0
+#define BRAKE_HOLD_PWM_MAX     100
+#define BRAKE_NVS_NAMESPACE    "brake"
+#define BRAKE_TRAVEL_NVS_KEY   "travel_ms"   // uint16, ms
+#define BRAKE_HOLD_NVS_KEY     "hold_pwm"    // uint8, PWM 0-255 scale
 
 // ============================================================================
 // VEHICLE SPEED SENSOR (12V toothed-ring pickup, PCNT on PIN_SPEED_SENSOR)
@@ -895,7 +909,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.22"
+#define FIRMWARE_VERSION "1.5.23"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

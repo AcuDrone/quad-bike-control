@@ -1021,6 +1021,27 @@
                 </div>
                 <div id="throttle-cal-status" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
             </div>
+            <!-- Brake tuning (travel time + hold drive, endstop state) -->
+            <div class="card" id="brake-card">
+                <h2 class="card-title"><span data-i18n="card_brake">🛑 Brake</span><button type="button" class="help-btn" onclick="openHelp('brake_help', 'card_brake')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <div>
+                    <label data-i18n="lbl_brake_travel" for="brake-travel-slider" style="font-size: 0.8em; color: var(--muted-foreground);">Full travel time</label>
+                    <div style="display: flex; gap: 8px; align-items: center; margin-top: 4px;">
+                        <input type="range" min="1000" max="3000" step="50" value="1500" id="brake-travel-slider" style="flex:1; min-width:0; height: 28px;">
+                        <span id="brake-travel-val" style="color:var(--foreground); min-width:4.5em; text-align:right;">1500 ms</span>
+                    </div>
+                </div>
+                <div style="margin-top: 10px;">
+                    <label data-i18n="lbl_brake_hold" for="brake-hold-input" style="font-size: 0.8em; color: var(--muted-foreground);">Hold drive (PWM 0-100)</label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px;">
+                        <input type="number" id="brake-hold-input" min="0" max="100" step="5" inputmode="numeric" style="flex:1; min-width:0; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button onclick="saveBrakeHoldPwm()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                    </div>
+                    <div data-i18n="brake_hold_hint" style="margin-top: 4px; font-size: 0.75em; color: var(--muted-foreground);">0 = no hold push</div>
+                </div>
+                <div id="brake-endstop" style="margin-top: 12px; font-size: 0.8em; color: var(--muted-foreground);">--</div>
+                <div id="brake-status-msg" style="margin-top: 8px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
+            </div>
             <!-- Gear Position Defaults -->
             <div class="card">
                 <h2 class="card-title"><span data-i18n="card_gear_defaults">⚙️ Gear Position Defaults</span><button type="button" class="help-btn" onclick="openHelp('gear_defaults_help', 'card_gear_defaults')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
@@ -1555,6 +1576,19 @@
                 invalid_steer_park_max: 'Max pulses must be a whole number 1-10',
                 steer_park_saving: 'Saving the park correction setting...',
 
+                // Brake tuning card
+                card_brake: '🛑 Brake',
+                brake_help: 'The brake position is estimated by time (there is no position sensor). <b>Full travel time</b>: set it so that the panel\'s brake percentage reaches 100 % just as the actuator reaches its end. <b>Hold drive</b>: the push that keeps a held brake from creeping back; 0 = none, higher values heat the actuator and the driver.',
+                lbl_brake_travel: 'Full travel time',
+                brake_travel_val: '%s ms',
+                lbl_brake_hold: 'Hold drive (PWM 0-100)',
+                brake_hold_hint: '0 = no hold push',
+                brake_endstop_released: 'Endstop: released',
+                brake_endstop_no: 'Endstop: no',
+                invalid_brake_travel: 'Travel time must be 1000-3000 ms',
+                invalid_brake_hold: 'Hold drive must be a whole number 0-100',
+                brake_saving: 'Saving the brake setting...',
+
                 // Throttle calibration card
                 card_throttle_cal: '🎚️ Throttle Calibration',
                 throttle_cal_help: 'Throttle servo endpoints (µs). <b>Engine must be OFF.</b> Press <b>Start</b>, drag a slider — the servo follows live — then <b>Save</b>. Full may be below idle (mirrored servo).',
@@ -2012,6 +2046,19 @@
                 relay_fn_q_7: 'резерв',
                 relay_fn_q_8: 'резерв',
                 relay_test_blocked: 'Доступно лише при ВИМК запалюванні, вимкненому світлі, відпущеному блокуванні колеса (якщо встановлене) та справній платі реле.',
+
+                // Brake tuning card
+                card_brake: '🛑 Гальмо',
+                brake_help: 'Положення гальма оцінюється за часом (датчика положення немає). <b>Час повного ходу</b>: підберіть так, щоб відсоток гальма на панелі досягав 100 % саме тоді, коли актуатор доходить до краю. <b>Утримання</b>: підтиск, що не дає утримуваному гальму відпускатися; 0 = без утримання, більші значення гріють актуатор і драйвер.',
+                lbl_brake_travel: 'Час повного ходу',
+                brake_travel_val: '%s мс',
+                lbl_brake_hold: 'Утримання (ШІМ 0-100)',
+                brake_hold_hint: '0 = без утримання',
+                brake_endstop_released: 'Кінцевик: відпущено',
+                brake_endstop_no: 'Кінцевик: ні',
+                invalid_brake_travel: 'Час ходу має бути 1000-3000 мс',
+                invalid_brake_hold: 'Утримання має бути цілим числом 0-100',
+                brake_saving: 'Збереження налаштування гальма...',
 
                 card_throttle_cal: '🎚️ Калібрування дроселя',
                 throttle_cal_help: 'Крайні точки серво дроселя (µs). <b>Двигун має бути вимкнено.</b> Натисніть <b>Почати</b>, потягніть повзунок — серво рухається наживо — потім <b>Зберегти</b>. Повний газ може бути меншим за холостий (дзеркальне серво).',
@@ -2503,6 +2550,12 @@
                     steerParkStatus(data.success ? data.message : t('error_prefix') + data.message,
                                     data.success ? 'var(--success)' : 'var(--danger)');
                 }
+                // Brake tuning card
+                if (data.message && (data.message.startsWith('Brake travel') || data.message.startsWith('Brake hold') ||
+                    data.message.startsWith('Failed to save the brake'))) {
+                    brakeStatus(data.success ? data.message : t('error_prefix') + data.message,
+                                data.success ? 'var(--success)' : 'var(--danger)');
+                }
                 // Gear code calibration status
                 if (data.message && (data.message.startsWith('Gear code') || data.message.startsWith('Gear codes'))) {
                     gearCodesStatus(data.success ? data.message : t('error_prefix') + data.message,
@@ -2740,6 +2793,7 @@
                 updateGearBoostButton(data.boost_enabled);
             }
             updateSteerParkCard(data);
+            updateBrakeCard(data);
 
             // Update gear button active state
             updateGearButtons(data.gear);
@@ -3361,6 +3415,69 @@
                 if (gdTrailTimer) { clearTimeout(gdTrailTimer); gdTrailTimer = null; }
                 gdSendMove(gdSliderValue());   // final value on release
                 gdDragging = false;
+            });
+        })();
+
+        // ---- Brake tuning card ----
+        // Travel time: a slider, label live on `input`, ONE set_brake_travel_ms on `change`
+        // (every command is an NVS write, so nothing is streamed while dragging); brakeDragging
+        // keeps telemetry from moving the thumb while the operator holds it (as gdDragging).
+        let brakeDragging = false;
+        function brakeStatus(text, color) {
+            const el = document.getElementById('brake-status-msg');
+            if (!el) return;
+            el.textContent = text;
+            el.style.color = color;
+        }
+        function brakeTravelLabel(ms) {
+            const el = document.getElementById('brake-travel-val');
+            if (el) el.textContent = t('brake_travel_val', ms);
+        }
+        function updateBrakeCard(data) {
+            if (data.brake_travel_ms === undefined) return;   // older firmware: card stays at its defaults
+            const sl = document.getElementById('brake-travel-slider');
+            if (sl && !brakeDragging && Number.isFinite(data.brake_travel_ms)) {
+                sl.value = data.brake_travel_ms;
+                brakeTravelLabel(data.brake_travel_ms);
+            }
+            syncSpeedInput('brake-hold-input', data.brake_hold_pwm);
+            const es = document.getElementById('brake-endstop');
+            if (es) {
+                const rel = data.brake_released === true;
+                es.textContent = t(rel ? 'brake_endstop_released' : 'brake_endstop_no');
+                es.style.color = rel ? 'var(--success)' : 'var(--muted-foreground)';
+            }
+        }
+        function saveBrakeTravelMs(val) {
+            if (!Number.isInteger(val) || val < 1000 || val > 3000) {
+                brakeStatus(t('invalid_brake_travel'), 'var(--danger)');
+                return;
+            }
+            sendCommand('set_brake_travel_ms', val);
+            brakeStatus(t('brake_saving'), 'var(--muted-foreground)');
+        }
+        function saveBrakeHoldPwm() {
+            const raw = document.getElementById('brake-hold-input').value;
+            const val = Number(raw);
+            if (raw === '' || !Number.isInteger(val) || val < 0 || val > 100) {
+                brakeStatus(t('invalid_brake_hold'), 'var(--danger)');
+                return;
+            }
+            sendCommand('set_brake_hold_pwm', val);
+            brakeStatus(t('brake_saving'), 'var(--muted-foreground)');
+        }
+        (function initBrakeTravelSlider() {
+            const sl = document.getElementById('brake-travel-slider');
+            if (!sl) return;
+            sl.addEventListener('pointerdown', () => { brakeDragging = true; });
+            sl.addEventListener('pointercancel', () => { brakeDragging = false; });
+            sl.addEventListener('input', () => {
+                brakeDragging = true;   // keyboard drags too
+                brakeTravelLabel(sl.value);   // label only, nothing is sent while dragging
+            });
+            sl.addEventListener('change', () => {
+                saveBrakeTravelMs(Math.round(Number(sl.value)));   // one send on release
+                brakeDragging = false;
             });
         })();
 

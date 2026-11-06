@@ -50,7 +50,10 @@ public:
         uint32_t timestamp;       // System time in milliseconds
         String gear;              // Current gear: "R", "N", "L", "H"
         float hall_position;      // Transmission servo position (0.0–100.0 %)
-        float brake_pct;          // Brake position percentage (0-100)
+        float brake_pct;          // Brake position ESTIMATE (open loop, 0-100 %)
+        uint16_t brake_travel_ms; // Brake full travel time in use (ms)
+        uint8_t brake_hold_pwm;   // Brake hold drive in use (0-100 PWM, 0 = no push)
+        bool brake_released;      // Released endstop (In5) asserted in a valid expander snapshot
         uint16_t throttle_us;         // Throttle servo pulse width (µs)
         uint16_t throttle_idle_us;    // Calibrated idle endpoint (µs)
         uint16_t throttle_full_us;    // Calibrated full-throttle endpoint (µs)

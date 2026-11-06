@@ -591,6 +591,9 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // + ≈ 1.23 KB of copied strings ≈ 8.24 KB with the park fields (≈ 7.99 KB without them), i.e.
     // only ≈ 200 B of headroom at 8192 before and none after; 9216 restores ≈ 1 KB. The steady
     // state (no probe / sniff) is ≈ 2.2 KB.
+    // Brake tuning since 1.5.23: brake_travel_ms / brake_hold_pwm / brake_released, 3 scalar
+    // slots (keys by pointer, ≈ 48 B of memory, ≈ 60 B of JSON; brake_pct already existed) —
+    // worst case ≈ 8.29 KB, still ≈ 0.9 KB of headroom at 9216 (size unchanged).
     // Static (single caller: the main-loop broadcast) so the larger document is off the stack.
     static StaticJsonDocument<9216> doc;
     doc.clear();
@@ -598,7 +601,10 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["timestamp"] = telemetry.timestamp;
     doc["gear"] = telemetry.gear;
     doc["hall_position"] = telemetry.hall_position;
-    doc["brake_pct"] = telemetry.brake_pct;
+    doc["brake_pct"] = telemetry.brake_pct;             // position estimate, 0-100 %
+    doc["brake_travel_ms"] = telemetry.brake_travel_ms; // ms
+    doc["brake_hold_pwm"] = telemetry.brake_hold_pwm;   // 0-100, 0 = no hold push
+    doc["brake_released"] = telemetry.brake_released;   // In5 endstop
     doc["throttle_us"] = telemetry.throttle_us;
     doc["throttle_idle_us"] = telemetry.throttle_idle_us;
     doc["throttle_full_us"] = telemetry.throttle_full_us;

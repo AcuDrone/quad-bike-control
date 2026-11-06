@@ -14,6 +14,11 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.23","date":"2026-11-06","uk":[
+"Гальмо: нова картка «Гальмо» — час повного ходу актуатора (повзунок 1000–3000 мс, типово 1500) і сила утримання (0–100, типово 30, 0 = без утримання) налаштовуються з веба для кожної машини окремо; показує стан кінцевика; плитка «Гальмо» на панелі тепер показує оцінене положення гальма замість 0. Потрібно залити оновлений образ LittleFS"
+],"en":[
+"Brake: new “Brake” card — the actuator full travel time (slider 1000–3000 ms, default 1500) and the hold drive (0–100, default 30, 0 = no hold push) are set from the web, per vehicle; it shows the endstop state; the panel “Brake” tile now shows the estimated brake position instead of 0. Upload the updated LittleFS image"
+]},
 {"version":"1.5.22","date":"2026-11-06","uk":[
 "Запуск двигуна: стартер крутить до 5 с за одну спробу (було 2 с) і, як і раніше, відпускається одразу, щойно двигун завівся"
 ],"en":[
