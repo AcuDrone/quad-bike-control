@@ -92,6 +92,17 @@ public:
         bool steer_driver_ok;      // True if the VESC telemetry link is healthy
         float steer_vin;           // VESC input voltage (V) — meaningless while !steer_driver_ok
         bool steer_vin_low;        // steer_driver_ok && steer_vin < STEER_VIN_LOW_V (warning only)
+        // Steering park correction (settings + last result, RAM only — SteeringController)
+        bool steer_park_enabled;
+        uint8_t steer_park_d[3];   // rung duty, rungs 1..3
+        uint16_t steer_park_t[3];  // rung length (ms), rungs 1..3
+        float steer_park_tol;      // done tolerance (deg) — 1 decimal in JSON
+        uint8_t steer_park_max;    // max pulses per parking
+        const char* steer_park_last_outcome; // none | done | gave_up | cancelled (static token)
+        uint8_t steer_park_last_pulses;
+        float steer_park_last_residual;      // deg, signed (target − position) — null for "none"
+        uint8_t steer_park_last_duty;        // last pulse duty × ms
+        uint16_t steer_park_last_ms;
         String input_source;      // Current input source: "MAVLINK", "WEB", "FAILSAFE"
         bool mav_active;          // True if MAVLink command stream is valid
         bool web_control;         // True if latched web-control override is engaged

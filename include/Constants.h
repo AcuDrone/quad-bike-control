@@ -442,6 +442,52 @@ struct ServoChannelConfig {
 // within STEER_RESTART_TOLERANCE. The stall latch is checked only on a command from idle.
 #define STEER_STALL_COOLDOWN_MS   700   // ms — same-direction moves refused after a stall; opposite direction always allowed
 
+// Park correction (include/SteerParkLaw.h, change add-steering-park-correction): a parking that
+// ended between STEER_POSITION_TOLERANCE (0.4°) and STEER_RESTART_TOLERANCE (1.0°) off target is
+// finished with a ladder of short open-loop pulses (setSpeed(dir × duty) then stop(), no
+// STEER_PWM_MIN_DUTY floor), escalating only when the wheel did not move. Measured 2026-11-05 on
+// the quad (USB steering diagnostics): sustained break-away L 46–50 / R 42–44, coast after the cut
+// ≈ 0 (self-locking 1:40 worm), ≤ 100 × 70 ms moves nothing at standstill, 100 × 100 ms moves
+// 0.4–0.6°, a closed-loop goto stops 0.2–0.4° short. Rolling tyres need less, hence rung 1 below
+// the standstill threshold.
+// Compile-time only (NOT web settings): these four decide WHEN the firmware moves the wheel by
+// itself and how a move is judged. A short settle, a small gap or a move threshold below the
+// sensor's 0.1° resolution gives pulses while driving or a buzzing wheel, which only the USB
+// diagnostics can show — change them only with a reflash after a diagnostics run.
+#define STEER_PARK_SETTLE_MS      1000  // ms — parked with a stable target this long before the first pulse
+#define STEER_PARK_TARGET_STABLE  3     // 0.1° (0.3°) — a target move beyond this cancels and restarts the settle clock
+#define STEER_PARK_PULSE_GAP_MS   500   // ms — wait after a pulse's end before its result is judged
+#define STEER_PARK_MOVE_MIN       1     // 0.1° (0.1°) — smaller position change = "did not move" (escalate)
+// Web settings (NVS "steering", owned by SteeringController): defaults and bounds
+#define STEER_PARK_ENABLED_DEFAULT     true
+#define STEER_PARK_DUTY1_DEFAULT       70    // rung 1 duty (0-255)
+#define STEER_PARK_DUTY2_DEFAULT       85
+#define STEER_PARK_DUTY3_DEFAULT       100
+#define STEER_PARK_MS1_DEFAULT         80    // rung 1 length, ms
+#define STEER_PARK_MS2_DEFAULT         90
+#define STEER_PARK_MS3_DEFAULT         100
+#define STEER_PARK_DONE_TOL_DEFAULT    2     // 0.1° (0.2°) — a correction ends within this
+#define STEER_PARK_MAX_PULSES_DEFAULT  5     // pulses per parking (a done does not refill the budget)
+#define STEER_PARK_DUTY_MIN            40
+#define STEER_PARK_DUTY_MAX            150
+#define STEER_PARK_MS_MIN              40    // ms
+#define STEER_PARK_MS_MAX              200   // ms
+#define STEER_PARK_DONE_TOL_MIN        1     // 0.1° (0.1°)
+#define STEER_PARK_DONE_TOL_MAX        5     // 0.1° (0.5°)
+#define STEER_PARK_MAX_PULSES_MIN      1
+#define STEER_PARK_MAX_PULSES_MAX      10
+// NVS keys in the EXISTING "steering" namespace (beside lim_l / lim_r / inv / cal_ver /
+// steer_sca_base). Never clear() it; the v4 migration and eraseLimits() leave these keys alone.
+#define STEER_PARK_EN_NVS_KEY     "park_en"    // bool
+#define STEER_PARK_D1_NVS_KEY     "park_d1"    // uint8 duty, rung 1..3
+#define STEER_PARK_D2_NVS_KEY     "park_d2"
+#define STEER_PARK_D3_NVS_KEY     "park_d3"
+#define STEER_PARK_T1_NVS_KEY     "park_t1"    // uint16 ms, rung 1..3
+#define STEER_PARK_T2_NVS_KEY     "park_t2"
+#define STEER_PARK_T3_NVS_KEY     "park_t3"
+#define STEER_PARK_TOL_NVS_KEY    "park_tol"   // int32, 0.1°
+#define STEER_PARK_MAX_NVS_KEY    "park_max"   // uint8
+
 // VESC steering driver telemetry monitor + failsafe
 // (Over-current is left to the VESC itself: Motor Current Max clamp, Absolute Max
 //  Current fault — surfaced here as a fault code — and MOSFET temperature limiting.
@@ -833,7 +879,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.17"
+#define FIRMWARE_VERSION "1.5.18"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

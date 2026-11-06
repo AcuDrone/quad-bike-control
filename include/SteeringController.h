@@ -5,11 +5,13 @@
 #include "Constants.h"
 #include "IMotorDriver.h"
 #include "LwsSensor.h"
+#include "SteerParkLaw.h"
 #include "SteerPositionLaw.h"
 #include "SteerRate.h"
 #include "SteerSensorDir.h"
 
 class CANController;
+class Preferences;
 
 /**
  * @brief Steering actuator controller: drives an IMotorDriver (VESC over UART)
@@ -60,6 +62,14 @@ class CANController;
  *    the limit captures and the sensor zero-set — is refused. The diagnostics drive the motor
  *    open loop through diagDrive() or run one closed-loop move through diagGoto(). Stop paths
  *    (stop(), stopRate(), the sensor / VESC monitors) are never gated.
+ *  - Park correction (SteerParkLaw.h, change add-steering-park-correction): a sub-mode of
+ *    PARKED (the state stays PARKED, no jog). Once the loop has been parked with a target stable
+ *    within STEER_PARK_TARGET_STABLE for STEER_PARK_SETTLE_MS and |err| exceeds
+ *    max(STEER_POSITION_TOLERANCE, done tolerance), short pulses from a 3-rung ladder
+ *    (motor_.setSpeed(dir × duty) then motor_.stop(), no duty floor) finish the move to the done
+ *    tolerance, at most max-pulses per parking. Any target move beyond the stable band, any exit
+ *    from PARKED, jog / nudge / rate, captures, zero-set, the diag lock or a park setting change
+ *    cancels it (a running pulse coasts at once). Settings persist in NVS "steering" (park_*).
  *  - Jog ownership: an active jog is owned by WEB (jog()/nudge()) or RATE
  *    (setRateCommand()). Rate commands never stop or override a WEB jog/nudge; a zero
  *    rate command and stopRate() stop only a RATE-owned drive; jog(0) and stop() stop
@@ -192,6 +202,45 @@ public:
 
     /** @brief Closed-loop state token: idle, drive, park */
     static const char* posStateToken(SteerPosState s);
+
+    // === Park correction (SteerParkLaw.h) ===
+
+    /** @brief Result of a park setting change (the web layer maps it to its reply) */
+    enum class ParkSetResult : uint8_t { OK, OUT_OF_RANGE, NOT_MONOTONIC, SAVE_FAILED };
+
+    /** @brief How the last park correction ended (RAM only, "none" after boot) */
+    enum class ParkOutcome : uint8_t { NONE, DONE, GAVE_UP, CANCELLED };
+
+    /** @brief Last park correction result for telemetry */
+    struct ParkLastResult {
+        ParkOutcome outcome = ParkOutcome::NONE;
+        uint8_t pulses = 0;      // pulses sent in that parking
+        int32_t residual = 0;    // target − position at the end, 0.1°, signed
+        uint8_t duty = 0;        // duty × ms of the last pulse
+        uint16_t ms = 0;
+    };
+
+    /**
+     * @brief Park correction settings: validated, written to NVS "steering" first, applied only
+     * after the write succeeded; any running correction is cancelled (a pulse coasts).
+     * setParkRung(): rung 1..3, duty STEER_PARK_DUTY_MIN..MAX, ms STEER_PARK_MS_MIN..MAX, and the
+     * ladder must stay non-decreasing (NOT_MONOTONIC otherwise). setParkDoneTol(): 0.1° units,
+     * STEER_PARK_DONE_TOL_MIN..MAX. setParkMaxPulses(): STEER_PARK_MAX_PULSES_MIN..MAX.
+     */
+    ParkSetResult setParkEnabled(bool on);
+    ParkSetResult setParkRung(uint8_t rung, int32_t duty, int32_t ms);
+    ParkSetResult setParkDoneTol(int32_t tol);
+    ParkSetResult setParkMaxPulses(int32_t count);
+
+    bool isParkEnabled() const { return parkEnabled_; }
+    /** @brief Ladder rung, index 0..2 */
+    const SteerParkRung& getParkRung(uint8_t i) const { return parkParams_.rung[i < STEER_PARK_RUNGS ? i : 0]; }
+    /** @brief Done tolerance, 0.1° */
+    int32_t getParkDoneTol() const { return parkParams_.doneTol; }
+    uint8_t getParkMaxPulses() const { return parkParams_.maxPulses; }
+    const ParkLastResult& getParkLast() const { return parkLast_; }
+    /** @brief Telemetry token: none, done, gave_up, cancelled */
+    static const char* parkOutcomeToken(ParkOutcome o);
 
     // === Calibration ===
 
@@ -353,6 +402,17 @@ private:
     SteerPosState posState_;
     SteerPosTimers posTimers_;   // move timer, stall window, boost, break-away (reset only from rest)
 
+    // Park correction (sub-mode of PARKED). The settle clock restarts on a target move beyond
+    // STEER_PARK_TARGET_STABLE (reference = that target) and on every entry into PARKED.
+    SteerParkParams parkParams_;   // ladder, done tolerance, max pulses + compile-time timings
+    bool parkEnabled_;
+    SteerParkState parkState_;
+    int32_t parkRefTarget_;        // target the stable band is measured from
+    uint32_t parkSettleStartMs_;   // settle clock start
+    bool parkPulseActive_;         // a pulse is being driven (ends with motor_.stop() at parkPulseEndMs_)
+    uint32_t parkPulseEndMs_;
+    ParkLastResult parkLast_;
+
     // Jog state
     int8_t jogDir_;
     uint32_t lastJogRefresh_;
@@ -397,6 +457,21 @@ private:
 
     /** @brief Coast and drop the closed loop to IDLE (no-op when already idle) */
     void loopToIdle();
+
+    /**
+     * @brief Cancel the park correction: coast a running pulse, reset the law state. With
+     * record, a cycle in progress that sent ≥ 1 pulse is stored as "cancelled" with residual.
+     */
+    void parkCancel(bool record = false, int32_t residual = 0);
+
+    /** @brief Restart the park settle clock at the current target (new park entry / target move) */
+    void parkRestartSettle(uint32_t now);
+
+    /** @brief Run the park correction while PARKED (called from update()) */
+    void serviceParkCorrection(uint32_t now, int32_t pos, int32_t err);
+
+    /** @brief Load the park settings from an open "steering" Preferences session (missing → default) */
+    void loadParkSettings(Preferences& prefs);
 
     /** @brief True if a new move in direction d must be refused due to the stall latch */
     bool latchBlocks(int8_t d, uint32_t now) const;
