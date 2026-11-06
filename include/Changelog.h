@@ -14,6 +14,11 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.17","date":"2026-11-06","uk":[
+"Поле точного кута керма на телефоні приймає від'ємні (ліві) кути: кнопка «±» змінює знак, а клавіатура тепер має мінус"
+],"en":[
+"The exact steering angle field accepts negative (left) angles on the phone: a “±” button flips the sign and the keyboard now has a minus key"
+]},
 {"version":"1.5.16","date":"2026-11-06","uk":[
 "Плавне відкриття газу проти глухнення двигуна: газ відкривається не швидше заданої швидкості (типово 60 %/с — від холостих до повного за 1,7 с), скидання газу завжди миттєве; налаштовується у веб-панелі (картка «Обмеження швидкості та кермо», 0 = вимкнено, 30–100 %/с)"
 ],"en":[

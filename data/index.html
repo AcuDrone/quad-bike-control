@@ -498,7 +498,7 @@
         }
         .relay-btn:hover:not(:disabled) { background: var(--accent); transform: translateY(-2px); }
         .relay-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        #steer-angle-input:disabled, #steer-angle-go:disabled, #steer-angle-zero:disabled { opacity: 0.5; cursor: not-allowed; }
+        #steer-angle-input:disabled, #steer-angle-neg:disabled, #steer-angle-go:disabled, #steer-angle-zero:disabled { opacity: 0.5; cursor: not-allowed; }
         .relay-btn.active { background: color-mix(in srgb, var(--success) 40%, var(--card)); border-color: var(--success); }
         .relay-btn-name { font-size: 1.25em; line-height: 1.15; }
         .relay-btn-desc { font-size: 0.8em; font-weight: normal; color: var(--muted-foreground); line-height: 1.3; }
@@ -915,13 +915,14 @@
                 <!-- Exact target angle (steer_angle, degrees): closed loop, needs web control and Position mode -->
                 <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 4px; font-size: 0.85em; color: var(--muted-foreground);">
                     <label for="steer-angle-input" data-i18n="lbl_steer_target_angle">Target angle, °</label>
-                    <input type="number" id="steer-angle-input" step="0.1" value="0" inputmode="decimal"
+                    <input type="number" id="steer-angle-input" step="0.1" value="0" inputmode="text"
                            style="flex:1; min-width:0; padding:10px 8px; border-radius:6px; border:1px solid var(--border); background:var(--input, var(--secondary)); color:var(--foreground); font-size:1em;"
                            onkeydown="if (event.key === 'Enter') steerAngleGo()">
+                    <button id="steer-angle-neg" onclick="steerAngleFlipSign()" data-i18n="btn_steer_angle_flip" style="padding:12px 14px; border-radius:6px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">±</button>
                     <button id="steer-angle-go" onclick="steerAngleGo()" data-i18n="btn_steer_angle_go" style="padding:12px 14px; border-radius:6px; border:none; background:var(--primary, var(--accent)); color:var(--primary-foreground, var(--foreground)); cursor:pointer;">Go</button>
                     <button id="steer-angle-zero" onclick="steerAngleZero()" data-i18n="btn_steer_angle_zero" style="padding:12px 14px; border-radius:6px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">0°</button>
                 </div>
-                <div data-i18n="steer_angle_hint" style="margin-bottom: 4px; font-size: 0.75em; color: var(--muted-foreground);">Steering drives to the target angle within about 0.3°; one Nudge ≈ 0.4°</div>
+                <div data-i18n="steer_angle_hint" style="margin-bottom: 4px; font-size: 0.75em; color: var(--muted-foreground);">Steering drives to the target angle within about 0.3°; negative = left; one Nudge ≈ 0.4°</div>
                 <div id="steer-angle-lock-hint" style="display: none; margin-bottom: 8px; font-size: 0.8em; color: var(--warning);"></div>
                 <div style="margin-bottom: 12px;"></div>
                 <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 8px;">
@@ -1477,7 +1478,8 @@
                 lbl_steer_target_angle: 'Target angle, °',
                 btn_steer_angle_go: 'Go',
                 btn_steer_angle_zero: '0°',
-                steer_angle_hint: 'Steering drives to the target angle within about 0.3°; one Nudge ≈ 0.4°',
+                btn_steer_angle_flip: '±',
+                steer_angle_hint: 'Steering drives to the target angle within about 0.3°; negative = left; one Nudge ≈ 0.4°',
                 steer_angle_need_web: 'Target angle needs web control (Take Control in Manual Control).',
                 invalid_steer_angle: 'Enter an angle in degrees',
                 btn_set_left: 'Set Left',
@@ -1943,7 +1945,8 @@
                 lbl_steer_target_angle: 'Кут, °',
                 btn_steer_angle_go: 'Перейти',
                 btn_steer_angle_zero: '0°',
-                steer_angle_hint: 'Кермо доїжджає до заданого кута з точністю близько 0,3°; один Nudge ≈ 0,4°',
+                btn_steer_angle_flip: '±',
+                steer_angle_hint: 'Кермо доїжджає до заданого кута з точністю близько 0,3°; від\'ємний = ліворуч; один Nudge ≈ 0,4°',
                 steer_angle_need_web: 'Для заданого кута потрібне веб-керування («Взяти керування» в Ручному керуванні).',
                 invalid_steer_angle: 'Введіть кут у градусах',
                 btn_set_left: 'Задати ліво',
@@ -3061,7 +3064,7 @@
             document.getElementById('steer-test-center').disabled = !steerEnabled;
             document.getElementById('steer-test-right').disabled = !steerEnabled;
             // Exact target angle (Calibration card): same conditions as the percent slider
-            ['steer-angle-input', 'steer-angle-go', 'steer-angle-zero'].forEach((id) => {
+            ['steer-angle-input', 'steer-angle-neg', 'steer-angle-go', 'steer-angle-zero'].forEach((id) => {
                 const el = document.getElementById(id);
                 if (el) el.disabled = !steerEnabled;
             });
@@ -4057,6 +4060,13 @@
             deg = Math.round(deg * 10) / 10;
             el.value = deg.toFixed(1);
             steerAngleSend(deg);
+        }
+        // iPhone keypads may lack a minus key: flip the sign of the field value (does not send)
+        function steerAngleFlipSign() {
+            const el = document.getElementById('steer-angle-input');
+            if (!el || el.disabled) return;
+            const v = parseFloat(String(el.value).replace(',', '.'));
+            el.value = isFinite(v) ? (-v).toFixed(1) : '-1.0';
         }
         function steerAngleZero() {
             const el = document.getElementById('steer-angle-input');
