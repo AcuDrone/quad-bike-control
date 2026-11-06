@@ -212,7 +212,7 @@
 #define BOOST_STARTUP_GRACE_MS     1000   // ms after enable during which low-rail warnings are suppressed
 
 // Cranking Parameters
-#define CRANKING_TIMEOUT           2000  // ms - maximum cranking duration
+#define CRANKING_TIMEOUT           5000  // ms - maximum cranking duration per start attempt; the starter is released earlier as soon as engineRpm ≥ ENGINE_RUNNING_RPM_THRESHOLD (2026-11-06: 2 s was too short)
 #define ACC_PRECRANK_DWELL_MS      2000  // ms - ignition/ECU line (Relay_1+Relay_2) must be powered this long before the starter (Relay_3) engages
 #define ENGINE_RUNNING_RPM_THRESHOLD 1500  // RPM - engine considered running above this
 
@@ -895,7 +895,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.21"
+#define FIRMWARE_VERSION "1.5.22"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

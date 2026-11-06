@@ -14,6 +14,11 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.22","date":"2026-11-06","uk":[
+"Запуск двигуна: стартер крутить до 5 с за одну спробу (було 2 с) і, як і раніше, відпускається одразу, щойно двигун завівся"
+],"en":[
+"Engine start: the starter cranks for up to 5 s per attempt (was 2 s) and, as before, is released immediately once the engine starts"
+]},
 {"version":"1.5.21","date":"2026-11-06","uk":[
 "WiFi: назва мережі тепер унікальна для кожної плати — QuadBike-Control-XXXX (XXXX — останні 4 символи MAC чипа), тож кілька машин поруч не плутаються; після прошивки один раз підключіть телефон до нової мережі. Ім'я OTA теж з суфіксом (quadbike-control-xxxx), адреса 192.168.10.1 без змін"
 ],"en":[
