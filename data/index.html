@@ -1064,7 +1064,7 @@
             </div>
             <!-- Speed limit and steering (limiter floor, speed-limit readout, steering authority, scaling base, bench test speed) -->
             <div class="card" id="speed-limit-card">
-                <h2 class="card-title"><span data-i18n="card_speed_limit_steer">🚦 Speed limit and steering</span><button type="button" class="help-btn" onclick="openHelp('speed_limit_help,speed_limiter_hint,speed_limit_floor_hint,speed_limit_slew_help,steer_scale_hint,steer_test_speed_hint', 'card_speed_limit_steer')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <h2 class="card-title"><span data-i18n="card_speed_limit_steer">🚦 Speed limit and steering</span><button type="button" class="help-btn" onclick="openHelp('speed_limit_help,speed_limiter_hint,speed_limit_floor_hint,speed_limit_slew_help,throttle_open_slew_help,steer_scale_hint,steer_test_speed_hint', 'card_speed_limit_steer')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
                 <div style="margin-top: 14px;">
                     <label data-i18n="lbl_speed_limit_floor" style="font-size: 0.8em; color: var(--muted-foreground);">Limiter floor (%)</label>
                     <div style="display: flex; gap: 6px; margin-top: 4px;">
@@ -1079,6 +1079,14 @@
                         <button onclick="saveSpeedLimitSlew()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
                     </div>
                     <div data-i18n="speed_limit_slew_note" style="margin-top: 4px; font-size: 0.75em; color: var(--muted-foreground);">Lower = gentler closing and return of the throttle; 80 = previous behaviour</div>
+                </div>
+                <div style="margin-top: 10px;">
+                    <label data-i18n="lbl_throttle_open_slew" style="font-size: 0.8em; color: var(--muted-foreground);">Throttle opening rate (%/s)</label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px;">
+                        <input type="number" id="throttle-open-slew-input" min="0" max="100" step="5" oninput="updateThrottleOpenSlewHint()" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button onclick="saveThrottleOpenSlew()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                    </div>
+                    <div id="throttle-open-slew-hint" style="margin-top: 4px; font-size: 0.75em; color: var(--muted-foreground);"></div>
                 </div>
                 <div style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px;">
                     <div style="display: flex; justify-content: space-between; align-items: baseline; font-size: 0.85em;">
@@ -1674,6 +1682,12 @@
                 speed_limit_slew_note: 'Lower = gentler closing and return of the throttle; 80 = previous behaviour',
                 speed_limit_slew_help: 'Limiter throttle rate: how fast the limiter may close and give back the throttle, 10–200 %/s (default 80); lower is gentler but lets the speed overshoot the limit a little more.',
                 invalid_speed_limit_slew: 'Limiter throttle rate must be 10-200 %/s',
+                lbl_throttle_open_slew: 'Throttle opening rate (%/s)',
+                throttle_open_slew_time: '0 → 100 % in %s s; closing is always instant',
+                throttle_open_slew_off: '0 = off (throttle opens instantly, as before)',
+                throttle_open_slew_range: '0 = off, or 30–100 %/s',
+                throttle_open_slew_help: 'Throttle opening rate: how fast the throttle may open, so the engine is not stalled by a snap from idle; closing is always instant. 0 = off, 30–100 %/s (default 60 = idle to full in 1.7 s).',
+                invalid_throttle_open_slew: 'Throttle opening rate must be 0 or 30-100 %/s',
                 speed_limit_at_floor: 'at floor',
                 speed_limit_sat: 'Limiter at floor, speed above limit',
                 speed_limit_sat_held: 'Limiter was at floor, speed above limit',
@@ -2133,6 +2147,12 @@
                 speed_limit_slew_note: 'Менше = плавніше прибирає й повертає газ; 80 = як раніше',
                 speed_limit_slew_help: 'Плавність обмежувача: як швидко обмежувач може прибирати й повертати газ, 10–200 %/с (типово 80); менше — м\'якше, але швидкість трохи більше перевищує ліміт.',
                 invalid_speed_limit_slew: 'Плавність обмежувача має бути 10-200 %/с',
+                lbl_throttle_open_slew: 'Плавність газу (%/с)',
+                throttle_open_slew_time: '0 → 100 % за %s с; скидання газу завжди миттєве',
+                throttle_open_slew_off: '0 = вимкнено (газ відкривається миттєво, як раніше)',
+                throttle_open_slew_range: '0 = вимкнено, або 30–100 %/с',
+                throttle_open_slew_help: 'Плавність газу: як швидко може відкриватися газ, щоб різкий газ з холостих не глушив двигун; скидання газу завжди миттєве. 0 = вимкнено, 30–100 %/с (типово 60 = від холостих до повного за 1,7 с).',
+                invalid_throttle_open_slew: 'Плавність газу має бути 0 або 30-100 %/с',
                 speed_limit_at_floor: 'на мінімумі',
                 speed_limit_sat: 'Обмежувач на мінімумі, швидкість вища за ліміт',
                 speed_limit_sat_held: 'Обмежувач був на мінімумі, швидкість була вища за ліміт',
@@ -2525,7 +2545,8 @@
                 if (data.message && (data.message.includes('Pulses/rev') ||
                     data.message.includes('Wheel circumference') || data.message.includes('Speed limit') ||
                     data.message.includes('Speed limiter') || data.message.toLowerCase().includes('speed-limiter') ||
-                    data.message.startsWith('Steering scale base') || data.message.startsWith('Test speed'))) {
+                    data.message.startsWith('Steering scale base') || data.message.startsWith('Test speed') ||
+                    data.message.startsWith('Throttle open rate'))) {
                     speedStatusMsg(data.success ? data.message : t('error_prefix') + data.message,
                                    data.success ? 'var(--success)' : 'var(--danger)');
                 }
@@ -3583,6 +3604,9 @@
                 Number.isFinite(data.speed_limit_floor) ? data.speed_limit_floor.toFixed(1) : undefined);
             syncSpeedInput('speed-limit-slew-input',
                 Number.isFinite(data.speed_limit_slew) ? data.speed_limit_slew.toFixed(0) : undefined);
+            syncSpeedInput('throttle-open-slew-input',
+                Number.isFinite(data.throttle_open_slew) ? data.throttle_open_slew.toFixed(0) : undefined);
+            updateThrottleOpenSlewHint();
             updateSpeedLimitRow(data);
 
             updateSteerScaleDisplay(data);
@@ -3648,6 +3672,36 @@
                 return;
             }
             sendCommand('set_speed_limit_slew', val);
+            speedStatusMsg(t('speed_saving'), 'var(--muted-foreground)');
+        }
+
+        function isValidThrottleOpenSlew(val) {
+            return !isNaN(val) && (val === 0 || (val >= 30 && val <= 100));
+        }
+
+        // Live hint under the opening-rate input: idle→full time for the value being typed.
+        function updateThrottleOpenSlewHint() {
+            const el = document.getElementById('throttle-open-slew-hint');
+            const input = document.getElementById('throttle-open-slew-input');
+            if (!el || !input) return;
+            const val = Math.round(parseFloat(input.value));
+            if (val === 0) {
+                el.textContent = t('throttle_open_slew_off');
+            } else if (isValidThrottleOpenSlew(val)) {
+                el.textContent = t('throttle_open_slew_time', (100 / val).toFixed(1));
+            } else {
+                el.textContent = t('throttle_open_slew_range');
+            }
+        }
+
+        function saveThrottleOpenSlew() {
+            speedStatusTarget = 'speed-limit-status-msg';
+            const val = Math.round(parseFloat(document.getElementById('throttle-open-slew-input').value));
+            if (!isValidThrottleOpenSlew(val)) {
+                speedStatusMsg(t('invalid_throttle_open_slew'), 'var(--danger)');
+                return;
+            }
+            sendCommand('set_throttle_open_slew', val);
             speedStatusMsg(t('speed_saving'), 'var(--muted-foreground)');
         }
 

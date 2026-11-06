@@ -648,6 +648,9 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
     } else if (cmd.cmd == "set_speed_limit_slew") {
         processSetSpeedLimitSlewCommand(cmd.floatValue, webPortal);
         return;
+    } else if (cmd.cmd == "set_throttle_open_slew") {
+        processSetThrottleOpenSlewCommand(cmd.floatValue, webPortal);
+        return;
     } else if (cmd.cmd == "set_steer_sca_base") {
         processSetSteerScaBaseCommand(cmd.floatValue, webPortal);
         return;
@@ -1322,6 +1325,26 @@ void VehicleController::processSetSpeedLimitSlewCommand(float value, WebPortal& 
     limiterSlewPctS_ = value;   // used from the law's next evaluation
     webPortal.sendResponse(true, "Speed-limiter throttle rate set to " + String(value, 1) + " %/s");
     Debug::printfFeature(DebugFeature::VEHICLE, "[SPEED] Limiter slew set to %.1f %%/s\n", value);
+}
+
+void VehicleController::processSetThrottleOpenSlewCommand(float value, WebPortal& webPortal) {
+    if (!isnan(value)) value = roundf(value);   // whole %/s
+    if (!ThrottleController::isValidOpenSlew(value)) {
+        webPortal.sendResponse(false, "Throttle open rate out of range (0 or " +
+                                      String(THROTTLE_OPEN_SLEW_MIN_PCT_S, 0) + "-" +
+                                      String(THROTTLE_OPEN_SLEW_MAX_PCT_S, 0) + " %/s)");
+        return;
+    }
+    // ThrottleController persists first (NVS "throttle"/open_slew), then applies.
+    if (!throttle_.setOpenSlewPctS(value)) {
+        webPortal.sendResponse(false, "Failed to save the throttle open rate");
+        return;
+    }
+    if (value == 0.0f) {
+        webPortal.sendResponse(true, "Throttle open rate off");
+    } else {
+        webPortal.sendResponse(true, "Throttle open rate set to " + String(value, 0) + " %/s");
+    }
 }
 
 void VehicleController::processSetSteerScaBaseCommand(float value, WebPortal& webPortal) {

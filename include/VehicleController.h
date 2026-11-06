@@ -285,6 +285,11 @@ public:
     float getSpeedLimitSlewPctS() const { return limiterSlewPctS_; }
 
     /**
+     * @brief Throttle opening rate limit in use (%/s, 0 = off), NVS "throttle"/open_slew
+     */
+    float getThrottleOpenSlewPctS() const { return throttle_.getOpenSlewPctS(); }
+
+    /**
      * @brief Live saturation: ceiling at the floor while the speed stays more than
      * SPEED_LIMIT_SAT_MARGIN_MS above the limit, continuously for SPEED_LIMIT_SAT_HOLD_MS.
      */
@@ -768,6 +773,11 @@ private:
     void processSetSpeedLimitFloorCommand(float value, WebPortal& webPortal);
     /** @brief Validate (NaN, 10–200 %/s), persist to NVS "speed"/thr_slew, then apply in RAM. */
     void processSetSpeedLimitSlewCommand(float value, WebPortal& webPortal);
+    /**
+     * @brief `set_throttle_open_slew`: round to a whole %/s, validate (NaN, 0 or 30–100 %/s),
+     * persist to NVS "throttle"/open_slew, then apply. Accepted from any input source.
+     */
+    void processSetThrottleOpenSlewCommand(float value, WebPortal& webPortal);
 
     /**
      * @brief Steering speed-scaling commands (`set_steer_sca_base`, `set_test_speed`).

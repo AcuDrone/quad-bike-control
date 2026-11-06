@@ -137,6 +137,7 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     // display hold, so every client — including one that joins late — shows the same state).
     telemetry.speed_limit_floor = vehicleController_.getSpeedLimitFloorPct();
     telemetry.speed_limit_slew = vehicleController_.getSpeedLimitSlewPctS();
+    telemetry.throttle_open_slew = (uint16_t)lroundf(vehicleController_.getThrottleOpenSlewPctS());
     telemetry.speed_limit_sat = vehicleController_.isSpeedLimitSaturated();
     telemetry.speed_limit_sat_held = vehicleController_.isSpeedLimitSatHeld();
     // Steering speed scaling: the applied scale, the base actually in use, which source that
