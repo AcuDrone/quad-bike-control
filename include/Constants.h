@@ -490,6 +490,17 @@ struct ServoChannelConfig {
 #define THROTTLE_DEFAULT_IDLE_US 901   // idle pulse width (previously 13° over the 800–2200µs range)
 #define THROTTLE_DEFAULT_FULL_US 1344  // full-throttle pulse width (previously 70° over the 800–2200µs range)
 #define THROTTLE_MIN_SPAN_US     100   // minimum accepted |full_us - idle_us| separation (full may be below idle on a mirrored servo)
+// Throttle OPENING rate limit (anti-stall; include/ThrottleSlewLaw.h, applied in
+// ThrottleController::setThrottlePercent). Snapping the throttle open from idle stalls the engine
+// (air before fuel, the CVT takes load before the RPM rises). Closing is never rate-limited.
+// Range: the engine needs ≈0.5–1 s from idle before it can take load, so a 1–2 s idle→full ramp
+// is the useful window; faster than 100 %/s brought the stall back; 30 %/s (3.3 s) is the slowest
+// still drivable. 0 = limit off (exactly the old snap). Per-vehicle, NVS "throttle"/open_slew.
+#define THROTTLE_OPEN_SLEW_DEFAULT_PCT_S 60.0f   // %/s - idle→full in 1.67 s, 0→30 % in 0.5 s
+#define THROTTLE_OPEN_SLEW_MIN_PCT_S     30.0f   // %/s - lowest accepted non-zero rate (3.3 s to full)
+#define THROTTLE_OPEN_SLEW_MAX_PCT_S     100.0f  // %/s - highest accepted rate (1 s to full)
+#define THROTTLE_OPEN_SLEW_NVS_KEY       "open_slew"  // NVS "throttle" namespace, float %/s (owned by ThrottleController)
+#define THROTTLE_OPEN_SLEW_MAX_DT_S      0.1f    // s - cap on the elapsed time per write, so a silent path never steps open
 
 // ============================================================================
 // BTS7960 MOTOR DRIVER CONFIGURATION
@@ -822,7 +833,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.15"
+#define FIRMWARE_VERSION "1.5.16"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

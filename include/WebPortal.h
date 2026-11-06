@@ -107,6 +107,7 @@ public:
         float speed_limit_ceil;   // Throttle ceiling the limiter is applying (taper + trim, %, 100 = inactive)
         float speed_limit_floor;  // Limiter throttle floor in use (%, 0 = calibrated idle)
         float speed_limit_slew;   // Limiter ceiling slew in use (%/s, both directions)
+        uint16_t throttle_open_slew; // Throttle opening rate limit in use (%/s, 0 = off)
         bool speed_limit_sat;     // Limiter saturated: ceiling at the floor, speed still above the limit
         bool speed_limit_sat_held; // speed_limit_sat, or within SPEED_LIMIT_SAT_UI_HOLD_MS after it cleared
         // Steering speed scaling — so "the steering feels weak" is diagnosable from the portal.

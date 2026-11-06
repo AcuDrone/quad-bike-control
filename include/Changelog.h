@@ -14,6 +14,11 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.16","date":"2026-11-06","uk":[
+"Плавне відкриття газу проти глухнення двигуна: газ відкривається не швидше заданої швидкості (типово 60 %/с — від холостих до повного за 1,7 с), скидання газу завжди миттєве; налаштовується у веб-панелі (картка «Обмеження швидкості та кермо», 0 = вимкнено, 30–100 %/с)"
+],"en":[
+"Smooth throttle opening against engine stalls: the throttle opens no faster than a set rate (default 60 %/s — idle to full in 1.7 s), closing is always instant; set it from the web (Speed limit and steering card, 0 = off, 30–100 %/s)"
+]},
 {"version":"1.5.15","date":"2026-11-06","uk":[
 "Перемикання передач швидше: очікування в крайньому положенні та пауза між кроками закінчуються, щойно датчик ≈0,2 с стабільно показує потрібну передачу (N→L ≈2,6 с замість ≈6,7 с); без датчика — як раніше (2 с і 1 с), перегазовка/холостий хід тримаються лише на час очікування"
 ],"en":[
