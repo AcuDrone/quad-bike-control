@@ -463,7 +463,8 @@ struct ServoChannelConfig {
 //  - Percent commands need a healthy sensor + both limits; jog/nudge only need the VESC link
 //    (sensorless open loop is allowed, with no stall backstop).
 // The values marked bench-tune were converted from AS5600 counts (1 count ≈ 0.88 × 0.1°).
-#define STEER_POSITION_TOLERANCE  4     // 0.1° (0.4°) - park window: driving stops (coast, the worm holds) within this;
+#define STEER_POSITION_TOLERANCE  4     // 0.1° (0.4°) - aztec keeps 0.4° (the rack coasts; master/quad uses 0.2°);
+                                        //      park window: driving stops (coast, the worm holds) within this;
                                         //      measured 2026-11-05 on the quad: coast after cut ≈ 0, with 1.0° goto 0 stopped 0.2–0.6° short
 #define STEER_RESTART_TOLERANCE   10    // 0.1° (1.0°) - a parked loop drives again only beyond this (stop hysteresis);
                                         //      measured 2026-11-05 on the quad: no overshoot / no restarts from ±9.3°, 3.0° blocked small moves
@@ -484,9 +485,13 @@ struct ServoChannelConfig {
 #define STEER_LWS_ZERO_CONFIRM_MS 1000  // ms - after [53 30], wait this long for OK=1 fault=0 cal=1 |angle| ≤ tolerance
 #define STEER_LWS_ZERO_TOLERANCE  10    // 0.1° (1.0°) - |angle| accepted as "zero confirmed"
 
-// Proportional PWM control (include/SteerPositionLaw.h): duty = clamp(|error| * STEER_KP + boost, floor, MAX),
+// Proportional PWM control (include/SteerPositionLaw.h):
+//   duty = clamp(max(|error| * STEER_KP, floor) + boost, floor, MAX), signed toward the target;
 // floor = STEER_PWM_MIN_DUTY (break-away) from rest / after a reversal until 0.3° of progress
-// (STEER_BOOST_MIN_PROGRESS), then STEER_PWM_TRACK_MIN_DUTY while tracking.
+// (STEER_BOOST_MIN_PROGRESS), then STEER_PWM_TRACK_MIN_DUTY while tracking. The anti-stall boost
+// adds on top of the floor (never hidden under it). Measured 2026-11-05 on the quad (USB diag,
+// goto ±10): at a tracking floor of 70 a 10° move had 5–6 stop/go plateaus (17–27 A standing,
+// 2.0–2.5 s per move), each broke free at duty 89–107; parked 0.3–0.4° short at a 0.4° window.
 #define STEER_KP                  1.15f // PWM duty (0-255) per 0.1° of error (saturates at ≈22°) — bench-tune
 // aztec (rack steering) measured 2026-11-06: break-away L 18 / R 14, 40×50 ms = 0.3°, 100×100 = 5.6°
 // (50×50 = 0.65°, 70×80 = 2.4°). The quad values below (80 / 70 / 100×100 / 120) were 2–3× too strong:
@@ -499,13 +504,20 @@ struct ServoChannelConfig {
 #define STEER_PWM_TRACK_MIN_DUTY  30    // aztec (was 70 on the quad); floor while driving after break-away; must exceed the worm's running friction
                                         // (measured 2026-11-05 on the quad: break-away 42–50, coast after cut ≈ 0)
 #define STEER_PWM_MAX_DUTY        255   // full speed for large errors
+static_assert(STEER_PWM_MIN_DUTY >= STEER_PWM_TRACK_MIN_DUTY, "break-away floor must not be below the tracking floor");
 
 // Anti-stall boost: steering load rises toward the locks; when commanded motion
 // makes no progress, duty escalates above the P term until movement resumes.
 // (Bench: closed-loop stalled ~72 counts short of the left lock at MIN duty.)
 #define STEER_BOOST_CHECK_MS      100   // ms - progress check period
 #define STEER_BOOST_MIN_PROGRESS  3     // 0.1° (0.3°) per check period considered "moving" — bench-tune
-#define STEER_BOOST_STEP          30    // duty added (stalled) or removed (moving) per check
+#define STEER_BOOST_STEP          30    // duty added per check when stalled (on top of the floor)
+#define STEER_BOOST_DECAY         30    // duty removed per check when moving inside STEER_BOOST_HOLD_ERR (never below 0): fast shed inside 2° (10 let a held +30 reach centre: 0.7° overshoot, 2026-11-06)
+// Boost hold band: while the wheel moves and |error| > this, the boost is held (no decay); a stalled
+// check still adds STEER_BOOST_STEP anywhere. Measured 2026-11-06 on the loaded quad (~200 kg, dry
+// steering, floors 70–100): outward 10° moves stalled at 35–44 A 2–3 times — +30 broke the wheel
+// free, the −10/100 ms decay removed it within ≈300 ms and it stalled again (duty 103–150).
+#define STEER_BOOST_HOLD_ERR      20    // 0.1° (2.0°) - bench-tune
 
 // Calibration jog (momentary open-loop drive from the web UI)
 #define STEER_JOG_DUTY            50    // aztec (was 120 on the quad); PWM duty while jogging (default when the UI sends no speed; measured 2026-11-05 on the quad:
@@ -528,17 +540,19 @@ struct ServoChannelConfig {
 #define STEER_STALL_COOLDOWN_MS   700   // ms — same-direction moves refused after a stall; opposite direction always allowed
 
 // Park correction (include/SteerParkLaw.h, change add-steering-park-correction): a parking that
-// ended between STEER_POSITION_TOLERANCE (0.4°) and STEER_RESTART_TOLERANCE (1.0°) off target is
+// ended between STEER_PARK_TRIGGER_TOL (0.4°) and STEER_RESTART_TOLERANCE (1.0°) off target is
 // finished with a ladder of short open-loop pulses (setSpeed(dir × duty) then stop(), no
 // STEER_PWM_MIN_DUTY floor), escalating only when the wheel did not move. Measured 2026-11-05 on
 // the quad (USB steering diagnostics): sustained break-away L 46–50 / R 42–44, coast after the cut
 // ≈ 0 (self-locking 1:40 worm), ≤ 100 × 70 ms moves nothing at standstill, 100 × 100 ms moves
 // 0.4–0.6°, a closed-loop goto stops 0.2–0.4° short. Rolling tyres need less, hence rung 1 below
 // the standstill threshold.
-// Compile-time only (NOT web settings): these four decide WHEN the firmware moves the wheel by
+// Compile-time only (NOT web settings): these five decide WHEN the firmware moves the wheel by
 // itself and how a move is judged. A short settle, a small gap or a move threshold below the
 // sensor's 0.1° resolution gives pulses while driving or a buzzing wheel, which only the USB
 // diagnostics can show — change them only with a reflash after a diagnostics run.
+#define STEER_PARK_TRIGGER_TOL    4     // 0.1° (0.4°) — no correction within max(this, done tolerance); separate from the
+                                        //      0.2° park window STEER_POSITION_TOLERANCE (fix-steering-jerk-and-centre-undershoot D5)
 #define STEER_PARK_SETTLE_MS      1000  // ms — parked with a stable target this long before the first pulse
 #define STEER_PARK_TARGET_STABLE  3     // 0.1° (0.3°) — a target move beyond this cancels and restarts the settle clock
 #define STEER_PARK_PULSE_GAP_MS   500   // ms — wait after a pulse's end before its result is judged
@@ -848,7 +862,7 @@ struct ServoChannelConfig {
 // WiFi ACCESS POINT CONFIGURATION
 // ============================================================================
 
-#define WIFI_AP_SSID          "QuadBike-Control"  // WiFi AP SSID
+#define WIFI_AP_SSID          "QuadBike-Control"  // WiFi AP SSID base; "-XXXX" chip suffix (eFuse MAC) appended at boot
 #define WIFI_AP_PASSWORD      ""                  // No password (open network)
 #define WIFI_AP_CHANNEL       1                   // WiFi channel (1-13)
 #define WIFI_AP_MAX_CLIENTS   5                   // Maximum simultaneous clients
@@ -869,7 +883,7 @@ struct ServoChannelConfig {
 // OTA UPDATE CONFIGURATION
 // ============================================================================
 
-#define OTA_HOSTNAME          "quadbike-control"  // OTA hostname for identification
+#define OTA_HOSTNAME          "quadbike-control"  // OTA hostname base; "-xxxx" chip suffix appended at boot
 #define OTA_PASSWORD          ""                  // OTA password (empty = no password)
 
 // ============================================================================
@@ -968,7 +982,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.19"
+#define FIRMWARE_VERSION "1.5.21"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

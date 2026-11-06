@@ -39,7 +39,7 @@ struct SteerParkRung {
 
 /** @brief Tunables (0.1° for positions, ms for times) */
 struct SteerParkParams {
-  int32_t triggerTol;    // STEER_POSITION_TOLERANCE: no correction within this
+  int32_t triggerTol;    // STEER_PARK_TRIGGER_TOL: no correction within this
   int32_t doneTol;       // done tolerance (web setting park_tol)
   int32_t moveMin;       // STEER_PARK_MOVE_MIN: smaller position change = "did not move"
   uint32_t settleMs;     // STEER_PARK_SETTLE_MS: parked + target stable this long before a pulse

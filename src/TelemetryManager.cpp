@@ -245,7 +245,7 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
 
     telemetry.firmware_version = FIRMWARE_VERSION;
     telemetry.board = BOARD_NAME;
-    telemetry.wifi_ssid = WIFI_AP_SSID;
+    telemetry.wifi_ssid = WebPortal::getApSsid();   // suffixed SSID, static storage
     {
         // Static AP address — formatted once, then reused (no String churn at 5 Hz).
         static char wifiIp[16] = "";

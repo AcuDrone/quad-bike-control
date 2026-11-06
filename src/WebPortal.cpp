@@ -1,6 +1,11 @@
 #include "WebPortal.h"
 #include "Changelog.h"
 #include "Debug.h"
+#include "DeviceId.h"
+#include <esp_mac.h>
+
+char WebPortal::apSsid_[33] = "";
+char WebPortal::otaHostname_[33] = "";
 
 WebPortal::WebPortal()
     : server(WEB_SERVER_PORT),
@@ -19,6 +24,16 @@ WebPortal::~WebPortal() {
 
 bool WebPortal::begin() {
     Debug::printlnFeature(DebugFeature::WEB,"\n=== Initializing Web Portal ===");
+
+    // Per-chip names: last two octets of the eFuse base MAC (include/DeviceId.h).
+    {
+        uint8_t mac[6] = {0};
+        esp_efuse_mac_get_default(mac);
+        char suffix[5];
+        DeviceId::formatChipSuffix(mac, suffix);
+        DeviceId::buildSuffixedName(WIFI_AP_SSID, suffix, false, apSsid_, sizeof(apSsid_));
+        DeviceId::buildSuffixedName(OTA_HOSTNAME, suffix, true, otaHostname_, sizeof(otaHostname_));
+    }
 
     // Mount filesystem first
     if (!mountFilesystem()) {
@@ -129,10 +144,10 @@ bool WebPortal::setupWiFiAP() {
     bool success = false;
     if (strlen(WIFI_AP_PASSWORD) > 0) {
         // With password
-        success = WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASSWORD, WIFI_AP_CHANNEL, false, WIFI_AP_MAX_CLIENTS);
+        success = WiFi.softAP(apSsid_, WIFI_AP_PASSWORD, WIFI_AP_CHANNEL, false, WIFI_AP_MAX_CLIENTS);
     } else {
         // Open network (no password)
-        success = WiFi.softAP(WIFI_AP_SSID, NULL, WIFI_AP_CHANNEL, false, WIFI_AP_MAX_CLIENTS);
+        success = WiFi.softAP(apSsid_, NULL, WIFI_AP_CHANNEL, false, WIFI_AP_MAX_CLIENTS);
     }
 
     if (!success) {
@@ -141,7 +156,7 @@ bool WebPortal::setupWiFiAP() {
     }
 
     Debug::printfFeature(DebugFeature::WEB,"  ✓ WiFi AP started\n");
-    Debug::printfFeature(DebugFeature::WEB,"  ✓ SSID: %s\n", WIFI_AP_SSID);
+    Debug::printfFeature(DebugFeature::WEB,"  ✓ SSID: %s\n", apSsid_);
     Debug::printfFeature(DebugFeature::WEB,"  ✓ IP: %s\n", WiFi.softAPIP().toString().c_str());
     Debug::printfFeature(DebugFeature::WEB,"  ✓ Max clients: %d\n", WIFI_AP_MAX_CLIENTS);
 
@@ -376,7 +391,7 @@ void WebPortal::setupOTA() {
     Debug::printlnFeature(DebugFeature::WEB,"Setting up OTA updates...");
 
     // Set OTA hostname
-    ArduinoOTA.setHostname(OTA_HOSTNAME);
+    ArduinoOTA.setHostname(otaHostname_);
 
     // Set OTA password if configured
     if (strlen(OTA_PASSWORD) > 0) {
@@ -432,7 +447,7 @@ void WebPortal::setupOTA() {
     });
 
     ArduinoOTA.begin();
-    Debug::printfFeature(DebugFeature::WEB,"  ✓ OTA configured (hostname: %s)\n", OTA_HOSTNAME);
+    Debug::printfFeature(DebugFeature::WEB,"  ✓ OTA configured (hostname: %s)\n", otaHostname_);
 }
 
 void WebPortal::setupDNS() {

@@ -25,11 +25,13 @@ static const SteerPosParams POS_PARAMS = {
     STEER_BOOST_CHECK_MS,
     STEER_BOOST_MIN_PROGRESS,
     STEER_BOOST_STEP,
+    STEER_BOOST_DECAY,
+    STEER_BOOST_HOLD_ERR,
 };
 
 // Park correction defaults (include/SteerParkLaw.h); doneTol / maxPulses / rungs are web settings
 static const SteerParkParams PARK_DEFAULTS = {
-    STEER_POSITION_TOLERANCE,
+    STEER_PARK_TRIGGER_TOL,   // 0.4°, independent of the 0.2° park window (fix-steering-jerk-and-centre-undershoot D5)
     STEER_PARK_DONE_TOL_DEFAULT,
     STEER_PARK_MOVE_MIN,
     STEER_PARK_SETTLE_MS,
