@@ -218,6 +218,7 @@ public:
         int32_t residual = 0;    // target − position at the end, 0.1°, signed
         uint8_t duty = 0;        // duty × ms of the last pulse
         uint16_t ms = 0;
+        SteerParkNote note = SteerParkNote::NONE;   // why it ended (TOO_STRONG, OVERSHOOT_RESTART, …)
     };
 
     /**
@@ -411,6 +412,11 @@ private:
     uint32_t parkSettleStartMs_;   // settle clock start
     bool parkPulseActive_;         // a pulse is being driven (ends with motor_.stop() at parkPulseEndMs_)
     uint32_t parkPulseEndMs_;
+    // Correction disabled until the next stick command: the main loop restarted after a park
+    // pulse (overshoot beyond STEER_RESTART_TOLERANCE). Cleared only by a target move beyond
+    // STEER_PARK_TARGET_STABLE or a command from idle — never by RESTARTED / PARKED events,
+    // otherwise pulse → restart → re-park → pulse loops forever (wheels shaking).
+    bool parkBlocked_;
     ParkLastResult parkLast_;
 
     // Jog state

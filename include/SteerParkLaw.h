@@ -9,15 +9,20 @@
 //          WAIT    — a pulse was sent; nothing is judged until pulse ms + gapMs have passed;
 //          DONE    — |err| ≤ doneTol after a pulse; a later |err| > trigger resumes at rung 1
 //                    with the REMAINING budget (DONE does not refill it);
-//          GAVE_UP — maxPulses sent and the evaluation after the last one was not done.
+//          GAVE_UP — maxPulses sent and the evaluation after the last one was not done,
+//                    or a pulse overshot beyond the error it started from (TOO_STRONG).
 //  The budget and the ladder re-arm only through reset() — the caller's settle clock reset
 //  (target move beyond the stable band, new park entry), seen here as settledMs < settleMs.
 //  Evaluation after a pulse, in this order (moved = progress toward the target, signed):
 //   1. |err| ≤ doneTol                     → DONE;
-//   2. err changed sign, |err| > doneTol   → OVERSHOOT, next pulse rung 1 (new direction);
-//   3. moved ≤ −moveMin                    → WRONG_WAY, next pulse rung 1;
-//   4. moved ≥ moveMin                     → SAME rung;
-//   5. otherwise                           → ESCALATE (next rung, stays at rung 3);
+//   2. err changed sign and |err| > |err before the pulse| + doneTol
+//                                          → GIVE_UP, note TOO_STRONG (the pulse was clearly
+//                                            too strong: reversing would only shake the wheel);
+//   3. err changed sign, |err| > doneTol   → OVERSHOOT, next pulse rung 1 (new direction)
+//                                            — small overshoots only (|err| ≲ |err before|);
+//   4. moved ≤ −moveMin                    → WRONG_WAY, next pulse rung 1;
+//   5. moved ≥ moveMin                     → SAME rung;
+//   6. otherwise                           → ESCALATE (next rung, stays at rung 3);
 //   then pulses ≥ maxPulses → GIVE_UP, else PULSE toward sign(err).
 // The stall latch, the motor and the logs stay in SteeringController.
 #pragma once
@@ -45,7 +50,10 @@ struct SteerParkParams {
 
 enum class SteerParkPhase : uint8_t { ARMED, WAIT, DONE, GAVE_UP };
 enum class SteerParkAction : uint8_t { NONE, PULSE, DONE, GIVE_UP };
-enum class SteerParkNote : uint8_t { NONE, SAME, ESCALATE, OVERSHOOT, WRONG_WAY };
+// TOO_STRONG: the law gave up after a pulse that overshot beyond the error it started from.
+// OVERSHOOT_RESTART: set by the caller (not the law) when the main loop restarted after a pulse.
+enum class SteerParkNote : uint8_t { NONE, SAME, ESCALATE, OVERSHOOT, WRONG_WAY, TOO_STRONG,
+                                     OVERSHOOT_RESTART };
 
 /** @brief Per-parking bookkeeping; reset() re-arms the ladder and the budget */
 struct SteerParkState {
@@ -55,6 +63,7 @@ struct SteerParkState {
   uint32_t pulseStartMs = 0;
   uint16_t pulseMs = 0;        // length of the running / last pulse
   int32_t posBefore = 0;       // position when the last pulse was sent
+  int32_t absErrBefore = 0;    // |err| when the last pulse was sent
   int8_t dir = 0;              // direction of the last pulse (+1 / −1)
   uint8_t lastDuty = 0;        // duty × ms of the last pulse (0 = none yet)
   uint16_t lastMs = 0;
@@ -101,6 +110,7 @@ static inline void steerParkIssue(SteerParkState& s, const SteerParkParams& p, u
   s.pulseStartMs = now;
   s.pulseMs = g.ms;
   s.posBefore = pos;
+  s.absErrBefore = steerParkAbs(err);
   s.dir = steerParkSign(err);
   s.lastDuty = g.duty;
   s.lastMs = g.ms;
@@ -157,6 +167,13 @@ static inline SteerParkResult steerParkStep(SteerParkState& s, const SteerParkPa
   if (absErr <= p.doneTol) {
     s.phase = SteerParkPhase::DONE;
     r.action = SteerParkAction::DONE;
+    return r;
+  }
+  if (steerParkSign(err) != s.dir && absErr > s.absErrBefore + p.doneTol) {
+    // Overshot further than it started from: a reverse pulse would overshoot again.
+    r.note = SteerParkNote::TOO_STRONG;
+    s.phase = SteerParkPhase::GAVE_UP;
+    r.action = SteerParkAction::GIVE_UP;
     return r;
   }
   if (steerParkSign(err) != s.dir) {
