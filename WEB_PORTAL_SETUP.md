@@ -130,10 +130,13 @@ it. Cards are shown in one column.
 - **Relay test**: eight buttons "Relay 1…8" with the relay function (quad bike labels when the
   wheel lock is fitted, aztec labels otherwise); an energised relay is highlighted. Switching a
   relay on needs ignition OFF, light off, the wheel lock released (if fitted) and a healthy relay
-  board.
+  board. The subtitle shows the active relay board ("Board: XL9535 @0x20 (auto)"); relay numbers
+  mean the same relays on either board.
 
 **Система / System**:
 - **System maintenance**: debug output on/off, RPM boost test, firmware upload (OTA), "What's new".
+- **Плата реле / Relay board**: Auto / PCA9557 / XL9535 selector, the active board line, a
+  "Reboot to apply" note and the detection error (see "Relay board selection" below).
 - **Мережа / Network**: the access point SSID and IP address as reported by the firmware
   (read-only; network settings will be added later).
 
@@ -182,6 +185,26 @@ missing battery, saves it to NVS `"bat12"` / `cal` and applies it at once. **Res
 `reset_bat_v_cal` (factor 1.0, saved). The "Attention" box shows "12 V voltage low" below 11.8 V
 (cleared above 12.1 V) only while `bat_v_valid`, never while the starter relay is on and for 2 s
 after.
+
+**Relay board selection (System → Relay board card):** two relay boards are supported on header
+X15 / I2C2, one at a time: the custom **PCA9557** board at `0x1F` and the **XL9535-K8V5** at
+`0x20`–`0x27` (pads A0–A2, default `0x20`). The firmware picks the board **once at boot**, before any
+relay is written, from the stored setting — NVS `"relay"` / `board` (uint8: 0 = `auto`, default;
+1 = `pca9557`; 2 = `xl9535`; an absent or out-of-range value means `auto` and is not rewritten). `auto`
+uses whichever board answers; with **both** boards, **no** board or **several** XL9535 addresses on
+the bus nothing is guessed: no relay is switched on, every relay command is ignored, `io_relay_fault`
+is true and the reason is shown. A manual `pca9557` / `xl9535` selects that board when both are
+connected (it never picks between two XL9535 addresses) and is a fault if the chosen board is
+missing. The selector sends `{"cmd":"set_relay_board","value":"auto|pca9557|xl9535"}` (any input
+source, any ignition state); the firmware saves it first and replies "Relay board set to … — takes
+effect after reboot" — **the running board never changes until a reboot**. Errors: "Relay board must
+be auto, pca9557 or xl9535", "Failed to save the relay board setting". Telemetry (every frame):
+`relay_board` (`"pca9557"` / `"xl9535"` / `"none"`), `relay_board_addr` (7-bit address as an
+integer, `null` when `"none"`), `relay_board_cfg` (stored setting), `relay_board_reboot` (stored
+setting differs from the one used at boot) and `relay_board_error` (`null` or `both_found`,
+`none_found`, `multiple_xl9535`, `cfg_mismatch`, `init_failed`). Every relay write is verified on the
+expander's pins; after a relay-board reset (e.g. an XL9535 VIN glitch) the firmware re-initializes
+the board every second until the relays verify again.
 
 **Tacho (RPM) calibration card:** engine RPM comes from the ECU tachometer wire (grey J1 pin 6)
 through a PC817 on X3 / GPIO14 (wiring: `GPIO_PINOUT_CUSTOM_BOARD_S3.md` §7a); CAN RPM is the

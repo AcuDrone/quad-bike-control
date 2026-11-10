@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <Wire.h>
+#include "IRelayPort.h"
 
 /**
  * @brief Minimal PCA9557 8-bit I2C port expander register driver.
@@ -17,8 +18,15 @@
  * result to the caller and never retries, sleeps or spins: retry and fault
  * policy belong to the caller (see `BoardInputs` and `RelayController`), which
  * keeps the cooperative main loop non-blocking.
+ *
+ * It also implements IRelayPort for the custom PCA9557 relay board (@0x1F): the relay
+ * port is the whole 8-bit port, readPins() is the input register (0x00) and the
+ * IRelayPort::initPort()/initAllOff() order applies (output, polarity, config, pin
+ * verify). The polarity write matters here: the PCA9557 powers up with polarity 0xF0,
+ * which would invert the upper nibble of the pin read-back. BoardInputs (U10 @0x1A)
+ * uses the same class through its own register methods only.
  */
-class PCA9557Expander {
+class PCA9557Expander : public IRelayPort {
 public:
     static constexpr uint8_t REG_INPUT    = 0x00;
     static constexpr uint8_t REG_OUTPUT   = 0x01;
@@ -36,7 +44,7 @@ public:
      * @brief Probe the device with a zero-length write.
      * @return true if the device ACKs its address
      */
-    bool isPresent();
+    bool isPresent() override;
 
     /**
      * @brief Read the input port register (0x00).
@@ -49,14 +57,14 @@ public:
      * @brief Write the output port register (0x01).
      * @return true on a successful transaction
      */
-    bool writeOutputs(uint8_t value);
+    bool writeOutputs(uint8_t value) override;
 
     /**
      * @brief Read the output port register (0x01) back for write verification.
      * @param value Out: last value latched into the output register
      * @return true on a successful transaction
      */
-    bool readOutputRegister(uint8_t& value);
+    bool readOutputRegister(uint8_t& value) override;
 
     /**
      * @brief Write the configuration register (0x03).
@@ -72,8 +80,19 @@ public:
      */
     bool setPolarityInversion(uint8_t mask);
 
+    // ---- IRelayPort ----
+    /** @brief Pin levels: the input port register (0x00) */
+    bool readPins(uint8_t& value) override { return readInputs(value); }
+    /** @brief Polarity inversion register (0x02) — same as setPolarityInversion() */
+    bool writePolarity(uint8_t mask) override { return setPolarityInversion(mask); }
+    /** @brief Configuration register (0x03) — same as setDirection() */
+    bool writeConfig(uint8_t mask) override { return setDirection(mask); }
+    const char* name() const override { return "PCA9557"; }
+    uint8_t probeRangeMin() const override { return 0x18; }   // A2A1A0 = 000
+    uint8_t probeRangeMax() const override { return 0x1F; }   // A2A1A0 = 111
+
     /** @brief 7-bit device address this instance is bound to */
-    uint8_t address() const { return address_; }
+    uint8_t address() const override { return address_; }
 
     /** @brief The bus this instance is bound to */
     TwoWire& bus() const { return bus_; }

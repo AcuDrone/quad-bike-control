@@ -46,9 +46,12 @@ MavlinkInterface mavlinkInterface;
 
 // ── I2C TOPOLOGY (scan-verified; overrides the schematic's port names) ───────
 //   I2C2 (Wire1, GPIO48/47) : on-board PCA9557s — opto inputs U10 @0x1A,
-//                             CD4051 mux U2 @0x1C — + relay board @0x1F on X15
+//                             CD4051 mux U2 @0x1C — + ONE relay board on X15:
+//                             PCA9557 relay board @0x1F or XL9535-K8V5 @0x20..0x27
 //   I2C1 (Wire,  GPIO1/2)   : external header X14 only — no device fitted, NOT started
-// Expected boot scan: I2C2 = 0x1A 0x1C 0x1F. Nothing restarts Wire1 after setup().
+// Expected boot scan: I2C2 = 0x1A 0x1C + 0x1F or one of 0x20..0x27 (the relay board is
+// selected once in RelayController::begin(), NVS "relay"/"board", default auto).
+// Nothing restarts Wire1 after setup().
 // Fallback if X15 ever goes silent: the relay board also works on X14 → I2C1
 // (change the RelayController argument below from Wire1 to Wire, and start Wire on
 // PIN_I2C1_SDA/PIN_I2C1_SCL in setup()).
@@ -56,7 +59,8 @@ MavlinkInterface mavlinkInterface;
 // Opto-isolated board inputs (3-bit gear code on port bits 0/1/6, brake endstop bit 4) on I2C2
 BoardInputs boardInputs(Wire1);
 
-// Relay Controller for ignition, starter and front light (aztec; wheel lock not fitted) — I2C2 @0x1F via X15
+// Relay Controller for ignition, starter and front light (aztec; wheel lock not fitted) — I2C2 via X15,
+// PCA9557 relay board @0x1F or XL9535 relay board @0x20..0x27 (detected in begin())
 RelayController relayController(Wire1);
 
 // Driveline speed sensor (12V hall via the X2 opto input, PCNT on GPIO8)
@@ -184,9 +188,10 @@ void setup() {
     }
 
     // Enumerate the bus before any driver claims it, so a missing or mis-strapped
-    // expander is obvious from the boot log alone (expected: 0x1A 0x1C 0x1F).
+    // expander is obvious from the boot log alone (expected: 0x1A 0x1C + the relay board,
+    // 0x1F for the PCA9557 board or one of 0x20..0x27 for the XL9535 board).
     if (Debug::isEnabled()) {
-        scanI2CBus(Wire1, "I2C2 (Wire1, expect 0x1A 0x1C 0x1F)");
+        scanI2CBus(Wire1, "I2C2 (Wire1, expect 0x1A 0x1C + 0x1F or 0x20..0x27)");
     }
 
     // Opto-isolated inputs (gear code lines + brake limit sensor)
@@ -247,6 +252,8 @@ void setup() {
         Debug::printlnFeature(DebugFeature::MAVLINK, "ERROR: MAVLink interface failed");
     }
 
+    // Relay board detection + hardware-safe all-off init. Runs before anything else
+    // writes a relay (VehicleController / MAVLink only command relays from loop()).
     if (!relayController.begin()) {
         Debug::printlnFeature(DebugFeature::RELAY, "ERROR: Relay controller failed");
     }

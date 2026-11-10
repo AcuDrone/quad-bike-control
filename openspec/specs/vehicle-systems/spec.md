@@ -1237,12 +1237,16 @@ The steering controller SHALL keep a persistent sensor-direction flag (`inv`: `f
 - **AND** the first-frame log line SHALL still show the raw sensor angle in the sensor's own sign, together with the resulting firmware position and the flag
 
 ### Requirement: Quad Bike Relay Assignment With Fitted Front-Wheel Lock
-On the quad bike (`master`) build the relay board SHALL use the quad assignment:
-- ignition/ECU line = Relay_1 + Relay_2, paralleled (`RELAY_MASK_IGNITION` `0b00110000`);
-- starter = Relay_3 (`0b01000000`);
-- front light = Relay_4 (`0b10000000`);
-- front-wheel lock = Relay_5 + Relay_6, paralleled (`RELAY_MASK_WHEEL_LOCK` `0b00001100`);
-- Relay_7 / Relay_8 spare (`RELAY_MASK_RESERVED` `0b00000011`).
+On the quad bike (`master`) build the relay board SHALL use the quad assignment, defined in
+`Constants.h` as relay-number sets and mapped at `begin()` through the detected board's Relay_N → bit
+table (masks shown for the PCA9557 / XL9535 board):
+- ignition/ECU line = Relay_1 + Relay_2, paralleled (`RELAY_SET_IGNITION`; mask `0b00110000` /
+  `0b00000011`);
+- starter = Relay_3 (`0b01000000` / `0b00000100`);
+- front light = Relay_4 (`0b10000000` / `0b00001000`);
+- front-wheel lock = Relay_5 + Relay_6, paralleled (`RELAY_SET_WHEEL_LOCK`; `0b00001100` /
+  `0b00110000`);
+- Relay_7 / Relay_8 spare (`RELAY_SET_RESERVED`; `0b00000011` / `0b11000000`).
 
 The front-wheel lock SHALL be fitted (`RELAY_WHEEL_LOCK_FITTED` = 1). It replaces, for this build
 only, the aztec buggy's "Front-Wheel Lock Not Fitted" behaviour.
@@ -1253,6 +1257,10 @@ only, the aztec buggy's "Front-Wheel Lock Not Fitted" behaviour.
   telemetry `wheel_lock_on` SHALL be `true` and `EFI_DIGITAL_FLAG_WHEEL_LOCK` SHALL be set
 - **AND WHEN** channel 7 returns to 1000 µs
 - **THEN** both relays SHALL be released and the lock SHALL report unlocked
+
+#### Scenario: Same relays on either board
+- **WHEN** the quad build runs with the PCA9557 board or with the XL9535 board
+- **THEN** the same relay numbers SHALL carry the same functions, and only the port masks SHALL differ
 
 #### Scenario: Wheel lock reported as fitted
 - **WHEN** telemetry is formatted on the quad build

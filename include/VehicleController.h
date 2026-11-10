@@ -223,6 +223,21 @@ public:
     /** @brief Relay expander fault state (telemetry `io_relay_fault`) */
     bool isRelayFault() const { return relayController_.isFaulted(); }
 
+    /** @brief Active relay board token "pca9557" / "xl9535" / "none" (telemetry `relay_board`) */
+    const char* getRelayBoardToken() const { return relayBoardKindToken(relayController_.getBoardKind()); }
+
+    /** @brief Active relay board 7-bit address; 0 when none (telemetry `relay_board_addr`, null then) */
+    uint8_t getRelayBoardAddress() const { return relayController_.getBoardAddress(); }
+
+    /** @brief Stored relay board setting "auto" / "pca9557" / "xl9535" (telemetry `relay_board_cfg`) */
+    const char* getRelayBoardCfgToken() const { return relayBoardSettingToken(relayController_.getStoredSetting()); }
+
+    /** @brief Stored setting differs from the boot one (telemetry `relay_board_reboot`) */
+    bool isRelayBoardRebootPending() const { return relayController_.isBoardRebootPending(); }
+
+    /** @brief Relay board error token, nullptr when none (telemetry `relay_board_error`) */
+    const char* getRelayBoardErrorToken() const { return relayBoardErrorToken(relayController_.getBoardError()); }
+
     /**
      * @brief Get vehicle data from CAN bus
      * @return VehicleData structure with engine RPM, speed, temperatures, etc.
@@ -675,6 +690,15 @@ private:
      * @param webPortal Reference to web portal for sending responses
      */
     void processRelayTestCommand(int32_t relayNumber, bool on, WebPortal& webPortal);
+
+    /**
+     * @brief Process `set_relay_board` (`value`: "auto" | "pca9557" | "xl9535").
+     * Persists first (NVS `relay`/`board`) and replies that the change takes effect after
+     * reboot; the running relay board is untouched. Not gated by input source or ignition.
+     * @param value     the requested setting token
+     * @param webPortal Reference to web portal for sending responses
+     */
+    void processRelayBoardCommand(const String& value, WebPortal& webPortal);
 
     /**
      * @brief `set_boost`: still accepted, but aztec has no boost board on X10 — replies

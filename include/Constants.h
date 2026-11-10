@@ -2,6 +2,7 @@
 #define CONSTANTS_H
 
 #include <Arduino.h>
+#include "RelayBoardLaw.h"   // RELAY_N() for the relay-number sets below
 
 // ============================================================================
 // GPIO PIN ASSIGNMENTS — custom control board "Control_v0" (ESP32-S3-WROOM-1U)
@@ -124,11 +125,16 @@
 //   I2C1 "Wire"  (GPIO1/2)   : external header X14 only — NO device fitted, not started
 //   I2C2 "Wire1" (GPIO48/47) : BOTH on-board PCA9557s —
 //                              opto-input U10 0x1A, CD4051 mux U2 0x1C
-//                              + external relay board 0x1F on header X15
+//                              + ONE external relay board on header X15:
+//                                the PCA9557 relay board 0x1F, or
+//                                the XL9535-K8V5 relay board 0x20..0x27 (default 0x20)
 //
-// Expected boot scan: I2C2 = 0x1A 0x1C 0x1F. No driver and no coordinator restarts
-// Wire1 after setup(); each expander keeps its own fail-safe (BoardInputs re-configures
-// itself, RelayController verifies every write).
+// Expected boot scan: I2C2 = 0x1A 0x1C + 0x1F (PCA9557 relay board) or one of
+// 0x20..0x27 (XL9535 relay board). The relay board is selected once at boot
+// (RelayController::begin(), setting NVS "relay"/"board"). No driver and no coordinator
+// restarts Wire1 after setup(); each expander keeps its own fail-safe (BoardInputs
+// re-configures itself, RelayController verifies every write on the pins and re-inits
+// the relay port while faulted).
 // (Steering feedback is on CAN since firmware 1.3.0 — the former AS5600 pair on
 // X14/X15 and the coordinated I2C2 recovery are gone.)
 //
@@ -142,9 +148,14 @@
 #define I2C_BUS_FREQ_HZ     100000       // 100 kHz (see note above)
 
 #define PCA9557_ADDR_INPUTS        0x1A  // On-board opto-input expander U10 (I2C2)
-// External relay board on X15 → I2C2, as shipped strapped A2A1A0 = 111 → 0x1F.
+// PCA9557 relay board on X15 → I2C2, as shipped strapped A2A1A0 = 111 → 0x1F.
 // The strap is kept: 0x1F collides with neither on-board expander (0x1A / 0x1C).
-#define PCA9557_ADDR_RELAYS        0x1F  // External relay board
+#define PCA9557_ADDR_RELAYS        0x1F  // External PCA9557 relay board
+// XL9535-K8V5 relay board (PCA9535-compatible, port P0 only): pads A0..A2 → 0x20..0x27,
+// default 0x20. Collides with nothing on I2C2. Hardware: J1 removed, VIN from the X15
+// 3.3 V side, the 5V relay terminal fed separately (≈0.6 A), shared GND.
+#define XL9535_ADDR_MIN            0x20  // XL9535 relay board, pads A2A1A0 = 000 (default)
+#define XL9535_ADDR_MAX            0x27  // XL9535 relay board, pads A2A1A0 = 111
 #define PCA9557_ADDR_MUX_RESERVED  0x1C  // On-board CD4051 mux control U2 (I2C2) — NEVER addressed
 
 // Opto-isolated input bit indices on PCA9557 U10.
@@ -198,39 +209,48 @@ static_assert(GEAR_CODE_LOW != 0b000 && GEAR_CODE_HIGH != 0b000 && GEAR_CODE_NEU
 // never moved during the 2026-08-21 sweep, so this is still the schematic's sense.
 #define BOARD_INPUT_ACTIVE_LOW     1     // 1 = asserted input reads 0, 0 = asserted reads 1
 
-// Relay port masks on the relay board's PCA9557.
-//
-// ⚠ The relay board's IO routing is NOT 1:1 — do NOT "simplify" these back to
-//   Relay_N = bit N. Verified against the Relay.PrjPcb schematic netlist:
-//     Relay_1=IO4  Relay_2=IO5  Relay_3=IO6  Relay_4=IO7
-//     Relay_5=IO3  Relay_6=IO2  Relay_7=IO0  Relay_8=IO1
+// Relay function assignment, as RELAY-NUMBER sets (bit0 = Relay_1 … bit7 = Relay_8 — the
+// same encoding as the `relay_test` telemetry), NOT port masks. RelayController::begin()
+// builds the whole-port masks from these through the DETECTED board's Relay_N → bit table
+// (include/RelayBoardLaw.h):
+//   PCA9557 relay board (0x1F) — ⚠ NOT 1:1, verified against the Relay.PrjPcb netlist;
+//     do NOT "simplify" it to Relay_N = bit N-1 (that would crank on a light request):
+//       Relay_1=IO4  Relay_2=IO5  Relay_3=IO6  Relay_4=IO7
+//       Relay_5=IO3  Relay_6=IO2  Relay_7=IO0  Relay_8=IO1
+//   XL9535-K8V5 relay board (0x20..0x27) — identity, Relay_N = P0.(N-1), active-high
+//     (bench-confirmed 2026-11-07 on an XL9535-K8V5 @0x20, tasks.md 1.4).
+// Compile-time checks (RelayController.cpp): the sets are disjoint and cover all eight
+// relays, both tables are permutations, and the mapped masks are disjoint and OR to 0xFF
+// on BOTH boards; begin() repeats the mask check at runtime.
 //
 // AZTEC BUGGY assignment (this branch). The quad bike's assignment — ignition on the
-// paralleled pair Relay_1+Relay_2 and the front-wheel lock on Relay_5+Relay_6 — lives
-// on master; the aztec harness is wired differently. Every function is still a
-// whole-port MASK (not a bare bit) so a future paired load needs no driver change.
-#define RELAY_MASK_IGNITION     0b00010000  // Relay_1 (IO4, X4) — ignition/ECU line (single relay)
-#define RELAY_MASK_STARTER      0b00100000  // Relay_2 (IO5, X5) — starter solenoid
-#define RELAY_MASK_FRONT_LIGHT  0b01000000  // Relay_3 (IO6, X6) — front light
-// Relay_4 (IO7, X7), Relay_5 (IO3, X8) and Relay_6 (IO2, X9) are wired to three
-// SEPARATE locks whose functions are specified in a later change; until then they
-// are reserved and always driven OFF. Relay_7 (IO0, X10) and Relay_8 (IO1, X11) are
-// spare. Outside the web relay test (below) RELAY_MASK_RESERVED is never set by the
-// driver — every port write leaves these bits 0. Connectors X4..X11 here are the RELAY BOARD's connectors, not the
-// main board's X4/X5 Hall headers.
-#define RELAY_MASK_RESERVED     0b10001111  // Relay_4 (IO7) | Relay_5 (IO3) | Relay_6 (IO2) | Relay_7 (IO0) | Relay_8 (IO1)
+// paralleled pair Relay_1+Relay_2, starter Relay_3, light Relay_4, front-wheel lock on
+// Relay_5+Relay_6, spare Relay_7/8 — lives on master; the aztec harness is wired
+// differently. Every function is still a SET (not a single relay) so a future paired load
+// needs no driver change.
+// Resulting masks — PCA9557 / XL9535: ignition 0x10 / 0x01, starter 0x20 / 0x02,
+// front light 0x40 / 0x04, reserved 0x8F / 0xF8.
+#define RELAY_SET_IGNITION     RELAY_N(1)  // Relay_1 (PCA9557 IO4, X4 / XL9535 P0.0) — ignition/ECU line (single relay)
+#define RELAY_SET_STARTER      RELAY_N(2)  // Relay_2 (PCA9557 IO5, X5 / XL9535 P0.1) — starter solenoid
+#define RELAY_SET_FRONT_LIGHT  RELAY_N(3)  // Relay_3 (PCA9557 IO6, X6 / XL9535 P0.2) — front light
+// Relay_4, Relay_5 and Relay_6 are wired to three SEPARATE locks whose functions are
+// specified in a later change; until then they are reserved and always driven OFF.
+// Relay_7 and Relay_8 are spare. Outside the web relay test (below) a reserved relay is
+// never set by the driver — every port write leaves those bits 0. Connectors X4..X11 here
+// are the PCA9557 RELAY BOARD's connectors, not the main board's X4/X5 Hall headers.
+#define RELAY_SET_RESERVED     (RELAY_N(4) | RELAY_N(5) | RELAY_N(6) | RELAY_N(7) | RELAY_N(8))
 
 // Web relay test (bench wiring check). Any of the eight relays can be toggled from the
 // web UI, but ONLY while the ignition is OFF and no real function relay is energized;
-// the per-relay number -> IO bit lookup lives in RelayController (relayIoMask()). A
-// test relay is the only way a RELAY_MASK_RESERVED bit is ever written 1. Every test
+// the per-relay number -> port bit lookup is the active board's table (RelayController::
+// relayIoMask()). A test relay is the only way a reserved relay is ever energized. Every test
 // bit auto-releases after RELAY_TEST_TIMEOUT_MS; the starter relay (Relay_2) is capped
 // much shorter so a test cannot crank the engine for long.
 #define RELAY_TEST_TIMEOUT_MS      30000UL  // ms a test relay stays on before auto-off
 #define RELAY_TEST_STARTER_MAX_MS  2000UL   // ms cap for a Relay_2 (starter) test
 
 // The quad bike's front-wheel lock is NOT fitted on the aztec buggy, so there is
-// deliberately no RELAY_MASK_WHEEL_LOCK. The MAVLink servo channel
+// deliberately no RELAY_SET_WHEEL_LOCK. The MAVLink servo channel
 // (ServoChannelConfig::WHEEL_LOCK), the web `set_wheel_lock` command and the
 // EFI_DIGITAL_FLAG_WHEEL_LOCK telemetry bit stay in place, but RelayController
 // rejects lock commands and reports the lock as released + not fitted.
@@ -240,7 +260,13 @@ static_assert(GEAR_CODE_LOW != 0b000 && GEAR_CODE_HIGH != 0b000 && GEAR_CODE_NEU
 #define BOARD_INPUT_POLL_MS        25    // ms between opto-input polls
 #define BOARD_INPUT_STALE_MS       250   // ms without a good read before the snapshot is invalid
 #define BOARD_INPUT_RECOVER_MS     1000  // ms between re-init attempts while faulted
-#define RELAY_WRITE_RETRIES        3     // read-back verification retries per port write
+#define RELAY_WRITE_RETRIES        3     // pin read-back verification retries per port write
+#define RELAY_RECOVER_MS           1000  // ms between relay-port re-inits (initPort + shadow write) while faulted
+
+// Relay board selection (persisted; read once in RelayController::begin(), applied at boot).
+// uint8: 0 = auto (default, also for an absent or out-of-range value), 1 = pca9557, 2 = xl9535.
+#define RELAY_BOARD_NVS_NS         "relay"
+#define RELAY_BOARD_NVS_KEY        "board"
 
 // ============================================================================
 // 12 V BATTERY SENSE (X10 / GPIO9 — aztec: no Buck-Boost board fitted)
@@ -996,7 +1022,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.23"
+#define FIRMWARE_VERSION "1.5.24"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

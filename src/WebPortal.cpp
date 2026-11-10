@@ -595,6 +595,9 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // Brake tuning since 1.5.23: brake_travel_ms / brake_hold_pwm / brake_released, 3 scalar
     // slots (keys by pointer, ≈ 48 B of memory, ≈ 60 B of JSON; brake_pct already existed) —
     // aztec worst case ≈ 8.55 KB, still ≈ 0.65 KB under 9216 (size unchanged).
+    // Relay board selection since 1.5.24: relay_board / _addr / _cfg / _reboot / _error, 5 scalar
+    // slots (keys by pointer, token values static strings by pointer, nothing copied; ≈ 80 B of
+    // memory, ≤ 130 B of JSON) — aztec worst case ≈ 8.63 KB, ≈ 0.57 KB under 9216 (size unchanged).
     // Static (single caller: the main-loop broadcast) so the larger document is off the stack.
     static StaticJsonDocument<9216> doc;
     doc.clear();
@@ -792,6 +795,15 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["io_input_fault"] = telemetry.io_input_fault;
     doc["io_raw"] = telemetry.io_raw;
     doc["io_relay_fault"] = telemetry.io_relay_fault;
+    // Relay board selection: tokens are static strings (stored by pointer); the address is
+    // null while no board is active, the error null while there is none.
+    doc["relay_board"] = telemetry.relay_board;
+    if (telemetry.relay_board_addr != 0) doc["relay_board_addr"] = telemetry.relay_board_addr;
+    else                                 doc["relay_board_addr"] = (const char*)nullptr;
+    doc["relay_board_cfg"] = telemetry.relay_board_cfg;
+    doc["relay_board_reboot"] = telemetry.relay_board_reboot;
+    if (telemetry.relay_board_error) doc["relay_board_error"] = telemetry.relay_board_error;
+    else                             doc["relay_board_error"] = (const char*)nullptr;
 
     // Firmware version and target board
     doc["firmware_version"] = telemetry.firmware_version;

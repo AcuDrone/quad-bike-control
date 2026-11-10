@@ -14,6 +14,11 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.24","date":"2026-11-07","uk":[
+"Реле: підтримка плати реле XL9535-K8V5 (адреса 0x20–0x27) поряд із платою PCA9557 (0x1F). Плата визначається автоматично під час запуску; нова картка «Плата реле» в розділі «Система» дозволяє вибрати Авто / PCA9557 / XL9535 (діє після перезавантаження) і показує активну плату та помилку. Якщо відповідають обидві плати, жодна або кілька адрес XL9535 — жодне реле не вмикається. Кожне перемикання реле тепер перевіряється за станом виводів, а після збою живлення плати реле відновлюються самі приблизно за 1 с. Потрібно залити оновлений образ LittleFS"
+],"en":[
+"Relays: support for the XL9535-K8V5 relay board (address 0x20–0x27) alongside the PCA9557 board (0x1F). The board is detected automatically at boot; the new “Relay board” card in the System section selects Auto / PCA9557 / XL9535 (applies after reboot) and shows the active board and any error. If both boards, no board or several XL9535 addresses answer, no relay is switched on. Every relay write is now verified on the pins, and after a relay-board power glitch the relays recover by themselves within about 1 s. Upload the updated LittleFS image"
+]},
 {"version":"1.5.23","date":"2026-11-06","uk":[
 "Гальмо: нова картка «Гальмо» — час повного ходу актуатора (повзунок 1000–3000 мс, типово 1500) і сила утримання (0–100, типово 30, 0 = без утримання) налаштовуються з веба для кожної машини окремо; показує стан кінцевика; плитка «Гальмо» на панелі тепер показує оцінене положення гальма замість 0. Потрібно залити оновлений образ LittleFS"
 ],"en":[

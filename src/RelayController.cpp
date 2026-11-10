@@ -1,67 +1,70 @@
 #include "RelayController.h"
+#include <Preferences.h>
 #include "Debug.h"
 
-// The function masks must be pairwise disjoint, disjoint from the reserved relays,
-// and together with them cover the whole port exactly once. The wheel-lock mask is
-// a function mask only where the lock is fitted (RELAY_MASK_WHEEL_LOCK is not
-// defined otherwise).
+// Relay-number sets (Constants.h) and both Relay_N -> bit tables (RelayBoardLaw.h) are
+// checked at compile time: the sets are disjoint, non-empty and cover all eight relays;
+// each table is a permutation of the eight port bits; and the masks mapped through EITHER
+// table are disjoint and OR to 0xFF. begin() repeats the mask check at runtime for the
+// detected board. The wheel-lock set exists only where the lock is fitted.
 #if RELAY_WHEEL_LOCK_FITTED
-#define RELAY_FUNCTION_MASKS_ (RELAY_MASK_IGNITION | RELAY_MASK_STARTER | RELAY_MASK_FRONT_LIGHT | RELAY_MASK_WHEEL_LOCK)
-static_assert((RELAY_MASK_WHEEL_LOCK & RELAY_MASK_IGNITION) == 0 &&
-              (RELAY_MASK_WHEEL_LOCK & RELAY_MASK_STARTER) == 0 &&
-              (RELAY_MASK_WHEEL_LOCK & RELAY_MASK_FRONT_LIGHT) == 0 &&
-              (RELAY_MASK_WHEEL_LOCK & RELAY_MASK_RESERVED) == 0 &&
-              RELAY_MASK_WHEEL_LOCK != 0,
-              "wheel-lock relay mask overlaps another function or the reserved relays");
+#define RELAY_SET_WHEEL_LOCK_OR_0_ RELAY_SET_WHEEL_LOCK
 #else
-#define RELAY_FUNCTION_MASKS_ (RELAY_MASK_IGNITION | RELAY_MASK_STARTER | RELAY_MASK_FRONT_LIGHT)
+#define RELAY_SET_WHEEL_LOCK_OR_0_ 0
 #endif
-static_assert((RELAY_MASK_IGNITION & RELAY_MASK_STARTER) == 0 &&
-              (RELAY_MASK_IGNITION & RELAY_MASK_FRONT_LIGHT) == 0 &&
-              (RELAY_MASK_STARTER & RELAY_MASK_FRONT_LIGHT) == 0 &&
-              (RELAY_FUNCTION_MASKS_ & RELAY_MASK_RESERVED) == 0,
-              "relay function masks overlap");
-static_assert((RELAY_FUNCTION_MASKS_ | RELAY_MASK_RESERVED) == 0xFF,
-              "relay masks must cover all eight relays");
-// The relay-test lookup must agree with the function masks and the reserved set of
-// this vehicle, and map the eight relays onto eight distinct port bits.
-#if RELAY_WHEEL_LOCK_FITTED
-// Quad bike: paired ignition (Relay_1+2), starter Relay_3, light Relay_4,
-// paired wheel lock (Relay_5+6), spare Relay_7/8.
-static_assert((RelayController::relayIoMask(1) | RelayController::relayIoMask(2)) == RELAY_MASK_IGNITION &&
-              RelayController::relayIoMask(3) == RELAY_MASK_STARTER &&
-              RelayController::relayIoMask(4) == RELAY_MASK_FRONT_LIGHT &&
-              (RelayController::relayIoMask(5) | RelayController::relayIoMask(6)) == RELAY_MASK_WHEEL_LOCK,
-              "relay test lookup disagrees with the function masks");
-static_assert((RelayController::relayIoMask(7) | RelayController::relayIoMask(8)) == RELAY_MASK_RESERVED,
-              "relay test lookup disagrees with RELAY_MASK_RESERVED");
-#else
-// Aztec buggy: single ignition Relay_1, starter Relay_2, light Relay_3,
-// reserved Relay_4..8.
-static_assert(RelayController::relayIoMask(1) == RELAY_MASK_IGNITION &&
-              RelayController::relayIoMask(2) == RELAY_MASK_STARTER &&
-              RelayController::relayIoMask(3) == RELAY_MASK_FRONT_LIGHT,
-              "relay test lookup disagrees with the function masks");
-static_assert((RelayController::relayIoMask(4) | RelayController::relayIoMask(5) |
-               RelayController::relayIoMask(6) | RelayController::relayIoMask(7) |
-               RelayController::relayIoMask(8)) == RELAY_MASK_RESERVED,
-              "relay test lookup disagrees with RELAY_MASK_RESERVED");
+static_assert(relaySetsValid(RELAY_SET_IGNITION, RELAY_SET_STARTER, RELAY_SET_FRONT_LIGHT,
+                             RELAY_SET_WHEEL_LOCK_OR_0_, RELAY_SET_RESERVED),
+              "relay function sets overlap, are empty or do not cover all eight relays");
+static_assert(relayTableIsPermutation(RELAY_TABLE_PCA9557) && relayTableIsPermutation(RELAY_TABLE_XL9535),
+              "relay board tables must map relays 1..8 onto all eight port bits");
+static_assert(relayMasksValid(relayBuildMasks(RELAY_TABLE_PCA9557, RELAY_SET_IGNITION, RELAY_SET_STARTER,
+                                              RELAY_SET_FRONT_LIGHT, RELAY_SET_WHEEL_LOCK_OR_0_,
+                                              RELAY_SET_RESERVED)),
+              "relay masks on the PCA9557 board overlap or leave a gap");
+static_assert(relayMasksValid(relayBuildMasks(RELAY_TABLE_XL9535, RELAY_SET_IGNITION, RELAY_SET_STARTER,
+                                              RELAY_SET_FRONT_LIGHT, RELAY_SET_WHEEL_LOCK_OR_0_,
+                                              RELAY_SET_RESERVED)),
+              "relay masks on the XL9535 board overlap or leave a gap");
+#if !RELAY_WHEEL_LOCK_FITTED
+// Aztec: the PCA9557 masks must stay exactly what the bench-verified build used.
+static_assert(relayPortMask(RELAY_TABLE_PCA9557, RELAY_SET_IGNITION) == 0x10 &&
+              relayPortMask(RELAY_TABLE_PCA9557, RELAY_SET_STARTER) == 0x20 &&
+              relayPortMask(RELAY_TABLE_PCA9557, RELAY_SET_FRONT_LIGHT) == 0x40 &&
+              relayPortMask(RELAY_TABLE_PCA9557, RELAY_SET_RESERVED) == 0x8F,
+              "aztec PCA9557 relay masks changed");
 #endif
-#undef RELAY_FUNCTION_MASKS_
-static_assert((RelayController::relayIoMask(1) | RelayController::relayIoMask(2) |
-               RelayController::relayIoMask(3) | RelayController::relayIoMask(4) |
-               RelayController::relayIoMask(5) | RelayController::relayIoMask(6) |
-               RelayController::relayIoMask(7) | RelayController::relayIoMask(8)) == 0xFF &&
-              RelayController::relayIoMask(0) == 0 && RelayController::relayIoMask(9) == 0,
-              "relay test lookup must map relays 1..8 onto all eight port bits");
+static_assert(PCA9557_ADDR_RELAYS == RELAY_LAW_PCA9557_ADDR &&
+              XL9535_ADDR_MIN == RELAY_LAW_XL9535_ADDR_MIN && XL9535_ADDR_MAX == RELAY_LAW_XL9535_ADDR_MAX &&
+              XL9535_ADDR_MIN == XL9535Expander::ADDR_MIN && XL9535_ADDR_MAX == XL9535Expander::ADDR_MAX,
+              "relay board addresses disagree between Constants.h, RelayBoardLaw.h and the driver");
+static_assert(XL9535_ADDR_MAX - XL9535_ADDR_MIN + 1 == 8, "one XL9535 instance per address 0x20..0x27");
 
 RelayController::RelayController(TwoWire& bus)
-    : expander_(bus, PCA9557_ADDR_RELAYS),
+    : pca_(bus, PCA9557_ADDR_RELAYS),
+      xl_{ {bus, 0x20}, {bus, 0x21}, {bus, 0x22}, {bus, 0x23},
+           {bus, 0x24}, {bus, 0x25}, {bus, 0x26}, {bus, 0x27} },
+      port_(nullptr),
+      table_(nullptr),
+      boardKind_(RelayBoardKind::NONE),
+      boardAddr_(0),
+      bootSetting_(RelayBoardSetting::AUTO),
+      storedSetting_(RelayBoardSetting::AUTO),
+      boardError_(RelayBoardError::NONE),
+      maskIgnition_(0),
+      maskStarter_(0),
+      maskFrontLight_(0),
+#if RELAY_WHEEL_LOCK_FITTED
+      maskWheelLock_(0),
+#endif
+      maskReserved_(0),
       outputShadow_(0x00),
       initialized_(false),
       faulted_(false),
       starterInhibit_(false),
       allOffEscalation_(false),
+      initPending_(false),
+      lastRecoverMs_(0),
+      recoverFailLogged_(false),
       currentIgnitionState_(IgnitionState::OFF),
       frontLightOn_(false),
 #if RELAY_WHEEL_LOCK_FITTED
@@ -77,66 +80,182 @@ RelayController::RelayController(TwoWire& bus)
       crankArmed_(false) {
 }
 
+RelayBoardSetting RelayController::loadBoardSetting() {
+    // Read-only open: fails (→ auto) while the namespace has never been written.
+    Preferences prefs;
+    uint8_t raw = (uint8_t)RelayBoardSetting::AUTO;
+    if (prefs.begin(RELAY_BOARD_NVS_NS, true)) {
+        raw = prefs.getUChar(RELAY_BOARD_NVS_KEY, (uint8_t)RelayBoardSetting::AUTO);
+        prefs.end();
+    }
+    bool valid = true;
+    RelayBoardSetting setting = relayBoardSettingFromRaw(raw, valid);
+    if (!valid) {
+        // Logged and treated as auto; deliberately NOT rewritten (a newer firmware may own it).
+        Debug::printfFeature(DebugFeature::RELAY,
+            "[RELAY] WARNING: stored relay board setting %u is out of range — using auto\n",
+            (unsigned)raw);
+    }
+    return setting;
+}
+
+bool RelayController::saveBoardSetting(RelayBoardSetting setting) {
+    // Persist first; the RAM copy (telemetry relay_board_cfg) changes only once NVS holds it.
+    // One key in the controller-owned "relay" namespace — never clear() it.
+    Preferences prefs;
+    bool ok = false;
+    if (prefs.begin(RELAY_BOARD_NVS_NS, false)) {
+        ok = prefs.putUChar(RELAY_BOARD_NVS_KEY, (uint8_t)setting) == sizeof(uint8_t);
+        prefs.end();
+    }
+    if (!ok) {
+        Debug::printlnFeature(DebugFeature::RELAY, "[RELAY] ERROR: relay board setting not saved");
+        return false;
+    }
+    storedSetting_ = setting;
+    Debug::printfFeature(DebugFeature::RELAY,
+        "[RELAY] Relay board setting stored: %s (active: %s @0x%02X, applies after reboot)\n",
+        relayBoardSettingToken(setting), relayBoardKindName(boardKind_), (unsigned)getBoardAddress());
+    return true;
+}
+
+void RelayController::logDetectionFault(uint16_t ackMask) {
+    static const char* const reasons[] = {
+        "", "both relay boards answer (0x1F and an XL9535 address) — select one in the web UI",
+        "no relay board answers at 0x1F or 0x20..0x27",
+        "more than one XL9535 address answers — fix the A0..A2 pads",
+        "the selected relay board does not answer (setting does not match the bus)",
+        "initialization failed"
+    };
+    const uint8_t idx = (uint8_t)boardError_;
+    Debug::printfFeature(DebugFeature::RELAY,
+        "[RELAY] ERROR: relay board detection failed (%s, setting %s, probe mask 0x%03X): %s — "
+        "every relay stays OFF, nothing written; reboot after fixing\n",
+        relayBoardErrorToken(boardError_), relayBoardSettingToken(bootSetting_), (unsigned)ackMask,
+        idx < sizeof(reasons) / sizeof(reasons[0]) ? reasons[idx] : "?");
+
+    // Report what the PCA9557 block (0x18-0x1F) and the XL9535 block (0x20-0x27) look like
+    // on THIS bus, so a mis-strapped board or a board on the wrong connector is obvious from
+    // one line. 0x1A / 0x1C are the on-board expanders on I2C2 — listed, never taken for a
+    // relay board. Bounded (16 zero-length probes) and non-blocking.
+    char found[16 * 6 + 1];
+    size_t used = 0;
+    const uint8_t lo = pca_.probeRangeMin() < RELAY_LAW_SCAN_ADDR_MIN ? pca_.probeRangeMin() : RELAY_LAW_SCAN_ADDR_MIN;
+    const uint8_t hi = xl_[0].probeRangeMax() > RELAY_LAW_SCAN_ADDR_MAX ? xl_[0].probeRangeMax() : RELAY_LAW_SCAN_ADDR_MAX;
+    for (uint8_t addr = lo; addr <= hi && used < sizeof(found); addr++) {
+        PCA9557Expander probe(pca_.bus(), addr);   // zero-length write only
+        if (probe.isPresent()) {
+            used += snprintf(found + used, sizeof(found) - used, " 0x%02X", addr);
+        }
+    }
+    Debug::printfFeature(DebugFeature::RELAY,
+        "[RELAY] I2C scan 0x%02X-0x%02X (0x1A/0x1C = on-board expanders, not relay boards):%s\n",
+        lo, hi, used ? found : " none");
+}
+
 bool RelayController::begin() {
     initialized_ = false;
     faulted_ = false;
     starterInhibit_ = false;
     allOffEscalation_ = false;
+    initPending_ = false;
+    recoverFailLogged_ = false;
     outputShadow_ = 0x00;
     testMask_ = 0;
+    port_ = nullptr;
+    table_ = nullptr;
+    boardKind_ = RelayBoardKind::NONE;
+    boardAddr_ = 0;
+    boardError_ = RelayBoardError::NONE;
 
-    if (!expander_.isPresent()) {
-        // Report what the whole PCA9557 address block (0x18-0x1F) looks like on
-        // THIS bus, so a mis-strapped board or a board on the wrong connector is
-        // obvious from one line. Naming a single "expected" address would
-        // misattribute: on I2C2 the on-board mux U2 @0x1C always answers.
-        // Bounded (8 zero-length probes) and non-blocking.
-        char found[8 * 6 + 1];
-        size_t used = 0;
-        for (uint8_t addr = 0x18; addr <= 0x1F; addr++) {
-            PCA9557Expander probe(expander_.bus(), addr);
-            if (probe.isPresent()) {
-                used += snprintf(found + used, sizeof(found) - used, " 0x%02X", addr);
-            }
-        }
-        Debug::printfFeature(DebugFeature::RELAY,
-            "[RELAY] ERROR: no expander at 0x%02X on this bus; "
-            "PCA9557-range devices found:%s\n",
-            PCA9557_ADDR_RELAYS, used ? found : " none");
-        return false;
-    }
-
-    // Drive every output LOW *before* enabling the outputs, so configuring the
-    // direction register can never latch a stale high onto a relay coil.
-    if (!expander_.writeOutputs(0x00) || !expander_.setDirection(0x00)) {
-        Debug::printlnFeature(DebugFeature::RELAY,
-            "[RELAY] ERROR: relay expander configuration write failed");
-        return false;
-    }
-
-    uint8_t readback = 0xFF;
-    if (!expander_.readOutputRegister(readback) || readback != 0x00) {
-        Debug::printfFeature(DebugFeature::RELAY,
-            "[RELAY] ERROR: all-off write did not verify (read back 0x%02X)\n", readback);
-        return false;
-    }
-
-    initialized_ = true;
-
-    // Set initial state
+    // Tracked state starts safe whatever happens below.
     currentIgnitionState_ = IgnitionState::OFF;
     frontLightOn_ = false;
 #if RELAY_WHEEL_LOCK_FITTED
-    wheelLockOn_ = false;    // the port was just written all-off, lock included
+    wheelLockOn_ = false;    // the port is written all-off below, lock included
 #endif
     ignitionHighSince_ = 0;
     crankArmed_ = false;
     isCranking_ = false;
 
-    Debug::printfFeature(DebugFeature::RELAY,
-        "[RELAY] Initialized on PCA9557 @0x%02X: all 8 relays OFF\n",
-        PCA9557_ADDR_RELAYS);
+    // 1. Setting (absent / out-of-range → auto)
+    bootSetting_ = loadBoardSetting();
+    storedSetting_ = bootSetting_;
 
+    // 2. Detection: nine zero-length probes (0x1F, 0x20..0x27) — nothing is written.
+    uint16_t ack = 0;
+    if (pca_.isPresent()) {
+        ack |= RELAY_ACK_PCA9557;
+    }
+    for (uint8_t i = 0; i < 8; i++) {
+        if (xl_[i].isPresent()) {
+            ack |= relayAckXl9535(xl_[i].address());
+        }
+    }
+    const RelayBoardDecision d = relayBoardDecide(ack, bootSetting_);
+    if (d.error != RelayBoardError::NONE) {
+        // Never a guess: no write to any device, every setter a logging no-op, no retry.
+        boardError_ = d.error;
+        logDetectionFault(ack);
+        return false;
+    }
+
+    // 3. Latch the board and build its masks.
+    IRelayPort* port = nullptr;
+    if (d.kind == RelayBoardKind::PCA9557) {
+        port = &pca_;
+        table_ = &RELAY_TABLE_PCA9557;
+    } else {
+        port = &xl_[d.address - XL9535_ADDR_MIN];
+        table_ = &RELAY_TABLE_XL9535;
+    }
+    const RelayPortMasks m = relayBuildMasks(*table_, RELAY_SET_IGNITION, RELAY_SET_STARTER,
+                                             RELAY_SET_FRONT_LIGHT, RELAY_SET_WHEEL_LOCK_OR_0_,
+                                             RELAY_SET_RESERVED);
+    if (!relayMasksValid(m)) {
+        // Unreachable while the static_asserts above hold; refuse to drive the port anyway.
+        Debug::printlnFeature(DebugFeature::RELAY,
+            "[RELAY] ERROR: relay masks overlap or leave a gap — relay port NOT initialized");
+        table_ = nullptr;
+        boardError_ = RelayBoardError::INIT_FAILED;
+        return false;
+    }
+    maskIgnition_ = m.ignition;
+    maskStarter_ = m.starter;
+    maskFrontLight_ = m.frontLight;
+#if RELAY_WHEEL_LOCK_FITTED
+    maskWheelLock_ = m.wheelLock;
+#endif
+    maskReserved_ = m.reserved;
+    port_ = port;
+    boardKind_ = d.kind;
+    boardAddr_ = d.address;
+
+    Debug::printfFeature(DebugFeature::RELAY,
+        "[RELAY] Relay board: %s @0x%02X (setting %s); masks ign 0x%02X start 0x%02X light 0x%02X "
+        "reserved 0x%02X\n",
+        port_->name(), boardAddr_, relayBoardSettingToken(bootSetting_),
+        maskIgnition_, maskStarter_, maskFrontLight_, maskReserved_);
+
+    // 4. Hardware-safe all-off init (output → polarity → config → pin verify).
+    initialized_ = true;   // the board is latched from here on, even if the init fails
+    const char* step = nullptr;
+    if (!port_->initAllOff(&step)) {
+        Debug::printfFeature(DebugFeature::RELAY,
+            "[RELAY] ERROR: %s @0x%02X all-off init failed at step '%s' — relays unavailable, "
+            "retrying every %u ms\n",
+            port_->name(), boardAddr_, step ? step : "?", (unsigned)RELAY_RECOVER_MS);
+        faulted_ = true;
+        initPending_ = true;
+        recoverFailLogged_ = true;     // this episode is already logged
+        lastRecoverMs_ = millis();
+        boardError_ = RelayBoardError::INIT_FAILED;
+        return false;
+    }
+
+    Debug::printfFeature(DebugFeature::RELAY,
+        "[RELAY] Initialized on %s @0x%02X: all 8 relays OFF (pins verified)\n",
+        port_->name(), boardAddr_);
     return true;
 }
 
@@ -165,7 +284,7 @@ void RelayController::setIgnitionState(IgnitionState state) {
             clearRelayTests("ignition command takes over");
         }
 
-        // The ignition/ECU line (RELAY_MASK_IGNITION) is HIGH in
+        // The ignition/ECU line (ignition mask) is HIGH in
         // ACC/IGNITION/CRANKING, LOW only in OFF. Start the pre-crank dwell clock on the
         // LOW->HIGH edge; reset it only on OFF (jitter between ACC and IGNITION keeps the
         // ignition line powered, so it must NOT reset).
@@ -235,7 +354,7 @@ void RelayController::setFrontLight(bool on) {
 
 bool RelayController::setWheelLock(bool locked) {
 #if RELAY_WHEEL_LOCK_FITTED
-    // Quad bike: the lock drives RELAY_MASK_WHEEL_LOCK (Relay_5 + Relay_6).
+    // Quad bike: the lock drives the wheel-lock mask (RELAY_SET_WHEEL_LOCK: Relay_5 + Relay_6).
     if (!initialized_ || faulted_) {
         Debug::printfFeature(DebugFeature::RELAY,
             "[RELAY] Wheel lock command (%s) ignored — relay expander unavailable\n",
@@ -302,12 +421,24 @@ void RelayController::update(uint16_t engineRpm) {
         if (clearRelayTests("relay expander faulted")) {
             outputShadow_ = computeShadow();
         }
-        // Keep pushing the safe state until the expander verifies clean again.
         // While the starter escalation is latched the shadow is already all-off.
         if (allOffEscalation_) {
             outputShadow_ = 0x00;
         }
-        writePort(outputShadow_, 1);
+        // Every RELAY_RECOVER_MS the single attempt is replaced by a re-init of the port
+        // (a reset expander has lost its configuration — XL9535 VIN brown-out).
+        uint32_t now = millis();
+        if ((now - lastRecoverMs_) >= RELAY_RECOVER_MS) {
+            lastRecoverMs_ = now;
+            attemptRecovery();
+            return;
+        }
+        // Otherwise keep pushing the safe state, one attempt per call, until it verifies.
+        // Not while the boot init is pending: an unconfigured port is touched only by the
+        // ordered re-init above.
+        if (!initPending_) {
+            writePort(outputShadow_, 1);
+        }
         return;  // no crank logic while the port cannot be trusted
     }
 
@@ -360,17 +491,17 @@ uint8_t RelayController::computeShadow() const {
     // relay is the only other way, ignition OFF only and capped at RELAY_TEST_STARTER_MAX_MS).
     bool starter = (currentIgnitionState_ == IgnitionState::CRANKING);
 
-    // Start from all-off so the reserved relays (RELAY_MASK_RESERVED: the spares, and
+    // Start from all-off so the reserved relays (RELAY_SET_RESERVED: the spares, and
     // on aztec the three pending locks) are written off unless the web relay test
     // energizes one. Relay numbers per vehicle: see RelayController.h.
     uint8_t shadow = 0x00;
-    shadow = withMask(shadow, RELAY_MASK_IGNITION,    ignitionLine);
-    shadow = withMask(shadow, RELAY_MASK_STARTER,     starter);
-    shadow = withMask(shadow, RELAY_MASK_FRONT_LIGHT, frontLightOn_);
+    shadow = withMask(shadow, maskIgnition_,   ignitionLine);
+    shadow = withMask(shadow, maskStarter_,    starter);
+    shadow = withMask(shadow, maskFrontLight_, frontLightOn_);
 #if RELAY_WHEEL_LOCK_FITTED
-    shadow = withMask(shadow, RELAY_MASK_WHEEL_LOCK,  wheelLockOn_);
+    shadow = withMask(shadow, maskWheelLock_,  wheelLockOn_);
 #endif
-    shadow &= (uint8_t)~RELAY_MASK_RESERVED;                           // belt and braces
+    shadow &= (uint8_t)~maskReserved_;                                 // belt and braces
     shadow |= testMask_;                                               // web relay test (ignition OFF only)
     return shadow;
 }
@@ -403,7 +534,7 @@ void RelayController::expireRelayTests() {
         if ((testMask_ & mask) == 0) {
             continue;
         }
-        uint32_t limit = (mask & RELAY_MASK_STARTER) ? RELAY_TEST_STARTER_MAX_MS : RELAY_TEST_TIMEOUT_MS;
+        uint32_t limit = (mask & maskStarter_) ? RELAY_TEST_STARTER_MAX_MS : RELAY_TEST_TIMEOUT_MS;
         if ((now - testOnSince_[n - 1]) >= limit) {
             testMask_ &= (uint8_t)~mask;
             changed = true;
@@ -416,14 +547,9 @@ void RelayController::expireRelayTests() {
     }
 }
 
-uint8_t RelayController::getRelayTestBitsFromMask(uint8_t portBits) {
-    uint8_t bits = 0;
-    for (uint8_t n = 1; n <= 8; n++) {
-        if (portBits & relayIoMask(n)) {
-            bits |= (uint8_t)(1u << (n - 1));
-        }
-    }
-    return bits;
+uint8_t RelayController::getRelayTestBitsFromMask(uint8_t portBits) const {
+    // Through the active board's table, so the bitfield means the same relays on either board.
+    return table_ ? relaySetFromPort(*table_, portBits) : (uint8_t)0;
 }
 
 uint8_t RelayController::getRelayTestBits() const {
@@ -437,14 +563,15 @@ uint8_t RelayController::getRelayTestBits() const {
 
 bool RelayController::setRelayTest(uint8_t relayNumber, bool on, const char*& reason) {
     reason = nullptr;
-    uint8_t mask = relayIoMask(relayNumber);
-    if (mask == 0) {
+    if (relayNumber < 1 || relayNumber > 8) {
         reason = "Relay number must be 1-8";
         Debug::printfFeature(DebugFeature::RELAY,
             "[RELAY] Test request for relay %u rejected — %s\n", relayNumber, reason);
         return false;
     }
-    if (!initialized_ || faulted_) {
+    // 0 while no board was detected — refused just below as "unavailable".
+    uint8_t mask = relayIoMask(relayNumber);
+    if (!initialized_ || faulted_ || mask == 0) {
         reason = "Relay expander unavailable";
         Debug::printfFeature(DebugFeature::RELAY,
             "[RELAY] Test Relay_%u %s ignored — relay expander unavailable\n",
@@ -487,7 +614,7 @@ bool RelayController::setRelayTest(uint8_t relayNumber, bool on, const char*& re
     testOnSince_[relayNumber - 1] = millis();
     Debug::printfFeature(DebugFeature::RELAY, "[RELAY] Test Relay_%u ON (auto-off in %lu ms)\n",
         relayNumber,
-        (unsigned long)((mask & RELAY_MASK_STARTER) ? RELAY_TEST_STARTER_MAX_MS : RELAY_TEST_TIMEOUT_MS));
+        (unsigned long)((mask & maskStarter_) ? RELAY_TEST_STARTER_MAX_MS : RELAY_TEST_TIMEOUT_MS));
     updateRelays();
     if (!isAvailable()) {
         reason = "Relay write did not verify - all test relays forced off";
@@ -497,20 +624,25 @@ bool RelayController::setRelayTest(uint8_t relayNumber, bool on, const char*& re
 }
 
 bool RelayController::writePort(uint8_t value, uint8_t attempts) {
-    if (!initialized_) {
+    if (!initialized_ || port_ == nullptr || initPending_) {
+        // No board, or the boot init has not verified yet: only attemptRecovery() may
+        // touch an unconfigured port (its config may still be all-inputs).
         return false;
     }
 
+    uint8_t pins = 0;
     for (uint8_t attempt = 0; attempt < attempts; attempt++) {
-        uint8_t readback = 0;
-        if (expander_.writeOutputs(value) &&
-            expander_.readOutputRegister(readback) &&
-            readback == value) {
+        // Verify on the PINS (input register), not the latch: a reset expander (config
+        // back to inputs, relays dropped) keeps a latch that could still read back fine.
+        if (port_->writeOutputs(value) &&
+            port_->readPins(pins) &&
+            pins == value) {
 
             if (faulted_) {
                 faulted_ = false;
                 allOffEscalation_ = false;
                 starterInhibit_ = false;
+                recoverFailLogged_ = false;
                 Debug::printlnFeature(DebugFeature::RELAY,
                     "[RELAY] Relay expander verified clean again — fault cleared");
             }
@@ -520,12 +652,15 @@ bool RelayController::writePort(uint8_t value, uint8_t attempts) {
 
     // Any starter bit set in the failed write escalates (the mask is one relay today,
     // but treat it as a mask so a paralleled starter would still escalate).
-    bool starterWasSet = (value & RELAY_MASK_STARTER) != 0;
+    bool starterWasSet = (value & maskStarter_) != 0;
     if (!faulted_) {
         Debug::printfFeature(DebugFeature::RELAY,
-            "[RELAY] FAULT: port write 0x%02X did not verify after %d attempts%s\n",
-            value, RELAY_WRITE_RETRIES,
+            "[RELAY] FAULT: port write 0x%02X did not verify on the pins after %d attempts "
+            "(last pins 0x%02X)%s\n",
+            value, (int)attempts, pins,
             starterWasSet ? " — STARTER WAS COMMANDED" : "");
+        lastRecoverMs_ = millis();    // first re-init RELAY_RECOVER_MS after the raise
+        recoverFailLogged_ = false;   // new fault episode
     }
     faulted_ = true;
 
@@ -535,30 +670,74 @@ bool RelayController::writePort(uint8_t value, uint8_t attempts) {
     if (clearRelayTests("relay port write did not verify")) {
         outputShadow_ = computeShadow();
         if (!starterWasSet) {
-            expander_.writeOutputs(outputShadow_);
+            port_->writeOutputs(outputShadow_);
         }
     }
 
     if (starterWasSet) {
-        // Starter escalation: never leave a starter latched. Force the port off
-        // immediately, latch ignition OFF, and refuse crank requests until a
-        // write verifies cleanly again. update() repeats the all-off write.
-        Debug::printlnFeature(DebugFeature::RELAY,
-            "[RELAY] Starter escalation: forcing all relays OFF, latching ignition OFF");
-        allOffEscalation_ = true;
-        starterInhibit_ = true;
-        outputShadow_ = 0x00;
-        forceAllOffWrite();
-        currentIgnitionState_ = IgnitionState::OFF;
-        isCranking_ = false;
-        crankArmed_ = false;
-        ignitionHighSince_ = 0;
+        escalateStarter();
     }
 
     return false;
 }
 
+void RelayController::escalateStarter() {
+    // Starter escalation: never leave a starter latched. Force the port off
+    // immediately, latch ignition OFF, and refuse crank requests until a
+    // write verifies cleanly again. update() repeats the all-off write.
+    Debug::printlnFeature(DebugFeature::RELAY,
+        "[RELAY] Starter escalation: forcing all relays OFF, latching ignition OFF");
+    allOffEscalation_ = true;
+    starterInhibit_ = true;
+    clearRelayTests("starter escalation");
+    outputShadow_ = 0x00;
+    forceAllOffWrite();
+    currentIgnitionState_ = IgnitionState::OFF;
+    isCranking_ = false;
+    crankArmed_ = false;
+    ignitionHighSince_ = 0;
+}
+
+void RelayController::attemptRecovery() {
+    if (port_ == nullptr) {
+        return;   // detection faults are never retried
+    }
+    // The starter bit is NEVER seeded into the latch by a recovery: if the shadow holds it,
+    // the starter escalation applies first (all-off, ignition OFF, crank inhibit) and the
+    // recovery seeds that all-off state.
+    if (outputShadow_ & maskStarter_) {
+        escalateStarter();
+    }
+    // Seed = the current shadow (amended design): a fault from a transient bus error that
+    // did not reset the expander must not blip an energized ignition relay. The latch is
+    // still written before the config register, so the XL9535 all-on glitch cannot occur.
+    const uint8_t seed = outputShadow_;
+    const char* step = nullptr;
+    if (!port_->initPort(seed, &step)) {
+        if (!recoverFailLogged_) {
+            recoverFailLogged_ = true;
+            Debug::printfFeature(DebugFeature::RELAY,
+                "[RELAY] Recovery: %s @0x%02X re-init (seed 0x%02X) failed at step '%s' — "
+                "retrying every %u ms (logged once per fault)\n",
+                port_->name(), boardAddr_, seed, step ? step : "?", (unsigned)RELAY_RECOVER_MS);
+        }
+        return;
+    }
+    // The port is configured again: one verified write of the shadow clears the fault.
+    initPending_ = false;
+    if (writePort(outputShadow_, 1)) {
+        if (boardError_ == RelayBoardError::INIT_FAILED) {
+            boardError_ = RelayBoardError::NONE;
+        }
+        Debug::printfFeature(DebugFeature::RELAY,
+            "[RELAY] Recovery: %s @0x%02X re-initialized, shadow 0x%02X verified on the pins\n",
+            port_->name(), boardAddr_, outputShadow_);
+    }
+}
+
 void RelayController::forceAllOffWrite() {
     // Best effort, single transaction — the retry loop lives in update().
-    expander_.writeOutputs(0x00);
+    if (port_ != nullptr && !initPending_) {
+        port_->writeOutputs(0x00);
+    }
 }

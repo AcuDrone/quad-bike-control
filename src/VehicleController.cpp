@@ -609,6 +609,11 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
         // accepts an ON while the ignition is OFF and no function relay is energized
         processRelayTestCommand(cmd.relay, cmd.boolValue, webPortal);
         return;
+    } else if (cmd.cmd == "set_relay_board") {
+        // Relay board selection: only changes the stored value (applies after reboot), so
+        // it is accepted regardless of input source and ignition state
+        processRelayBoardCommand(cmd.strValue, webPortal);
+        return;
     } else if (cmd.cmd == "set_boost") {
         // Kept for old clients: no boost board on X10 (aztec) — replies "not fitted"
         processBoostCommand(cmd.boolValue, webPortal);
@@ -1915,6 +1920,21 @@ void VehicleController::processRelayTestCommand(int32_t relayNumber, bool on, We
         return;
     }
     webPortal.sendResponse(true, String("Relay test: Relay_") + String(n) + (on ? " ON" : " OFF"));
+}
+
+void VehicleController::processRelayBoardCommand(const String& value, WebPortal& webPortal) {
+    RelayBoardSetting setting = RelayBoardSetting::AUTO;
+    if (!relayBoardSettingParse(value.c_str(), setting)) {
+        webPortal.sendResponse(false, "Relay board must be auto, pca9557 or xl9535");
+        return;
+    }
+    // Persist first (RelayController owns the "relay" namespace); nothing else changes now.
+    if (!relayController_.saveBoardSetting(setting)) {
+        webPortal.sendResponse(false, "Failed to save the relay board setting");
+        return;
+    }
+    webPortal.sendResponse(true, String("Relay board set to ") + relayBoardSettingToken(setting) +
+                                 " — takes effect after reboot");
 }
 
 void VehicleController::processBoostCommand(bool on, WebPortal& webPortal) {

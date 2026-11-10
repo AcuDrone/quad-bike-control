@@ -196,7 +196,14 @@ public:
         // Board I/O expander health
         bool io_input_fault;      // Opto-input expander U10 (0x1A, I2C2) unreachable/stale
         uint8_t io_raw;           // Raw U10 input port byte of the last good read
-        bool io_relay_fault;      // Relay expander (0x1F, I2C2 via X15) unreachable/unverified
+        bool io_relay_fault;      // Relay board (I2C2 via X15) not detected / unreachable / unverified
+        // Relay board selection (all static strings, stored by pointer)
+        const char* relay_board;       // active board "pca9557" / "xl9535" / "none"
+        uint8_t relay_board_addr;      // active board 7-bit address; 0 → JSON null (relay_board "none")
+        const char* relay_board_cfg;   // stored setting "auto" / "pca9557" / "xl9535"
+        bool relay_board_reboot;       // stored setting differs from the one used at boot
+        const char* relay_board_error; // nullptr (JSON null) or both_found / none_found /
+                                       // multiple_xl9535 / cfg_mismatch / init_failed
 
         // Firmware information
         String firmware_version;  // Firmware version string (e.g., "1.0.0")

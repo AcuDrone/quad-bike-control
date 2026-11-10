@@ -1378,6 +1378,7 @@
             <!-- Relay Test (wiring check, ignition OFF only) -->
             <div class="card">
                 <h2 class="card-title"><span data-i18n="card_relay_test">🧪 Relay Test</span><button type="button" class="help-btn" onclick="openHelp('relay_test_help', 'card_relay_test')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <div id="relay-test-board" style="margin: -6px 0 10px; font-size: 0.8em; color: var(--muted-foreground);"></div>
                 <div id="relay-test-grid" class="relay-grid"></div>
                 <div id="relay-test-status" style="margin-top: 10px; font-size: 0.8em; color: var(--muted-foreground); min-height: 1.2em;"></div>
             </div>
@@ -1418,6 +1419,20 @@
                         📋 <span data-i18n="btn_changelog">What's new in this firmware</span>
                     </button>
                 </div>
+            </div>
+            <!-- Relay board selection (telemetry relay_board / _addr / _cfg / _reboot / _error; applies after reboot) -->
+            <div class="card">
+                <h2 class="card-title"><span data-i18n="card_relay_board">🔌 Relay board</span><button type="button" class="help-btn" onclick="openHelp('relay_board_help', 'card_relay_board')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <div class="gear-buttons" style="grid-template-columns: repeat(3, 1fr); margin-bottom: 12px;">
+                    <button class="gear-btn" id="relay-board-auto" onclick="setRelayBoard('auto')" data-i18n="relay_board_auto" style="padding: 12px 6px; font-size: 1em;">Auto</button>
+                    <button class="gear-btn" id="relay-board-pca9557" onclick="setRelayBoard('pca9557')" style="padding: 12px 6px; font-size: 1em;">PCA9557</button>
+                    <button class="gear-btn" id="relay-board-xl9535" onclick="setRelayBoard('xl9535')" style="padding: 12px 6px; font-size: 1em;">XL9535</button>
+                </div>
+                <div class="ro-row"><span data-i18n="lbl_relay_board_active">Active board</span><span class="ro-val" id="relay-board-active">--</span></div>
+                <div id="relay-board-reboot" data-i18n="relay_board_reboot" style="display: none; margin-top: 8px; font-size: 0.85em; color: var(--warning);">Reboot to apply</div>
+                <div id="relay-board-error" style="display: none; margin-top: 8px; font-size: 0.85em; color: var(--danger);"></div>
+                <div data-i18n="relay_board_note" style="margin-top: 10px; font-size: 0.8em; color: var(--muted-foreground);">A change takes effect after reboot.</div>
+                <div id="relay-board-status" style="margin-top: 6px; font-size: 0.8em; min-height: 1.2em;"></div>
             </div>
             <!-- Network (read-only; SSID / IP come from telemetry wifi_ssid / wifi_ip; settings later) -->
             <div class="card">
@@ -1617,6 +1632,21 @@
                 relay_fn_q_7: 'spare',
                 relay_fn_q_8: 'spare',
                 relay_test_blocked: 'Available only with ignition OFF, light off, wheel lock released (if fitted) and the relay board healthy.',
+                relay_test_board: 'Board: %s',
+
+                // Relay board card (System)
+                card_relay_board: '🔌 Relay board',
+                relay_board_help: 'Which relay board drives the relays: the PCA9557 board (address 0x1F) or the XL9535-K8V5 board (0x20–0x27). <b>Auto</b> detects it once at boot; if both boards, no board or several XL9535 addresses answer, no relay is switched on and the error is shown here. Choose PCA9557 or XL9535 to pick one when both are connected. <b>A change takes effect only after a reboot</b> — the running board never changes while driving.',
+                relay_board_auto: 'Auto',
+                lbl_relay_board_active: 'Active board',
+                relay_board_none: 'none',
+                relay_board_reboot: 'Reboot to apply',
+                relay_board_note: 'A change takes effect after reboot.',
+                relay_board_err_both_found: 'Both relay boards found — choose one',
+                relay_board_err_none_found: 'No relay board found',
+                relay_board_err_multiple_xl9535: 'Several XL9535 addresses answer — check the A0–A2 pads',
+                relay_board_err_cfg_mismatch: 'The selected board does not match the bus',
+                relay_board_err_init_failed: 'Relay board initialization failed (retrying)',
 
                 // Steering park correction card
                 card_steer_park: '🎯 Steering park correction',
@@ -2133,6 +2163,21 @@
                 relay_fn_q_7: 'резерв',
                 relay_fn_q_8: 'резерв',
                 relay_test_blocked: 'Доступно лише при ВИМК запалюванні, вимкненому світлі, відпущеному блокуванні колеса (якщо встановлене) та справній платі реле.',
+                relay_test_board: 'Плата: %s',
+
+                // Relay board card (System)
+                card_relay_board: '🔌 Плата реле',
+                relay_board_help: 'Яка плата реле керує реле: плата PCA9557 (адреса 0x1F) чи плата XL9535-K8V5 (0x20–0x27). <b>Авто</b> визначає її один раз під час запуску; якщо відповідають обидві плати, жодна або кілька адрес XL9535, жодне реле не вмикається, а помилка показується тут. Оберіть PCA9557 або XL9535, щоб вибрати одну, коли підключені обидві. <b>Зміна діє лише після перезавантаження</b> — під час руху плата не змінюється.',
+                relay_board_auto: 'Авто',
+                lbl_relay_board_active: 'Активна плата',
+                relay_board_none: 'немає',
+                relay_board_reboot: 'Перезавантажте для застосування',
+                relay_board_note: 'Зміна діє після перезавантаження.',
+                relay_board_err_both_found: 'Знайдено обидві плати реле — оберіть одну',
+                relay_board_err_none_found: 'Плату реле не знайдено',
+                relay_board_err_multiple_xl9535: 'Відповідають кілька адрес XL9535 — перевірте перемички A0–A2',
+                relay_board_err_cfg_mismatch: 'Вибрана плата не відповідає шині',
+                relay_board_err_init_failed: 'Не вдалося ініціалізувати плату реле (повторна спроба)',
 
                 // Brake tuning card
                 card_brake: '🛑 Гальмо',
@@ -2685,6 +2730,12 @@
                 if (data.message && data.message.startsWith('CAN sniffer')) {
                     sniffReply(data.success, data.message);
                 }
+                // Relay board selection status
+                if (data.message && (data.message.startsWith('Relay board') ||
+                    data.message === 'Failed to save the relay board setting')) {
+                    relayBoardStatus(data.success ? data.message : t('error_prefix') + data.message,
+                                     data.success ? 'var(--success)' : 'var(--danger)');
+                }
                 // Relay test status
                 if (data.message && data.message.startsWith('Relay test')) {
                     relayTestStatus(data.success ? data.message : t('error_prefix') + data.message,
@@ -3095,6 +3146,7 @@
             }
 
             updateNetworkCard(data);
+            updateRelayBoardCard(data);
             updateAttention(data);
             updateGearDefUI(data);
 
@@ -4755,6 +4807,65 @@
             if (typeof data.wifi_ip === 'string' && data.wifi_ip) {
                 document.getElementById('net-ip').textContent = data.wifi_ip;
             }
+        }
+
+        // Relay board card (System) + the Relay Test subtitle. Telemetry is the source of truth:
+        // relay_board_cfg = stored setting, relay_board / _addr = board in use since boot.
+        function relayBoardLine(data) {
+            if (data.relay_board === 'pca9557' || data.relay_board === 'xl9535') {
+                const addr = (typeof data.relay_board_addr === 'number')
+                    ? ' @0x' + data.relay_board_addr.toString(16).toUpperCase().padStart(2, '0') : '';
+                // The setting in brackets is the boot one — only known while no reboot is pending.
+                const cfg = (data.relay_board_reboot === false && data.relay_board_cfg)
+                    ? ' (' + (data.relay_board_cfg === 'auto' ? t('relay_board_auto').toLowerCase() : data.relay_board_cfg) + ')' : '';
+                return data.relay_board.toUpperCase() + addr + cfg;
+            }
+            return t('relay_board_none');
+        }
+        function updateRelayBoardCard(data) {
+            if (data.relay_board === undefined) return;
+            const line = relayBoardLine(data);
+            const activeEl = document.getElementById('relay-board-active');
+            if (activeEl) {
+                activeEl.textContent = line;
+                activeEl.style.color = data.relay_board === 'none' ? 'var(--danger)' : '';
+            }
+            const sub = document.getElementById('relay-test-board');
+            if (sub) sub.textContent = t('relay_test_board', line);
+            ['auto', 'pca9557', 'xl9535'].forEach(v => {
+                const b = document.getElementById('relay-board-' + v);
+                if (b) {
+                    b.classList.toggle('active', data.relay_board_cfg === v);
+                    b.disabled = !wsConnected;
+                }
+            });
+            const rb = document.getElementById('relay-board-reboot');
+            if (rb) rb.style.display = data.relay_board_reboot === true ? '' : 'none';
+            const er = document.getElementById('relay-board-error');
+            if (er) {
+                if (data.relay_board_error) {
+                    const key = 'relay_board_err_' + data.relay_board_error;
+                    const txt = t(key);
+                    er.textContent = (txt && txt !== key) ? txt : data.relay_board_error;
+                    er.style.display = '';
+                } else {
+                    er.textContent = '';
+                    er.style.display = 'none';
+                }
+            }
+        }
+        function setRelayBoard(value) {
+            if (!wsConnected) return;
+            // No optimistic update: telemetry `relay_board_cfg` is the source of truth.
+            ws.send(JSON.stringify({ cmd: 'set_relay_board', value: value }));
+        }
+        function relayBoardStatus(msg, color) {
+            const status = document.getElementById('relay-board-status');
+            if (!status) return;
+            status.textContent = msg;
+            status.style.color = color;
+            clearTimeout(relayBoardStatus._t);
+            relayBoardStatus._t = setTimeout(() => { status.textContent = ''; }, 6000);
         }
 
         // ---- Shared help modal: body comes from the existing i18n help keys (comma-separated) ----
