@@ -97,12 +97,19 @@ public:
     /** @brief The bus this instance is bound to */
     TwoWire& bus() const { return bus_; }
 
+    /** @brief Wire error of the last transaction (see IRelayPort::lastError()) */
+    uint8_t lastError() const override { return lastError_; }
+
+    /** @brief requestFrom() returned fewer bytes than asked (its Wire error is not exposed) */
+    static constexpr uint8_t ERR_READ_SHORT = 6;
+
 private:
     bool writeRegister(uint8_t reg, uint8_t value);
     bool readRegister(uint8_t reg, uint8_t& value);
 
     TwoWire& bus_;
     uint8_t  address_;
+    uint8_t  lastError_ = 0;
 };
 
 #endif // PCA9557_EXPANDER_H

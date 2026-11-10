@@ -59,12 +59,19 @@ public:
     uint8_t probeRangeMin() const override { return ADDR_MIN; }
     uint8_t probeRangeMax() const override { return ADDR_MAX; }
 
+    /** @brief Wire error of the last transaction (see IRelayPort::lastError()) */
+    uint8_t lastError() const override { return lastError_; }
+
+    /** @brief requestFrom() returned fewer bytes than asked (its Wire error is not exposed) */
+    static constexpr uint8_t ERR_READ_SHORT = 6;
+
 private:
     bool writeRegister(uint8_t reg, uint8_t value);
     bool readRegister(uint8_t reg, uint8_t& value);
 
     TwoWire& bus_;
     uint8_t  address_;
+    uint8_t  lastError_ = 0;
 };
 
 #endif // XL9535_EXPANDER_H

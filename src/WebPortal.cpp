@@ -2,6 +2,7 @@
 #include "Changelog.h"
 #include "Debug.h"
 #include "DeviceId.h"
+#include "EventJournal.h"
 #include <esp_mac.h>
 
 char WebPortal::apSsid_[33] = "";
@@ -35,11 +36,13 @@ bool WebPortal::begin() {
         DeviceId::buildSuffixedName(OTA_HOSTNAME, suffix, true, otaHostname_, sizeof(otaHostname_));
     }
 
-    // Mount filesystem first
+    // Mount filesystem first (the event journal starts writing to it from here on)
     if (!mountFilesystem()) {
         Debug::printlnFeature(DebugFeature::WEB,"  ✗ Filesystem mount failed");
+        EventJournal::attachFs(false);
         return false;
     }
+    EventJournal::attachFs(true);
 
     // Setup WiFi Access Point
     if (!setupWiFiAP()) {
@@ -246,6 +249,48 @@ void WebPortal::setupWebServer() {
         }
     );
 
+    // Event journal (text/plain, streamed in chunks from the AsyncTCP task; never blocks the loop).
+    // "/api/events" also matches "/api/events/<x>" in this server, so the longer routes go first.
+    // GET /api/events/download — /events.1 then /events.log (+ unflushed lines) as one attachment
+    server.on("/api/events/download", HTTP_GET, [](AsyncWebServerRequest* request) {
+        std::shared_ptr<EventJournal::Stream> st = EventJournal::openStream(0);
+        AsyncWebServerResponse* response = request->beginChunkedResponse("text/plain",
+            [st](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {
+                (void)index;
+                const size_t r = st->read(buffer, maxLen);
+                return r == EventJournal::Stream::TRY_AGAIN ? RESPONSE_TRY_AGAIN : r;
+            });
+        char disp[80];
+        snprintf(disp, sizeof(disp), "attachment; filename=\"%s-events-boot%lu.log\"",
+                 apSsid_, (unsigned long)EventJournal::bootNumber());
+        response->addHeader("Content-Disposition", disp);
+        response->addHeader("Cache-Control", "no-cache");
+        request->send(response);
+    });
+    // POST /api/events/clear — executed by the main loop (both files + RAM, SYS I journal_cleared)
+    server.on("/api/events/clear", HTTP_POST, [](AsyncWebServerRequest* request) {
+        EventJournal::requestClear();
+        request->send(200, "application/json", "{\"ok\":true}");
+    });
+
+    // GET /api/events?tail=N — last N lines (default 100, max 500), unflushed RAM lines included.
+    server.on("/api/events", HTTP_GET, [](AsyncWebServerRequest* request) {
+        long n = 100;
+        if (request->hasParam("tail")) {
+            n = request->getParam("tail")->value().toInt();
+        }
+        if (n <= 0) n = 100;
+        if (n > 500) n = 500;
+        std::shared_ptr<EventJournal::Stream> st = EventJournal::openStream((size_t)n);
+        AsyncWebServerResponse* response = request->beginChunkedResponse("text/plain",
+            [st](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {
+                (void)index;
+                const size_t r = st->read(buffer, maxLen);
+                return r == EventJournal::Stream::TRY_AGAIN ? RESPONSE_TRY_AGAIN : r;
+            });
+        response->addHeader("Cache-Control", "no-cache");
+        request->send(response);
+    });
     // OTA firmware update endpoint
     server.on("/update", HTTP_POST,
         // Handler when upload finishes
@@ -255,6 +300,10 @@ void WebPortal::setupWebServer() {
             if (success) {
                 Debug::printlnFeature(DebugFeature::WEB,"[WEB OTA] Update successful, rebooting...");
                 request->send(200, "text/plain", "OK");
+
+                // Controlled reboot: journal it and flush the journal first (a filesystem
+                // update has already suspended the journal's file output).
+                EventJournal::flushNow(otaUpdateType == U_SPIFFS ? "ota_fs" : "ota");
 
                 // Reboot after short delay to allow response to be sent
                 delay(1000);
@@ -282,6 +331,7 @@ void WebPortal::setupWebServer() {
                     if (type == "littlefs" || type == "spiffs" || type == "filesystem") {
                         otaUpdateType = U_SPIFFS;
                         updateTypeName = "LittleFS";
+                        EventJournal::suspendFs();   // no journal file I/O from here on
                         FILESYSTEM.end();
                     }
                 }
@@ -289,6 +339,7 @@ void WebPortal::setupWebServer() {
                 else if (filename.indexOf("littlefs") >= 0 || filename.indexOf("spiffs") >= 0 || filename.indexOf("filesystem") >= 0) {
                     otaUpdateType = U_SPIFFS;
                     updateTypeName = "LittleFS";
+                    EventJournal::suspendFs();   // no journal file I/O from here on
                     FILESYSTEM.end();
                 }
 
@@ -405,7 +456,8 @@ void WebPortal::setupOTA() {
             type = "sketch";
         } else {  // U_SPIFFS or U_FILESYSTEM
             type = "filesystem";
-            // Unmount filesystem before OTA
+            // Unmount filesystem before OTA (the event journal stops its file I/O first)
+            EventJournal::suspendFs();
             FILESYSTEM.end();
         }
         Debug::printlnFeature(DebugFeature::WEB,"\n[OTA] Starting update: " + type);
@@ -417,6 +469,8 @@ void WebPortal::setupOTA() {
 
     ArduinoOTA.onEnd([this]() {
         Debug::printlnFeature(DebugFeature::WEB,"\n[OTA] Update complete");
+        // ArduinoOTA reboots right after this callback: journal + flush first.
+        EventJournal::flushNow(ArduinoOTA.getCommand() == U_FLASH ? "ota" : "ota_fs");
         otaInProgress = false;
     });
 
@@ -598,6 +652,9 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // Relay board selection since 1.5.24: relay_board / _addr / _cfg / _reboot / _error, 5 scalar
     // slots (keys by pointer, token values static strings by pointer, nothing copied; ≈ 80 B of
     // memory, ≤ 130 B of JSON) — aztec worst case ≈ 8.63 KB, ≈ 0.57 KB under 9216 (size unchanged).
+    // Link recovery counters + journal size since 1.5.26: vesc_resync / can_reinit / i2c_unlock /
+    // journal_bytes, 4 integer slots (keys by pointer, nothing copied; ≈ 64 B of memory, ≤ 80 B of
+    // JSON) — aztec worst case ≈ 8.7 KB, ≈ 0.5 KB under 9216 (size unchanged).
     // Static (single caller: the main-loop broadcast) so the larger document is off the stack.
     static StaticJsonDocument<9216> doc;
     doc.clear();
@@ -804,6 +861,12 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["relay_board_reboot"] = telemetry.relay_board_reboot;
     if (telemetry.relay_board_error) doc["relay_board_error"] = telemetry.relay_board_error;
     else                             doc["relay_board_error"] = (const char*)nullptr;
+
+    // Link recovery session totals + event journal size (-1 = journal cannot write to flash)
+    doc["vesc_resync"] = telemetry.vesc_resync;
+    doc["can_reinit"] = telemetry.can_reinit;
+    doc["i2c_unlock"] = telemetry.i2c_unlock;
+    doc["journal_bytes"] = telemetry.journal_bytes;
 
     // Firmware version and target board
     doc["firmware_version"] = telemetry.firmware_version;

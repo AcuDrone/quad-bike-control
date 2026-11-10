@@ -56,6 +56,13 @@ public:
     /** @brief 7-bit device address this instance is bound to */
     virtual uint8_t address() const = 0;
 
+    /**
+     * @brief Wire error of the last transaction (0 = ok; endTransmission() codes 2 = address NACK,
+     * 3 = data NACK, 4 = other, 5 = timeout; 6 = read returned no data — requestFrom() does not
+     * expose its error). For the event journal and the I2C2 bus recovery decision.
+     */
+    virtual uint8_t lastError() const { return 0; }
+
     /** @brief Chip name for logs ("PCA9557" / "XL9535") */
     virtual const char* name() const = 0;
 

@@ -15,6 +15,8 @@
 #include "BoardInputs.h"
 #include "SpeedSensor.h"
 #include "SteerDiag.h"
+#include "EventJournal.h"
+#include "I2cBusRecovery.h"
 #include "nvs_flash.h"
 #include "esp_log.h"
 #include "esp32-hal-uart.h"
@@ -51,7 +53,9 @@ MavlinkInterface mavlinkInterface;
 //   I2C1 (Wire,  GPIO1/2)   : external header X14 only — no device fitted, NOT started
 // Expected boot scan: I2C2 = 0x1A 0x1C + 0x1F or one of 0x20..0x27 (the relay board is
 // selected once in RelayController::begin(), NVS "relay"/"board", default auto).
-// Nothing restarts Wire1 after setup().
+// Wire1 runs with a I2C_TIMEOUT_MS (20 ms) transaction timeout. Only the main-owned
+// I2cBusRecovery routine restarts Wire1 after setup() (SDA/SCL unlock + Wire1.end()/begin(),
+// on bus evidence only, at most once per I2C_RECOVER_MIN_MS); no driver ever does.
 // Fallback if X15 ever goes silent: the relay board also works on X14 → I2C1
 // (change the RelayController argument below from Wire1 to Wire, and start Wire on
 // PIN_I2C1_SDA/PIN_I2C1_SCL in setup()).
@@ -96,6 +100,24 @@ static void scanI2CBus(TwoWire& bus, const char* label) {
         }
     }
     Debug::println("[I2C] " + String(label) + " devices:" + (found.isEmpty() ? " none" : found));
+}
+
+// Event journal snapshot fields (EventJournal SNAP lines, every JOURNAL_SNAP_MS): VESC input
+// voltage / FET temperature, LWS frame rate, VESC good / dropped packets in the window, and the
+// session totals of VESC resyncs, CAN re-inits and I2C2 unlocks.
+static void journalSnapFields(char* a, size_t capA, char* b, size_t capB) {
+    static uint32_t lastGood = 0;
+    static uint32_t lastDrop = 0;
+    const SteeringController& steering = vehicleController.getSteering();
+    const IMotorDriver::LinkStats ls = steeringVesc.linkStats();
+    const uint32_t drop = ls.dropCrc + ls.dropStop;
+    snprintf(a, capA, "vin=%.1f fet=%.1f", (double)steering.getInputVoltage(), (double)steering.getFetTemp());
+    snprintf(b, capB, "lws_fps=%u vesc_good=%lu drop=%lu resync=%lu can_reinit=%lu i2c_unlock=%lu",
+             (unsigned)steering.lwsSensor().fps(), (unsigned long)(ls.good - lastGood),
+             (unsigned long)(drop - lastDrop), (unsigned long)ls.resync,
+             (unsigned long)vehicleController.getCanReinitCount(), (unsigned long)I2cBusRecovery::count());
+    lastGood = ls.good;
+    lastDrop = drop;
 }
 
 // ============================================================================
@@ -176,6 +198,11 @@ void setup() {
 
     Debug::println("\n=== ESP32-S3 Quad Bike Control (Control_v0) ===");
 
+    // Event journal: boot counter (NVS "journal"/"boot"), RTC replay, boot header + line. Lines
+    // stay in RAM until LittleFS is mounted (WebPortal::begin() -> EventJournal::attachFs()).
+    EventJournal::begin();
+    EventJournal::setSnapProvider(journalSnapFields);
+
     // 12 V battery sense on X10 / GPIO9 (ADC setup + calibration factor from NVS)
     vehicleController.initBatterySense();
 
@@ -183,7 +210,9 @@ void setup() {
     // main.cpp is the single owner of the bus: it is opened here, before any
     // consumer, so no driver depends on another driver's initialization succeeding.
     // I2C1 (Wire, X14) has no device fitted and is not started.
-    if (!Wire1.begin(PIN_RELAY_SDA, PIN_RELAY_SCL, I2C_BUS_FREQ_HZ)) {
+    // Wire1.begin() + Wire1.setTimeOut(I2C_TIMEOUT_MS): a dead bus can no longer hold one
+    // transaction for the core's 50 ms default.
+    if (!I2cBusRecovery::beginBus()) {
         Debug::println("[INIT] ERROR: I2C2 (Wire1) init failed");
     }
 
@@ -288,20 +317,48 @@ void setup() {
 // MAIN LOOP
 // ============================================================================
 
+// Loop timing (event journal): micros() stamps between the phases; the slowest phase of an
+// iteration longer than JOURNAL_LOOP_OVERRUN_MS is journaled (never for the journal flush itself).
+namespace {
+enum LoopPhase : uint8_t { PH_INPUTS, PH_SPEED, PH_MAVLINK, PH_WEB, PH_SOURCE, PH_VEHICLE, PH_DIAG,
+                           PH_REPORT, PH_TELEMETRY, PH_JOURNAL, PH_COUNT };
+const char* const kPhaseNames[PH_COUNT] = { "inputs", "speed", "mavlink", "web", "source", "vehicle",
+                                            "diag", "report", "telemetry", "journal" };
+struct LoopTimer {
+    uint32_t start = 0, last = 0, worstUs = 0;
+    uint8_t worst = 0;
+    void begin() { start = last = micros(); worstUs = 0; worst = 0; }
+    void mark(uint8_t phase) {
+        const uint32_t t = micros();
+        const uint32_t d = t - last;
+        last = t;
+        if (d > worstUs) { worstUs = d; worst = phase; }
+    }
+    uint32_t total() const { return last - start; }
+};
+LoopTimer loopTimer;
+}  // namespace
+
 void loop() {
+    loopTimer.begin();
+
     // Poll the opto-input expander (rate-limited internally) before any consumer
     // reads the snapshot this iteration.
     boardInputs.update();
+    loopTimer.mark(PH_INPUTS);
 
     // Sample the hall speed counter (rate-limited internally) before the control
     // logic and telemetry read the speed this iteration.
     speedSensor.update();
+    loopTimer.mark(PH_SPEED);
 
     // Update MAVLink interface (parse inbound, request command stream)
     mavlinkInterface.update();
+    loopTimer.mark(PH_MAVLINK);
 
     // Update web portal (handles OTA, WebSocket cleanup, etc.)
     webPortal.update();
+    loopTimer.mark(PH_WEB);
 
     // Determine current input source (MAVLINK > WEB > FAILSAFE)
     InputSource currentSource = telemetryManager.determineInputSource();
@@ -313,13 +370,16 @@ void loop() {
         vehicleController.processWebCommand(cmd, webPortal);
         webPortal.clearCommand();
     }
+    loopTimer.mark(PH_SOURCE);
 
     // Update vehicle controller (failsafe, actuators, etc.)
     vehicleController.update();
+    loopTimer.mark(PH_VEHICLE);
 
     // USB steering diagnostics: command lines, experiment step + safety checks. After
     // vehicleController.update() so it sees this iteration's LWS frame and VESC telemetry.
     steerDiag.update();
+    loopTimer.mark(PH_DIAG);
 
     // Report vehicle state back to the MAVLink network (rate-limited internally)
     CANController::VehicleData vd = vehicleController.getVehicleData();
@@ -375,7 +435,15 @@ void loop() {
     // Steering control mode (STEER_MODE NAMED_VALUE_INT): 0 position, 1 rate, 2 blocked.
     report.steerMode        = (uint8_t)vehicleController.getSteerMode();
     mavlinkInterface.report(report);
+    loopTimer.mark(PH_REPORT);
 
     // Broadcast telemetry to web clients
     telemetryManager.update();
+    loopTimer.mark(PH_TELEMETRY);
+
+    // Event journal: SNAP, heap watch, and the flash flush (≤ 1/s, only with data) — the last
+    // step of the iteration, deferred while the steering motor is driven (≤ 10 s).
+    EventJournal::service(steeringActuator.isDriving());
+    loopTimer.mark(PH_JOURNAL);
+    EventJournal::noteLoop(loopTimer.total(), kPhaseNames[loopTimer.worst], loopTimer.worstUs);
 }

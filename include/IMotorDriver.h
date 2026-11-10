@@ -18,6 +18,21 @@
  */
 class IMotorDriver {
 public:
+    /**
+     * @brief Packet-link counters for the event journal / telemetry (session totals; all zero
+     * for drivers without a packet link, e.g. the BTS7960).
+     */
+    struct LinkStats {
+        uint32_t bytes = 0;           // bytes received
+        uint32_t good = 0;            // packets with a valid CRC and stop byte
+        uint32_t dropCrc = 0;         // packets dropped for a CRC mismatch
+        uint32_t dropStop = 0;        // packets dropped for a wrong stop byte
+        uint32_t resync = 0;          // receiver resyncs (inter-byte gap ended an incomplete frame)
+        uint32_t bytesSinceGood = 0;  // bytes since the last good packet
+        const char* state = "-";      // receiver state token (at the last link loss: stateAtLoss)
+        const char* stateAtLoss = "-";
+    };
+
     virtual ~IMotorDriver() {}
 
     /** @brief Set drive effort: -255 (full left/reverse) .. +255 (full right/forward), 0 = coast */
@@ -54,6 +69,9 @@ public:
 
     /** @brief Telemetry poll period in ms (USB steering diagnostics speeds it up; no-op without telemetry) */
     virtual void setTelemetryPeriodMs(uint32_t ms) { (void)ms; }
+
+    /** @brief Packet-link counters (all zero without a packet link) */
+    virtual LinkStats linkStats() const { return LinkStats(); }
 };
 
 #endif // IMOTOR_DRIVER_H

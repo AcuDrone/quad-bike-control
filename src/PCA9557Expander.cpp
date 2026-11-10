@@ -6,7 +6,8 @@ PCA9557Expander::PCA9557Expander(TwoWire& bus, uint8_t address)
 
 bool PCA9557Expander::isPresent() {
     bus_.beginTransmission(address_);
-    return bus_.endTransmission() == 0;
+    lastError_ = bus_.endTransmission();
+    return lastError_ == 0;
 }
 
 bool PCA9557Expander::readInputs(uint8_t& value) {
@@ -33,7 +34,8 @@ bool PCA9557Expander::writeRegister(uint8_t reg, uint8_t value) {
     bus_.beginTransmission(address_);
     bus_.write(reg);
     bus_.write(value);
-    return bus_.endTransmission() == 0;
+    lastError_ = bus_.endTransmission();
+    return lastError_ == 0;
 }
 
 bool PCA9557Expander::readRegister(uint8_t reg, uint8_t& value) {
@@ -42,12 +44,15 @@ bool PCA9557Expander::readRegister(uint8_t reg, uint8_t& value) {
     // value intact.
     bus_.beginTransmission(address_);
     bus_.write(reg);
-    if (bus_.endTransmission(false) != 0) {
+    lastError_ = bus_.endTransmission(false);
+    if (lastError_ != 0) {
         return false;
     }
     if (bus_.requestFrom(address_, (uint8_t)1) != 1) {
+        lastError_ = ERR_READ_SHORT;
         return false;
     }
     value = (uint8_t)bus_.read();
+    lastError_ = 0;
     return true;
 }

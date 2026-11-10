@@ -1,6 +1,21 @@
 #include "RelayController.h"
 #include <Preferences.h>
 #include "Debug.h"
+#include "EventJournal.h"
+#include "I2cBusRecovery.h"
+
+// Journal values never contain spaces: "pin read" -> "pin_read".
+namespace {
+struct JTok {
+    char s[24];
+    explicit JTok(const char* in) {
+        size_t i = 0;
+        for (; in != nullptr && in[i] != '\0' && i < sizeof(s) - 1; i++) s[i] = (in[i] == ' ') ? '_' : in[i];
+        s[i] = '\0';
+        if (i == 0) { s[0] = '?'; s[1] = '\0'; }
+    }
+};
+}  // namespace
 
 // Relay-number sets (Constants.h) and both Relay_N -> bit tables (RelayBoardLaw.h) are
 // checked at compile time: the sets are disjoint, non-empty and cover all eight relays;
@@ -204,6 +219,8 @@ bool RelayController::begin() {
         // Never a guess: no write to any device, every setter a logging no-op, no retry.
         boardError_ = d.error;
         logDetectionFault(ack);
+        EventJournal::log(JSrc::RELAY, JLvl::E, "board_error", "board=none addr=0 why=%s ack=0x%03X",
+                          relayBoardErrorToken(boardError_), (unsigned)ack);
         return false;
     }
 
@@ -257,6 +274,8 @@ bool RelayController::begin() {
         recoverFailLogged_ = true;     // this episode is already logged
         lastRecoverMs_ = millis();
         boardError_ = RelayBoardError::INIT_FAILED;
+        EventJournal::log(JSrc::RELAY, JLvl::E, "board_error", "board=%s addr=0x%02X why=init_failed step=%s err=%u",
+                          port_->name(), (unsigned)boardAddr_, JTok(step).s, (unsigned)port_->lastError());
         return false;
     }
 
@@ -639,12 +658,14 @@ bool RelayController::writePort(uint8_t value, uint8_t attempts) {
     }
 
     uint8_t pins = 0;
+    const char* failStep = "write";
     for (uint8_t attempt = 0; attempt < attempts; attempt++) {
         // Verify on the PINS (input register), not the latch: a reset expander (config
         // back to inputs, relays dropped) keeps a latch that could still read back fine.
-        if (port_->writeOutputs(value) &&
-            port_->readPins(pins) &&
-            pins == value) {
+        const bool wrote = port_->writeOutputs(value);
+        const bool read = wrote && port_->readPins(pins);
+        failStep = !wrote ? "write" : (!read ? "read" : "verify");
+        if (wrote && read && pins == value) {
 
             if (faulted_) {
                 faulted_ = false;
@@ -653,6 +674,8 @@ bool RelayController::writePort(uint8_t value, uint8_t attempts) {
                 recoverFailLogged_ = false;
                 Debug::printlnFeature(DebugFeature::RELAY,
                     "[RELAY] Relay expander verified clean again — fault cleared");
+                EventJournal::log(JSrc::I2C, JLvl::I, "relay_ok", "addr=0x%02X value=0x%02X",
+                                  (unsigned)port_->address(), (unsigned)value);
             }
             return true;
         }
@@ -667,6 +690,9 @@ bool RelayController::writePort(uint8_t value, uint8_t attempts) {
             "(last pins 0x%02X)%s\n",
             value, (int)attempts, pins,
             starterWasSet ? " — STARTER WAS COMMANDED" : "");
+        EventJournal::log(JSrc::I2C, JLvl::E, "relay_fault", "addr=0x%02X err=%u step=%s value=0x%02X pins=0x%02X%s",
+                          (unsigned)port_->address(), (unsigned)port_->lastError(), failStep,
+                          (unsigned)value, (unsigned)pins, starterWasSet ? " starter=1" : "");
         lastRecoverMs_ = millis();    // first re-init RELAY_RECOVER_MS after the raise
         recoverFailLogged_ = false;   // new fault episode
     }
@@ -695,6 +721,8 @@ void RelayController::escalateStarter() {
     // write verifies cleanly again. update() repeats the all-off write.
     Debug::printlnFeature(DebugFeature::RELAY,
         "[RELAY] Starter escalation: forcing all relays OFF, latching ignition OFF");
+    EventJournal::log(JSrc::RELAY, JLvl::E, "board_error", "board=%s addr=0x%02X why=starter_escalation",
+                      port_ ? port_->name() : "none", (unsigned)boardAddr_);
     allOffEscalation_ = true;
     starterInhibit_ = true;
     clearRelayTests("starter escalation");
@@ -720,9 +748,14 @@ void RelayController::attemptRecovery() {
     // did not reset the expander must not blip an energized ignition relay. The latch is
     // still written before the config register, so the XL9535 all-on glitch cannot occur.
     const uint8_t seed = outputShadow_;
+    // Free / restart the I2C2 bus first when the lines or the last error show a bus problem
+    // (main-owned I2cBusRecovery; a plain NACK of an unplugged board does not restart Wire1).
+    I2cBusRecovery::recover("relay", port_->lastError());
     const char* step = nullptr;
     if (!port_->initPort(seed, &step)) {
         if (!recoverFailLogged_) {
+            EventJournal::log(JSrc::I2C, JLvl::E, "relay_fault", "addr=0x%02X err=%u step=reinit_%s",
+                              (unsigned)port_->address(), (unsigned)port_->lastError(), JTok(step).s);
             recoverFailLogged_ = true;
             Debug::printfFeature(DebugFeature::RELAY,
                 "[RELAY] Recovery: %s @0x%02X re-init (seed 0x%02X) failed at step '%s' — "

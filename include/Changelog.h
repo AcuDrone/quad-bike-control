@@ -14,6 +14,15 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.26","date":"2026-11-10","uk":[
+"Журнал подій: нова картка «Журнал подій» у розділі «Система» — останні 100 подій (запуски й перезапуски, failsafe, режим керма, втрата зв’язку з VESC керма, збої CAN і шини реле, нестача пам’яті, знімок стану щохвилини) з фільтром за джерелом, кнопками «Завантажити» (весь журнал одним файлом, ≈ 1–2 доби) та «Очистити». Журнал зберігається у флеші й переживає оновлення прошивки",
+"Самовідновлення: зв’язок із VESC керма більше не «зависає» на хвилини після одного пошкодженого байта (відновлюється з наступною відповіддю); датчик кута керма на CAN перезапускається сам, якщо замовк при ввімкненому запалюванні (ACC/ON), а ECU відповідає; шина I2C плати реле звільняється й перезапускається сама. Кожне таке відновлення записується в журнал, лічильники показано в картці",
+"Потрібно залити оновлений образ LittleFS. Увага: заливання образу файлової системи (uploadfs або оновлення LittleFS з веб-сторінки) стирає журнал — спершу завантажте його"
+],"en":[
+"Event journal: new “Event journal” card in the System section — the last 100 events (boots and resets, fail-safe, steering mode, steering VESC link loss, CAN and relay-bus faults, low memory, a status snapshot every minute) with a source filter, “Download” (the whole journal as one file, ≈ 1–2 days) and “Clear”. The journal is kept in flash and survives a firmware update",
+"Self-recovery: the steering VESC link no longer stays stuck for minutes after one corrupted byte (it recovers with the next reply); the CAN steering-angle sensor is restarted automatically when it goes silent with the ignition on (ACC/ON) while the ECU still answers; the relay board I2C bus frees and restarts itself. Every such recovery is written to the journal and counted in the card",
+"Upload the updated LittleFS image. Note: uploading the filesystem image (uploadfs or a LittleFS update from the web page) erases the journal — download it first"
+]},
 {"version":"1.5.25","date":"2026-11-10","uk":[
 "Багі: увімкнено блокування — реле 4, 5 і 6 (клеми X7, X8, X9) вмикаються разом. Керування: кнопка «Блокування» у веб-панелі або MAVLink канал 7 (понад 1520 мкс = заблоковано); стан передається в біті 0 EFI_STATUS. Під час аварійного вимкнення (failsafe) блокування зберігає свій останній стан, як на квадроциклі. Тест реле доступний лише при відпущеному блокуванні; команда блокування вимикає всі тестові реле. Потрібно залити оновлений образ LittleFS"
 ],"en":[

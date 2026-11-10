@@ -1,4 +1,6 @@
 #include "TelemetryManager.h"
+#include "EventJournal.h"
+#include "I2cBusRecovery.h"
 
 TelemetryManager::TelemetryManager(VehicleController& vehicleController,
                                    WebPortal& webPortal,
@@ -252,6 +254,12 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.relay_board_cfg = vehicleController_.getRelayBoardCfgToken();
     telemetry.relay_board_reboot = vehicleController_.isRelayBoardRebootPending();
     telemetry.relay_board_error = vehicleController_.getRelayBoardErrorToken();
+
+    // Link recovery counters + event journal size
+    telemetry.vesc_resync = vehicleController_.getSteering().getLinkStats().resync;
+    telemetry.can_reinit = vehicleController_.getCanReinitCount();
+    telemetry.i2c_unlock = I2cBusRecovery::count();
+    telemetry.journal_bytes = EventJournal::journalBytes();
 
     telemetry.firmware_version = FIRMWARE_VERSION;
     telemetry.board = BOARD_NAME;

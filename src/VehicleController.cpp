@@ -1,5 +1,6 @@
 #include "VehicleController.h"
 #include "Debug.h"
+#include "EventJournal.h"
 #include "BrakeLaw.h"
 
 // BrakeLaw.h cannot include Constants.h (native tests): keep its literals in sync.
@@ -37,6 +38,7 @@ VehicleController::VehicleController(SteeringController& steering,
       lastStarterOnMs_(0),
       lastBatteryWarnMs_(0),
       currentInputSource_(InputSource::FAILSAFE),
+      prevInputSource_(InputSource::FAILSAFE),
       steerMode_(SteerMode::BLOCKED),   // the sensor starts unhealthy (no frames yet)
       lastMavCmdCount_(0),
       failsafeApplied_(false),
@@ -394,7 +396,21 @@ void VehicleController::updateEffectiveRpm() {
                              d.dataValid, d.engineRPM, d.lastUpdateTime);
 }
 
+static const char* inputSourceName(InputSource s) {
+    return (s == InputSource::MAVLINK) ? INPUT_SOURCE_NAME_MAVLINK :
+           (s == InputSource::WEB) ? INPUT_SOURCE_NAME_WEB : INPUT_SOURCE_NAME_FAILSAFE;
+}
+
 void VehicleController::update() {
+    // The Bosch LWS is powered from the ACC line (ignition Relay_1): its CAN silence watchdog
+    // runs only while the ignition is ACC or IGNITION (decision 1 of change
+    // add-event-journal-and-link-recovery). Read-only use of the relay state.
+    {
+        const RelayController::IgnitionState ign = relayController_.getIgnitionState();
+        canController_.setLwsPowered(ign == RelayController::IgnitionState::ACC ||
+                                     ign == RelayController::IgnitionState::IGNITION);
+    }
+
     // Update CAN controller (read vehicle data from ECU)
     canController_.update();
 
@@ -553,10 +569,13 @@ void VehicleController::setInputSource(InputSource source) {
                      (source == InputSource::MAVLINK) ? INPUT_SOURCE_NAME_MAVLINK :
                      (source == InputSource::WEB) ? INPUT_SOURCE_NAME_WEB :
                      INPUT_SOURCE_NAME_FAILSAFE);
+        EventJournal::log(JSrc::SRC, JLvl::I, "change", "from=%s to=%s",
+                          inputSourceName(currentInputSource_), inputSourceName(source));
         if (source == InputSource::WEB) {
             webThrottleDemandPct_ = 0.0f;
             throttle_.idle();
         }
+        prevInputSource_ = currentInputSource_;
     }
     currentInputSource_ = source;
 }
@@ -795,6 +814,7 @@ String VehicleController::getFromGearString() const {
 void VehicleController::applyFailsafe() {
     if (currentInputSource_ == InputSource::FAILSAFE && !failsafeApplied_) {
         Debug::printlnFeature(DebugFeature::VEHICLE, "[FAILSAFE] Entering safe state");
+        EventJournal::log(JSrc::SRC, JLvl::W, "failsafe_enter", "from=%s", inputSourceName(prevInputSource_));
         // Centres with a healthy sensor; refused without one (never centres blind). A rate
         // drive was already stopped this iteration: FAILSAFE makes the mode BLOCKED and
         // updateSteerMode() ran stopRate() before this.
@@ -816,6 +836,7 @@ void VehicleController::applyFailsafe() {
         failsafeApplied_ = true;
     } else if (currentInputSource_ != InputSource::FAILSAFE && failsafeApplied_) {
         Debug::printlnFeature(DebugFeature::VEHICLE, "[FAILSAFE] Exiting safe state");
+        EventJournal::log(JSrc::SRC, JLvl::I, "failsafe_exit", "to=%s", inputSourceName(currentInputSource_));
         brake_.stop();  // Ensure brake is stopped before handing control
         failsafeApplied_ = false;
     }
@@ -847,6 +868,14 @@ void VehicleController::updateSteerMode() {
     }
     Debug::printfFeature(DebugFeature::SERVO, "[STEER] mode: %s -> %s (%s)\n",
                          steerModeToken(steerMode_), steerModeToken(mode), reason);
+    {
+        char tok[sizeof(reason)];   // journal values carry no spaces
+        size_t i = 0;
+        for (; reason[i] != '\0' && i < sizeof(tok) - 1; i++) tok[i] = (reason[i] == ' ') ? '_' : reason[i];
+        tok[i] = '\0';
+        EventJournal::log(JSrc::STEER, JLvl::I, "mode", "from=%s to=%s reason=%s",
+                          steerModeToken(steerMode_), steerModeToken(mode), tok);
+    }
 
     // Every change stops a rate-owned drive (a web jog/nudge and a closed-loop move are
     // untouched) and every entry into RATE needs the stick centred once before motion.
