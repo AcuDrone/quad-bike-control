@@ -220,6 +220,80 @@ static void test_crc32_known() {
     TEST_ASSERT_EQUAL_HEX32(0xCBF43926u, jCrc32("123456789", 9));
 }
 
+// ─── RAM line buffer / RAM tail (jLineBufAppend) ─────────────────────────────
+
+static void test_linebuf_fits() {
+    char buf[32];
+    size_t len = 0;
+    JBufCut c = jLineBufAppend(buf, sizeof(buf), len, "aaaa\n", 5);
+    TEST_ASSERT_EQUAL_UINT32(0, c.bytes);
+    TEST_ASSERT_EQUAL_UINT32(0, c.lines);
+    c = jLineBufAppend(buf, sizeof(buf), len, "bbbbbbbbb\n", 10);
+    TEST_ASSERT_EQUAL_UINT32(0, c.lines);
+    TEST_ASSERT_EQUAL_UINT32(15, len);
+    TEST_ASSERT_EQUAL_STRING_LEN("aaaa\nbbbbbbbbb\n", buf, 15);
+}
+
+static void test_linebuf_drops_oldest_whole_lines() {
+    char buf[20];
+    size_t len = 0;
+    jLineBufAppend(buf, sizeof(buf), len, "11111\n", 6);   // 6
+    jLineBufAppend(buf, sizeof(buf), len, "22222\n", 6);   // 12
+    jLineBufAppend(buf, sizeof(buf), len, "33333\n", 6);   // 18
+    // 18 + 6 = 24 > 20: drop "11111\n" only (need 4 → one whole line of 6)
+    JBufCut c = jLineBufAppend(buf, sizeof(buf), len, "44444\n", 6);
+    TEST_ASSERT_EQUAL_UINT32(6, c.bytes);
+    TEST_ASSERT_EQUAL_UINT32(1, c.lines);
+    TEST_ASSERT_EQUAL_UINT32(18, len);
+    TEST_ASSERT_EQUAL_STRING_LEN("22222\n33333\n44444\n", buf, 18);
+    // A 15-byte line needs 13 bytes freed: three whole lines go (never a partial line)
+    c = jLineBufAppend(buf, sizeof(buf), len, "xxxxxxxxxxxxxx\n", 15);
+    TEST_ASSERT_EQUAL_UINT32(18, c.bytes);
+    TEST_ASSERT_EQUAL_UINT32(3, c.lines);
+    TEST_ASSERT_EQUAL_UINT32(15, len);
+    TEST_ASSERT_EQUAL_STRING_LEN("xxxxxxxxxxxxxx\n", buf, 15);
+}
+
+static void test_linebuf_rejects_oversize_and_empty() {
+    char buf[8];
+    size_t len = 0;
+    jLineBufAppend(buf, sizeof(buf), len, "abc\n", 4);
+    JBufCut c = jLineBufAppend(buf, sizeof(buf), len, "123456789\n", 10);
+    TEST_ASSERT_EQUAL_UINT32(0, c.lines);
+    TEST_ASSERT_EQUAL_UINT32(4, len);
+    c = jLineBufAppend(buf, sizeof(buf), len, "", 0);
+    TEST_ASSERT_EQUAL_UINT32(4, len);
+    // Exactly the capacity: everything older goes, the line fits
+    c = jLineBufAppend(buf, sizeof(buf), len, "1234567\n", 8);
+    TEST_ASSERT_EQUAL_UINT32(1, c.lines);
+    TEST_ASSERT_EQUAL_UINT32(8, len);
+}
+
+static void test_linebuf_tail_accounting() {
+    // RAM tail of 4 KB fed with 1000 formatted lines: always the newest lines, whole lines only,
+    // and appended bytes == kept bytes + dropped bytes (the journal's byte accounting).
+    static char buf[4096];
+    size_t len = 0;
+    size_t appended = 0, dropped = 0;
+    uint32_t droppedLines = 0;
+    char line[JOURNAL_LINE_MAX + 1];
+    for (uint32_t i = 0; i < 1000; i++) {
+        size_t n = jFormatLine(line, 3, i * 1000u, JSrc::SYS, JLvl::I, "tick", (i % 3) ? "k=v" : "a_longer_field=12345", 0);
+        JBufCut c = jLineBufAppend(buf, sizeof(buf), len, line, n);
+        appended += n;
+        dropped += c.bytes;
+        droppedLines += c.lines;
+        TEST_ASSERT_TRUE(len <= sizeof(buf));
+    }
+    TEST_ASSERT_EQUAL_UINT32(appended, dropped + len);
+    TEST_ASSERT_EQUAL_UINT32(1000, droppedLines + jCountLines(buf, len));
+    TEST_ASSERT_EQUAL_CHAR('\n', buf[len - 1]);
+    // Starts at a line boundary and ends with the newest line
+    TEST_ASSERT_EQUAL_STRING_LEN("3 ", buf, 2);
+    const size_t last = jTailStart(buf, len, 1);
+    TEST_ASSERT_EQUAL_STRING_LEN("3 999.000 SYS I tick a_longer_field=12345\n", buf + last, len - last);
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_format_basic);
@@ -237,5 +311,9 @@ int main(int, char**) {
     RUN_TEST(test_ring_partial_consume);
     RUN_TEST(test_ring_corruption);
     RUN_TEST(test_crc32_known);
+    RUN_TEST(test_linebuf_fits);
+    RUN_TEST(test_linebuf_drops_oldest_whole_lines);
+    RUN_TEST(test_linebuf_rejects_oversize_and_empty);
+    RUN_TEST(test_linebuf_tail_accounting);
     return UNITY_END();
 }

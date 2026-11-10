@@ -5,8 +5,8 @@
  * @file EventJournalLaw.h
  * @brief Pure (Arduino-free, header-only) logic of the persistent event journal: source / level
  * tokens, the line formatter with truncation, the (source, event) dedupe table, the rotation
- * decision, the tail finder and the RTC_NOINIT replay ring. Native-tested in
- * test/test_event_journal. The flash / NVS / mutex side lives in src/EventJournal.cpp.
+ * decision, the tail finder, the RAM line buffer (oldest lines dropped) and the RTC_NOINIT replay
+ * ring. Native-tested in test/test_event_journal. The flash / NVS / mutex side lives in src/EventJournal.cpp.
  *
  * Line format (design D2), ASCII, at most `JOURNAL_LINE_MAX` bytes including the '\n':
  *   <boot> <uptime_s.mmm> <SRC> <LVL> <event> k=v k=v ...
@@ -235,6 +235,36 @@ inline size_t jTailStart(const char* buf, size_t len, size_t n) {
         i--;
     }
     return 0;
+}
+
+/** @brief What jLineBufAppend() had to drop from the front of the buffer */
+struct JBufCut {
+    size_t bytes;     // bytes removed from the front (whole lines)
+    uint32_t lines;   // lines removed
+};
+
+/**
+ * @brief Append one line to a line buffer of capacity `cap`, dropping the oldest WHOLE lines from
+ * the front until it fits (the RAM buffer / RAM tail of the journal). `len` is updated.
+ * A line longer than `cap` (or empty) is not appended and nothing is dropped.
+ * @return what was dropped (bytes + lines), {0, 0} when the line fitted as is
+ */
+inline JBufCut jLineBufAppend(char* buf, size_t cap, size_t& len, const char* line, size_t n) {
+    JBufCut cut = {0, 0};
+    if (n == 0 || n > cap) return cut;
+    if (len + n > cap) {
+        const size_t need = len + n - cap;
+        while (cut.bytes < len && cut.bytes < need) {
+            const char* nl = (const char*)memchr(buf + cut.bytes, '\n', len - cut.bytes);
+            cut.bytes = nl ? (size_t)(nl - buf) + 1 : len;
+            cut.lines++;
+        }
+        memmove(buf, buf + cut.bytes, len - cut.bytes);
+        len -= cut.bytes;
+    }
+    memcpy(buf + len, line, n);
+    len += n;
+    return cut;
 }
 
 /** @brief Count '\n'-terminated lines (plus a trailing partial line) */

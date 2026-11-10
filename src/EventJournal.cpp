@@ -23,10 +23,13 @@ static JRtcRing s_prevRing;                 // copy taken at boot for the replay
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;   // RAM buffer, ring, dedupe
 static SemaphoreHandle_t s_fileMutex = nullptr;             // file operations + scratch buffer
 
+// RAM line buffer. Flash writes on: the unflushed lines. Flash writes off: the RAM tail (the
+// newest JOURNAL_RAM_BUF_BYTES of lines, oldest whole lines dropped).
 static char s_ram[JOURNAL_RAM_BUF_BYTES];
 static size_t s_ramLen = 0;
 static uint32_t s_frontDropBytes = 0;     // bytes dropped from the RAM front (overflow), monotonic
-static uint32_t s_dropPending = 0;        // lines dropped since the last journal_drop line
+static uint32_t s_dropPending = 0;        // lines dropped since the last journal_drop line (writes on)
+static uint32_t s_offDropLines = 0;       // RAM-tail lines dropped while flash writes are off
 static char s_scratch[JOURNAL_RAM_BUF_BYTES];   // flush copy / tail scan (file mutex held)
 
 static JDedupe<24> s_dedupe(JOURNAL_DEDUPE_MS);
@@ -39,6 +42,16 @@ static volatile bool s_fsSuspended = false;
 static uint8_t s_failCount = 0;
 static uint32_t s_activeSize = 0;
 static uint32_t s_rotatedSize = 0;
+static bool s_sizesKnown = false;    // file sizes read (lazily: no file I/O at boot while writes are off)
+
+// Flash-write switch (NVS journal/fs, default 0 = off). s_fsCfg is the persisted setting (set from
+// HTTP); the loop applies it: s_fsWriting = flash writes active. On → off keeps s_fsWriting until
+// one final flush (s_fsFinalFlush); off → on flushes the RAM tail at once (s_fsFlushAsap).
+static volatile bool s_fsCfg = false;
+static bool s_fsApplied = false;
+static volatile bool s_fsWriting = false;
+static bool s_fsFinalFlush = false;
+static bool s_fsFlushAsap = false;
 static int s_streams = 0;            // open HTTP streams (written under s_mux)
 static volatile bool s_clearReq = false;
 
@@ -56,8 +69,14 @@ static EventJournal::SnapFn s_snapFn = nullptr;
 // Helpers
 // ============================================================================
 
-static bool fileOutputOn() {
+// LittleFS usable by the journal (mounted, not failed, not suspended for a filesystem OTA)
+static bool fsOperable() {
     return s_fsMounted && !s_fsDisabled && !s_fsSuspended;
+}
+
+// Flash writes active (switch on, or the final flush after switching off) and possible
+static bool fileOutputOn() {
+    return s_fsWriting && fsOperable();
 }
 
 static const char* resetToken(esp_reset_reason_t r) {
@@ -79,27 +98,19 @@ static const char* resetToken(esp_reset_reason_t r) {
 }
 
 // Append one complete line (with '\n') to the RAM buffer and the RTC ring. Drops the oldest
-// whole lines on overflow (counted; the next logged line is preceded by journal_drop).
+// whole lines on overflow. Flash writes on: counted, the next logged line is preceded by
+// journal_drop. Flash writes off: the buffer is a RAM tail, dropping is normal (counted silently,
+// reported as ram_dropped= in the next `journal_fs on=1` line).
 static void appendLine(const char* line, size_t len) {
     if (len == 0 || len > JOURNAL_LINE_MAX) return;
     portENTER_CRITICAL(&s_mux);
-    if (s_ramLen + len > sizeof(s_ram)) {
-        const size_t need = s_ramLen + len - sizeof(s_ram);
-        size_t cut = 0;
-        uint32_t lines = 0;
-        while (cut < s_ramLen && cut < need) {
-            const char* nl = (const char*)memchr(s_ram + cut, '\n', s_ramLen - cut);
-            cut = nl ? (size_t)(nl - s_ram) + 1 : s_ramLen;
-            lines++;
-        }
-        memmove(s_ram, s_ram + cut, s_ramLen - cut);
-        s_ramLen -= cut;
-        s_frontDropBytes += cut;
-        s_dropPending += lines;
-        if (s_begun) jRingConsume(s_ring, lines);   // lost, never reaching flash
+    const JBufCut cut = jLineBufAppend(s_ram, sizeof(s_ram), s_ramLen, line, len);
+    if (cut.lines > 0) {
+        s_frontDropBytes += (uint32_t)cut.bytes;
+        if (s_fsWriting) s_dropPending += cut.lines;
+        else             s_offDropLines += cut.lines;
+        if (s_begun) jRingConsume(s_ring, cut.lines);   // lost, never reaching flash
     }
-    memcpy(s_ram + s_ramLen, line, len);
-    s_ramLen += len;
     if (s_begun) jRingPush(s_ring, line);
     portEXIT_CRITICAL(&s_mux);
 }
@@ -136,8 +147,25 @@ static uint32_t fileSize(const char* path) {
     return sz;
 }
 
+// Read both file sizes once (read-only metadata). File mutex held.
+static void ensureSizesLocked() {
+    if (s_sizesKnown || !fsOperable()) return;
+    s_activeSize = fileSize(ACTIVE_PATH);
+    s_rotatedSize = fileSize(ROTATED_PATH);
+    s_sizesKnown = true;
+}
+
+static void saveFsSetting(bool on) {
+    Preferences prefs;
+    if (prefs.begin("journal", false)) {
+        prefs.putUChar("fs", on ? 1 : 0);
+        prefs.end();
+    }
+}
+
 // One flush attempt. File mutex held by the caller. Returns true on success (or nothing to do).
 static bool doFlush() {
+    ensureSizesLocked();
     size_t n;
     uint32_t dropBase;
     portENTER_CRITICAL(&s_mux);
@@ -231,6 +259,10 @@ void EventJournal::begin() {
         if (prefs.begin("journal", false)) {
             s_boot = prefs.getUInt("boot", 0) + 1;
             prefs.putUInt("boot", s_boot);
+            const bool fs = prefs.getUChar("fs", 0) != 0;   // flash writes, default off
+            s_fsCfg = fs;
+            s_fsApplied = fs;
+            s_fsWriting = fs;
             prefs.end();
         }
     }
@@ -275,11 +307,19 @@ void EventJournal::attachFs(bool mounted) {
         return;
     }
     if (s_fileMutex && xSemaphoreTake(s_fileMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
-        s_activeSize = fileSize(ACTIVE_PATH);
-        s_rotatedSize = fileSize(ROTATED_PATH);
         s_fsMounted = true;
+        // Flash writes off: no file access at boot at all (sizes are read on first use).
+        if (s_fsWriting) ensureSizesLocked();
         xSemaphoreGive(s_fileMutex);
     }
+}
+
+void EventJournal::setFlashWrites(bool on) {
+    s_fsCfg = on;   // persisted and applied by the loop (service())
+}
+
+bool EventJournal::flashWritesEnabled() {
+    return s_fsCfg;
 }
 
 void EventJournal::log(JSrc src, JLvl lvl, const char* event, const char* fmt, ...) {
@@ -384,17 +424,42 @@ void EventJournal::service(bool steeringDriving) {
         }
     }
 
-    // Clear (requested over HTTP): executed here, never while a stream is open.
+    // Flash-write switch (set over HTTP): persist, journal the change, arrange the flush.
+    const bool wantFs = s_fsCfg;
+    if (wantFs != s_fsApplied) {
+        s_fsApplied = wantFs;
+        saveFsSetting(wantFs);
+        if (wantFs) {
+            uint32_t dropped;
+            portENTER_CRITICAL(&s_mux);
+            dropped = s_offDropLines;
+            s_offDropLines = 0;
+            s_fsWriting = true;
+            portEXIT_CRITICAL(&s_mux);
+            s_fsFinalFlush = false;
+            log(JSrc::SYS, JLvl::I, "journal_fs", "on=1 ram_dropped=%lu", (unsigned long)dropped);
+            s_fsFlushAsap = true;    // the RAM tail goes to the file now (steering deferral applies)
+        } else {
+            log(JSrc::SYS, JLvl::I, "journal_fs", "on=0");
+            s_fsFlushAsap = false;
+            s_fsFinalFlush = s_fsWriting;   // one last flush, then no more file access
+        }
+    }
+
+    // Clear (requested over HTTP): executed here, never while a stream is open. Deletes the files
+    // whatever the flash-write switch says (an explicit operator action).
     if (s_clearReq && s_streams == 0 && xSemaphoreTake(s_fileMutex, 0) == pdTRUE) {
-        if (fileOutputOn()) {
+        if (fsOperable()) {
             LittleFS.remove(ROTATED_PATH);
             LittleFS.remove(ACTIVE_PATH);
+            s_sizesKnown = true;
         }
         s_activeSize = 0;
         s_rotatedSize = 0;
         portENTER_CRITICAL(&s_mux);
         s_ramLen = 0;
         s_dropPending = 0;
+        s_offDropLines = 0;
         jRingMarkFlushed(s_ring);
         portEXIT_CRITICAL(&s_mux);
         xSemaphoreGive(s_fileMutex);
@@ -407,14 +472,20 @@ void EventJournal::service(bool steeringDriving) {
         writeSnap(now);
     }
 
-    // Flush decision.
+    // Flush decision. Flash writes off: never (the RAM buffer is the RAM tail).
     if (s_ramLen == 0 || !fileOutputOn()) {
         s_dueSinceMs = 0;
+        s_fsFlushAsap = false;
+        if (s_fsFinalFlush) {        // switched off: nothing left to write, or cannot write
+            s_fsFinalFlush = false;
+            s_fsWriting = false;
+        }
         return;
     }
     const bool intervalDue = (now - s_lastFlushMs) >= JOURNAL_FLUSH_MS;
     const bool fillDue = s_ramLen >= (sizeof(s_ram) * 3) / 4 && s_failCount == 0;
-    if (!intervalDue && !fillDue) return;
+    const bool switchDue = s_fsFlushAsap || s_fsFinalFlush;   // flash-write switch changed
+    if (!intervalDue && !fillDue && !switchDue) return;
     if (s_dueSinceMs == 0) s_dueSinceMs = now | 1u;
     // Decision 2: no flash erase while the steering motor is driven (a sector erase stalls both
     // cores for 30-50 ms; the LWS timeout is 100 ms) — at most JOURNAL_FLUSH_DEFER_MAX_MS.
@@ -427,10 +498,16 @@ void EventJournal::service(bool steeringDriving) {
     xSemaphoreGive(s_fileMutex);
     s_lastFlushMs = millis();
     s_dueSinceMs = 0;
+    s_fsFlushAsap = false;
+    if (s_fsFinalFlush) {            // switched off: that was the last flush
+        s_fsFinalFlush = false;
+        s_fsWriting = false;
+    }
 }
 
 void EventJournal::flushNow(const char* why) {
     log(JSrc::SYS, JLvl::I, "reboot", "why=%s", why ? why : "?");
+    // Flash writes off: the reboot line stays in RAM and the RTC ring (replayed at the next boot).
     if (!fileOutputOn() || s_fileMutex == nullptr) return;
     if (xSemaphoreTake(s_fileMutex, pdMS_TO_TICKS(1000)) != pdTRUE) return;
     flushLocked();
@@ -448,7 +525,9 @@ void EventJournal::requestClear() {
 }
 
 int32_t EventJournal::journalBytes() {
-    if (!fileOutputOn()) return -1;
+    if (!s_fsWriting) return (int32_t)s_ramLen;   // flash writes off: the RAM tail
+    if (!fsOperable()) return -1;
+    if (!s_sizesKnown) return (int32_t)s_ramLen;
     return (int32_t)(s_activeSize + s_rotatedSize + s_ramLen);
 }
 
@@ -460,10 +539,19 @@ uint32_t EventJournal::bootNumber() {
 // Streams (HTTP tail / download)
 // ============================================================================
 
+// Section labels (flash writes off only), so a reader can tell flash lines from RAM-only lines.
+static const char LABEL_FILES[] = "# --- flash: /events.1 + /events.log (written while flash writes were on) ---\n";
+static const char LABEL_RAM[] = "# --- RAM only: flash writes off, the lines below are lost at power-off ---\n";
+static_assert(sizeof(LABEL_FILES) - 1 <= JOURNAL_LINE_MAX && sizeof(LABEL_RAM) - 1 <= JOURNAL_LINE_MAX,
+              "journal labels are journal lines");
+
 std::shared_ptr<EventJournal::Stream> EventJournal::openStream(size_t tailLines) {
     std::shared_ptr<Stream> st(new Stream());
+    const bool writesOff = !s_fsWriting;
+    if (writesOff) st->lblRam_ = LABEL_RAM;
 
-    // Unflushed RAM lines (copied: the loop may flush them while the stream runs).
+    // RAM lines (copied: the loop may flush / drop them while the stream runs). Flash writes on:
+    // the unflushed lines; off: the RAM tail.
     portENTER_CRITICAL(&s_mux);
     const size_t n = s_ramLen;
     portEXIT_CRITICAL(&s_mux);
@@ -478,15 +566,19 @@ std::shared_ptr<EventJournal::Stream> EventJournal::openStream(size_t tailLines)
         }
     }
     const size_t ramLines = st->ram_ ? jCountLines(st->ram_, st->ramLen_) : 0;
+    st->ramLines_ = ramLines;
     if (tailLines > 0 && ramLines >= tailLines) {
         st->ramPos_ = jTailStart(st->ram_, st->ramLen_, tailLines);
         return st;   // the RAM lines alone are enough
     }
 
-    if (!fileOutputOn() || s_fileMutex == nullptr ||
+    // The files are read even with flash writes off (read-only, no erase): lines from an earlier
+    // period with writes on come first, then the RAM tail.
+    if (!fsOperable() || s_fileMutex == nullptr ||
         xSemaphoreTake(s_fileMutex, pdMS_TO_TICKS(200)) != pdTRUE) {
         return st;   // RAM lines only
     }
+    ensureSizesLocked();
     portENTER_CRITICAL(&s_mux);
     s_streams++;
     portEXIT_CRITICAL(&s_mux);
@@ -510,6 +602,9 @@ std::shared_ptr<EventJournal::Stream> EventJournal::openStream(size_t tailLines)
         }
     }
     xSemaphoreGive(s_fileMutex);
+    if (writesOff && (st->seg_[0].pos < st->seg_[0].end || st->seg_[1].pos < st->seg_[1].end)) {
+        st->lblFiles_ = LABEL_FILES;
+    }
     return st;
 }
 
@@ -522,11 +617,25 @@ EventJournal::Stream::~Stream() {
     }
 }
 
+// Copy the rest of a label; nullptr it once done. Returns bytes copied (0 = nothing left).
+static size_t emitLabel(const char*& lbl, size_t& pos, uint8_t* buf, size_t maxLen) {
+    if (lbl == nullptr) return 0;
+    const size_t len = strlen(lbl);
+    size_t k = len - pos;
+    if (k > maxLen) k = maxLen;
+    memcpy(buf, lbl + pos, k);
+    pos += k;
+    if (pos >= len) lbl = nullptr;
+    return k;
+}
+
 size_t EventJournal::Stream::read(uint8_t* buf, size_t maxLen) {
     if (maxLen == 0) return TRY_AGAIN;
+    // Order: [files label] .1 → active → [RAM label] → RAM lines (labels only with writes off)
+    if (size_t k = emitLabel(lblFiles_, lblFilesPos_, buf, maxLen)) return k;
     while (segIdx_ < 2) {
         Seg& seg = seg_[segIdx_];
-        if (seg.pos >= seg.end || !fileOutputOn()) {
+        if (seg.pos >= seg.end || !fsOperable()) {
             segIdx_++;
             continue;
         }
@@ -552,6 +661,7 @@ size_t EventJournal::Stream::read(uint8_t* buf, size_t maxLen) {
         seg.pos += (uint32_t)r;
         return r;
     }
+    if (size_t k = emitLabel(lblRam_, lblRamPos_, buf, maxLen)) return k;
     if (ram_ != nullptr && ramPos_ < ramLen_) {
         size_t k = ramLen_ - ramPos_;
         if (k > maxLen) k = maxLen;

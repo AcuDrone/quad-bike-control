@@ -251,7 +251,8 @@ void WebPortal::setupWebServer() {
 
     // Event journal (text/plain, streamed in chunks from the AsyncTCP task; never blocks the loop).
     // "/api/events" also matches "/api/events/<x>" in this server, so the longer routes go first.
-    // GET /api/events/download — /events.1 then /events.log (+ unflushed lines) as one attachment
+    // GET /api/events/download — /events.1 then /events.log, then the RAM lines, as one attachment
+    // (flash writes off: the files are read-only history and each part gets a "# ---" label line)
     server.on("/api/events/download", HTTP_GET, [](AsyncWebServerRequest* request) {
         std::shared_ptr<EventJournal::Stream> st = EventJournal::openStream(0);
         AsyncWebServerResponse* response = request->beginChunkedResponse("text/plain",
@@ -267,13 +268,38 @@ void WebPortal::setupWebServer() {
         response->addHeader("Cache-Control", "no-cache");
         request->send(response);
     });
+    // Journal flash-write switch (NVS journal/fs, default off) — same style as /api/debug.
+    // GET → {"fs":bool}; POST {"fs":bool} → applied by the main loop (journal_fs line + flush).
+    server.on("/api/events/config", HTTP_GET, [](AsyncWebServerRequest* request) {
+        request->send(200, "application/json",
+                      EventJournal::flashWritesEnabled() ? "{\"fs\":true}" : "{\"fs\":false}");
+    });
+    server.on("/api/events/config", HTTP_POST, [](AsyncWebServerRequest* request) {}, nullptr,
+        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+            StaticJsonDocument<64> doc;
+            DeserializationError error = deserializeJson(doc, data, len);
+            if (error) {
+                request->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid JSON\"}");
+                return;
+            }
+            if (!doc["fs"].is<bool>()) {
+                request->send(400, "application/json", "{\"success\":false,\"message\":\"Missing 'fs' field\"}");
+                return;
+            }
+            const bool fs = doc["fs"];
+            EventJournal::setFlashWrites(fs);
+            request->send(200, "application/json",
+                          fs ? "{\"success\":true,\"fs\":true}" : "{\"success\":true,\"fs\":false}");
+        }
+    );
     // POST /api/events/clear — executed by the main loop (both files + RAM, SYS I journal_cleared)
     server.on("/api/events/clear", HTTP_POST, [](AsyncWebServerRequest* request) {
         EventJournal::requestClear();
         request->send(200, "application/json", "{\"ok\":true}");
     });
 
-    // GET /api/events?tail=N — last N lines (default 100, max 500), unflushed RAM lines included.
+    // GET /api/events?tail=N — last N lines (default 100, max 500), RAM lines included.
+    // Headers X-Journal-Fs (0/1) and X-Journal-Ram-Lines (lines held in RAM) feed the card status.
     server.on("/api/events", HTTP_GET, [](AsyncWebServerRequest* request) {
         long n = 100;
         if (request->hasParam("tail")) {
@@ -289,6 +315,8 @@ void WebPortal::setupWebServer() {
                 return r == EventJournal::Stream::TRY_AGAIN ? RESPONSE_TRY_AGAIN : r;
             });
         response->addHeader("Cache-Control", "no-cache");
+        response->addHeader("X-Journal-Fs", EventJournal::flashWritesEnabled() ? "1" : "0");
+        response->addHeader("X-Journal-Ram-Lines", String((unsigned long)st->ramLines()));
         request->send(response);
     });
     // OTA firmware update endpoint
@@ -828,11 +856,12 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     if (telemetry.relay_board_error) doc["relay_board_error"] = telemetry.relay_board_error;
     else                             doc["relay_board_error"] = (const char*)nullptr;
 
-    // Link recovery session totals + event journal size (-1 = journal cannot write to flash)
+    // Link recovery session totals + event journal size (-1 = flash writes on but impossible)
     doc["vesc_resync"] = telemetry.vesc_resync;
     doc["can_reinit"] = telemetry.can_reinit;
     doc["i2c_unlock"] = telemetry.i2c_unlock;
-    doc["journal_bytes"] = telemetry.journal_bytes;
+    doc["journal_bytes"] = telemetry.journal_bytes;   // writes off: RAM tail bytes
+    doc["journal_fs"] = telemetry.journal_fs;         // journal flash-write switch
 
     // Firmware version and target board
     doc["firmware_version"] = telemetry.firmware_version;

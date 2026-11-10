@@ -72,8 +72,8 @@ written to the journal verbatim behind a replay marker, and the ring SHALL be cl
 
 ### Requirement: Buffered Journal Flush
 Lines SHALL be appended to a RAM buffer (`JOURNAL_RAM_BUF_BYTES`, 4 KB) by a non-blocking call that
-never accesses flash. The buffer SHALL be written to flash from the main loop at most once per
-`JOURNAL_FLUSH_MS` (1 s) and only when it holds data (earlier when ≥ 75 % full), and immediately
+never accesses flash. While flash writes are switched on (see Journal Flash-Write Switch) the buffer
+SHALL be written to flash from the main loop at most once per `JOURNAL_FLUSH_MS` (1 s) and only when it holds data (earlier when ≥ 75 % full), and immediately
 before a controlled reboot. While the steering motor is actively driven (closed-loop move, jog,
 nudge, rate drive, park pulse) a due flush SHALL be deferred, for at most
 `JOURNAL_FLUSH_DEFER_MAX_MS` (10 s), because a flash sector erase stalls both cores for tens of
@@ -176,6 +176,16 @@ The web server SHALL expose the journal over HTTP without blocking the main loop
 - **WHEN** a client requests `GET /api/events?tail=N`
 - **THEN** the last N lines (default 100, at most 500) of the journal, including lines not yet
   flushed, SHALL be returned as `text/plain`, oldest first
+- **AND** the response SHALL carry the headers `X-Journal-Fs` (`0`/`1`, the flash-write setting) and
+  `X-Journal-Ram-Lines` (lines currently held in RAM)
+
+#### Scenario: Flash-write configuration
+- **WHEN** a client requests `GET /api/events/config`
+- **THEN** the reply SHALL be `{"fs":<bool>}` with the current flash-write setting
+- **AND WHEN** a client sends `POST /api/events/config` with `{"fs":<bool>}`
+- **THEN** the setting SHALL be applied by the main loop and the reply SHALL be
+  `{"success":true,"fs":<bool>}`; a body that is not JSON or lacks a boolean `fs` SHALL be answered
+  400 with `{"success":false,...}`
 
 #### Scenario: Download
 - **WHEN** a client requests `GET /api/events/download`
@@ -186,3 +196,48 @@ The web server SHALL expose the journal over HTTP without blocking the main loop
 - **WHEN** a client sends `POST /api/events/clear`
 - **THEN** the main loop SHALL delete both files and the RAM buffer and journal `SYS I journal_cleared`
 - **AND** the boot counter SHALL NOT be reset
+
+### Requirement: Journal Flash-Write Switch
+The journal's flash writes SHALL be controlled by a persisted switch (NVS namespace `journal`, key
+`fs`, uint8 0/1), read once at boot, **default 0 = off**. While the switch is off the journal SHALL
+perform no LittleFS write of any kind (no flush, no rotation) and no file access at boot; the RAM
+buffer SHALL act as a RAM tail holding the newest `JOURNAL_RAM_BUF_BYTES` (4 KB) of lines, dropping
+the oldest whole lines without a `journal_drop` line. Everything else SHALL keep working: the RTC
+ring and its replay at boot (into the RAM tail), dedupe, the boot header and boot line, SNAP every
+60 s, the counters, and `journal_bytes` (reporting the RAM-tail bytes); `jflush_max` stays 0 and a
+controlled-reboot flush is a no-op. Journal files written during an earlier period with the switch
+on SHALL still be served read-only by tail and download, before the RAM tail, each part preceded by a
+`# --- ... ---` label line naming it. Every change of the switch SHALL be journaled so that gaps in
+the flash history are explainable.
+
+#### Scenario: Default off — no file I/O, RAM tail served
+- **WHEN** the device boots with no `journal`/`fs` key in NVS
+- **THEN** the journal SHALL not open, read, write, rename or remove any journal file during normal
+  operation
+- **AND** `GET /api/events?tail=N` SHALL return the newest lines of the RAM tail behind a
+  `# --- RAM only ... ---` label line, preceded by the existing file lines (behind a
+  `# --- flash ... ---` label) when the RAM tail has fewer than N lines and journal files exist
+- **AND** when the RAM tail is full, logging a new line SHALL drop the oldest whole lines
+
+#### Scenario: Switch turned on
+- **WHEN** the operator switches flash writes on
+- **THEN** the setting SHALL be saved to NVS, `SYS I journal_fs on=1 ram_dropped=<n>` SHALL be
+  journaled (`n` = RAM-tail lines dropped while off), and the RAM tail SHALL be flushed to
+  `/events.log` at once, subject only to the steering-drive deferral (at most 10 s)
+- **AND** from then on the journal SHALL flush as described in Buffered Journal Flush
+
+#### Scenario: Switch turned off
+- **WHEN** the operator switches flash writes off
+- **THEN** the setting SHALL be saved to NVS, `SYS I journal_fs on=0` SHALL be journaled, and the
+  buffer SHALL be flushed one final time (subject to the steering-drive deferral)
+- **AND** after that flush the journal SHALL not write any journal file again until switched on
+
+#### Scenario: Persisted across reboot
+- **WHEN** the switch was set on and the device reboots
+- **THEN** the journal SHALL start with flash writes on and flush as before the reboot
+- **AND** when it was set off, the journal SHALL start in RAM-only mode
+
+#### Scenario: Clear with flash writes off
+- **WHEN** `POST /api/events/clear` is sent while flash writes are off
+- **THEN** both journal files SHALL still be deleted (an explicit operator action) and the RAM tail
+  emptied

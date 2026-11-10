@@ -1381,12 +1381,19 @@
                 <div class="ro-row"><span data-i18n="lbl_ip">IP address</span><span class="ro-val" id="net-ip">--</span></div>
                 <div data-i18n="network_later" style="margin-top: 10px; font-size: 0.8em; color: var(--muted-foreground);">Settings will appear later.</div>
             </div>
-            <!-- Event journal (GET /api/events?tail=100 / /api/events/download, POST /api/events/clear;
-                 counters vesc_resync / can_reinit / i2c_unlock / journal_bytes from telemetry). No vehicle command. -->
+            <!-- Event journal (GET /api/events?tail=100 / /api/events/download, POST /api/events/clear,
+                 POST /api/events/config {"fs":bool} = flash-write switch; counters vesc_resync / can_reinit /
+                 i2c_unlock / journal_bytes / journal_fs from telemetry). No vehicle command. -->
             <div class="card">
-                <h2 class="card-title"><span data-i18n="card_journal">📜 Event journal</span><button type="button" class="help-btn" onclick="openHelp('journal_help,journal_format_help,journal_erase_help', 'card_journal')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <h2 class="card-title"><span data-i18n="card_journal">📜 Event journal</span><button type="button" class="help-btn" onclick="openHelp('journal_help,journal_fs_help,journal_format_help,journal_erase_help', 'card_journal')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
                 <div class="ro-row"><span data-i18n="lbl_journal_counters">Recoveries VESC / CAN / I2C</span><span class="ro-val" id="journal-counters">--</span></div>
                 <div class="ro-row"><span data-i18n="lbl_journal_size">Journal size</span><span class="ro-val" id="journal-size">--</span></div>
+                <div class="ro-row"><span data-i18n="lbl_journal_mode">Storage</span><span class="ro-val" id="journal-mode">--</span></div>
+                <div style="display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-top: 8px;">
+                    <span data-i18n="lbl_journal_fs">Write to flash</span>
+                    <button class="gear-btn" id="journal-fs-btn" onclick="toggleJournalFs()" style="min-width: 90px; padding: 6px 10px; font-size: 0.9em;">--</button>
+                </div>
+                <div data-i18n="journal_fs_hint" style="margin-top: 4px; font-size: 0.8em; color: var(--muted-foreground);">Off: the journal lives only in RAM (and the RTC ring) and is lost at power-off.</div>
                 <div id="journal-unavail" data-i18n="journal_unavailable" style="display: none; margin-top: 8px; font-size: 0.85em; color: var(--danger);">Journal cannot be written to flash</div>
                 <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 12px 0 8px;">
                     <select id="journal-filter" onchange="renderJournal()" aria-label="Source" style="flex: 1; min-width: 90px; padding: 6px; border-radius: 4px; border: 1px solid var(--border); background: var(--input); color: var(--foreground);">
@@ -1918,6 +1925,14 @@
                 lbl_journal_counters: 'Recoveries VESC / CAN / I2C',
                 lbl_journal_size: 'Journal size',
                 journal_unavailable: 'The journal cannot be written to flash — only the latest lines in memory are shown',
+                lbl_journal_mode: 'Storage',
+                lbl_journal_fs: 'Write to flash',
+                journal_fs_hint: 'Off (default): the journal lives only in RAM (the last ≈ 4 KB, plus the RTC ring across a reset) and is lost at power-off. On: written to flash about once a second.',
+                journal_mode_ram: 'RAM only',
+                journal_mode_flash: 'flash',
+                journal_ram_lines: '%s lines in RAM',
+                journal_fs_failed: 'Could not change the flash-write setting',
+                journal_fs_help: '<b>Write to flash is OFF by default.</b> While it is off nothing is written to flash (no flash-erase stalls in the control loop): the journal keeps only the newest ≈ 4 KB of lines in RAM, a reset keeps the last 16 lines (RTC memory), a power-off loses everything. Lines written earlier while it was on are still shown and downloaded first, marked “flash”, followed by the RAM lines. Switching on writes <b>journal_fs on=1</b> and saves the RAM lines to flash at once; switching off writes <b>journal_fs on=0</b>, saves once more, then stops. The setting survives a reboot.',
                 journal_all: 'All',
                 journal_refresh: 'Refresh',
                 journal_download: 'Download',
@@ -2418,6 +2433,14 @@
                 lbl_journal_counters: 'Самовідновлення VESC / CAN / I2C',
                 lbl_journal_size: 'Розмір журналу',
                 journal_unavailable: 'Журнал не вдається записати у флеш — показано лише останні рядки з пам’яті',
+                lbl_journal_mode: 'Зберігання',
+                lbl_journal_fs: 'Запис у flash',
+                journal_fs_hint: 'Вимкнено (типово): журнал живе лише в RAM (останні ≈ 4 КБ, плюс RTC-кільце через перезапуск) і зникає після вимкнення живлення. Увімкнено: запис у flash приблизно раз на секунду.',
+                journal_mode_ram: 'лише RAM',
+                journal_mode_flash: 'flash',
+                journal_ram_lines: 'рядків у RAM: %s',
+                journal_fs_failed: 'Не вдалося змінити запис у flash',
+                journal_fs_help: '<b>Запис у flash типово ВИМКНЕНО.</b> Поки він вимкнений, у флеш нічого не пишеться (жодних пауз головного циклу через стирання флешу): журнал тримає в RAM лише найновіші ≈ 4 КБ рядків, перезапуск зберігає останні 16 рядків (RTC-пам’ять), вимкнення живлення втрачає все. Рядки, записані раніше, коли запис був увімкнений, і далі показуються й завантажуються першими з позначкою «flash», а за ними — рядки з RAM. Увімкнення пише <b>journal_fs on=1</b> і одразу зберігає рядки з RAM у флеш; вимкнення пише <b>journal_fs on=0</b>, зберігає ще раз і зупиняється. Налаштування зберігається після перезапуску.',
                 journal_all: 'Усі',
                 journal_refresh: 'Оновити',
                 journal_download: 'Завантажити',
@@ -2491,6 +2514,7 @@
             if (changelogOpen) renderChangelog();
             pprMeasRender();
             renderJournal();
+            updateJournalFsUi();
         }
 
         function updateLangToggle() {
@@ -4670,7 +4694,41 @@
         // ---- Event journal card (System): last 100 lines over HTTP, filtered in the browser ----
         let journalLines = [];
         let journalTimer = null;
+        let journalFs = null;          // flash-write switch (telemetry journal_fs), null = unknown
+        let journalRamLines = null;    // lines held in RAM (X-Journal-Ram-Lines of the last tail)
+        function updateJournalFsUi() {
+            const btn = document.getElementById('journal-fs-btn');
+            const mode = document.getElementById('journal-mode');
+            if (!btn || !mode) return;
+            if (journalFs === null) { btn.textContent = '--'; mode.textContent = '--'; return; }
+            btn.dataset.state = journalFs;
+            btn.textContent = journalFs ? t('on') : t('off');
+            btn.style.background = journalFs ? 'color-mix(in srgb, var(--success) 45%, black)' : '';
+            let txt = journalFs ? t('journal_mode_flash') : t('journal_mode_ram');
+            if (journalRamLines !== null) txt += ' · ' + t('journal_ram_lines', journalRamLines);
+            mode.textContent = txt;
+        }
+        function toggleJournalFs() {
+            if (journalFs === null) return;
+            fetch('/api/events/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ fs: !journalFs })
+            })
+                .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+                .then(data => {
+                    if (!data.success) throw new Error('fs');
+                    journalFs = data.fs;
+                    updateJournalFsUi();
+                    setTimeout(loadJournal, 600);   // the loop journals the switch (journal_fs on=…)
+                })
+                .catch(() => journalStatus(t('journal_fs_failed'), 'var(--danger)'));
+        }
         function updateJournalCard(data) {
+            if (typeof data.journal_fs === 'boolean' && data.journal_fs !== journalFs) {
+                journalFs = data.journal_fs;
+                updateJournalFsUi();
+            }
             if (typeof data.vesc_resync === 'number') {
                 document.getElementById('journal-counters').textContent =
                     data.vesc_resync + ' / ' + data.can_reinit + ' / ' + data.i2c_unlock;
@@ -4704,7 +4762,15 @@
         }
         function loadJournal() {
             fetch('/api/events?tail=100', { cache: 'no-store' })
-                .then(r => { if (!r.ok) throw new Error(r.status); return r.text(); })
+                .then(r => {
+                    if (!r.ok) throw new Error(r.status);
+                    const ramLines = parseInt(r.headers.get('X-Journal-Ram-Lines'), 10);
+                    journalRamLines = isNaN(ramLines) ? null : ramLines;
+                    const fsHdr = r.headers.get('X-Journal-Fs');
+                    if (fsHdr === '0' || fsHdr === '1') journalFs = fsHdr === '1';
+                    updateJournalFsUi();
+                    return r.text();
+                })
                 .then(txt => {
                     journalLines = txt.split('\n').filter(l => l.length > 0);
                     renderJournal();

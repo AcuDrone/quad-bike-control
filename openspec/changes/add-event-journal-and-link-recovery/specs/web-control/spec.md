@@ -2,7 +2,7 @@
 ### Requirement: Event Journal Card
 The System section SHALL contain an «Журнал подій» / "Event journal" card, placed after the Network
 card, that shows the persistent event journal. It SHALL offer no vehicle command; its only actions
-are refresh, download and clear.
+are refresh, download, clear and the journal's flash-write switch.
 
 #### Scenario: Show the last lines
 - **WHEN** the System section is opened
@@ -28,7 +28,20 @@ are refresh, download and clear.
 - **AND** when `journal_bytes` is −1 the card SHALL show a localized note that the journal cannot be
   written to flash
 
+#### Scenario: Flash-write toggle
+- **WHEN** the card is shown
+- **THEN** it SHALL show a «Запис у flash» / "Write to flash" toggle reflecting telemetry
+  `journal_fs`, with a localized hint that while it is off the journal lives only in RAM (and the
+  RTC ring) and is lost at power-off
+- **AND** a status row SHALL show «лише RAM» / "RAM only" or "flash" and the number of lines held in
+  RAM (header `X-Journal-Ram-Lines` of the last tail request)
+- **WHEN** the operator clicks the toggle
+- **THEN** the card SHALL send `POST /api/events/config` with `{"fs":<new state>}`, show the state
+  from the reply, and reload the list so that the `journal_fs on=…` line appears; a failure SHALL
+  show a localized error
+
 #### Scenario: Help
 - **WHEN** the ⓘ button of the card is clicked
-- **THEN** the help modal SHALL explain what is journaled, the line format, and that `uploadfs` or a
-  filesystem update erases the journal, in the active language
+- **THEN** the help modal SHALL explain what is journaled, the flash-write switch (off by default,
+  RAM only while off), the line format, and that `uploadfs` or a filesystem update erases the
+  journal, in the active language

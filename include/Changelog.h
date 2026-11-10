@@ -16,10 +16,12 @@
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
 {"version":"1.5.26","date":"2026-11-10","uk":[
 "Журнал подій: нова картка «Журнал подій» у розділі «Система» — останні 100 подій (запуски й перезапуски, failsafe, режим керма, втрата зв’язку з VESC керма, збої CAN і шини реле, нестача пам’яті, знімок стану щохвилини) з фільтром за джерелом, кнопками «Завантажити» (весь журнал одним файлом, ≈ 1–2 доби) та «Очистити». Журнал зберігається у флеші й переживає оновлення прошивки",
+"Журнал подій: запис у флеш типово ВИМКНЕНО — вмикається перемикачем «Запис у flash» у картці «Журнал подій» (налаштування зберігається після перезапуску). Поки запис вимкнено, журнал тримається лише в пам’яті (останні ≈ 4 КБ рядків) і зникає після вимкнення живлення",
 "Самовідновлення: зв’язок із VESC керма більше не «зависає» на хвилини після одного пошкодженого байта (відновлюється з наступною відповіддю); датчик кута керма на CAN перезапускається сам, якщо замовк при ввімкненому запалюванні (ACC/ON), а ECU відповідає; шина I2C плати реле звільняється й перезапускається сама. Кожне таке відновлення записується в журнал, лічильники показано в картці",
 "Потрібно залити оновлений образ LittleFS. Увага: заливання образу файлової системи (uploadfs або оновлення LittleFS з веб-сторінки) стирає журнал — спершу завантажте його"
 ],"en":[
 "Event journal: new “Event journal” card in the System section — the last 100 events (boots and resets, fail-safe, steering mode, steering VESC link loss, CAN and relay-bus faults, low memory, a status snapshot every minute) with a source filter, “Download” (the whole journal as one file, ≈ 1–2 days) and “Clear”. The journal is kept in flash and survives a firmware update",
+"Event journal: writing to flash is OFF by default — switch it on with “Write to flash” in the “Event journal” card (the setting survives a reboot). While it is off, the journal is kept only in RAM (the last ≈ 4 KB of lines) and is lost at power-off",
 "Self-recovery: the steering VESC link no longer stays stuck for minutes after one corrupted byte (it recovers with the next reply); the CAN steering-angle sensor is restarted automatically when it goes silent with the ignition on (ACC/ON) while the ECU still answers; the relay board I2C bus frees and restarts itself. Every such recovery is written to the journal and counted in the card",
 "Upload the updated LittleFS image. Note: uploading the filesystem image (uploadfs or a LittleFS update from the web page) erases the journal — download it first"
 ]},

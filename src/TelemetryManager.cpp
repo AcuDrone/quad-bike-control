@@ -219,6 +219,7 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.can_reinit = vehicleController_.getCanReinitCount();
     telemetry.i2c_unlock = I2cBusRecovery::count();
     telemetry.journal_bytes = EventJournal::journalBytes();
+    telemetry.journal_fs = EventJournal::flashWritesEnabled();
 
     telemetry.firmware_version = FIRMWARE_VERSION;
     telemetry.board = BOARD_NAME;
