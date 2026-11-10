@@ -6,6 +6,7 @@
 #include "IMotorDriver.h"
 #include "LwsSensor.h"
 #include "SteerParkLaw.h"
+#include "EventJournalLaw.h"
 #include "SteerPositionLaw.h"
 #include "SteerRate.h"
 #include "SteerSensorDir.h"
@@ -363,6 +364,17 @@ public:
 
     /** @brief True while the steering motor driver link is healthy */
     bool isDriverOk() const { return steerDriverOk_; }
+
+    /**
+     * @brief The steering motor is being driven right now: closed-loop DRIVING, a jog / nudge /
+     * rate drive, a park-correction pulse, or any nonzero effort on the driver (e.g. a USB diag
+     * drive). The event journal defers its flash flush while this is true (at most
+     * JOURNAL_FLUSH_DEFER_MAX_MS).
+     */
+    bool isDriving() const {
+        return posState_ == SteerPosState::DRIVING || jogDir_ != 0 || parkPulseActive_ ||
+               motor_.lastSpeed() != 0;
+    }
     /** @brief Steering motor current (A) from the last VESC telemetry poll */
     float getMotorCurrent() const { return motor_.motorCurrentA(); }
     /** @brief VESC FET temperature (°C) from the last telemetry poll */
@@ -371,6 +383,8 @@ public:
     float getInputVoltage() const { return motor_.inputVoltageV(); }
     /** @brief VESC fault code (0 = no fault) */
     uint8_t getVescFault() const { return motor_.faultCode(); }
+    /** @brief Steering driver packet-link counters (all zero without a packet link) */
+    IMotorDriver::LinkStats getLinkStats() const { return motor_.linkStats(); }
 
 private:
     IMotorDriver& motor_;
@@ -443,6 +457,9 @@ private:
 
     // VESC driver health / monitors
     bool steerDriverOk_;         // mirrors driver link health (false until first good reply)
+    uint32_t linkDownSinceMs_;   // event journal: when the link went down (0 = boot)
+    uint32_t linkDownSnapMs_;    // event journal: last link_down_snap line
+    uint8_t lastFaultCode_;      // event journal: last journaled VESC fault code
 
     // USB diagnostics lock: external steering commands refused while true
     bool diagLock_;
@@ -526,6 +543,9 @@ private:
 
     /** @brief One debug line: angle, pos, token, fps (+ suffix) */
     void logState(const char* suffix);
+
+    /** @brief Event journal: VESC link event with the parser snapshot (extra = trailing fields) */
+    void journalLink(JLvl lvl, const char* event, const char* extra);
 };
 
 #endif // STEERING_CONTROLLER_H

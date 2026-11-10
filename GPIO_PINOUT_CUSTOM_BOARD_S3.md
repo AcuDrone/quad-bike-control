@@ -169,7 +169,7 @@ BAV199 clamp + 100n, into the CD4051 mux.
 | Bus | SDA | SCL | Speed | Devices |
 |-----|-----|-----|-------|---------|
 | I2C1 (`Wire`) | 1 | 2 | 100 kHz | **X14 header only — no device fitted**, so `Wire` is not started (`PIN_I2C1_SDA`/`PIN_I2C1_SCL` defined, unused). The steering angle sensor is on CAN |
-| I2C2 (`Wire1`) | 48 | 47 | 100 kHz | **Both on-board PCA9557s plus the relay board.** Opto-input **U10 @ 0x1A** (A2A1A0 = 010); mux-control **U2 @ 0x1C** (A2A1A0 = 100); external relay board **@ 0x1F** on header X15. Opened once in `setup()`; nothing restarts it afterwards |
+| I2C2 (`Wire1`) | 48 | 47 | 100 kHz | **Both on-board PCA9557s plus the relay board.** Opto-input **U10 @ 0x1A** (A2A1A0 = 010); mux-control **U2 @ 0x1C** (A2A1A0 = 100); external relay board **@ 0x1F** on header X15. Opened once in `setup()` with a 20 ms transaction timeout; afterwards only the main-owned `I2cBusRecovery` routine restarts it (see "I2C2 timeout and bus unlock") |
 
 > ⚠ **EMPIRICAL — established by live `i2cdetect`-style scans on the assembled board, and it
 > overrides the schematic reading.** The schematic's port names suggested the opto-input expander
@@ -189,9 +189,37 @@ BAV199 clamp + 100n, into the CD4051 mux.
 > the `RelayController` bus argument to `Wire` and start `Wire` on `PIN_I2C1_SDA`/`PIN_I2C1_SCL` in
 > `setup()`; X14 is empty) — a contingency, not the current wiring.
 >
-> There is no coordinated I2C2 recovery any more (it existed only for the coarse AS5600): the
-> expanders keep their own fail-safes — `BoardInputs` re-configures itself on its recovery cadence and
-> `RelayController` verifies every write.
+> The expanders keep their own fail-safes — `BoardInputs` re-configures itself on its recovery cadence
+> and `RelayController` verifies every write — and since firmware 1.5.26 one main-owned bus recovery
+> (`I2cBusRecovery`) frees a stuck bus (below).
+
+#### I2C2 timeout and bus unlock (firmware 1.5.26)
+
+- **Timeout:** `Wire1.setTimeOut(I2C_TIMEOUT_MS)` (20 ms) right after every `Wire1.begin()`
+  (`I2cBusRecovery::beginBus()`, used by `setup()` and by the recovery). The arduino-esp32 default
+  is 50 ms; with the relay write retries a dead bus could hold the loop ≈ 300 ms, now ≈ 120 ms and
+  only while faulted. A PCA9557 / XL9535 transaction at 100 kHz takes ≈ 0.3–0.5 ms.
+- **Driver check (task 6.6):** the pinned core is arduino-esp32 **3.3.7** on ESP-IDF **5.5**, which
+  compiles `esp32-hal-i2c-ng.c` — the IDF `driver/i2c_master.h` driver. `TwoWire::setTimeOut()` is
+  passed unchanged as `xfer_timeout_ms` to `i2c_master_transmit` / `_receive` /
+  `_transmit_receive` / `_probe`, so the 20 ms is honoured per transaction; a timeout surfaces as Wire
+  error **5**. Note: on this driver a transmit NACK maps to Wire error **4** ("other"), and
+  `requestFrom()` does not expose its error at all (the drivers record 6 = "read returned no data").
+- **Single owner:** only `I2cBusRecovery::recover()` (`src/I2cBusRecovery.cpp`) may call
+  `Wire1.end()` / `Wire1.begin()` after `setup()`; no expander driver does. It is called by the
+  relay recovery path (before `initPort`, every `RELAY_RECOVER_MS` while faulted) and by
+  `BoardInputs` after `BOARD_INPUT_UNLOCK_FAILS` (8, ≈ 200 ms) consecutive failed polls, rate-limited
+  to one run per `I2C_RECOVER_MIN_MS` (1 s) across both.
+- **Bus evidence only:** it acts when SDA or SCL reads low, or the last Wire error was a timeout (5).
+  A plain NACK with both lines high (relay board unplugged) does **not** restart `Wire1` — only the
+  device re-init runs — so the opto-input reader is not disturbed every second.
+- **Unlock procedure:** `Wire1.end()`; if SDA is low and SCL high, SCL is driven open-drain for up to
+  `I2C_UNLOCK_CLOCKS` (9) pulses (5 µs low / 5 µs high, ≈ 100 kHz), stopping as soon as SDA reads
+  high, then a STOP (SDA low → SCL high → SDA high); then `Wire1.begin(48, 47, 100 kHz)` +
+  `setTimeOut(20)`, then the caller's own device re-init. If SCL itself is held low no clocking is
+  possible (`scl=0 released=0`). Bit-banging through the BSS138 shifter is valid: it is open-drain
+  on both sides. Every run is journaled (`I2C W bus_stuck sda scl clocks released reinit by err runs`;
+  identical unsuccessful runs at most once per minute) and counted (`i2c_unlock` in telemetry).
 
 > I2C runs at **100 kHz** (`I2C_BUS_FREQ_HZ` in `include/Constants.h`). The relay board is at the end
 > of a cable run on X15, so signal-integrity margin beats bus speed; 400 kHz was tried and rejected.

@@ -36,6 +36,11 @@ pio run -t uploadfs
 
 **Important:** You must upload the filesystem after any changes to `data/index.html`.
 
+> ⚠ **`uploadfs` erases the event journal.** The journal files (`/events.log`, `/events.1`) live in
+> the same LittleFS partition, so `pio run -t uploadfs` — and a web LittleFS update
+> (`/update?type=littlefs`) — wipe them. **Download the journal first** (System → Event journal →
+> Download, or `GET /api/events/download`). A normal firmware (application) update keeps it.
+
 ### 3. Connect to WiFi
 
 After the ESP32 boots:
@@ -132,6 +137,12 @@ it. Cards are shown in one column.
   "Reboot to apply" note and the detection error (see "Relay board selection" below).
 - **Мережа / Network**: the access point SSID and IP address as reported by the firmware
   (read-only; network settings will be added later).
+- **Журнал подій / Event journal** (after Network): the last 100 journal lines (monospace, newest
+  at the bottom) with a source filter (All, SYS, SRC, STEER, VESC, CAN, I2C, RELAY, SNAP, RTC),
+  Refresh, Download and Clear (with a confirm). It refreshes on open and every 5 s while the System
+  section is visible. The header shows the self-recovery counters VESC / CAN / I2C (`vesc_resync`,
+  `can_reinit`, `i2c_unlock` since boot) and the journal size (`journal_bytes`); when the journal
+  cannot write to flash (`journal_bytes` = −1) a red note says so. See "Event journal" below.
 
 **Odometer / trip (read-only):** the Speed card **displays** the total odometer (`odo_km`) and the
 trip distance (`trip_km`), both in km to 3 decimals and both shown whatever the sensor's health —
@@ -196,6 +207,42 @@ pulses: on an overshoot, Cancel and start again. The hand-turned distance is add
 and trip like any pushed distance (about 2 m per turn). Nothing is stored until **Save as
 pulses/rev**, which sends the usual `speed_cal_ppr`; a disconnect or a page reload drops the
 measurement.
+
+**Event journal (System → Event journal):** a persistent post-mortem record kept on LittleFS as two
+plain-text files, `/events.log` (active) and `/events.1` (previous), 128 KB each (≈ 1500 lines,
+≈ 17–20 powered hours per file at the idle rate). When the active file is full it is renamed to
+`/events.1` (the old `.1` is deleted). Lines are buffered in RAM and written to flash at most once per
+second, never while the steering motor is being driven (deferred up to 10 s), and just before a
+controlled reboot (OTA). The last 16 unflushed lines also sit in RTC memory and are replayed after a
+panic / watchdog / software reset behind an `RTC I replay` line; up to ≈ 1 s of events is lost on a
+power cut. A boot counter (NVS `journal`/`boot`) numbers the boots.
+
+Line format (ASCII, ≤ 120 bytes): `<boot> <uptime_s.mmm> <SRC> <LVL> <event> k=v k=v ...`, levels
+`I`/`W`/`E`, sources `SYS SRC STEER VESC CAN I2C RELAY SNAP RTC`; each boot starts with
+`# boot=N fw=… reset=…`. The same (source, event) is written at most once per 2 s; repeats are counted
+as `sup=N` on the next line of that pair. Examples:
+
+```
+47 0.412 SYS I boot reset=POWERON fw=1.5.26 heap=131560 prev_heap_min=?
+47 612.447 VESC W resync state=PAYLOAD idle=287 bytes_since_good=1412 drop=1
+47 980.113 CAN W lws_silent ms=1200 obd_alive=1 -> reinit
+47 980.120 CAN I reinit reason=lws_silent result=ok attempt=1
+47 2210.551 I2C W bus_stuck sda=0 scl=1 clocks=3 released=1 reinit=1 by=relay err=5 runs=1
+47 60.001 SNAP I heap=126840 min=118204 loop_max=4 jflush_max=38 vin=24.0 fet=40.1
+47 60.001 SNAP I lws_fps=100 vesc_good=198 drop=0 resync=0 can_reinit=0 i2c_unlock=0
+```
+
+The VESC link lines (`link_lost`, `link_up`, `link_down_snap`) use compact keys to stay within the
+line limit: `st` parser state, `bsg` bytes since the last good packet, `good`, `crc` / `stop` dropped
+packets, `rs` resyncs, `vin`, `fet`, `fault`, `down_ms`. The snapshot is written every 60 s as two
+`SNAP` lines.
+
+HTTP API (text/plain, streamed; the main loop never waits for a reader):
+- `GET /api/events?tail=N` — the last N lines (default 100, max 500), unflushed lines included, oldest first.
+- `GET /api/events/download` — `/events.1` then `/events.log` (+ unflushed lines) as one attachment
+  (`<SSID>-events-boot<N>.log`). Rotation is postponed while it streams.
+- `POST /api/events/clear` — deletes both files and the RAM buffer (executed by the main loop) and
+  writes `SYS I journal_cleared`; answers `{"ok":true}`. The boot counter is kept.
 
 **OTA Firmware Update** (Система → System maintenance):
 1. Build new firmware: `pio run`
@@ -263,6 +310,7 @@ All settings are in [include/Constants.h](include/Constants.h):
 - Check that device has enough free space for new firmware
 - Try OTA update via Arduino IDE OTA (hostname: `quadbike-control`)
 - If update fails, device will automatically rollback to previous firmware
+- A filesystem (LittleFS) update erases the event journal — download it first
 
 ### Build errors
 If you see library-related errors:

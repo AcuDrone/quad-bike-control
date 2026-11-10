@@ -1,6 +1,7 @@
 #include "SteeringController.h"
 #include "CANController.h"
 #include "Debug.h"
+#include "EventJournal.h"
 #include <Preferences.h>
 
 // NVS calibration layout version ("steering"/cal_ver). Version 4 = Bosch LWS limits +
@@ -92,6 +93,9 @@ SteeringController::SteeringController(IMotorDriver& motor)
       stallLatchDir_(0),
       stallLatchTime_(0),
       steerDriverOk_(false),
+      linkDownSinceMs_(0),
+      linkDownSnapMs_(0),
+      lastFaultCode_(0),
       diagLock_(false),
       bootCenterPending_(false),
       bootCenterRequestMs_(0) {
@@ -167,6 +171,13 @@ void SteeringController::refreshSensor(uint32_t now) {
         stop();
     }
 
+    if (fault_ != prevFault) {
+        // Event journal: every LWS health change, with the fault token and the frame rate.
+        EventJournal::log(JSrc::STEER, fault_ == SensorFault::NONE ? JLvl::I : JLvl::W, "lws",
+                          "fault=%s prev=%s fps=%u", faultToken(fault_), faultToken(prevFault),
+                          (unsigned)lws_.fps());
+    }
+
     if (prevOk && !sensorOk_) {
         // Faults take effect at once: a closed-loop move is stopped, but an active
         // jog or nudge continues open loop under its own refresh / pulse bounds.
@@ -214,6 +225,7 @@ void SteeringController::setDiagLock(bool on) {
     stop();                       // coast, closed loop idle, jog cancelled
     bootCenterPending_ = false;   // never centre by itself after a diagnostics session
     diagLock_ = on;
+    EventJournal::log(JSrc::STEER, JLvl::I, "diag_lock", "on=%d", on ? 1 : 0);
     Debug::printfFeature(DebugFeature::SERVO, "[STEER] USB diagnostics %s\n",
                          on ? "own the steering (external commands refused)" : "released the steering");
 }
@@ -475,6 +487,7 @@ void SteeringController::triggerStallStop(int8_t dir, const char* reason) {
     Debug::printfFeature(DebugFeature::SERVO,
                          "[STEER] Stall-stop (%s) dir=%d — latched for %d ms\n",
                          reason, (int)dir, STEER_STALL_COOLDOWN_MS);
+    EventJournal::log(JSrc::STEER, JLvl::W, "stall", "dir=%d reason=%s", (int)dir, reason ? reason : "?");
 }
 
 bool SteeringController::serviceDriver(uint32_t now) {
@@ -488,6 +501,16 @@ bool SteeringController::serviceDriver(uint32_t now) {
         if (steerDriverOk_) {
             Debug::printlnFeature(DebugFeature::SERVO,
                                   "[STEER] VESC driver fault (no telemetry) — motor stopped");
+            journalLink(JLvl::E, "link_lost", nullptr);
+            linkDownSinceMs_ = millis();
+            linkDownSnapMs_ = linkDownSinceMs_;
+        } else if (linkDownSinceMs_ != 0 && (millis() - linkDownSnapMs_) >= VESC_LINK_DOWN_SNAP_MS) {
+            // Still down: a parser snapshot every VESC_LINK_DOWN_SNAP_MS (only after a loss —
+            // a VESC that never answered since boot is not a link-down episode).
+            linkDownSnapMs_ = millis();
+            char extra[32];
+            snprintf(extra, sizeof(extra), "down_ms=%lu", (unsigned long)(linkDownSnapMs_ - linkDownSinceMs_));
+            journalLink(JLvl::W, "link_down_snap", extra);
         }
         steerDriverOk_ = false;
         parkCancel();
@@ -499,8 +522,19 @@ bool SteeringController::serviceDriver(uint32_t now) {
     }
     if (!steerDriverOk_) {
         Debug::printlnFeature(DebugFeature::SERVO, "[STEER] VESC driver recovered");
+        char extra[32];
+        snprintf(extra, sizeof(extra), "down_ms=%lu", (unsigned long)(millis() - linkDownSinceMs_));
+        journalLink(JLvl::I, "link_up", extra);
     }
     steerDriverOk_ = true;
+
+    // Fault-code change (I code=0 when it clears)
+    const uint8_t fc = motor_.faultCode();
+    if (fc != lastFaultCode_) {
+        EventJournal::log(JSrc::VESC, fc ? JLvl::W : JLvl::I, "fault", "code=%u prev=%u",
+                          (unsigned)fc, (unsigned)lastFaultCode_);
+        lastFaultCode_ = fc;
+    }
 
     // Nonzero VESC fault code -> immediate stop + latch (current drive direction),
     // also for a sensorless jog. This is the over-current backstop: the VESC raises a
@@ -519,6 +553,19 @@ bool SteeringController::serviceDriver(uint32_t now) {
     }
 
     return true;
+}
+
+void SteeringController::journalLink(JLvl lvl, const char* event, const char* extra) {
+    // Compact keys keep the line within JOURNAL_LINE_MAX: st = parser state (at the loss for
+    // link_lost), bsg = bytes since the last good packet, crc / stop = dropped packets, rs = resyncs.
+    const IMotorDriver::LinkStats ls = motor_.linkStats();
+    const bool lost = strcmp(event, "link_lost") == 0;
+    EventJournal::log(JSrc::VESC, lvl, event,
+                      "st=%s bsg=%lu good=%lu crc=%lu stop=%lu rs=%lu vin=%.1f fet=%.1f fault=%u%s%s",
+                      lost ? ls.stateAtLoss : ls.state, (unsigned long)ls.bytesSinceGood,
+                      (unsigned long)ls.good, (unsigned long)ls.dropCrc, (unsigned long)ls.dropStop,
+                      (unsigned long)ls.resync, (double)motor_.inputVoltageV(), (double)motor_.fetTempC(),
+                      (unsigned)motor_.faultCode(), extra ? " " : "", extra ? extra : "");
 }
 
 // === Steering interface ===

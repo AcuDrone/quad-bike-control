@@ -1,5 +1,7 @@
 #include "BoardInputs.h"
 #include "Debug.h"
+#include "EventJournal.h"
+#include "I2cBusRecovery.h"
 
 // Rate limit for the "read failed" chatter while a fault persists.
 static constexpr uint32_t BOARD_INPUT_FAIL_LOG_MS = 1000;
@@ -39,6 +41,8 @@ bool BoardInputs::begin() {
         Debug::printfFeature(DebugFeature::VEHICLE,
             "[IO] ERROR: opto-input expander not responding at 0x%02X on I2C2\n",
             PCA9557_ADDR_INPUTS);
+        EventJournal::log(JSrc::I2C, JLvl::W, "input_fail", "addr=0x%02X err=%u n=0 why=init",
+                          (unsigned)PCA9557_ADDR_INPUTS, (unsigned)expander_.lastError());
         initialized_ = false;
         faulted_ = true;
         return false;
@@ -96,6 +100,8 @@ void BoardInputs::update() {
             faulted_ = false;
             Debug::printfFeature(DebugFeature::VEHICLE,
                 "[IO] Opto inputs recovered (raw=0x%02X)\n", raw);
+            EventJournal::log(JSrc::I2C, JLvl::I, "input_ok", "addr=0x%02X raw=0x%02X",
+                              (unsigned)PCA9557_ADDR_INPUTS, (unsigned)raw);
         }
         if (lastLoggedRaw_ != (uint16_t)raw) {
             lastLoggedRaw_ = raw;
@@ -110,6 +116,16 @@ void BoardInputs::update() {
     // Failed poll: hold the last-known snapshot, count the failure, retry next poll.
     failureCount_++;
 
+    // Every BOARD_INPUT_UNLOCK_FAILS consecutive failures (~200 ms): ask the main-owned I2C2
+    // recovery to free / restart the bus (it acts only on bus evidence and at most once per
+    // I2C_RECOVER_MIN_MS); after a restart the expander is re-configured.
+    if (failureCount_ % BOARD_INPUT_UNLOCK_FAILS == 0 &&
+        I2cBusRecovery::recover("inputs", expander_.lastError())) {
+        if (configureDevice()) {
+            initialized_ = true;
+        }
+    }
+
     uint32_t age = hasGoodRead_ ? (now - lastGoodReadMs_) : UINT32_MAX;
     if (age > BOARD_INPUT_STALE_MS) {
         snapshot_.valid = false;
@@ -120,6 +136,9 @@ void BoardInputs::update() {
                 "[IO] FAULT: opto inputs stale (%lu ms, %lu consecutive failures) — "
                 "gear reports UNKNOWN, brake endstop unconfirmed\n",
                 (unsigned long)age, (unsigned long)failureCount_);
+            EventJournal::log(JSrc::I2C, JLvl::W, "input_fail", "addr=0x%02X err=%u n=%lu",
+                              (unsigned)PCA9557_ADDR_INPUTS, (unsigned)expander_.lastError(),
+                              (unsigned long)failureCount_);
         } else if ((now - lastFailLogMs_) >= BOARD_INPUT_FAIL_LOG_MS) {
             lastFailLogMs_ = now;
             Debug::printfFeature(DebugFeature::VEHICLE,

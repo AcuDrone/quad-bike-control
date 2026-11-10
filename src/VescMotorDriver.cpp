@@ -1,6 +1,7 @@
 #include "VescMotorDriver.h"
 #include "Constants.h"
 #include "Debug.h"
+#include "EventJournal.h"
 
 VescMotorDriver::VescMotorDriver(uint8_t uartNum)
     : serial_(uartNum),
@@ -10,10 +11,9 @@ VescMotorDriver::VescMotorDriver(uint8_t uartNum)
       telemPeriodMs_(STEER_VESC_TELEM_MS),
       haveReply_(false),
       lastValidReplyTime_(0),
-      rxState_(RX_START),
-      rxLen_(0),
-      rxIdx_(0),
-      rxCrc_(0) {
+      parser_(VESC_RX_GAP_MS),
+      linkWasOk_(false),
+      stateAtLoss_("-") {
 }
 
 bool VescMotorDriver::begin(gpio_num_t rxPin, gpio_num_t txPin, uint32_t baud) {
@@ -61,73 +61,54 @@ void VescMotorDriver::poll() {
     }
 
     pumpRx();   // consume only what is already buffered — never busy-waits
+
+    // Link-lost transition: discard whatever sits in the UART RX buffer and restart the
+    // parser, so the next GET_VALUES reply is received from a clean start.
+    const bool ok = driverOk();
+    if (linkWasOk_ && !ok) {
+        stateAtLoss_ = VescRxParser::stateToken(parser_.state());
+        while (serial_.available() > 0) {
+            (void)serial_.read();
+        }
+        parser_.reset();
+    }
+    linkWasOk_ = ok;
+}
+
+IMotorDriver::LinkStats VescMotorDriver::linkStats() const {
+    const VescRxParser::Stats& st = parser_.stats();
+    LinkStats ls;
+    ls.bytes = st.bytes;
+    ls.good = st.good;
+    ls.dropCrc = st.dropCrc;
+    ls.dropStop = st.dropStop;
+    ls.resync = st.resync;
+    ls.bytesSinceGood = st.bytesSinceGood;
+    ls.state = VescRxParser::stateToken(parser_.state());
+    ls.stateAtLoss = stateAtLoss_;
+    return ls;
 }
 
 void VescMotorDriver::pumpRx() {
     // Process every byte the UART has already received. Bounded by the hardware
     // FIFO + driver RX buffer; this reads what is present and returns — it does
-    // not wait for more data, so the main loop cannot block here.
+    // not wait for more data, so the main loop cannot block here. The bytes are
+    // timestamped when the loop reads them (VescRxParser gap rule, design D9).
+    const uint32_t now = millis();
     while (serial_.available() > 0) {
-        uint8_t b = (uint8_t)serial_.read();
-
-        switch (rxState_) {
-            case RX_START:
-                if (b == 0x02) {
-                    rxState_ = RX_LEN_SHORT;
-                } else if (b == 0x03) {
-                    rxState_ = RX_LEN_HI;
-                }
-                // any other byte: stay hunting for a start byte (resync)
-                break;
-
-            case RX_LEN_SHORT:
-                rxLen_ = b;
-                rxIdx_ = 0;
-                if (rxLen_ == 0 || rxLen_ > RX_BUF_SIZE) {
-                    rxState_ = RX_START;   // implausible length: resync
-                } else {
-                    rxState_ = RX_PAYLOAD;
-                }
-                break;
-
-            case RX_LEN_HI:
-                rxLen_ = (uint16_t)b << 8;
-                rxState_ = RX_LEN_LO;
-                break;
-
-            case RX_LEN_LO:
-                rxLen_ |= b;
-                rxIdx_ = 0;
-                if (rxLen_ == 0 || rxLen_ > RX_BUF_SIZE) {
-                    rxState_ = RX_START;
-                } else {
-                    rxState_ = RX_PAYLOAD;
-                }
-                break;
-
-            case RX_PAYLOAD:
-                rxPayload_[rxIdx_++] = b;
-                if (rxIdx_ >= rxLen_) rxState_ = RX_CRC_HI;
-                break;
-
-            case RX_CRC_HI:
-                rxCrc_ = (uint16_t)b << 8;
-                rxState_ = RX_CRC_LO;
-                break;
-
-            case RX_CRC_LO:
-                rxCrc_ |= b;
-                rxState_ = RX_END;
-                break;
-
-            case RX_END:
-                if (b == 0x03 &&
-                    VescProtocol::crc16(rxPayload_, rxLen_) == rxCrc_) {
-                    handlePacket(rxPayload_, rxLen_);
-                }
-                rxState_ = RX_START;   // packet complete (or dropped) — resync
-                break;
+        const uint8_t b = (uint8_t)serial_.read();
+        if (parser_.feed(b, now)) {
+            handlePacket(parser_.payload(), parser_.length());
         }
+    }
+
+    VescRxParser::State st;
+    uint32_t idleMs = 0;
+    if (parser_.takeResync(st, idleMs)) {
+        const VescRxParser::Stats& s = parser_.stats();
+        EventJournal::log(JSrc::VESC, JLvl::W, "resync", "state=%s idle=%lu bytes_since_good=%lu drop=%lu",
+                          VescRxParser::stateToken(st), (unsigned long)idleMs,
+                          (unsigned long)s.bytesSinceGood, (unsigned long)(s.dropCrc + s.dropStop));
     }
 }
 

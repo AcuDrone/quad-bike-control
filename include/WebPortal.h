@@ -181,6 +181,12 @@ public:
         const char* relay_board_error; // nullptr (JSON null) or both_found / none_found /
                                        // multiple_xl9535 / cfg_mismatch / init_failed
 
+        // Link recovery session totals + event journal size (change add-event-journal-and-link-recovery)
+        uint32_t vesc_resync;     // VESC UART parser resyncs since boot
+        uint32_t can_reinit;      // verified MCP2515 re-initializations of any cause since boot
+        uint32_t i2c_unlock;      // I2C2 bus recoveries (Wire1 restarts) since boot
+        int32_t journal_bytes;    // both journal files + unflushed bytes; -1 = cannot write to flash
+
         // Firmware information
         String firmware_version;  // Firmware version string (e.g., "1.0.0")
         String board;             // Target board name (BOARD_NAME, e.g. "Control_v0")

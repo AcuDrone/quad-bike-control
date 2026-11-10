@@ -191,6 +191,16 @@ public:
     /** @brief True once the MCP2515 is initialised and on the bus */
     bool isInitialized() const { return initialized_; }
 
+    /** @brief Completed (verified) MCP2515 re-initializations of any cause since boot */
+    uint32_t getReinitCount() const { return reinitCount_; }
+
+    /**
+     * @brief LWS power state, fed every loop by the vehicle layer: true while the ignition is ACC
+     * or IGNITION (the Bosch LWS hangs on the ACC line, Relay_1). The LWS silence watchdog runs
+     * only while powered and arms on the first 0x305 frame after each off -> on transition.
+     */
+    void setLwsPowered(bool on);
+
     // ---- Bosch LWS steering-angle sensor (shared bus) ------------------------
 
     /**
@@ -285,6 +295,32 @@ private:
     uint32_t rxOverflowSuppressed_;   // RXnOVR clears since the last overflow log line
     uint32_t lastReinitTime_;         // millis() of the last forced re-init (also the boot reference before any response)
 
+    // ---- Re-init verification + LWS silence watchdog (add-event-journal-and-link-recovery) ----
+    bool reinitPending_;              // a failed re-init attempt waits for its retry
+    const char* reinitReason_;        // trigger token of the running re-init sequence
+    uint8_t reinitAttempt_;           // attempts made in the running sequence
+    uint32_t reinitAttemptMs_;        // millis() of the last attempt
+    uint32_t reinitCount_;            // verified re-inits since boot (telemetry can_reinit)
+    bool lwsPowered_;                 // ignition ACC / IGNITION (setLwsPowered())
+    bool lwsSeenSinceOn_;             // a 0x305 frame arrived since the ignition was switched on (armed)
+    uint32_t lastLwsFrameMs_;         // millis() of the last dispatched 0x305 frame
+    bool lwsSilentObdDeadLogged_;     // "lws_silent obd_alive=0" journaled for this silence episode
+    bool firstFrameWait_;             // measuring the time to the first frames after a re-init
+    uint32_t reinitDoneMs_;
+    uint32_t firstLwsMs_;             // ms after the re-init (0 = not yet; stored as +1)
+    uint32_t firstObdMs_;
+    // Journal economy for watchdog repeats (the re-init cadence itself is unchanged): within one
+    // silence episode (no frame of that kind since the episode's first re-init) the trigger line
+    // is journaled at the start and then every CAN_WD_REPEAT_LOG_MS with a repeat count; the
+    // successful re-inits in between are counted only. Failures are always journaled.
+    bool reinitQuiet_;                // the running sequence is such a repeat
+    bool lwsEpisode_;
+    bool obdEpisode_;
+    uint32_t lwsEpLogMs_;
+    uint32_t obdEpLogMs_;
+    uint32_t lwsEpRepeats_;
+    uint32_t obdEpRepeats_;
+
     // State machine
     OBDState state_;
     uint8_t activePIDIndex_;        // Index into pidTable_ of current request
@@ -340,9 +376,17 @@ private:
     uint8_t readRegister(uint8_t address) const;
     void modifyRegister(uint8_t address, uint8_t mask, uint8_t data) const;
 
-    // Re-initialize the MCP2515 after a bus-off condition (shared by the send-failure
-    // and response-timeout paths). Non-blocking apart from the library's own SPI waits.
-    void recoverFromBusOff();
+    // Re-initialize the MCP2515 (bus-off, send failure, no-data watchdog, LWS silence watchdog,
+    // sniffer filter restore). Checks begin(), applyRxFilters() and setMode(MCP_NORMAL); a failed
+    // attempt is retried on later update() calls (CAN_REINIT_RETRY_MS apart, no in-call loop),
+    // at most CAN_REINIT_MAX_ATTEMPTS per trigger. Every outcome is journaled.
+    // Non-blocking apart from the library's own SPI waits. Returns this attempt's result.
+    bool recoverFromBusOff(const char* reason = "bus_off", bool quiet = false);
+    bool attemptReinit();
+    // Journal `CAN E bus_off tec rec eflg`, then recoverFromBusOff("bus_off")
+    void handleBusOff(uint8_t eflg);
+    void serviceLwsWatchdog(uint32_t now);
+    void serviceFirstFrame(uint32_t now);
 
     // Rate-limited (~1/s) dump of a received frame that did not match the expected response
     void logUnmatchedFrame(unsigned long canId, uint8_t len, const uint8_t* buf);

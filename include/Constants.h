@@ -115,12 +115,13 @@
 //
 // Expected boot scan: I2C2 = 0x1A 0x1C + 0x1F (PCA9557 relay board) or one of
 // 0x20..0x27 (XL9535 relay board). The relay board is selected once at boot
-// (RelayController::begin(), setting NVS "relay"/"board"). No driver and no coordinator
-// restarts Wire1 after setup(); each expander keeps its own fail-safe (BoardInputs
-// re-configures itself, RelayController verifies every write on the pins and re-inits
-// the relay port while faulted).
+// (RelayController::begin(), setting NVS "relay"/"board"). No expander driver restarts
+// Wire1; after setup() only the main-owned I2cBusRecovery routine does (SCL unlock +
+// Wire1.end()/begin() on bus evidence, 1.5.26). Each expander keeps its own fail-safe
+// (BoardInputs re-configures itself, RelayController verifies every write on the pins and
+// re-inits the relay port while faulted).
 // (Steering feedback is on CAN since firmware 1.3.0 — the former AS5600 pair on
-// X14/X15 and the coordinated I2C2 recovery are gone.)
+// X14/X15 is gone.)
 //
 // ⚠ The I2C2 level shifter low side is jumper-selected: R16 populated (3V3),
 //   R18 not (pinout §8.6).
@@ -130,6 +131,13 @@
 // I2C runs at 100 kHz (the relay board sits at the end of a cable run on X15); 400 kHz was
 // tried and rejected for lack of margin. Raising it again would need a stronger pull-up.
 #define I2C_BUS_FREQ_HZ     100000       // 100 kHz (see note above)
+// I2C2 timeout + bus unlock (I2cBusRecovery, change add-event-journal-and-link-recovery D11).
+// Wire1.setTimeOut(I2C_TIMEOUT_MS) after every Wire1.begin(): a dead bus can no longer hold a
+// transaction for the core's 50 ms default. Only I2cBusRecovery restarts Wire1 after setup().
+#define I2C_TIMEOUT_MS             20    // ms — max duration of one Wire1 transaction
+#define I2C_UNLOCK_CLOCKS          9     // SCL pulses bit-banged to free a slave holding SDA low
+#define I2C_RECOVER_MIN_MS         1000  // ms — min spacing between bus recoveries (all callers)
+#define BOARD_INPUT_UNLOCK_FAILS   8     // consecutive failed opto-input polls (~200 ms) before a bus recovery
 
 #define PCA9557_ADDR_INPUTS        0x1A  // On-board opto-input expander U10 (I2C2)
 // PCA9557 relay board on X15 → I2C2, as shipped strapped A2A1A0 = 111 → 0x1F.
@@ -536,6 +544,8 @@ static_assert(STEER_PWM_MIN_DUTY >= STEER_PWM_TRACK_MIN_DUTY, "break-away floor 
 //  while the sensor is healthy; sensorless jog relies on the VESC current clamp + fault stop.)
 #define STEER_VESC_TELEM_MS         300   // ms — COMM_GET_VALUES poll period (~3 Hz)
 #define STEER_VESC_COMM_TIMEOUT_MS  1000  // ms — no valid GET_VALUES reply for this long -> driver fault (stop, reject moves)
+#define VESC_RX_GAP_MS              5     // ms — byte gap that ends an incomplete frame (VescRxParser resync)
+#define VESC_LINK_DOWN_SNAP_MS      10000 // ms — journal `VESC W link_down_snap` period while the link is down
 // Steering VESC input voltage below this = "low" (telemetry steer_vin_low → web "Увага" warning only,
 // no control action). 21.5 V ≈ 3.58 V/cell on a 6s NMC pack, ≈ 3.07 V/cell on a 7s LiFePO4 pack —
 // low but not yet harmful for either. Adjust per vehicle build.
@@ -874,6 +884,16 @@ enum class InputSource {
 #define CAN_OVERFLOW_LOG_INTERVAL    5000  // ms - rate limit for RXnOVR overflow logging
 #define CAN_REINIT_NO_DATA_MS        15000 // ms - full chip re-init when polling but no valid OBD response for this long (heals a wedged TX / latched ABAT once the ECU powers up)
 #define CAN_REINIT_MIN_INTERVAL_MS   15000 // ms - minimum spacing between forced re-inits
+// LWS silence watchdog (change add-event-journal-and-link-recovery D10). Runs only while the
+// ignition is ACC or IGNITION (the LWS is fed from the ACC line) and arms on the first 0x305
+// frame since the ignition was switched on. Fixed spacing, no back-off.
+#define CAN_LWS_SILENT_MS            1000  // ms - no 0x305 frame for this long = LWS path silent
+#define CAN_LWS_WD_OBD_ALIVE_MS      2000  // ms - an OBD reply within this window proves the bus works
+#define CAN_LWS_REINIT_MIN_MS        5000  // ms - min spacing from the last re-init of any kind
+#define CAN_REINIT_MAX_ATTEMPTS      3     // re-init attempts per trigger (retried on later update() calls)
+#define CAN_REINIT_RETRY_MS          100   // ms - spacing between the attempts of one trigger
+#define CAN_FIRST_FRAME_WAIT_MS      10000 // ms - give up waiting for the first LWS/OBD frame after a re-init
+#define CAN_WD_REPEAT_LOG_MS         600000 // ms - journal a still-silent watchdog episode again after this long (with a count)
 
 // MCP2515 hardware acceptance filtering (standard 11-bit IDs only), two paths on ONE bus.
 // The ECU floods the bus with broadcast frames (Delphi MT05 sends 0x301 etc.) which
@@ -928,13 +948,29 @@ enum class InputSource {
 #define BOOST_ENABLED_DEFAULT            true  // absent key → boost on (quad behaviour); off → idle hold during the shift
 
 // ============================================================================
+// EVENT JOURNAL (LittleFS /events.log + /events.1, change add-event-journal-and-link-recovery)
+// ============================================================================
+
+#define JOURNAL_FILE_MAX_BYTES     131072  // bytes per journal file (active + one rotated)
+#define JOURNAL_LINE_MAX           120     // bytes per line incl. '\n'; longer lines end with '~'
+#define JOURNAL_RAM_BUF_BYTES      4096    // unflushed lines held in RAM
+#define JOURNAL_FLUSH_MS           1000    // ms — at most one flash flush per interval
+#define JOURNAL_FLUSH_DEFER_MAX_MS 10000   // ms — max flush deferral while the steering motor drives
+#define JOURNAL_DEDUPE_MS          2000    // ms — same (source, event) written at most once per window
+#define JOURNAL_SNAP_MS            60000   // ms — SNAP line period
+#define JOURNAL_RTC_RING           16      // unflushed lines kept in RTC memory across a reset
+#define JOURNAL_LOOP_OVERRUN_MS    50      // ms — loop iteration longer than this is journaled
+#define JOURNAL_HEAP_WARN_BYTES    40960   // bytes — free heap below this = heap_low (40 KB)
+#define JOURNAL_HEAP_HYST_BYTES    8192    // bytes — heap_ok once free heap is this far above the threshold
+
+// ============================================================================
 // FIRMWARE VERSION
 // ============================================================================
 
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.24"
+#define FIRMWARE_VERSION "1.5.26"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

@@ -1381,6 +1381,27 @@
                 <div class="ro-row"><span data-i18n="lbl_ip">IP address</span><span class="ro-val" id="net-ip">--</span></div>
                 <div data-i18n="network_later" style="margin-top: 10px; font-size: 0.8em; color: var(--muted-foreground);">Settings will appear later.</div>
             </div>
+            <!-- Event journal (GET /api/events?tail=100 / /api/events/download, POST /api/events/clear;
+                 counters vesc_resync / can_reinit / i2c_unlock / journal_bytes from telemetry). No vehicle command. -->
+            <div class="card">
+                <h2 class="card-title"><span data-i18n="card_journal">📜 Event journal</span><button type="button" class="help-btn" onclick="openHelp('journal_help,journal_format_help,journal_erase_help', 'card_journal')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <div class="ro-row"><span data-i18n="lbl_journal_counters">Recoveries VESC / CAN / I2C</span><span class="ro-val" id="journal-counters">--</span></div>
+                <div class="ro-row"><span data-i18n="lbl_journal_size">Journal size</span><span class="ro-val" id="journal-size">--</span></div>
+                <div id="journal-unavail" data-i18n="journal_unavailable" style="display: none; margin-top: 8px; font-size: 0.85em; color: var(--danger);">Journal cannot be written to flash</div>
+                <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 12px 0 8px;">
+                    <select id="journal-filter" onchange="renderJournal()" aria-label="Source" style="flex: 1; min-width: 90px; padding: 6px; border-radius: 4px; border: 1px solid var(--border); background: var(--input); color: var(--foreground);">
+                        <option value="" data-i18n="journal_all">All</option>
+                        <option value="SYS">SYS</option><option value="SRC">SRC</option><option value="STEER">STEER</option>
+                        <option value="VESC">VESC</option><option value="CAN">CAN</option><option value="I2C">I2C</option>
+                        <option value="RELAY">RELAY</option><option value="SNAP">SNAP</option><option value="RTC">RTC</option>
+                    </select>
+                    <button class="gear-btn" onclick="loadJournal()" data-i18n="journal_refresh" style="flex: 1; padding: 8px 6px; font-size: 0.9em;">Refresh</button>
+                    <button class="gear-btn" onclick="downloadJournal()" data-i18n="journal_download" style="flex: 1; padding: 8px 6px; font-size: 0.9em;">Download</button>
+                    <button class="gear-btn" onclick="clearJournal()" data-i18n="journal_clear" style="flex: 1; padding: 8px 6px; font-size: 0.9em;">Clear</button>
+                </div>
+                <pre id="journal-lines" style="margin: 0; max-height: 320px; overflow: auto; padding: 6px 8px; border-radius: 4px; border: 1px solid var(--border); font-family: var(--font-mono, monospace); font-size: 0.72em; line-height: 1.45; white-space: pre; color: var(--foreground);">--</pre>
+                <div id="journal-status" style="margin-top: 6px; font-size: 0.8em; min-height: 1.2em; color: var(--muted-foreground);"></div>
+            </div>
             </div>
             </section>
         </main>
@@ -1892,6 +1913,22 @@
                 lbl_ssid: 'SSID',
                 lbl_ip: 'IP address',
                 network_later: 'Network settings will be added later.',
+                // Event journal card (System)
+                card_journal: '📜 Event journal',
+                lbl_journal_counters: 'Recoveries VESC / CAN / I2C',
+                lbl_journal_size: 'Journal size',
+                journal_unavailable: 'The journal cannot be written to flash — only the latest lines in memory are shown',
+                journal_all: 'All',
+                journal_refresh: 'Refresh',
+                journal_download: 'Download',
+                journal_clear: 'Clear',
+                journal_confirm_clear: 'Delete the whole event journal? The boot counter is kept.',
+                journal_cleared: 'Journal cleared',
+                journal_load_failed: 'Could not load the journal',
+                journal_empty: '(no lines)',
+                journal_help: 'A persistent record of what the controller saw: boots and resets, fail-safe and control-source changes, steering mode changes and stall stops, steering-angle sensor health, steering VESC link loss / recovery, CAN and relay-bus (I2C) faults and their automatic recoveries, main-loop overruns, low memory, and a snapshot every minute. It survives a firmware update and most resets; lines from the last second before a power cut may be missing. The header shows how many times the VESC link, the CAN controller and the relay I2C bus recovered themselves since boot.',
+                journal_format_help: 'Line format: <b>boot uptime_s SOURCE LEVEL event key=value …</b> — boot = boot counter, uptime in seconds since that boot, LEVEL I = info, W = warning, E = error. <b>sup=N</b> means N identical events were suppressed. Lines after <b>RTC replay</b> were recovered from memory after a crash or reset. Download saves both journal files (≈ 1–2 days) as one text file.',
+                journal_erase_help: '<b>Uploading the filesystem image (pio run -t uploadfs, or a LittleFS update from this page) erases the journal</b> — download it first. A normal firmware update keeps it.',
 
                 // Gear position defaults / gear codes
                 gd_start: 'Start',
@@ -2376,7 +2413,22 @@
                 card_network: '🌐 Мережа',
                 lbl_ssid: 'SSID',
                 lbl_ip: 'IP-адреса',
-                network_later: 'Налаштування мережі з’являться пізніше.',
+                // Event journal card (System)
+                card_journal: '📜 Журнал подій',
+                lbl_journal_counters: 'Самовідновлення VESC / CAN / I2C',
+                lbl_journal_size: 'Розмір журналу',
+                journal_unavailable: 'Журнал не вдається записати у флеш — показано лише останні рядки з пам’яті',
+                journal_all: 'Усі',
+                journal_refresh: 'Оновити',
+                journal_download: 'Завантажити',
+                journal_clear: 'Очистити',
+                journal_confirm_clear: 'Видалити весь журнал подій? Лічильник запусків збережеться.',
+                journal_cleared: 'Журнал очищено',
+                journal_load_failed: 'Не вдалося завантажити журнал',
+                journal_empty: '(рядків немає)',
+                journal_help: 'Постійний запис того, що бачив контролер: запуски й перезапуски, аварійний режим (failsafe) і зміна джерела керування, зміна режиму керма та зупинки через заклинювання, стан датчика кута керма, втрата й відновлення зв’язку з VESC керма, збої CAN і шини реле (I2C) та їх автоматичне відновлення, перевищення часу головного циклу, нестача пам’яті та знімок стану щохвилини. Журнал переживає оновлення прошивки й більшість перезапусків; рядки за останню секунду перед зникненням живлення можуть бути втрачені. У заголовку — скільки разів зв’язок із VESC, контролер CAN і шина реле I2C відновилися самі з моменту запуску.',
+                journal_format_help: 'Формат рядка: <b>запуск час_с ДЖЕРЕЛО РІВЕНЬ подія ключ=значення …</b> — запуск = номер запуску, час у секундах від цього запуску, РІВЕНЬ I = інформація, W = попередження, E = помилка. <b>sup=N</b> — N однакових подій пропущено. Рядки після <b>RTC replay</b> відновлено з пам’яті після збою або перезапуску. «Завантажити» зберігає обидва файли журналу (≈ 1–2 доби) одним текстовим файлом.',
+                journal_erase_help: '<b>Заливання образу файлової системи (pio run -t uploadfs або оновлення LittleFS з цієї сторінки) стирає журнал</b> — спершу завантажте його. Звичайне оновлення прошивки журнал зберігає.',
 
                 // Gear position defaults / gear codes
                 gd_start: 'Почати',
@@ -2438,6 +2490,7 @@
             if (lastTelemetry) updateTelemetry(lastTelemetry);
             if (changelogOpen) renderChangelog();
             pprMeasRender();
+            renderJournal();
         }
 
         function updateLangToggle() {
@@ -3025,6 +3078,7 @@
             }
 
             updateNetworkCard(data);
+            updateJournalCard(data);
             updateRelayBoardCard(data);
             updateAttention(data);
             updateGearDefUI(data);
@@ -4570,6 +4624,7 @@
             });
             try { localStorage.setItem('ui_section', id); } catch (e) { /* storage unavailable */ }
             updateSectionTitle();
+            journalSectionChanged();
             const sb = document.getElementById('sidebar');
             if (sb) sb.classList.remove('open');
             window.scrollTo(0, 0);
@@ -4611,6 +4666,82 @@
                 document.getElementById('net-ip').textContent = data.wifi_ip;
             }
         }
+
+        // ---- Event journal card (System): last 100 lines over HTTP, filtered in the browser ----
+        let journalLines = [];
+        let journalTimer = null;
+        function updateJournalCard(data) {
+            if (typeof data.vesc_resync === 'number') {
+                document.getElementById('journal-counters').textContent =
+                    data.vesc_resync + ' / ' + data.can_reinit + ' / ' + data.i2c_unlock;
+            }
+            if (typeof data.journal_bytes === 'number') {
+                const unavailable = data.journal_bytes < 0;
+                document.getElementById('journal-size').textContent = unavailable ? '—'
+                    : (data.journal_bytes >= 1024 ? (data.journal_bytes / 1024).toFixed(1) + ' KB' : data.journal_bytes + ' B');
+                document.getElementById('journal-unavail').style.display = unavailable ? '' : 'none';
+            }
+        }
+        function journalStatus(msg, color) {
+            const el = document.getElementById('journal-status');
+            if (!el) return;
+            el.textContent = msg || '';
+            el.style.color = color || 'var(--muted-foreground)';
+        }
+        function renderJournal() {
+            const pre = document.getElementById('journal-lines');
+            if (!pre) return;
+            const src = document.getElementById('journal-filter').value;
+            // Columns: boot uptime SRC LVL ... ; "#" header lines belong to SYS.
+            const shown = journalLines.filter(l => {
+                if (!src) return true;
+                if (l.startsWith('#')) return src === 'SYS';
+                return l.split(' ')[2] === src;
+            });
+            const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 8;
+            pre.textContent = shown.length ? shown.join('\n') : t('journal_empty');
+            if (atBottom) pre.scrollTop = pre.scrollHeight;   // newest line at the bottom
+        }
+        function loadJournal() {
+            fetch('/api/events?tail=100', { cache: 'no-store' })
+                .then(r => { if (!r.ok) throw new Error(r.status); return r.text(); })
+                .then(txt => {
+                    journalLines = txt.split('\n').filter(l => l.length > 0);
+                    renderJournal();
+                    journalStatus('');
+                })
+                .catch(() => journalStatus(t('journal_load_failed'), 'var(--danger)'));
+        }
+        function downloadJournal() {
+            const a = document.createElement('a');
+            a.href = '/api/events/download';
+            a.download = '';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+        }
+        function clearJournal() {
+            if (!confirm(t('journal_confirm_clear'))) return;
+            fetch('/api/events/clear', { method: 'POST' })
+                .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+                .then(() => {
+                    journalStatus(t('journal_cleared'), 'var(--success, inherit)');
+                    setTimeout(loadJournal, 600);   // the loop executes the clear
+                })
+                .catch(() => journalStatus(t('journal_load_failed'), 'var(--danger)'));
+        }
+        // Refresh on open and every 5 s while the System section is visible; stop when hidden.
+        function journalSectionChanged() {
+            const visible = currentSection === 'system' && !document.hidden;
+            if (visible && !journalTimer) {
+                loadJournal();
+                journalTimer = setInterval(loadJournal, 5000);
+            } else if (!visible && journalTimer) {
+                clearInterval(journalTimer);
+                journalTimer = null;
+            }
+        }
+        document.addEventListener('visibilitychange', journalSectionChanged);
 
         // Relay board card (System) + the Relay Test subtitle. Telemetry is the source of truth:
         // relay_board_cfg = stored setting, relay_board / _addr = board in use since boot.

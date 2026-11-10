@@ -1,5 +1,6 @@
 #include "CANController.h"
 #include "Debug.h"
+#include "EventJournal.h"
 #include "Lws305.h"
 #include "LwsSensor.h"
 #include <SPI.h>
@@ -36,6 +37,26 @@ CANController::CANController()
       lastOverflowLogTime_(0),
       rxOverflowSuppressed_(0),
       lastReinitTime_(0),
+      reinitPending_(false),
+      reinitReason_("bus_off"),
+      reinitAttempt_(0),
+      reinitAttemptMs_(0),
+      reinitCount_(0),
+      lwsPowered_(false),
+      lwsSeenSinceOn_(false),
+      lastLwsFrameMs_(0),
+      lwsSilentObdDeadLogged_(false),
+      firstFrameWait_(false),
+      reinitDoneMs_(0),
+      firstLwsMs_(0),
+      firstObdMs_(0),
+      reinitQuiet_(false),
+      lwsEpisode_(false),
+      obdEpisode_(false),
+      lwsEpLogMs_(0),
+      obdEpLogMs_(0),
+      lwsEpRepeats_(0),
+      obdEpRepeats_(0),
       state_(OBDState::IDLE),
       activePIDIndex_(0),
       requestSentTime_(0),
@@ -198,6 +219,12 @@ void CANController::update() {
         return;
     }
 
+    // A failed re-init attempt is retried here, on a later call (never looped inside one call).
+    if (reinitPending_ && (millis() - reinitAttemptMs_) >= CAN_REINIT_RETRY_MS) {
+        attemptReinit();
+    }
+    serviceFirstFrame(millis());
+
     // While sniffing, only the sniffer reads the bus (no OBD-II requests go out).
     if (mode_ == Mode::SNIFFING) {
         updateSniff();
@@ -216,6 +243,9 @@ void CANController::update() {
         }
         return;
     }
+
+    // LWS silence watchdog (normal mode only: the sniffer opens the filters, the probe pauses OBD)
+    serviceLwsWatchdog(millis());
 
     switch (state_) {
         case OBDState::IDLE: {
@@ -251,7 +281,19 @@ void CANController::update() {
                 Debug::printfFeature(DebugFeature::CAN,
                     "[CAN] No data for %lus, re-initializing controller\n",
                     (unsigned long)(noDataFor / 1000));
-                recoverFromBusOff();
+                // Journaled at the start of a silence episode, then every CAN_WD_REPEAT_LOG_MS with
+                // the number of re-inits in between (an ECU that is simply off must not flood it).
+                bool quiet = obdEpisode_ && (now - obdEpLogMs_) < CAN_WD_REPEAT_LOG_MS;
+                if (quiet) {
+                    obdEpRepeats_++;
+                } else {
+                    EventJournal::log(JSrc::CAN, JLvl::W, "obd_silent", "ms=%lu obd_alive=0 repeat=%lu -> reinit",
+                                      (unsigned long)noDataFor, (unsigned long)obdEpRepeats_);
+                    obdEpLogMs_ = now;
+                    obdEpRepeats_ = 0;
+                }
+                obdEpisode_ = true;
+                recoverFromBusOff("obd_silent", quiet);
                 lastReinitTime_ = millis();
                 state_ = OBDState::IDLE;
                 break;  // resume polling on the next iteration, from a freshly configured chip
@@ -269,7 +311,7 @@ void CANController::update() {
                     mcp_can_->errorCountTX(), mcp_can_->errorCountRX(), eflg);
 
                 if (eflg & MCP_EFLG_TXBO) {
-                    recoverFromBusOff();
+                    handleBusOff(eflg);
                 }
 
                 // A wedged TX buffer never clears itself: abort queued transmissions
@@ -302,6 +344,10 @@ void CANController::update() {
                 vehicleData_.lastUpdateTime = millis();
                 vehicleData_.dataValid = true;
                 state_ = OBDState::IDLE;
+                if (firstFrameWait_ && firstObdMs_ == 0) {
+                    firstObdMs_ = (millis() - reinitDoneMs_) + 1;
+                }
+                obdEpisode_ = false;   // the OBD silence episode is over
 
                 static uint32_t lastDataLog = 0;
                 if (millis() - lastDataLog >= 1000) {
@@ -317,8 +363,9 @@ void CANController::update() {
             } else if (millis() - requestSentTime_ >= CAN_RESPONSE_TIMEOUT) {
                 // Abort pending TX and wait for bus-off recovery before next send
                 // mcp_can_->abortTX();
-                if (mcp_can_->getError() & MCP_EFLG_TXBO) {
-                    recoverFromBusOff();
+                const uint8_t eflgTo = mcp_can_->getError();
+                if (eflgTo & MCP_EFLG_TXBO) {
+                    handleBusOff(eflgTo);
                 }
                 pidTable_[activePIDIndex_].retryCount++;
                 // Add a short delay before the next send to let abortTX settle
@@ -601,23 +648,129 @@ bool CANController::applyRxFilters() {
     return ok;
 }
 
-void CANController::recoverFromBusOff() {
+bool CANController::recoverFromBusOff(const char* reason, bool quiet) {
     if (mcp_can_ == nullptr) {
-        return;
+        return false;
     }
+    if (!reinitPending_) {
+        // A new trigger starts a new sequence; a trigger arriving while a failed attempt waits
+        // for its retry simply makes that retry happen now (same sequence, same budget).
+        reinitReason_ = reason ? reason : "?";
+        reinitAttempt_ = 0;
+        reinitQuiet_ = quiet;
+    }
+    return attemptReinit();
+}
+
+bool CANController::attemptReinit() {
+    reinitAttempt_++;
+    reinitAttemptMs_ = millis();
 
     Debug::printlnFeature(DebugFeature::CAN, "[CAN] Bus-off detected, recovering...");
     // begin() resets the chip, which wipes the masks/filters — reprogram them before
     // returning to NORMAL or the broadcast flood comes straight back.
-    mcp_can_->begin(MCP_STDEXT, CAN_500KBPS, MCP_8MHZ);
-    applyRxFilters();
-    if (mcp_can_->setMode(MCP_NORMAL) != MCP2515_OK) {
+    const bool okBegin = (mcp_can_->begin(MCP_STDEXT, CAN_500KBPS, MCP_8MHZ) == CAN_OK);
+    const bool okFilt = applyRxFilters();
+    const bool okMode = (mcp_can_->setMode(MCP_NORMAL) == MCP2515_OK);
+    if (!okMode) {
         Debug::printlnFeature(DebugFeature::CAN, "[CAN] ERROR: failed to enter NORMAL mode (stuck in loopback?)");
     }
     Debug::printfFeature(DebugFeature::CAN,
         "[CAN] Recovery: CANSTAT=0x%02X EFLG=0x%02X\n",
         readRegister(MCP_CANSTAT), mcp_can_->getError());
     consecutiveSendFailures_ = 0;
+
+    const bool ok = okBegin && okFilt && okMode;
+    if (ok) {
+        reinitPending_ = false;
+        reinitCount_++;
+        if (!reinitQuiet_) {
+            EventJournal::log(JSrc::CAN, JLvl::I, "reinit", "reason=%s result=ok attempt=%u",
+                              reinitReason_, (unsigned)reinitAttempt_);
+            // Time to the first LWS frame / OBD reply after this re-init
+            firstFrameWait_ = true;
+            reinitDoneMs_ = millis();
+            firstLwsMs_ = 0;
+            firstObdMs_ = 0;
+        }
+    } else if (reinitAttempt_ >= CAN_REINIT_MAX_ATTEMPTS) {
+        reinitPending_ = false;   // the next watchdog interval / bus-off event tries again
+        EventJournal::log(JSrc::CAN, JLvl::E, "reinit", "reason=%s result=fail attempt=%u begin=%d filt=%d mode=%d",
+                          reinitReason_, (unsigned)reinitAttempt_, okBegin ? 1 : 0, okFilt ? 1 : 0, okMode ? 1 : 0);
+    } else {
+        reinitPending_ = true;    // retried on a later update() call
+        Debug::printfFeature(DebugFeature::CAN,
+            "[CAN] Re-init attempt %u failed (begin=%d filters=%d mode=%d) — retrying\n",
+            (unsigned)reinitAttempt_, okBegin ? 1 : 0, okFilt ? 1 : 0, okMode ? 1 : 0);
+    }
+    return ok;
+}
+
+void CANController::handleBusOff(uint8_t eflg) {
+    EventJournal::log(JSrc::CAN, JLvl::E, "bus_off", "tec=%u rec=%u eflg=0x%02X",
+                      (unsigned)mcp_can_->errorCountTX(), (unsigned)mcp_can_->errorCountRX(), (unsigned)eflg);
+    recoverFromBusOff("bus_off");
+}
+
+void CANController::setLwsPowered(bool on) {
+    if (!(on && lwsPowered_)) {
+        lwsSeenSinceOn_ = false;   // off, or switched on just now: disarmed until the next 0x305 frame
+    }
+    lwsPowered_ = on;
+}
+
+void CANController::serviceLwsWatchdog(uint32_t now) {
+    // Decision 1: only while the LWS is powered (ignition ACC / IGNITION) and armed by a frame
+    // seen since the ignition was switched on. Ignition OFF = legitimately silent: no event.
+    if (!lwsPowered_ || !lwsSeenSinceOn_ || lwsSink_ == nullptr) return;
+    if (lwsZeroPhase_ != LwsZeroPhase::IDLE) return;   // a zero-set is running
+    const uint32_t silentMs = now - lastLwsFrameMs_;
+    if (silentMs <= CAN_LWS_SILENT_MS) return;
+
+    const bool obdAlive = vehicleData_.lastUpdateTime != 0 &&
+                          (now - vehicleData_.lastUpdateTime) <= CAN_LWS_WD_OBD_ALIVE_MS;
+    if (!obdAlive) {
+        // The whole bus is quiet: left to the OBD-II no-data watchdog. Journaled once per episode.
+        if (!lwsSilentObdDeadLogged_) {
+            lwsSilentObdDeadLogged_ = true;
+            EventJournal::log(JSrc::CAN, JLvl::W, "lws_silent", "ms=%lu obd_alive=0", (unsigned long)silentMs);
+        }
+        return;
+    }
+    // Fixed spacing from the last re-init of any kind; no back-off (decision 1).
+    if ((now - lastReinitTime_) < CAN_LWS_REINIT_MIN_MS || reinitPending_) return;
+
+    Debug::printfFeature(DebugFeature::CAN,
+        "[CAN] No LWS 0x305 frame for %lu ms while the ECU answers — re-initializing controller\n",
+        (unsigned long)silentMs);
+    // Same journal economy as the OBD watchdog: a dead sensor with the ECU on is re-initialized
+    // every 5 s (decision 1), journaled at the start of the episode and every 10 min after.
+    const bool quiet = lwsEpisode_ && (now - lwsEpLogMs_) < CAN_WD_REPEAT_LOG_MS;
+    if (quiet) {
+        lwsEpRepeats_++;
+    } else {
+        EventJournal::log(JSrc::CAN, JLvl::W, "lws_silent", "ms=%lu obd_alive=1 repeat=%lu -> reinit",
+                          (unsigned long)silentMs, (unsigned long)lwsEpRepeats_);
+        lwsEpLogMs_ = now;
+        lwsEpRepeats_ = 0;
+    }
+    lwsEpisode_ = true;
+    recoverFromBusOff("lws_silent", quiet);
+    lastReinitTime_ = millis();
+    state_ = OBDState::IDLE;
+}
+
+void CANController::serviceFirstFrame(uint32_t now) {
+    if (!firstFrameWait_) return;
+    const bool done = (firstLwsMs_ != 0 && firstObdMs_ != 0) ||
+                      (now - reinitDoneMs_) >= CAN_FIRST_FRAME_WAIT_MS;
+    if (!done) return;
+    firstFrameWait_ = false;
+    char lws[12];
+    char obd[12];
+    if (firstLwsMs_) snprintf(lws, sizeof(lws), "%lu", (unsigned long)(firstLwsMs_ - 1)); else strcpy(lws, "-");
+    if (firstObdMs_) snprintf(obd, sizeof(obd), "%lu", (unsigned long)(firstObdMs_ - 1)); else strcpy(obd, "-");
+    EventJournal::log(JSrc::CAN, JLvl::I, "first_frame", "lws_ms=%s obd_ms=%s", lws, obd);
 }
 
 void CANController::logUnmatchedFrame(unsigned long canId, uint8_t len, const uint8_t* buf) {
@@ -714,6 +867,15 @@ bool CANController::dispatchSteeringFrame(unsigned long canId, uint8_t len, cons
     // remote request, so only a standard data frame compares equal to 0x305.
     if (canId != (unsigned long)STEER_LWS_CAN_ID) {
         return false;
+    }
+    lastLwsFrameMs_ = millis();
+    lwsSilentObdDeadLogged_ = false;
+    lwsEpisode_ = false;   // the LWS silence episode is over
+    if (lwsPowered_) {
+        lwsSeenSinceOn_ = true;   // arms the LWS silence watchdog
+    }
+    if (firstFrameWait_ && firstLwsMs_ == 0) {
+        firstLwsMs_ = (lastLwsFrameMs_ - reinitDoneMs_) + 1;
     }
     if (lwsSink_ != nullptr) {
         lwsSink_->onFrame(buf, len, millis());
@@ -1247,7 +1409,7 @@ CANController::SniffStart CANController::startSniff(uint32_t ms, bool gearChange
     if (!applySniffFilters()) {
         // Half-programmed filters: put the normal set back and refuse.
         if (!applyRxFilters()) {
-            recoverFromBusOff();
+            recoverFromBusOff("sniff_restore");
         }
         return SniffStart::BUSY;
     }
@@ -1343,7 +1505,7 @@ void CANController::finishSniff() {
     if (!ok) {
         Debug::printlnFeature(DebugFeature::CAN,
             "[CAN][SNIFF] Filter restore failed — re-initialising the controller");
-        recoverFromBusOff();   // full reset + applyRxFilters() + NORMAL
+        recoverFromBusOff("sniff_restore");   // full reset + applyRxFilters() + NORMAL
     }
     modifyRegister(MCP_EFLG, MCP_EFLG_RX0OVR | MCP_EFLG_RX1OVR, 0x00);
 

@@ -229,6 +229,9 @@ public:
      */
     CANController::VehicleData getVehicleData() const { return canController_.getVehicleData(); }
 
+    /** @brief Completed MCP2515 re-initializations of any cause since boot (telemetry / journal) */
+    uint32_t getCanReinitCount() const { return canController_.getReinitCount(); }
+
     /**
      * @brief Get the latest ECU capability probe snapshot (for telemetry)
      */
@@ -456,6 +459,7 @@ private:
 
     // State tracking
     InputSource currentInputSource_;
+    InputSource prevInputSource_;   // source before the last change (event journal: failsafe_enter from=)
 
     // Steering control mode (change add-aztec-steering-rate-mode)
     SteerMode steerMode_;           // re-derived every update() before the MAVLink commands
