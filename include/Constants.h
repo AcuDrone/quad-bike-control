@@ -226,19 +226,22 @@ static_assert(GEAR_CODE_LOW != 0b000 && GEAR_CODE_HIGH != 0b000 && GEAR_CODE_NEU
 // AZTEC BUGGY assignment (this branch). The quad bike's assignment — ignition on the
 // paralleled pair Relay_1+Relay_2, starter Relay_3, light Relay_4, front-wheel lock on
 // Relay_5+Relay_6, spare Relay_7/8 — lives on master; the aztec harness is wired
-// differently. Every function is still a SET (not a single relay) so a future paired load
-// needs no driver change.
+// differently. Every function is a SET (not a single relay), so the aztec lock — three
+// relays switched together — needs no driver change.
 // Resulting masks — PCA9557 / XL9535: ignition 0x10 / 0x01, starter 0x20 / 0x02,
-// front light 0x40 / 0x04, reserved 0x8F / 0xF8.
+// front light 0x40 / 0x04, lock 0x8C / 0x38, reserved 0x03 / 0xC0.
 #define RELAY_SET_IGNITION     RELAY_N(1)  // Relay_1 (PCA9557 IO4, X4 / XL9535 P0.0) — ignition/ECU line (single relay)
 #define RELAY_SET_STARTER      RELAY_N(2)  // Relay_2 (PCA9557 IO5, X5 / XL9535 P0.1) — starter solenoid
 #define RELAY_SET_FRONT_LIGHT  RELAY_N(3)  // Relay_3 (PCA9557 IO6, X6 / XL9535 P0.2) — front light
-// Relay_4, Relay_5 and Relay_6 are wired to three SEPARATE locks whose functions are
-// specified in a later change; until then they are reserved and always driven OFF.
+// Lock ("блокування"): Relay_4, Relay_5 and Relay_6 are wired to the buggy's three locks
+// and are switched TOGETHER as one function — the existing wheel-lock function (web
+// `set_wheel_lock`, MAVLink servo channel 7 > RC_WHEEL_LOCK_THRESHOLD, EFI bit0).
+//   ⚠ On the PCA9557 board these are IO7 / IO3 / IO2 (X7 / X8 / X9) — NOT IO3..IO5.
+#define RELAY_SET_WHEEL_LOCK   (RELAY_N(4) | RELAY_N(5) | RELAY_N(6))  // PCA9557 IO7|IO3|IO2 = 0x8C, X7/X8/X9 / XL9535 P0.3..P0.5 = 0x38
 // Relay_7 and Relay_8 are spare. Outside the web relay test (below) a reserved relay is
 // never set by the driver — every port write leaves those bits 0. Connectors X4..X11 here
 // are the PCA9557 RELAY BOARD's connectors, not the main board's X4/X5 Hall headers.
-#define RELAY_SET_RESERVED     (RELAY_N(4) | RELAY_N(5) | RELAY_N(6) | RELAY_N(7) | RELAY_N(8))
+#define RELAY_SET_RESERVED     (RELAY_N(7) | RELAY_N(8))
 
 // Web relay test (bench wiring check). Any of the eight relays can be toggled from the
 // web UI, but ONLY while the ignition is OFF and no real function relay is energized;
@@ -249,12 +252,15 @@ static_assert(GEAR_CODE_LOW != 0b000 && GEAR_CODE_HIGH != 0b000 && GEAR_CODE_NEU
 #define RELAY_TEST_TIMEOUT_MS      30000UL  // ms a test relay stays on before auto-off
 #define RELAY_TEST_STARTER_MAX_MS  2000UL   // ms cap for a Relay_2 (starter) test
 
-// The quad bike's front-wheel lock is NOT fitted on the aztec buggy, so there is
-// deliberately no RELAY_SET_WHEEL_LOCK. The MAVLink servo channel
-// (ServoChannelConfig::WHEEL_LOCK), the web `set_wheel_lock` command and the
-// EFI_DIGITAL_FLAG_WHEEL_LOCK telemetry bit stay in place, but RelayController
-// rejects lock commands and reports the lock as released + not fitted.
-#define RELAY_WHEEL_LOCK_FITTED 0           // 0 = no relay behind the wheel-lock function
+// The lock function is FITTED on the aztec buggy (RELAY_SET_WHEEL_LOCK above, Relay_4..6).
+// The MAVLink servo channel (ServoChannelConfig::WHEEL_LOCK), the web `set_wheel_lock`
+// command and the EFI_DIGITAL_FLAG_WHEEL_LOCK telemetry bit drive / report it; the
+// relay test refuses an ON while it is engaged, and a LOCK command drops every test relay.
+// 0 = no relay behind the function (RelayController then rejects a LOCK and reports
+// released + not fitted); RELAY_SET_WHEEL_LOCK is then ignored, so Relay_4..6 must go back
+// into RELAY_SET_RESERVED and the aztec mask static_asserts in RelayController.cpp updated —
+// the compile-time checks fail until both are done.
+#define RELAY_WHEEL_LOCK_FITTED 1           // 1 = Relay_4 + Relay_5 + Relay_6 drive the lock
 
 // Expander timing / fault policy
 #define BOARD_INPUT_POLL_MS        25    // ms between opto-input polls
@@ -364,7 +370,7 @@ struct ServoChannelConfig {
     static constexpr uint8_t TRANSMISSION = 3;  // Gear selector (3 positions: R/N/L)
     static constexpr uint8_t IGNITION = 4;      // Ignition state (OFF/ACC/IGNITION)
     static constexpr uint8_t FRONT_LIGHT = 6;   // Front light (on/off)
-    static constexpr uint8_t WHEEL_LOCK  = 7;   // Front-wheel lock (on/off) — decoded but NOT fitted on aztec (RELAY_WHEEL_LOCK_FITTED)
+    static constexpr uint8_t WHEEL_LOCK  = 7;   // Lock (on/off) — aztec: Relay_4+5+6 (RELAY_SET_WHEEL_LOCK)
 };
 
 // MAVLink transport / link parameters
@@ -457,7 +463,7 @@ struct ServoChannelConfig {
 // Digital output states reported back to the GCS as a bitmask carried in
 // EFI_STATUS.pt_compensation (float). MUST stay in sync with the MP plugin decode.
 // bit2+ reserved for future digital outputs.
-#define EFI_DIGITAL_FLAG_WHEEL_LOCK  0x01  // bit0 — front-wheel lock engaged (always 0 on aztec: not fitted)
+#define EFI_DIGITAL_FLAG_WHEEL_LOCK  0x01  // bit0 — lock engaged (aztec: Relay_4+5+6 energized)
 #define EFI_DIGITAL_FLAG_FRONT_LIGHT 0x02  // bit1 — front light on
 
 // ============================================================================
@@ -1022,7 +1028,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.24"
+#define FIRMWARE_VERSION "1.5.25"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

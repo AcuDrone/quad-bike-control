@@ -601,7 +601,7 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
         processLightCommand(cmd.boolValue, webPortal);
         return;
     } else if (cmd.cmd == "set_wheel_lock") {
-        // Front-wheel lock: not restricted by input source; rejected on aztec (not fitted)
+        // Lock (aztec: Relay_4+5+6): not restricted by input source, like the light
         processWheelLockCommand(cmd.boolValue, webPortal);
         return;
     } else if (cmd.cmd == "set_relay_test") {
@@ -948,8 +948,8 @@ void VehicleController::processMavlinkCommands() {
     bool frontLightOn = mavlink_.getFrontLight();
     relayController_.setFrontLight(frontLightOn);
 
-    // Front-wheel lock (channel 7) — fitted on the quad; on aztec (not fitted)
-    // RelayController rejects a LOCK
+    // Lock (channel 7, > RC_WHEEL_LOCK_THRESHOLD = LOCKED) — aztec: Relay_4+5+6 together.
+    // A LOCK drops every web test relay first (RelayController::setWheelLock()).
     relayController_.setWheelLock(mavlink_.getWheelLock());
 }
 
@@ -1892,20 +1892,20 @@ void VehicleController::setFrontLight(bool on) {
 bool VehicleController::setWheelLock(bool locked) {
     bool ok = relayController_.setWheelLock(locked);
     if (ok) {
-        Debug::printfFeature(DebugFeature::VEHICLE, "[WHEEL_LOCK] Front wheels: %s\n", locked ? "LOCKED" : "UNLOCKED");
+        Debug::printfFeature(DebugFeature::VEHICLE, "[WHEEL_LOCK] Lock: %s\n", locked ? "LOCKED" : "UNLOCKED");
     }
     return ok;
 }
 
 void VehicleController::processWheelLockCommand(bool locked, WebPortal& webPortal) {
     if (!isWheelLockFitted()) {
-        // Aztec: no relay behind the function — never report a lock as applied.
+        // RELAY_WHEEL_LOCK_FITTED = 0: no relay behind the function — never report a lock as applied.
         relayController_.setWheelLock(locked);   // logs the rejection once
         webPortal.sendResponse(false, "Front-wheel lock not fitted on this vehicle");
         return;
     }
     bool ok = setWheelLock(locked);
-    webPortal.sendResponse(ok, ok ? String("Front wheels ") + (locked ? "LOCKED" : "UNLOCKED")
+    webPortal.sendResponse(ok, ok ? String("Lock ") + (locked ? "LOCKED" : "UNLOCKED")
                                   : String("Wheel lock command rejected"));
 }
 

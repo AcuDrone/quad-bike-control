@@ -8,11 +8,13 @@ void setUp() {}
 void tearDown() {}
 
 // Mirror of the per-vehicle relay-number sets (include/Constants.h needs Arduino.h).
-// aztec buggy: ignition Relay_1, starter Relay_2, light Relay_3, reserved Relay_4..8.
+// aztec buggy: ignition Relay_1, starter Relay_2, light Relay_3, lock Relay_4+5+6
+// (switched together), reserved Relay_7..8.
 static const uint8_t AZ_IGN   = RELAY_N(1);
 static const uint8_t AZ_START = RELAY_N(2);
 static const uint8_t AZ_LIGHT = RELAY_N(3);
-static const uint8_t AZ_RES   = RELAY_N(4) | RELAY_N(5) | RELAY_N(6) | RELAY_N(7) | RELAY_N(8);
+static const uint8_t AZ_LOCK  = RELAY_N(4) | RELAY_N(5) | RELAY_N(6);
+static const uint8_t AZ_RES   = RELAY_N(7) | RELAY_N(8);
 // quad bike (master): ignition {1,2}, starter {3}, light {4}, wheel lock {5,6}, reserved {7,8}.
 static const uint8_t Q_IGN   = RELAY_N(1) | RELAY_N(2);
 static const uint8_t Q_START = RELAY_N(3);
@@ -50,25 +52,43 @@ static void test_pca9557_routing() {
 }
 
 static void test_aztec_masks_pca9557() {
-    RelayPortMasks m = relayBuildMasks(RELAY_TABLE_PCA9557, AZ_IGN, AZ_START, AZ_LIGHT, 0, AZ_RES);
+    RelayPortMasks m = relayBuildMasks(RELAY_TABLE_PCA9557, AZ_IGN, AZ_START, AZ_LIGHT, AZ_LOCK, AZ_RES);
     TEST_ASSERT_EQUAL_HEX8(0x10, m.ignition);
     TEST_ASSERT_EQUAL_HEX8(0x20, m.starter);
     TEST_ASSERT_EQUAL_HEX8(0x40, m.frontLight);
-    TEST_ASSERT_EQUAL_HEX8(0x00, m.wheelLock);
-    TEST_ASSERT_EQUAL_HEX8(0x8F, m.reserved);
+    // ⚠ non-1:1: Relay_4=IO7, Relay_5=IO3, Relay_6=IO2 (X7/X8/X9) — NOT 0x38
+    TEST_ASSERT_EQUAL_HEX8(0x8C, m.wheelLock);
+    TEST_ASSERT_EQUAL_HEX8(0x03, m.reserved);
     TEST_ASSERT_TRUE(relayMasksValid(m));
     // CRANKING pins: ignition + starter
     TEST_ASSERT_EQUAL_HEX8(0x30, (uint8_t)(m.ignition | m.starter));
 }
 
 static void test_aztec_masks_xl9535() {
-    RelayPortMasks m = relayBuildMasks(RELAY_TABLE_XL9535, AZ_IGN, AZ_START, AZ_LIGHT, 0, AZ_RES);
+    RelayPortMasks m = relayBuildMasks(RELAY_TABLE_XL9535, AZ_IGN, AZ_START, AZ_LIGHT, AZ_LOCK, AZ_RES);
     TEST_ASSERT_EQUAL_HEX8(0x01, m.ignition);
     TEST_ASSERT_EQUAL_HEX8(0x02, m.starter);
     TEST_ASSERT_EQUAL_HEX8(0x04, m.frontLight);
-    TEST_ASSERT_EQUAL_HEX8(0xF8, m.reserved);
+    TEST_ASSERT_EQUAL_HEX8(0x38, m.wheelLock);   // P0.3..P0.5
+    TEST_ASSERT_EQUAL_HEX8(0xC0, m.reserved);
     TEST_ASSERT_TRUE(relayMasksValid(m));
     TEST_ASSERT_EQUAL_HEX8(0x03, (uint8_t)(m.ignition | m.starter));
+}
+
+// Lock engaged together with the other functions: on either board the energized pins are
+// exactly the OR of the function masks, and the spare relays stay off.
+static void test_aztec_lock_with_functions() {
+    const RelayPortMasks p = relayBuildMasks(RELAY_TABLE_PCA9557, AZ_IGN, AZ_START, AZ_LIGHT, AZ_LOCK, AZ_RES);
+    const RelayPortMasks x = relayBuildMasks(RELAY_TABLE_XL9535, AZ_IGN, AZ_START, AZ_LIGHT, AZ_LOCK, AZ_RES);
+    TEST_ASSERT_EQUAL_HEX8(0xFC, (uint8_t)(p.ignition | p.starter | p.frontLight | p.wheelLock));
+    TEST_ASSERT_EQUAL_HEX8(0x3F, (uint8_t)(x.ignition | x.starter | x.frontLight | x.wheelLock));
+    TEST_ASSERT_EQUAL_HEX8(0x00, (uint8_t)(p.wheelLock & p.reserved));
+    TEST_ASSERT_EQUAL_HEX8(0x00, (uint8_t)(x.wheelLock & x.reserved));
+    // each lock relay individually (relay test / relayIoMask) lies inside the lock mask
+    for (uint8_t n = 4; n <= 6; n++) {
+        TEST_ASSERT_TRUE((relayTableMask(RELAY_TABLE_PCA9557, n) & p.wheelLock) != 0);
+        TEST_ASSERT_TRUE((relayTableMask(RELAY_TABLE_XL9535, n) & x.wheelLock) != 0);
+    }
 }
 
 static void test_quad_masks_both_tables() {
@@ -90,13 +110,17 @@ static void test_quad_masks_both_tables() {
 }
 
 static void test_set_invariants() {
-    TEST_ASSERT_TRUE(relaySetsValid(AZ_IGN, AZ_START, AZ_LIGHT, 0, AZ_RES));
+    TEST_ASSERT_TRUE(relaySetsValid(AZ_IGN, AZ_START, AZ_LIGHT, AZ_LOCK, AZ_RES));
     TEST_ASSERT_TRUE(relaySetsValid(Q_IGN, Q_START, Q_LIGHT, Q_LOCK, Q_RES));
-    // overlap
-    TEST_ASSERT_FALSE(relaySetsValid(AZ_IGN | AZ_START, AZ_START, AZ_LIGHT, 0, AZ_RES));
-    TEST_ASSERT_FALSE(relaySetsValid(AZ_IGN, AZ_START, AZ_LIGHT, RELAY_N(4), AZ_RES));
-    // gap (Relay_8 uncovered)
-    TEST_ASSERT_FALSE(relaySetsValid(AZ_IGN, AZ_START, AZ_LIGHT, 0, (uint8_t)(AZ_RES & ~RELAY_N(8))));
+    // overlap (lock relay also reserved / also the light)
+    TEST_ASSERT_FALSE(relaySetsValid(AZ_IGN | AZ_START, AZ_START, AZ_LIGHT, AZ_LOCK, AZ_RES));
+    TEST_ASSERT_FALSE(relaySetsValid(AZ_IGN, AZ_START, AZ_LIGHT, AZ_LOCK, (uint8_t)(AZ_RES | RELAY_N(4))));
+    TEST_ASSERT_FALSE(relaySetsValid(AZ_IGN, AZ_START, AZ_LIGHT, (uint8_t)(AZ_LOCK | AZ_LIGHT), AZ_RES));
+    // gap (Relay_8 uncovered; lock missing Relay_6)
+    TEST_ASSERT_FALSE(relaySetsValid(AZ_IGN, AZ_START, AZ_LIGHT, AZ_LOCK, (uint8_t)(AZ_RES & ~RELAY_N(8))));
+    TEST_ASSERT_FALSE(relaySetsValid(AZ_IGN, AZ_START, AZ_LIGHT, (uint8_t)(AZ_LOCK & ~RELAY_N(6)), AZ_RES));
+    // the lock left out (the pre-1.5.25 "not fitted" shape) no longer covers the port
+    TEST_ASSERT_FALSE(relaySetsValid(AZ_IGN, AZ_START, AZ_LIGHT, 0, AZ_RES));
     // empty function
     TEST_ASSERT_FALSE(relaySetsValid(0, AZ_START, AZ_LIGHT, AZ_IGN, AZ_RES));
 }
@@ -111,6 +135,9 @@ static void test_port_to_set_roundtrip() {
     // relay_test telemetry: Relay_5 test-energized -> 16 on either board
     TEST_ASSERT_EQUAL_UINT8(16, relaySetFromPort(RELAY_TABLE_PCA9557, 0x08));   // IO3
     TEST_ASSERT_EQUAL_UINT8(16, relaySetFromPort(RELAY_TABLE_XL9535, 0x10));    // P0.4
+    // aztec lock mask maps back to exactly Relay_4+5+6 on either board
+    TEST_ASSERT_EQUAL_HEX8(AZ_LOCK, relaySetFromPort(RELAY_TABLE_PCA9557, 0x8C));
+    TEST_ASSERT_EQUAL_HEX8(AZ_LOCK, relaySetFromPort(RELAY_TABLE_XL9535, 0x38));
 }
 
 // ---- detection -------------------------------------------------------------
@@ -227,6 +254,7 @@ int main(int, char**) {
     RUN_TEST(test_pca9557_routing);
     RUN_TEST(test_aztec_masks_pca9557);
     RUN_TEST(test_aztec_masks_xl9535);
+    RUN_TEST(test_aztec_lock_with_functions);
     RUN_TEST(test_quad_masks_both_tables);
     RUN_TEST(test_set_invariants);
     RUN_TEST(test_port_to_set_roundtrip);

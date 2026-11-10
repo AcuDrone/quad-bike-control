@@ -405,19 +405,20 @@ public:
     bool getFrontLight() const { return relayController_.getFrontLight(); }
 
     /**
-     * @brief Set front-wheel lock state (NOT fitted on aztec — a LOCK is rejected)
+     * @brief Set the lock state (aztec: Relay_4+5+6 together; rejected only when
+     *        RELAY_WHEEL_LOCK_FITTED is 0)
      * @param locked true to engage the lock, false to release
      * @return false if the request could not be honoured
      */
     bool setWheelLock(bool locked);
 
     /**
-     * @brief Get current front-wheel lock state
-     * @return true if locked (always false on aztec)
+     * @brief Get current lock state
+     * @return true if locked (always false when not fitted)
      */
     bool getWheelLock() const { return relayController_.getWheelLock(); }
 
-    /** @brief True if the front-wheel lock is fitted (false on aztec) */
+    /** @brief True if the lock is fitted (RELAY_WHEEL_LOCK_FITTED; true on aztec) */
     bool isWheelLockFitted() const { return RelayController::isWheelLockFitted(); }
 
     /**

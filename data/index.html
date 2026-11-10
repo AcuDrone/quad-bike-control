@@ -1336,10 +1336,10 @@
                     </button>
                 </div>
 
-                <h3 data-i18n="h_wheel_lock" style="margin-bottom: 10px;">Front Wheel Lock</h3>
+                <h3 data-i18n="h_wheel_lock" style="margin-bottom: 10px;">Lock</h3>
                 <div style="margin-bottom: 20px;">
                     <button class="upload-btn" id="wheel-lock-btn" onclick="toggleWheelLock()" style="background: var(--secondary);">
-                        🔒 <span data-i18n="lbl_wheel_lock">Wheel Lock:</span> <span id="wheel-lock-status">UNLOCKED</span>
+                        🔒 <span data-i18n="lbl_wheel_lock">Lock:</span> <span id="wheel-lock-status">UNLOCKED</span>
                     </button>
                 </div>
 
@@ -1613,14 +1613,14 @@
 
                 // Relay test card
                 card_relay_test: '🧪 Relay Test',
-                relay_test_help: 'Wiring check: toggle one relay at a time. <b>Ignition must be OFF</b>, the light off and the wheel lock released (if fitted). Each relay switches off by itself after 30 s (starter: 2 s); any ignition / light / wheel-lock command switches all test relays off. On a paired relay (ignition, wheel lock) each relay is tested on its own — one contact drives the load for up to 30 s.',
+                relay_test_help: 'Wiring check: toggle one relay at a time. <b>Ignition must be OFF</b>, the light off and the wheel lock released (if fitted). Each relay switches off by itself after 30 s (starter: 2 s); any ignition / light / wheel-lock command switches all test relays off. On a grouped relay (quad: ignition, wheel lock; buggy: lock = 4+5+6) each relay is tested on its own — one contact drives the load for up to 30 s.',
                 relay_test_relay: 'Relay %s',
                 relay_fn_1: 'ignition',
                 relay_fn_2: 'starter (max 2 s)',
                 relay_fn_3: 'light',
-                relay_fn_4: 'lock (unassigned)',
-                relay_fn_5: 'lock (unassigned)',
-                relay_fn_6: 'lock (unassigned)',
+                relay_fn_4: 'lock (with 5+6)',
+                relay_fn_5: 'lock (with 4+6)',
+                relay_fn_6: 'lock (with 4+5)',
                 relay_fn_7: 'spare',
                 relay_fn_8: 'spare',
                 relay_fn_q_1: 'ignition (pair with 2)',
@@ -1696,8 +1696,8 @@
                 ign_CRANKING: 'CRANKING',
                 h_front_light: 'Front Light',
                 lbl_light: 'Light:',
-                h_wheel_lock: 'Front Wheel Lock',
-                lbl_wheel_lock: 'Wheel Lock:',
+                h_wheel_lock: 'Lock',
+                lbl_wheel_lock: 'Lock:',
                 lock_locked: 'LOCKED',
                 lock_unlocked: 'UNLOCKED',
                 lock_not_fitted: '— not fitted',
@@ -2144,14 +2144,14 @@
 
                 // Throttle calibration card
                 card_relay_test: '🧪 Перевірка реле',
-                relay_test_help: 'Перевірка проводки: вмикайте по одному реле. <b>Запалювання має бути ВИМК</b>, світло вимкнене, блокування колеса відпущене (якщо встановлене). Кожне реле вимикається само через 30 с (стартер: 2 с); будь-яка команда запалювання / світла / блокування колеса вимикає всі тестові реле. Реле з пари (запалювання, блокування колеса) перевіряється окремо — один контакт живить навантаження до 30 с.',
+                relay_test_help: 'Перевірка проводки: вмикайте по одному реле. <b>Запалювання має бути ВИМК</b>, світло вимкнене, блокування колеса відпущене (якщо встановлене). Кожне реле вимикається само через 30 с (стартер: 2 с); будь-яка команда запалювання / світла / блокування колеса вимикає всі тестові реле. Реле з групи (квадроцикл: запалювання, блокування колеса; багі: блокування = 4+5+6) перевіряється окремо — один контакт живить навантаження до 30 с.',
                 relay_test_relay: 'Реле %s',
                 relay_fn_1: 'запалювання',
                 relay_fn_2: 'стартер (макс. 2 с)',
                 relay_fn_3: 'світло',
-                relay_fn_4: 'замок (не призначено)',
-                relay_fn_5: 'замок (не призначено)',
-                relay_fn_6: 'замок (не призначено)',
+                relay_fn_4: 'блокування (з 5+6)',
+                relay_fn_5: 'блокування (з 4+6)',
+                relay_fn_6: 'блокування (з 4+5)',
                 relay_fn_7: 'резерв',
                 relay_fn_8: 'резерв',
                 relay_fn_q_1: 'запалювання (пара з 2)',
@@ -2208,8 +2208,8 @@
                 ign_CRANKING: 'ПРОКРУТКА',
                 h_front_light: 'Переднє світло',
                 lbl_light: 'Світло:',
-                h_wheel_lock: 'Блокування переднього колеса',
-                lbl_wheel_lock: 'Блок. колеса:',
+                h_wheel_lock: 'Блокування',
+                lbl_wheel_lock: 'Блокування:',
                 lock_locked: 'ЗАБЛОКОВАНО',
                 lock_unlocked: 'РОЗБЛОКОВАНО',
                 lock_not_fitted: '— не встановлено',
@@ -2985,8 +2985,9 @@
                 lightState = data.front_light_on;
                 updateLightButton(data.front_light_on);
             }
-            // `wheel_lock_fitted: false` (aztec) → the toggle is disabled and shows "not fitted".
-            // Older firmware without the field is treated as fitted.
+            // `wheel_lock_fitted: false` (no relay behind the lock) → the toggle is disabled and
+            // shows "not fitted". Older firmware without the field is treated as fitted.
+            // Aztec (Relay_4+5+6) sends `true`.
             if (data.wheel_lock_fitted !== undefined) {
                 wheelLockFitted = data.wheel_lock_fitted !== false;
             }
@@ -3000,6 +3001,7 @@
             // off, wheel lock released and a healthy relay board (the firmware enforces the
             // same gate).
             if (data.relay_test !== undefined) {
+                relayLabelsAztec = data.gear_codes !== undefined;
                 relayTestBits = data.relay_test;
                 relayTestAllowed = data.ignition_state === 'OFF' && !data.front_light_on &&
                                    !data.wheel_lock_on && !data.io_relay_fault;
@@ -4191,7 +4193,7 @@
         }
 
         let wheelLockState = false;
-        let wheelLockFitted = true;   // from telemetry `wheel_lock_fitted` (false on aztec)
+        let wheelLockFitted = true;   // from telemetry `wheel_lock_fitted` (true on aztec: Relay_4+5+6)
         function toggleWheelLock() {
             if (!wheelLockFitted) return;   // no relay behind the function on this vehicle
             wheelLockState = !wheelLockState;
@@ -4199,11 +4201,14 @@
         }
 
         // ---- Relay test (wiring check; firmware gate: ignition OFF, no function relay on) ----
-        // Relay labels follow the vehicle: `wheelLockFitted` (telemetry `wheel_lock_fitted`)
-        // stands in for the vehicle until the firmware sends a `vehicle` key —
-        // fitted = quad bike (relay_fn_q_*), not fitted = aztec buggy (relay_fn_*).
+        // Relay labels follow the vehicle. The lock is fitted on BOTH vehicles now, so
+        // `wheel_lock_fitted` no longer tells them apart; the aztec-only `gear_codes` object
+        // (3-bit gear code calibration, sent in every aztec frame) stands in for the vehicle
+        // until the firmware sends a `vehicle` key — present = aztec buggy (relay_fn_*),
+        // absent = quad bike (relay_fn_q_*).
+        let relayLabelsAztec = false;   // from telemetry: `gear_codes` present
         function relayFnLabel(n) {
-            return t((wheelLockFitted ? 'relay_fn_q_' : 'relay_fn_') + n);
+            return t((relayLabelsAztec ? 'relay_fn_' : 'relay_fn_q_') + n);
         }
         let relayTestBits = 0;          // telemetry `relay_test`: bit0 = Relay_1 … bit7 = Relay_8
         let relayTestAllowed = false;

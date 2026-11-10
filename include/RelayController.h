@@ -43,12 +43,13 @@
  *     front light       = Relay_4 (RELAY_SET_FRONT_LIGHT),
  *     front-wheel lock  = Relay_5 + Relay_6 (RELAY_SET_WHEEL_LOCK, two paralleled relays),
  *     Relay_7 / Relay_8 = spare (always off)        — RELAY_SET_RESERVED.
- *   aztec buggy (aztec, RELAY_WHEEL_LOCK_FITTED = 0):
+ *   aztec buggy (aztec, RELAY_WHEEL_LOCK_FITTED = 1):
  *     ignition/ECU line = Relay_1 (RELAY_SET_IGNITION, single relay),
  *     starter           = Relay_2 (RELAY_SET_STARTER),
  *     front light       = Relay_3 (RELAY_SET_FRONT_LIGHT),
- *     Relay_4/5/6       = three separate locks, reserved until a later change (always off),
- *     Relay_7 / Relay_8 = spare (always off)        — together RELAY_SET_RESERVED.
+ *     lock              = Relay_4 + Relay_5 + Relay_6 switched together (RELAY_SET_WHEEL_LOCK;
+ *                         ⚠ PCA9557 IO7|IO3|IO2 = 0x8C, X7/X8/X9; XL9535 P0.3..P0.5 = 0x38),
+ *     Relay_7 / Relay_8 = spare (always off)        — RELAY_SET_RESERVED.
  *
  * Web relay test: any single relay (1..8) can be toggled for a wiring check, but only
  * while the ignition is OFF and no function relay is energized (the wheel lock, where
@@ -58,11 +59,11 @@
  * ignition/crank/light-on/wheel-lock command, allOff(), a relay-write fault and the
  * starter escalation.
  *
- * Front-wheel lock: fitted on the quad bike (RELAY_WHEEL_LOCK_FITTED = 1, Relay_5 +
- * Relay_6); allOff() deliberately leaves it in its last state. NOT fitted on aztec
- * (RELAY_WHEEL_LOCK_FITTED = 0): setWheelLock() is kept so the MAVLink/web plumbing
- * compiles, but it rejects a LOCK request (logged once), and getWheelLock() always
- * reports released.
+ * Lock ("wheel lock" in the API): fitted on both vehicles (RELAY_WHEEL_LOCK_FITTED = 1) —
+ * aztec Relay_4 + Relay_5 + Relay_6, quad bike Relay_5 + Relay_6. allOff() deliberately
+ * leaves it in its last state on both. With RELAY_WHEEL_LOCK_FITTED = 0 setWheelLock() is
+ * kept so the MAVLink/web plumbing compiles, but it rejects a LOCK request (logged once),
+ * and getWheelLock() always reports released.
  *
  * The whole 8-bit port is written from a single shadow byte and verified by reading
  * the PINS back (IRelayPort::readPins(), the input register), because over I2C a write
@@ -151,11 +152,12 @@ public:
      * @brief Front-wheel lock request.
      * @param locked requested lock state
      *
-     * Fitted (RELAY_WHEEL_LOCK_FITTED = 1, quad bike): drives the wheel-lock mask (RELAY_SET_WHEEL_LOCK).
+     * Fitted (RELAY_WHEEL_LOCK_FITTED = 1; aztec: Relay_4+5+6, quad: Relay_5+6): drives the
+     * whole wheel-lock mask (RELAY_SET_WHEEL_LOCK) with a verified whole-port write.
      * A LOCK request first releases every web test relay. Refused while the expander
      * is unavailable.
      *
-     * Not fitted (RELAY_WHEEL_LOCK_FITTED = 0, aztec buggy): there is no relay behind
+     * Not fitted (RELAY_WHEEL_LOCK_FITTED = 0): there is no relay behind
      * this function, so a LOCK request is rejected: nothing is written to the port, the
      * reported state stays "released", and the first LOCK request after boot is logged
      * once.
@@ -194,7 +196,7 @@ public:
         return table_ ? relayTableMask(*table_, relayNumber) : (uint8_t)0;
     }
 
-    /** @brief True if a relay is wired behind the wheel-lock function (quad: true, aztec: false) */
+    /** @brief True if relays are wired behind the wheel-lock function (RELAY_WHEEL_LOCK_FITTED) */
     static constexpr bool isWheelLockFitted() { return RELAY_WHEEL_LOCK_FITTED != 0; }
 
     /**
@@ -237,7 +239,7 @@ public:
     /**
      * @brief Get current front-wheel lock state
      * @return the commanded lock state when fitted; always false when not fitted
-     *         (aztec — see isWheelLockFitted())
+     *         (see isWheelLockFitted())
      */
 #if RELAY_WHEEL_LOCK_FITTED
     bool getWheelLock() const { return wheelLockOn_; }
@@ -327,7 +329,7 @@ private:
     IgnitionState currentIgnitionState_;
     bool frontLightOn_;
 #if RELAY_WHEEL_LOCK_FITTED
-    bool wheelLockOn_;             // commanded front-wheel lock state (held through allOff())
+    bool wheelLockOn_;             // commanded lock state (held through allOff())
 #else
     bool wheelLockRejectLogged_;   // the "wheel lock not fitted" message is logged once per boot
 #endif

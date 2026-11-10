@@ -14,6 +14,11 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.25","date":"2026-11-10","uk":[
+"Багі: увімкнено блокування — реле 4, 5 і 6 (клеми X7, X8, X9) вмикаються разом. Керування: кнопка «Блокування» у веб-панелі або MAVLink канал 7 (понад 1520 мкс = заблоковано); стан передається в біті 0 EFI_STATUS. Під час аварійного вимкнення (failsafe) блокування зберігає свій останній стан, як на квадроциклі. Тест реле доступний лише при відпущеному блокуванні; команда блокування вимикає всі тестові реле. Потрібно залити оновлений образ LittleFS"
+],"en":[
+"Buggy: the lock is enabled — relays 4, 5 and 6 (terminals X7, X8, X9) switch together. Control: the “Lock” button in the web panel or MAVLink channel 7 (above 1520 µs = locked); the state is reported in EFI_STATUS bit 0. The lock holds its last state through a fail-safe, same as on the quad bike. The relay test is available only with the lock released; a lock command switches all test relays off. Upload the updated LittleFS image"
+]},
 {"version":"1.5.24","date":"2026-11-07","uk":[
 "Реле: підтримка плати реле XL9535-K8V5 (адреса 0x20–0x27) поряд із платою PCA9557 (0x1F). Плата визначається автоматично під час запуску; нова картка «Плата реле» в розділі «Система» дозволяє вибрати Авто / PCA9557 / XL9535 (діє після перезавантаження) і показує активну плату та помилку. Якщо відповідають обидві плати, жодна або кілька адрес XL9535 — жодне реле не вмикається. Кожне перемикання реле тепер перевіряється за станом виводів, а після збою живлення плати реле відновлюються самі приблизно за 1 с. Потрібно залити оновлений образ LittleFS"
 ],"en":[

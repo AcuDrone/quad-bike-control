@@ -90,7 +90,7 @@ constexpr bool relayTableIsPermutation(const uint8_t (&table)[8]) {
 /**
  * @brief Function sets (or masks) are valid: ignition, starter and front light non-empty,
  * every set pairwise disjoint, and together with the reserved set covering all eight bits.
- * `wheelLock` is 0 where the lock is not fitted (aztec).
+ * `wheelLock` is 0 where the lock is not fitted (RELAY_WHEEL_LOCK_FITTED = 0).
  */
 constexpr bool relaySetsValid(uint8_t ignition, uint8_t starter, uint8_t frontLight,
                               uint8_t wheelLock, uint8_t reserved) {

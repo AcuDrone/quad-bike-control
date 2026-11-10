@@ -25,14 +25,21 @@ static_assert(relayMasksValid(relayBuildMasks(RELAY_TABLE_XL9535, RELAY_SET_IGNI
                                               RELAY_SET_FRONT_LIGHT, RELAY_SET_WHEEL_LOCK_OR_0_,
                                               RELAY_SET_RESERVED)),
               "relay masks on the XL9535 board overlap or leave a gap");
-#if !RELAY_WHEEL_LOCK_FITTED
-// Aztec: the PCA9557 masks must stay exactly what the bench-verified build used.
+// Aztec: ignition / starter / light must stay exactly what the bench-verified build used,
+// and the lock (Relay_4+5+6) must land on IO7|IO3|IO2 (X7/X8/X9) — the ⚠ non-1:1 routing —
+// on the PCA9557 board and on P0.3..P0.5 on the XL9535 board.
 static_assert(relayPortMask(RELAY_TABLE_PCA9557, RELAY_SET_IGNITION) == 0x10 &&
               relayPortMask(RELAY_TABLE_PCA9557, RELAY_SET_STARTER) == 0x20 &&
               relayPortMask(RELAY_TABLE_PCA9557, RELAY_SET_FRONT_LIGHT) == 0x40 &&
-              relayPortMask(RELAY_TABLE_PCA9557, RELAY_SET_RESERVED) == 0x8F,
+              relayPortMask(RELAY_TABLE_PCA9557, RELAY_SET_WHEEL_LOCK_OR_0_) == 0x8C &&
+              relayPortMask(RELAY_TABLE_PCA9557, RELAY_SET_RESERVED) == 0x03,
               "aztec PCA9557 relay masks changed");
-#endif
+static_assert(relayPortMask(RELAY_TABLE_XL9535, RELAY_SET_IGNITION) == 0x01 &&
+              relayPortMask(RELAY_TABLE_XL9535, RELAY_SET_STARTER) == 0x02 &&
+              relayPortMask(RELAY_TABLE_XL9535, RELAY_SET_FRONT_LIGHT) == 0x04 &&
+              relayPortMask(RELAY_TABLE_XL9535, RELAY_SET_WHEEL_LOCK_OR_0_) == 0x38 &&
+              relayPortMask(RELAY_TABLE_XL9535, RELAY_SET_RESERVED) == 0xC0,
+              "aztec XL9535 relay masks changed");
 static_assert(PCA9557_ADDR_RELAYS == RELAY_LAW_PCA9557_ADDR &&
               XL9535_ADDR_MIN == RELAY_LAW_XL9535_ADDR_MIN && XL9535_ADDR_MAX == RELAY_LAW_XL9535_ADDR_MAX &&
               XL9535_ADDR_MIN == XL9535Expander::ADDR_MIN && XL9535_ADDR_MAX == XL9535Expander::ADDR_MAX,
@@ -233,9 +240,9 @@ bool RelayController::begin() {
 
     Debug::printfFeature(DebugFeature::RELAY,
         "[RELAY] Relay board: %s @0x%02X (setting %s); masks ign 0x%02X start 0x%02X light 0x%02X "
-        "reserved 0x%02X\n",
+        "lock 0x%02X reserved 0x%02X\n",
         port_->name(), boardAddr_, relayBoardSettingToken(bootSetting_),
-        maskIgnition_, maskStarter_, maskFrontLight_, maskReserved_);
+        maskIgnition_, maskStarter_, maskFrontLight_, m.wheelLock, maskReserved_);
 
     // 4. Hardware-safe all-off init (output → polarity → config → pin verify).
     initialized_ = true;   // the board is latched from here on, even if the init fails
@@ -354,7 +361,9 @@ void RelayController::setFrontLight(bool on) {
 
 bool RelayController::setWheelLock(bool locked) {
 #if RELAY_WHEEL_LOCK_FITTED
-    // Quad bike: the lock drives the wheel-lock mask (RELAY_SET_WHEEL_LOCK: Relay_5 + Relay_6).
+    // Fitted: the lock drives the whole wheel-lock mask (RELAY_SET_WHEEL_LOCK — aztec:
+    // Relay_4 + Relay_5 + Relay_6 together; quad bike: Relay_5 + Relay_6) through the same
+    // verified whole-port shadow write as ignition and light.
     if (!initialized_ || faulted_) {
         Debug::printfFeature(DebugFeature::RELAY,
             "[RELAY] Wheel lock command (%s) ignored — relay expander unavailable\n",
@@ -362,7 +371,7 @@ bool RelayController::setWheelLock(bool locked) {
         return false;
     }
     if (wheelLockOn_ != locked) {
-        Debug::printfFeature(DebugFeature::RELAY, "[RELAY] Front Wheel Lock: %s\n", locked ? "LOCKED" : "UNLOCKED");
+        Debug::printfFeature(DebugFeature::RELAY, "[RELAY] Lock: %s\n", locked ? "LOCKED" : "UNLOCKED");
         if (locked) {
             clearRelayTests("wheel lock command takes over");
         }
@@ -371,9 +380,9 @@ bool RelayController::setWheelLock(bool locked) {
     }
     return true;
 #else
-    // Not fitted (aztec): no relay behind the wheel-lock function.
-    // Reject rather than "succeed" silently; the port is never touched, so the
-    // reserved lock relays (Relay_4..Relay_6) can't be energized through this path.
+    // Not fitted (RELAY_WHEEL_LOCK_FITTED = 0): no relay behind the wheel-lock function.
+    // Reject rather than "succeed" silently; the port is never touched, so no reserved
+    // relay can be energized through this path.
     // Release requests arrive every control loop from the MAVLink servo channel and
     // are trivially satisfied (the lock is never engaged).
     if (!locked) {
@@ -491,9 +500,8 @@ uint8_t RelayController::computeShadow() const {
     // relay is the only other way, ignition OFF only and capped at RELAY_TEST_STARTER_MAX_MS).
     bool starter = (currentIgnitionState_ == IgnitionState::CRANKING);
 
-    // Start from all-off so the reserved relays (RELAY_SET_RESERVED: the spares, and
-    // on aztec the three pending locks) are written off unless the web relay test
-    // energizes one. Relay numbers per vehicle: see RelayController.h.
+    // Start from all-off so the reserved relays (RELAY_SET_RESERVED: the spares) are
+    // written off unless the web relay test energizes one. Relay numbers per vehicle: see RelayController.h.
     uint8_t shadow = 0x00;
     shadow = withMask(shadow, maskIgnition_,   ignitionLine);
     shadow = withMask(shadow, maskStarter_,    starter);

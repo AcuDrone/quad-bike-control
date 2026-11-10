@@ -59,7 +59,7 @@ MavlinkInterface mavlinkInterface;
 // Opto-isolated board inputs (3-bit gear code on port bits 0/1/6, brake endstop bit 4) on I2C2
 BoardInputs boardInputs(Wire1);
 
-// Relay Controller for ignition, starter and front light (aztec; wheel lock not fitted) — I2C2 via X15,
+// Relay Controller for ignition, starter, front light and the lock (aztec: Relay_4+5+6) — I2C2 via X15,
 // PCA9557 relay board @0x1F or XL9535 relay board @0x20..0x27 (detected in begin())
 RelayController relayController(Wire1);
 
@@ -338,7 +338,7 @@ void loop() {
     report.gearMoving   = vehicleController.getTransmission().isGearChangeActive();
     report.ignition     = getRelayIgnitionStateName(vehicleController.getIgnitionState());
     report.failsafe     = (vehicleController.getInputSource() == InputSource::FAILSAFE);
-    // bit0 (wheel lock) is always 0 on aztec: not fitted, getWheelLock() is always false.
+    // bit0 = the lock (aztec: Relay_4+5+6 energized), from the relay controller's commanded state.
     report.digitalFlags = (vehicleController.getWheelLock()  ? EFI_DIGITAL_FLAG_WHEEL_LOCK  : 0)
                         | (vehicleController.getFrontLight() ? EFI_DIGITAL_FLAG_FRONT_LIGHT : 0);
     report.speedValid   = vehicleController.isVehicleSpeedValid();

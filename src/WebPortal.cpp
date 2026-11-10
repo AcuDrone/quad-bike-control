@@ -782,7 +782,7 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["is_cranking"] = telemetry.is_cranking;
     doc["front_light_on"] = telemetry.front_light_on;
     doc["wheel_lock_on"] = telemetry.wheel_lock_on;
-    doc["wheel_lock_fitted"] = telemetry.wheel_lock_fitted;   // false on aztec → UI shows "not fitted"
+    doc["wheel_lock_fitted"] = telemetry.wheel_lock_fitted;   // true on aztec (Relay_4+5+6); false → UI shows "not fitted"
     doc["relay_test"] = telemetry.relay_test;   // web relay test, bit0 = Relay_1 … bit7 = Relay_8
 
     // 12 V battery (X10 sense) + board I/O health — emitted unconditionally (independent of

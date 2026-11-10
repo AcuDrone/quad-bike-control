@@ -154,7 +154,7 @@ outputs must align with these indices (see `ServoChannelConfig` in `include/Cons
 | `servo3_raw` | Transmission | R <1200, N 1201–1520, L >1520 |
 | `servo4_raw` | Ignition | OFF <1200, ACC 1201–1520, IGNITION >1520 |
 | `servo6_raw` | Front light | >1520 = ON |
-| `servo7_raw` | Front-wheel lock — fitted on the quad (master); **not fitted on aztec**: decoded but ignored | >1520 = LOCKED (rejected on aztec) |
+| `servo7_raw` | Lock — aztec: Relay_4 + Relay_5 + Relay_6 (relay board X7/X8/X9) switched together; quad (master): front-wheel lock | >1520 = LOCKED, ≤1520 = UNLOCKED |
 
 (Channel 5 is intentionally unused.)
 
@@ -327,7 +327,7 @@ which switches on the first character of the gear name):
 
 | Bit | Mask | Meaning |
 |-----|------|---------|
-| 0 | `0x01` | `EFI_DIGITAL_FLAG_WHEEL_LOCK` — front-wheel lock engaged (fitted on the quad (master); not fitted on aztec: always 0) |
+| 0 | `0x01` | `EFI_DIGITAL_FLAG_WHEEL_LOCK` — lock engaged (aztec: Relay_4+5+6 energized; quad (master): front-wheel lock) |
 | 1 | `0x02` | `EFI_DIGITAL_FLAG_FRONT_LIGHT` — front light on |
 | 2–7 | — | unassigned, always 0 |
 
