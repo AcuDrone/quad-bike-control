@@ -206,6 +206,11 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.io_input_fault = vehicleController_.isInputFault();
     telemetry.io_raw = vehicleController_.getInputRaw();
     telemetry.io_relay_fault = vehicleController_.isRelayFault();
+    telemetry.relay_board = vehicleController_.getRelayBoardToken();
+    telemetry.relay_board_addr = vehicleController_.getRelayBoardAddress();
+    telemetry.relay_board_cfg = vehicleController_.getRelayBoardCfgToken();
+    telemetry.relay_board_reboot = vehicleController_.isRelayBoardRebootPending();
+    telemetry.relay_board_error = vehicleController_.getRelayBoardErrorToken();
 
     telemetry.firmware_version = FIRMWARE_VERSION;
     telemetry.board = BOARD_NAME;

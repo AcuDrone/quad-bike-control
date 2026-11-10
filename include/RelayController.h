@@ -4,34 +4,51 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include "Constants.h"
+#include "IRelayPort.h"
 #include "PCA9557Expander.h"
+#include "XL9535Expander.h"
+#include "RelayBoardLaw.h"
 
 /**
  * @brief Relay controller for ignition, starter, lighting and (where fitted) the
  * front-wheel lock.
  *
  * Manages relay outputs for vehicle ignition states (OFF/ACC/IGNITION/CRANKING),
- * the front light and, when RELAY_WHEEL_LOCK_FITTED is 1, the front-wheel lock. The relays live on the external relay board's
- * PCA9557 @ `PCA9557_ADDR_RELAYS` (0x1F, as-shipped strap A2A1A0=111), not on
- * ESP32 GPIO. The bus is chosen by the owner at construction: the board sits on
- * its intended home X15 → I2C2 (`Wire1`), bench-verified. X14 → I2C1 (`Wire`)
- * works too and is the contingency if that header is ever damaged.
+ * the front light and, when RELAY_WHEEL_LOCK_FITTED is 1, the front-wheel lock. The
+ * relays live on an external relay board on I2C, not on ESP32 GPIO. The bus is chosen
+ * by the owner at construction: the board sits on its intended home X15 → I2C2
+ * (`Wire1`), bench-verified. X14 → I2C1 (`Wire`) works too and is the contingency if
+ * that header is ever damaged.
  *
- * The board's IO routing is NOT 1:1 (Relay_1=IO4 … Relay_8=IO1), so each function
- * is a whole-port MASK from `Constants.h` rather than a relay number. The masks are
- * per vehicle (the vehicle's Constants.h):
+ * TWO RELAY BOARDS, one image. Exactly one of them is used, selected ONCE in begin()
+ * (before any relay write) and latched until reboot:
+ *   - the custom PCA9557 relay board @0x1F (PCA9557_ADDR_RELAYS; Relay.PrjPcb routing,
+ *     NOT 1:1: Relay_1=IO4 … Relay_8=IO1);
+ *   - the XL9535-K8V5 relay board @0x20..0x27 (XL9535 = PCA9535-compatible, port P0
+ *     only, identity routing Relay_N = P0.(N-1), bench-confirmed 2026-11-07).
+ * The persisted setting (NVS RELAY_BOARD_NVS_NS / RELAY_BOARD_NVS_KEY: auto | pca9557 |
+ * xl9535, default auto) and nine zero-length probes (0x1F, 0x20..0x27) go through the
+ * pure relayBoardDecide() (RelayBoardLaw.h). Any ambiguity — both boards, none, two
+ * XL9535 addresses, a manual setting contradicting the bus — is a relay fault: nothing
+ * is written to any device, every setter is a logging no-op, the reason is published
+ * (telemetry `relay_board_error`) and the 0x18..0x27 scan is logged. Never a guess; a
+ * detection fault is not retried before reboot. A changed setting applies after reboot.
+ * The chip is driven only through IRelayPort; both driver instances are members (no heap).
+ *
+ * Functions are RELAY-NUMBER sets in Constants.h (RELAY_SET_*, bit0 = Relay_1); begin()
+ * maps them through the detected board's table into whole-port masks. Per vehicle:
  *   quad bike (master, RELAY_WHEEL_LOCK_FITTED = 1):
- *     ignition/ECU line = Relay_1 + Relay_2 (RELAY_MASK_IGNITION, two paralleled relays),
- *     starter           = Relay_3 (RELAY_MASK_STARTER),
- *     front light       = Relay_4 (RELAY_MASK_FRONT_LIGHT),
- *     front-wheel lock  = Relay_5 + Relay_6 (RELAY_MASK_WHEEL_LOCK, two paralleled relays),
- *     Relay_7 / Relay_8 = spare (always off)        — RELAY_MASK_RESERVED.
+ *     ignition/ECU line = Relay_1 + Relay_2 (RELAY_SET_IGNITION, two paralleled relays),
+ *     starter           = Relay_3 (RELAY_SET_STARTER),
+ *     front light       = Relay_4 (RELAY_SET_FRONT_LIGHT),
+ *     front-wheel lock  = Relay_5 + Relay_6 (RELAY_SET_WHEEL_LOCK, two paralleled relays),
+ *     Relay_7 / Relay_8 = spare (always off)        — RELAY_SET_RESERVED.
  *   aztec buggy (aztec, RELAY_WHEEL_LOCK_FITTED = 0):
- *     ignition/ECU line = Relay_1 (RELAY_MASK_IGNITION, single relay),
- *     starter           = Relay_2 (RELAY_MASK_STARTER),
- *     front light       = Relay_3 (RELAY_MASK_FRONT_LIGHT),
+ *     ignition/ECU line = Relay_1 (RELAY_SET_IGNITION, single relay),
+ *     starter           = Relay_2 (RELAY_SET_STARTER),
+ *     front light       = Relay_3 (RELAY_SET_FRONT_LIGHT),
  *     Relay_4/5/6       = three separate locks, reserved until a later change (always off),
- *     Relay_7 / Relay_8 = spare (always off)        — together RELAY_MASK_RESERVED.
+ *     Relay_7 / Relay_8 = spare (always off)        — together RELAY_SET_RESERVED.
  *
  * Web relay test: any single relay (1..8) can be toggled for a wiring check, but only
  * while the ignition is OFF and no function relay is energized (the wheel lock, where
@@ -47,12 +64,24 @@
  * compiles, but it rejects a LOCK request (logged once), and getWheelLock() always
  * reports released.
  *
- * The whole 8-bit port is written from a single shadow byte and verified by
- * reading the output register back, because over I2C a write can fail silently
- * (a GPIO write cannot). The starter is escalated separately: a latched starter
- * destroys the starter motor and can move the vehicle, so an unverified starter
- * engagement aborts the crank and a verification failure while the starter bit
- * is set forces repeated all-off writes and latches ignition OFF.
+ * The whole 8-bit port is written from a single shadow byte and verified by reading
+ * the PINS back (IRelayPort::readPins(), the input register), because over I2C a write
+ * can fail silently (a GPIO write cannot) and a reset expander (XL9535 VIN brown-out:
+ * configuration back to all-inputs, relays dropped) keeps a latch that would still read
+ * back fine. The starter is escalated separately: a latched starter destroys the starter
+ * motor and can move the vehicle, so an unverified starter engagement aborts the crank
+ * and a verification failure while the starter bit is set forces repeated all-off
+ * writes and latches ignition OFF.
+ *
+ * Recovery: while faulted, update() makes one single-attempt write per call and, every
+ * RELAY_RECOVER_MS, replaces it by IRelayPort::initPort(shadow) (output = shadow →
+ * polarity 0 → config 0 → pin verify) plus one verified shadow write. Seeding the latch
+ * with the shadow (not 0x00) keeps a transient bus error from blipping an energized
+ * ignition relay; writing the latch before the config register still rules out the
+ * all-relays-on glitch. The starter bit is never seeded: if the shadow holds it, the
+ * starter escalation runs first and recovery seeds all-off. At boot begin() always uses
+ * initAllOff() (seed 0x00). A detected board whose boot init fails enters the same timed
+ * recovery (`relay_board_error` = init_failed until it verifies).
  *
  * Note: a physically welded relay contact is invisible to the read-back, which
  * reflects the expander pin and not the contact. That risk stays with hardware.
@@ -76,16 +105,18 @@ public:
     explicit RelayController(TwoWire& bus = Wire1);
 
     /**
-     * @brief Initialize the relay expander and drive every relay OFF.
+     * @brief Select the relay board, build the masks and drive every relay OFF.
      *
-     * Probes `PCA9557_ADDR_RELAYS`, configures all eight pins as outputs and
-     * writes 0x00 with read-back verification before returning. If nothing
-     * answers, the whole PCA9557 address block (0x18-0x1F) is probed on the same
-     * bus and the ACKing addresses are logged, so a mis-strapped board or a board
-     * plugged into the wrong connector is visible from one line.
+     * Reads the setting (NVS `relay`/`board`), probes 0x1F and 0x20..0x27 and decides
+     * through relayBoardDecide(); the result is latched until reboot. On a detection
+     * fault nothing is written, the reason and the 0x18..0x27 scan are logged and the
+     * fault is not retried. On success the function masks are built from the board's
+     * table (checked at runtime) and initAllOff() runs (output 0x00 → polarity 0x00 →
+     * config 0x00 → pins read 0x00). If that init fails, the board stays latched and
+     * the update() recovery timer retries it.
      *
-     * @return true if initialization succeeded; false leaves the driver in a
-     *         degraded state where every setter is a logging no-op
+     * @return true only if a board was detected and its all-off state verifies; false
+     *         leaves the driver degraded (every setter a logging no-op)
      */
     bool begin();
 
@@ -120,7 +151,7 @@ public:
      * @brief Front-wheel lock request.
      * @param locked requested lock state
      *
-     * Fitted (RELAY_WHEEL_LOCK_FITTED = 1, quad bike): drives RELAY_MASK_WHEEL_LOCK.
+     * Fitted (RELAY_WHEEL_LOCK_FITTED = 1, quad bike): drives the wheel-lock mask (RELAY_SET_WHEEL_LOCK).
      * A LOCK request first releases every web test relay. Refused while the expander
      * is unavailable.
      *
@@ -154,18 +185,13 @@ public:
      */
     uint8_t getRelayTestBits() const;
 
-    /** @brief Port mask (IO bit) of relay `relayNumber` (1..8); 0 for any other number */
-    static constexpr uint8_t relayIoMask(uint8_t relayNumber) {
-        // Relay.PrjPcb routing: Relay_1=IO4 Relay_2=IO5 Relay_3=IO6 Relay_4=IO7
-        //                       Relay_5=IO3 Relay_6=IO2 Relay_7=IO0 Relay_8=IO1
-        return relayNumber == 1 ? (uint8_t)(1u << 4) :
-               relayNumber == 2 ? (uint8_t)(1u << 5) :
-               relayNumber == 3 ? (uint8_t)(1u << 6) :
-               relayNumber == 4 ? (uint8_t)(1u << 7) :
-               relayNumber == 5 ? (uint8_t)(1u << 3) :
-               relayNumber == 6 ? (uint8_t)(1u << 2) :
-               relayNumber == 7 ? (uint8_t)(1u << 0) :
-               relayNumber == 8 ? (uint8_t)(1u << 1) : (uint8_t)0;
+    /**
+     * @brief Port mask of relay `relayNumber` (1..8) on the ACTIVE board (RelayBoardLaw.h
+     * table: PCA9557 Relay.PrjPcb routing or XL9535 identity); 0 for any other number
+     * and while no board was detected.
+     */
+    uint8_t relayIoMask(uint8_t relayNumber) const {
+        return table_ ? relayTableMask(*table_, relayNumber) : (uint8_t)0;
     }
 
     /** @brief True if a relay is wired behind the wheel-lock function (quad: true, aztec: false) */
@@ -180,7 +206,8 @@ public:
      * - CRANKING_TIMEOUT elapsed without engine start
      *
      * While the driver is faulted this instead re-attempts the safe-state port
-     * write on every call until it verifies.
+     * write (one attempt per call) and, every RELAY_RECOVER_MS, re-initializes the
+     * relay port seeded with the shadow (attemptRecovery()) until it verifies.
      *
      * @param engineRpm Current engine RPM from CAN bus
      */
@@ -220,6 +247,33 @@ public:
     /** @brief True when relay commands are actually reaching the hardware */
     bool isAvailable() const { return initialized_ && !faulted_; }
 
+    // ---- Relay board selection (telemetry relay_board / _addr / _cfg / _reboot / _error) ----
+
+    /** @brief Board in use, latched at boot (NONE when detection failed) */
+    RelayBoardKind getBoardKind() const { return boardKind_; }
+
+    /** @brief 7-bit address of the board in use; 0 when none */
+    uint8_t getBoardAddress() const { return boardKind_ == RelayBoardKind::NONE ? 0 : boardAddr_; }
+
+    /** @brief Setting used for detection at boot (out-of-range stored values read as AUTO) */
+    RelayBoardSetting getBootSetting() const { return bootSetting_; }
+
+    /** @brief Setting currently stored in NVS (changes apply after reboot) */
+    RelayBoardSetting getStoredSetting() const { return storedSetting_; }
+
+    /** @brief True while the stored setting differs from the one used at boot */
+    bool isBoardRebootPending() const { return storedSetting_ != bootSetting_; }
+
+    /** @brief Why no board is in use / the boot init failed; NONE otherwise */
+    RelayBoardError getBoardError() const { return boardError_; }
+
+    /**
+     * @brief Persist a new relay board setting (NVS `relay`/`board`). The running board,
+     * address and masks are untouched — the value is used from the next boot.
+     * @return true when NVS holds the new value (RAM copy updated only then)
+     */
+    bool saveBoardSetting(RelayBoardSetting setting);
+
     /**
      * @brief Fail-safe: turn ignition, starter and front light OFF and release every
      * web test relay. The front-wheel lock (where fitted) deliberately holds its last
@@ -228,13 +282,39 @@ public:
     void allOff();
 
 private:
-    PCA9557Expander expander_;
-    uint8_t outputShadow_;   // whole-port shadow; bits per RELAY_MASK_* in Constants.h
+    // Both drivers are members (no heap); port_ points at the detected one. The XL9535
+    // can sit at any of 0x20..0x27, so there is one instance per address (each is bound
+    // to its address at construction and also serves as that address's detection probe).
+    PCA9557Expander pca_;
+    XL9535Expander xl_[8];
+    IRelayPort* port_;               // nullptr until a board is detected
+    const uint8_t (*table_)[8];      // active Relay_N -> port bit table; nullptr while none
+
+    // Board selection (latched in begin())
+    RelayBoardKind boardKind_;
+    uint8_t boardAddr_;
+    RelayBoardSetting bootSetting_;
+    RelayBoardSetting storedSetting_;
+    RelayBoardError boardError_;
+
+    // Function port masks, built in begin() from RELAY_SET_* and the active table
+    uint8_t maskIgnition_;
+    uint8_t maskStarter_;
+    uint8_t maskFrontLight_;
+#if RELAY_WHEEL_LOCK_FITTED
+    uint8_t maskWheelLock_;
+#endif
+    uint8_t maskReserved_;
+
+    uint8_t outputShadow_;   // whole-port shadow; bits per the runtime masks above
 
     bool initialized_;       // begin() succeeded
     bool faulted_;           // a port write could not be verified
     bool starterInhibit_;    // crank requests refused until a write verifies clean again
     bool allOffEscalation_;  // repeat the all-off write on every update() while faulted
+    bool initPending_;       // boot initPort failed: only the timed recovery may touch the port
+    uint32_t lastRecoverMs_; // millis() of the fault raise / last recovery attempt
+    bool recoverFailLogged_; // a failed recovery attempt is logged once per fault episode
 
     // State tracking
     IgnitionState currentIgnitionState_;
@@ -273,13 +353,28 @@ private:
     /** @brief Release test relays whose auto-off time has elapsed */
     void expireRelayTests();
 
-    /** @brief Port bits -> relay-number bitfield (bit0 = Relay_1 … bit7 = Relay_8) */
-    static uint8_t getRelayTestBitsFromMask(uint8_t portBits);
+    /** @brief Port bits -> relay-number bitfield (bit0 = Relay_1 … bit7 = Relay_8), active table */
+    uint8_t getRelayTestBitsFromMask(uint8_t portBits) const;
+
+    /** @brief Read the stored setting from NVS (absent / out-of-range → AUTO, logged, not rewritten) */
+    static RelayBoardSetting loadBoardSetting();
+
+    /** @brief Log the detection fault and the 0x18..0x27 scan of this bus */
+    void logDetectionFault(uint16_t ackMask);
+
+    /** @brief Starter escalation: all-off shadow + write, ignition latched OFF, crank inhibit */
+    void escalateStarter();
 
     /**
-     * @brief Write the whole port and verify it by reading the output register back.
+     * @brief Timed recovery while faulted: initPort(shadow) (starter never seeded) and one
+     * verified write of the shadow. Bounded: four init transactions + one write + one read.
+     */
+    void attemptRecovery();
+
+    /**
+     * @brief Write the whole port and verify it by reading the PINS back (readPins()).
      * Retries up to `attempts` times. On persistent failure raises the fault and,
-     * if any `RELAY_MASK_STARTER` bit was set, runs the starter escalation (all-off,
+     * if any starter-mask bit was set, runs the starter escalation (all-off,
      * ignition OFF, crank inhibit).
      * @param value    port byte to write
      * @param attempts verification attempts (the faulted-path retry in update() uses

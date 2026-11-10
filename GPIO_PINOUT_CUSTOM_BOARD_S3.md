@@ -315,18 +315,20 @@ the aztec buggy (single ignition relay, no front-wheel lock); that assignment is
 > schematic netlist: `Relay_1=IO4, Relay_2=IO5, Relay_3=IO6, Relay_4=IO7, Relay_5=IO3, Relay_6=IO2,
 > Relay_7=IO0, Relay_8=IO1`. Do **not** "fix" firmware back to `Relay_N = bit N` — that mapping is
 > wrong and would fire the starter when the front light is commanded. The firmware encodes this in
-> `RELAY_MASK_*` in `include/Constants.h`, never in per-relay bit indices.
+> the `RELAY_TABLE_PCA9557` table in `include/RelayBoardLaw.h`; `include/Constants.h` holds only
+> relay-NUMBER sets (`RELAY_SET_*`), never per-relay bit indices.
 
-**Duplicate (paralleled) relays are intentional.** Two functions are split across two relay contacts
-that always energize together:
+Each function is a relay-number set in `include/Constants.h`, turned into a whole-port mask at boot
+through the detected board's table. **Duplicate (paralleled) relays are intentional.** Two functions
+are split across two relay contacts that always energize together:
 
-| Function | Mask (`include/Constants.h`) | Value | Relays / IO |
-|----------|------------------------------|-------|-------------|
-| Ignition / ECU line | `RELAY_MASK_IGNITION` | `0b00110000` | Relay_1 (IO4) + Relay_2 (IO5) |
-| Starter | `RELAY_MASK_STARTER` | `0b01000000` | Relay_3 (IO6) |
-| Front light | `RELAY_MASK_FRONT_LIGHT` | `0b10000000` | Relay_4 (IO7) |
-| Front-wheel lock | `RELAY_MASK_WHEEL_LOCK` | `0b00001100` | Relay_5 (IO3) + Relay_6 (IO2) |
-| Spare | `RELAY_MASK_RESERVED` | `0b00000011` | Relay_7 (IO0) + Relay_8 (IO1) — 0 except in the web relay test |
+| Function | Set (`include/Constants.h`) | PCA9557 mask | XL9535 mask | Relays |
+|----------|-----------------------------|--------------|-------------|--------|
+| Ignition / ECU line | `RELAY_SET_IGNITION` | `0b00110000` | `0b00000011` | Relay_1 (IO4 / P0.0) + Relay_2 (IO5 / P0.1) |
+| Starter | `RELAY_SET_STARTER` | `0b01000000` | `0b00000100` | Relay_3 (IO6 / P0.2) |
+| Front light | `RELAY_SET_FRONT_LIGHT` | `0b10000000` | `0b00001000` | Relay_4 (IO7 / P0.3) |
+| Front-wheel lock | `RELAY_SET_WHEEL_LOCK` | `0b00001100` | `0b00110000` | Relay_5 (IO3 / P0.4) + Relay_6 (IO2 / P0.5) |
+| Spare | `RELAY_SET_RESERVED` | `0b00000011` | `0b11000000` | Relay_7 (IO0 / P0.6) + Relay_8 (IO1 / P0.7) — 0 except in the web relay test |
 
 The front-wheel lock is **fitted** (`RELAY_WHEEL_LOCK_FITTED = 1`): MAVLink servo channel 7, the web
 `set_wheel_lock` command and telemetry bit0 drive and report it. The fail-safe all-off leaves the
@@ -346,6 +348,43 @@ switches off by itself after 30 s (`RELAY_TEST_TIMEOUT_MS`); the starter relay (
 all-off and a relay-board fault switch every test relay off immediately. The test bits go through
 the same shadow byte and read-back as the functions; telemetry `relay_test` reports them
 (bit0 = Relay_1 … bit7 = Relay_8).
+
+### 6a. Alternative relay board: XL9535-K8V5
+
+Off-the-shelf 8-relay board (5 V coils, optocoupler + FET per channel) with an **XL9535** 16-bit
+expander (PCA9535/TCA9535-compatible). Only **port P0** is used; P1 is never written. One image
+drives either board: the board is selected **once at boot** (NVS `relay`/`board`: auto | pca9557 |
+xl9535, default auto — web *System → Relay board*), and any ambiguity (both boards, none, two XL9535
+addresses, a manual choice that contradicts the bus) is a relay fault with every relay off.
+
+| Item | Value |
+|------|-------|
+| Bus | X15 / I2C2 (`Wire1`), 100 kHz — same header as the PCA9557 board, one board at a time |
+| 7-bit address | `0x20`..`0x27` via solder pads A0..A2, **default `0x20`** (collides with nothing on I2C2) |
+| Registers (P0) | input `0x00`, output `0x02`, polarity `0x04`, config `0x06` (1 = input) |
+| Power-on | output latch `0xFF`, config `0xFF` (all inputs) — **never enable outputs before writing the latch** (all eight relays, starter included, would pulse on); the firmware writes output → polarity → config, then checks the pins |
+| Reset | no RESET pin; a VIN brown-out resets it to all-inputs → caught by pin read-back, re-initialized every 1 s |
+| Expected boot scan | I2C2 = `0x1A 0x1C 0x20` |
+
+**Wiring (hardware task — to be confirmed and recorded on the bench, tasks.md 1.1):** remove jumper
+**J1**; feed **VIN** (logic + the board's I2C pull-ups) from the X15 I2C high-side **3.3 V** rail;
+feed the **5V relay terminal** from a separate 5 V supply (8 × ≈70 mA ≈ 0.6 A); shared GND; no I2C
+isolation.
+
+| Relay | XL9535 bit | Function (quad bike) |
+|-------|-----------|----------------------|
+| Relay_1, Relay_2 | P0.0, P0.1 | Ignition / ECU line — paralleled pair |
+| Relay_3 | P0.2 | Starter solenoid |
+| Relay_4 | P0.3 | Front light |
+| Relay_5, Relay_6 | P0.4, P0.5 | Front-wheel lock — paralleled pair |
+| Relay_7, Relay_8 | P0.6, P0.7 | Spare — off except in the web relay test |
+
+> ✅ **Mapping and polarity (identity, active-high) were bench-confirmed on 2026-11-07** on an
+> XL9535-K8V5 @0x20 (firmware 1.5.24): every relay Relay_1..Relay_8 switched correctly from the web
+> relay test, with pin read-back verified. Re-check on a different board revision (starter load
+> disconnected): Output P0 = `0x01`, then Config P0 = `0xFE` → Relay_1 must click; walk
+> `0x02`..`0x80`. A different result changes only `RELAY_TABLE_XL9535` in `include/RelayBoardLaw.h` (and, if
+> active-low, the XL9535 driver).
 
 ---
 
@@ -396,7 +435,8 @@ A separate 7s LiFePO4 battery also exists in the vehicle power system.
    board ships at **0x1F**, which collides with neither, so there is **no rework to do**; the earlier
    "must be strapped 0x18" instruction is withdrawn. `PCA9557_ADDR_RELAYS` is 0x1F.
    - The board lives on **X15 (I2C2)** and the firmware constructs `RelayController` with `Wire1`.
-     A boot scan of I2C2 shows **0x1A, 0x1C, 0x1F**.
+     A boot scan of I2C2 shows **0x1A, 0x1C, 0x1F** (or **0x1A, 0x1C, 0x20** with the XL9535-K8V5
+     board of §6a instead).
    - ⚠ **X15 needed rework on the first assembled board.** As delivered it passed no I2C signals at
      all (a device on X15 never answered, while the same device answered immediately on X14). The
      fix was in the **`FB3`/`FB4` ferrite area** of the X15 SDA/SCL run — **check there first** on
@@ -406,7 +446,8 @@ A separate 7s LiFePO4 battery also exists in the vehicle power system.
    - ⚠ **The relay board's IO routing is NOT 1:1** (§6): `Relay_1=IO4, Relay_2=IO5, Relay_3=IO6,
      Relay_4=IO7, Relay_5=IO3, Relay_6=IO2, Relay_7=IO0, Relay_8=IO1`, verified from the
      `Relay.PrjPcb` netlist. Never "simplify" the firmware back to `Relay_N = bit N` — that would
-     command the starter when the front light is requested. Firmware uses `RELAY_MASK_*`.
+     command the starter when the front light is requested. Firmware uses `RELAY_SET_*` through
+     `RELAY_TABLE_PCA9557` (`include/RelayBoardLaw.h`).
    - Two loads are deliberately split across **paired** relays that switch together: the
      ignition/ECU line on **X4 + X5** (Relay_1 + Relay_2) and the front-wheel lock on **X8 + X9**
      (Relay_5 + Relay_6). Starter is **X6** (Relay_3), front light **X7** (Relay_4). X10/X11
@@ -467,10 +508,10 @@ A separate 7s LiFePO4 battery also exists in the vehicle power system.
 | `PIN_GEAR_NEUTRAL` | 20 | Opto input **bit 0** (see §5) |
 | `PIN_GEAR_LOW` | 21 | Opto input **bit 6** (see §5) |
 | `PIN_GEAR_HIGH` | 47 | Opto input **bit 7** (see §5) |
-| `PIN_RELAY1` | 36 | Relay board ignition/ECU line — **Relay_1 + Relay_2** (IO4+IO5, `RELAY_MASK_IGNITION`) |
-| `PIN_RELAY2` | 37 | Relay board starter — **Relay_3** (IO6, `RELAY_MASK_STARTER`) |
-| `PIN_RELAY3` | 38 | Relay board front light — **Relay_4** (IO7, `RELAY_MASK_FRONT_LIGHT`) |
-| `PIN_WHEEL_LOCK` | 39 | Relay board front-wheel lock — **Relay_5 + Relay_6** (IO3+IO2, `RELAY_MASK_WHEEL_LOCK`) |
+| `PIN_RELAY1` | 36 | Relay board ignition/ECU line — **Relay_1 + Relay_2** (IO4+IO5, `RELAY_SET_IGNITION`) |
+| `PIN_RELAY2` | 37 | Relay board starter — **Relay_3** (IO6, `RELAY_SET_STARTER`) |
+| `PIN_RELAY3` | 38 | Relay board front light — **Relay_4** (IO7, `RELAY_SET_FRONT_LIGHT`) |
+| `PIN_WHEEL_LOCK` | 39 | Relay board front-wheel lock — **Relay_5 + Relay_6** (IO3+IO2, `RELAY_SET_WHEEL_LOCK`) |
 | `PIN_STEER_RPWM` / `PIN_STEER_LPWM` | 17 / 18 | Fully released — GPIO17/18 are now MAVLink UART1. The "RESERVED/FREED" placeholders (and `LEDC_CH_STEER_RPWM`/`LEDC_CH_STEER_LPWM`) must be deleted, not kept reserved |
 
 ### New / reworked drivers
