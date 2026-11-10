@@ -209,7 +209,9 @@ public:
         uint32_t vesc_resync;     // VESC UART parser resyncs since boot
         uint32_t can_reinit;      // verified MCP2515 re-initializations of any cause since boot
         uint32_t i2c_unlock;      // I2C2 bus recoveries (Wire1 restarts) since boot
-        int32_t journal_bytes;    // both journal files + unflushed bytes; -1 = cannot write to flash
+        int32_t journal_bytes;    // writes on: both journal files + unflushed bytes (-1 = cannot
+                                  // write to flash); writes off: RAM tail bytes
+        bool journal_fs;          // journal flash-write switch (NVS journal/fs, default off)
 
         // Firmware information
         String firmware_version;  // Firmware version string (e.g., "1.0.0")

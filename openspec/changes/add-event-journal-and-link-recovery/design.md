@@ -261,6 +261,33 @@ iteration: total and the slowest phase. Kept: max total per SNAP window (`loop_m
 (`jflush_max`). An iteration > `JOURNAL_LOOP_OVERRUN_MS` (50 ms) logs `loop_overrun` unless the
 slowest phase was `journal`.
 
+## D13 — Flash-write switch, default off
+- NVS `journal`/`fs` (uint8 0/1, default 0), read once in `EventJournal::begin()`, written by the
+  main loop when the operator changes it (`POST /api/events/config` only sets a request flag; the
+  loop persists it, journals it and arranges the flush, so ordering is deterministic).
+- **Why default off**: the flush's flash erase stalls both cores for 30–50 ms (D6). The aztec
+  vehicle has not been bench-verified with the journal yet (tasks §9.4), so the first field runs
+  must not risk an LWS timeout or a VESC link loss caused by the journal itself. The operator turns
+  flash writing on from the web card once the bench numbers (`jflush_max`) are known.
+- **What survives while off**: the RAM tail — the existing 4 KB buffer (`JOURNAL_RAM_BUF_BYTES`,
+  ≈ 45–55 lines, ≈ 20 min of idle SNAPs) holding the newest lines, oldest whole lines dropped
+  silently (counted, reported as `ram_dropped=` when switched on; no `journal_drop` spam); the RTC
+  ring (last 16 lines across a panic / watchdog / software reset, replayed into the RAM tail at the
+  next boot; `lost` then counts the RAM-tail lines beyond 16); dedupe, SNAP every 60 s (with
+  `jflush_max=0`), counters, heap watch, loop timing, `link_down_snap`. Lost at power-off: all of it.
+  `flushNow()` before an OTA / reboot only logs the `reboot` line (RAM + RTC ring).
+- **No file access while off**: no flush, rotation, size read at boot (sizes are read lazily on the
+  first tail / download or the first flush). Reading existing files for tail / download is allowed
+  (read-only, no erase); the file part and the RAM tail are each preceded by a `# --- … ---` label
+  line. `Clear` still deletes the files (explicit operator action).
+- **On → off**: `SYS I journal_fs on=0`, one final flush (steering deferral applies), then file
+  writes stop. **Off → on**: `SYS I journal_fs on=1 ram_dropped=N`, the RAM tail is flushed at once
+  (steering deferral applies), then normal 1 s cadence. Both lines are dedupe-exempt (`journal_*`),
+  so a gap in the flash history is always bracketed by them.
+- `journal_bytes`: on → files + unflushed bytes (−1 when file output failed); off → RAM-tail bytes.
+  Telemetry `journal_fs` carries the setting; the tail response carries `X-Journal-Fs` and
+  `X-Journal-Ram-Lines` for the card's status row.
+
 ## Risks / Trade-offs
 - Flash-erase stall in the loop (D6) → bench measurement; flushes deferred while the steering drives (Decisions).
 - LittleFS free space shrinks if `index.html` grows a lot → 256 KB budget checked in docs; write errors

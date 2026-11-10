@@ -43,6 +43,13 @@ laptop is attached. Three of those faults also have a concrete firmware cause th
 - Access: web card «Журнал подій» / "Event journal" in the System section (last 100 lines, source
   filter, Download, Clear); `GET /api/events?tail=N` (text/plain), `GET /api/events/download`
   (`.1` then active, one text stream), `POST /api/events/clear`.
+- **Flash-write switch, default OFF**: a persisted switch (NVS `journal`/`fs`, uint8, default 0)
+  decides whether the journal writes LittleFS at all. Off: no flush, no rotation, no file access at
+  boot — the journal runs in RAM (a 4 KB RAM tail, oldest lines dropped) plus the RTC ring, with
+  dedupe, SNAP, counters and replay unchanged; existing files are still served read-only before the
+  RAM tail. On: the behaviour above. Switching is journaled (`SYS I journal_fs on=1|0`) and flushes
+  at once (on: the RAM tail; off: one final flush). Web: «Запис у flash» / "Write to flash" toggle
+  in the card, `GET`/`POST /api/events/config` (`{"fs":bool}`), telemetry `journal_fs`.
 
 **B. Recovery fixes (each logs its trigger to the journal)**
 1. **VESC parser**: reset to `RX_START` when more than `VESC_RX_GAP_MS` (5 ms) passed since the last
@@ -60,8 +67,8 @@ laptop is attached. Three of those faults also have a concrete firmware cause th
    **This reverses the current rule "no driver and no coordinator SHALL call `end()`/`begin()` on
    `Wire1` after `setup()`"** (gpio-expander), for this one coordinator only.
 4. **Loop timing**: per-iteration duration and the slowest phase, max per 60 s snapshot window.
-- **Web telemetry** gains `vesc_resync`, `can_reinit`, `i2c_unlock` (session totals) and
-  `journal_bytes`.
+- **Web telemetry** gains `vesc_resync`, `can_reinit`, `i2c_unlock` (session totals),
+  `journal_bytes` and `journal_fs`.
 - **Not changed**: steering control law, relay functions, throttle, gear logic, MAVLink (no new
   messages or fields).
 - Firmware version 1.5.25 → 1.5.26, `include/Changelog.h` entry (uk + en). Docs:
@@ -80,7 +87,8 @@ laptop is attached. Three of those faults also have a concrete firmware cause th
   only), `src/RelayController.cpp`, `src/BoardInputs.cpp`, `src/SteerDiag.cpp`, `src/WebPortal.cpp`,
   `include/WebPortal.h`, `src/TelemetryManager.cpp`, `data/index.html`, `include/Constants.h`,
   `include/Changelog.h`, `platformio.ini` (native test filters), two docs.
-- Flash: ≤ 256 KB of the 1.5 MB LittleFS partition (≈ 1.2 MB free next to `index.html`); one NVS key.
+- Flash: ≤ 256 KB of the 1.5 MB LittleFS partition (≈ 1.2 MB free next to `index.html`), used only
+  while flash writes are switched on; two NVS keys (`journal`/`boot`, `journal`/`fs`).
 - Overlap with pending changes: `move-can-rx-to-interrupt` and `move-aztec-vesc-to-can` both MODIFY
   `CAN Communication Error Handling` and the VESC requirements. To avoid three-way conflicts this
   change only ADDS requirements in `can-controller` and `vehicle-actuators`. If `move-aztec-vesc-to-can`

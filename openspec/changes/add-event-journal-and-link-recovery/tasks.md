@@ -10,6 +10,8 @@
 - [x] 1.9 Failure handling: retry, oldest-line drop with `journal_drop n=`, file output disabled after 3 consecutive failures or a failed mount
 - [x] 1.10 SNAP every 60 s with the D3 field list; heap low / ok with 8 KB hysteresis
 - [x] 1.11 Deferred flush (decision 2): `service(steeringDriving)` defers the flush while `SteeringController::isDriving()` (closed-loop drive, jog, nudge, rate drive, park pulse, nonzero effort), at most `JOURNAL_FLUSH_DEFER_MAX_MS` (10 s), then flushes anyway; `flushNow()` never deferred
+- [x] 1.12 Flash-write switch (D13): NVS `journal`/`fs` (default 0) read in `begin()`, persisted by the loop on change; off = no file I/O (no flush / rotation / boot size read), RAM tail of `JOURNAL_RAM_BUF_BYTES` (oldest dropped, no `journal_drop`), RTC replay, dedupe, SNAP, counters unchanged, `flushNow()` a no-op; on → `SYS I journal_fs on=1 ram_dropped=N` + immediate flush; off → `SYS I journal_fs on=0` + one final flush (both subject to the steering deferral); tail / download serve existing files read-only before the RAM tail with `# --- … ---` labels
+- [x] 1.13 `EventJournalLaw.h`: `jLineBufAppend()` (append, drop oldest whole lines, byte / line accounting) used by the RAM buffer; native tests in `test/test_event_journal`
 
 ## 2. Event sources wiring
 - [x] 2.1 `src/main.cpp`: `EventJournal::begin()` right after LittleFS is mounted (lines logged earlier stay in RAM); `EventJournal::service()` as the last step of `loop()`
@@ -30,6 +32,8 @@
 - [x] 3.3 `POST /api/events/clear` → loop-executed clear, answered `{"ok":true}`
 - [x] 3.4 `data/index.html`: «Журнал подій» / "Event journal" card in the System section after Network: last 100 lines (monospace, newest at the bottom), source filter (All + 9 sources), Refresh, Download, Clear (with confirm); refresh on open and every 5 s while the System section is visible; uk + en strings; ⓘ help text (what is logged, uploadfs erases the journal)
 - [x] 3.5 Card shows a "journal unavailable (flash write failed)" note when `journal_bytes` is −1
+- [x] 3.6 `GET /api/events/config` → `{"fs":bool}`, `POST /api/events/config` `{"fs":bool}` (style of `/api/debug`); `X-Journal-Fs` / `X-Journal-Ram-Lines` headers on the tail response; telemetry `journal_fs`
+- [x] 3.7 Card: «Запис у flash» / "Write to flash" toggle (uk + en) with the RAM-only hint, status row "RAM only" / "flash" + lines in RAM, help text for the switch
 
 ## 4. VESC parser fix and tests
 - [x] 4.1 `include/VescRxParser.h` (header-only): the existing state machine moved verbatim, plus `feed(byte, nowMs)` gap reset (`VESC_RX_GAP_MS` = 5), counters `bytes good drop_crc drop_stop resync bytes_since_good`
@@ -76,3 +80,4 @@
 - [ ] 9.8 CAN: unplug the LWS connector with the ECU on → `lws_silent … -> reinit` at ≥ 5 s spacing; replug → `first_frame`; ECU off as well → no LWS re-inits; ignition OFF (LWS unpowered) → no `lws_silent`, no re-init; ignition ON again → first frame re-arms
 - [ ] 9.9 I2C2: hold SDA low briefly (pull-down via resistor on X15) during operation → `bus_stuck … released=1`, relays and opto inputs recover without reboot; unplugged relay board does not restart `Wire1`
 - [ ] 9.10 Loop overrun event appears for an artificial 80 ms delay (test build) and names the phase
+- [ ] 9.11 Flash-write switch: fresh NVS → `journal_fs` false, no `/events.*` created or growing, tail shows the RAM-only label; toggle on → `journal_fs on=1` + RAM tail in `/events.log` within 1 s; toggle off → `journal_fs on=0`, file stops growing; setting survives a reboot

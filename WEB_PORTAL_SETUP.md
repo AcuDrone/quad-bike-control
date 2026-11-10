@@ -149,7 +149,10 @@ it. Cards are shown in one column.
   Refresh, Download and Clear (with a confirm). It refreshes on open and every 5 s while the System
   section is visible. The header shows the self-recovery counters VESC / CAN / I2C (`vesc_resync`,
   `can_reinit`, `i2c_unlock` since boot) and the journal size (`journal_bytes`); when the journal
-  cannot write to flash (`journal_bytes` = −1) a red note says so. See "Event journal" below.
+  cannot write to flash (`journal_bytes` = −1) a red note says so. A **«Запис у flash» / "Write to
+  flash"** toggle (default **OFF**, from telemetry `journal_fs`) switches the journal's flash writes;
+  the "Storage" row shows "RAM only" / "flash" and the number of lines held in RAM. See "Event
+  journal" below.
 
 **Odometer / trip (read-only):** the Speed card **displays** the total odometer (`odo_km`) and the
 trip distance (`trip_km`), both in km to 3 decimals and both shown whatever the sensor's health —
@@ -274,6 +277,20 @@ controlled reboot (OTA). The last 16 unflushed lines also sit in RTC memory and 
 panic / watchdog / software reset behind an `RTC I replay` line; up to ≈ 1 s of events is lost on a
 power cut. A boot counter (NVS `journal`/`boot`) numbers the boots.
 
+**Flash-write switch (default OFF).** Everything above about files applies only while «Запис у
+flash» / "Write to flash" is on (NVS `journal`/`fs`, uint8, default 0; survives a reboot). While it is
+**off** (the default, so an untested vehicle never sees a flash-erase stall from the journal) the
+journal does no LittleFS writes at all — no flush, no rotation, no file access at boot — and runs in
+RAM: the newest ≈ 4 KB of lines (`JOURNAL_RAM_BUF_BYTES`, ≈ 45–55 lines; oldest lines dropped) plus
+the RTC ring (last 16 lines across a reset). Dedupe, SNAP every 60 s, counters and replay work as
+usual; `journal_bytes` reports the RAM bytes, `jflush_max` stays 0, the pre-OTA flush is skipped.
+**Everything is lost at power-off.** Files from an earlier period with writes on are still served
+(read-only) by tail and download, before the RAM lines; with writes off each part is preceded by a
+label line `# --- flash: … ---` / `# --- RAM only: … ---`. Switching is journaled so gaps are
+explainable: on → `SYS I journal_fs on=1 ram_dropped=N` and the RAM lines are written to flash at
+once; off → `SYS I journal_fs on=0`, one final flush, then the files are left alone (both flushes
+still wait for the steering motor, at most 10 s). Clear deletes the files in either mode.
+
 Line format (ASCII, ≤ 120 bytes): `<boot> <uptime_s.mmm> <SRC> <LVL> <event> k=v k=v ...`, levels
 `I`/`W`/`E`, sources `SYS SRC STEER VESC CAN I2C RELAY SNAP RTC`; each boot starts with
 `# boot=N fw=… reset=…`. The same (source, event) is written at most once per 2 s; repeats are counted
@@ -295,9 +312,14 @@ packets, `rs` resyncs, `vin`, `fet`, `fault`, `down_ms`. The snapshot is written
 `SNAP` lines.
 
 HTTP API (text/plain, streamed; the main loop never waits for a reader):
-- `GET /api/events?tail=N` — the last N lines (default 100, max 500), unflushed lines included, oldest first.
-- `GET /api/events/download` — `/events.1` then `/events.log` (+ unflushed lines) as one attachment
+- `GET /api/events?tail=N` — the last N lines (default 100, max 500), RAM lines included, oldest
+  first. Headers: `X-Journal-Fs` (`0`/`1`) and `X-Journal-Ram-Lines` (lines held in RAM).
+- `GET /api/events/download` — `/events.1` then `/events.log`, then the RAM lines, as one attachment
   (`<SSID>-events-boot<N>.log`). Rotation is postponed while it streams.
+- `GET /api/events/config` → `{"fs":false}` — the flash-write switch.
+- `POST /api/events/config` with `{"fs":true}` / `{"fs":false}` → `{"success":true,"fs":…}`
+  (400 `{"success":false,"message":…}` for invalid JSON or a missing boolean `fs`). Applied by the
+  main loop on its next iteration (persisted to NVS, `journal_fs on=…` line, flush).
 - `POST /api/events/clear` — deletes both files and the RAM buffer (executed by the main loop) and
   writes `SYS I journal_cleared`; answers `{"ok":true}`. The boot counter is kept.
 
