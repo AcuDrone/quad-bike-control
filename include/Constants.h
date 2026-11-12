@@ -45,7 +45,7 @@
 // Connector X6 via BSS138 shifters — 115200 only (pinout §8.3).
 // (The aztec buggy runs its VESC on UART0 / X1 instead — aztec branch.)
 #define PIN_VESC_TX         GPIO_NUM_4    // ESP TX -> VESC RX (X6 pin 2)
-#define PIN_VESC_RX         GPIO_NUM_5    // ESP RX <- VESC TX (X6 pin 3)
+#define PIN_VESC_RX         GPIO_NUM_5    // ESP RX <- VESC TX (X6 pin 3); internal pull-up set in VescMotorDriver::begin()
 #define VESC_UART_NUM       2             // UART_NUM_2
 #define VESC_UART_BAUD      115200        // VESC app default baud
 
@@ -882,7 +882,7 @@ enum class InputSource {
 #define CAN_RX_LOG_INTERVAL          1000  // ms - rate limit for unmatched-RX-frame logging
 #define CAN_HEALTH_LOG_INTERVAL      5000  // ms - rate limit for TEC/REC/EFLG health logging
 #define CAN_OVERFLOW_LOG_INTERVAL    5000  // ms - rate limit for RXnOVR overflow logging
-#define CAN_REINIT_NO_DATA_MS        15000 // ms - full chip re-init when polling but no valid OBD response for this long (heals a wedged TX / latched ABAT once the ECU powers up)
+#define CAN_REINIT_NO_DATA_MS        15000 // ms - full chip re-init when polling but no valid OBD response for this long (heals a wedged TX / latched ABAT once the ECU powers up); only while the ignition is ACC/IGNITION, window restarts at switch-on (CanWatchdogLaw.h)
 #define CAN_REINIT_MIN_INTERVAL_MS   15000 // ms - minimum spacing between forced re-inits
 // LWS silence watchdog (change add-event-journal-and-link-recovery D10). Runs only while the
 // ignition is ACC or IGNITION (the LWS is fed from the ACC line) and arms on the first 0x305
@@ -970,7 +970,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.27"
+#define FIRMWARE_VERSION "1.5.28"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

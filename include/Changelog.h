@@ -14,6 +14,13 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.28","date":"2026-11-12","uk":[
+"Квадроцикл: на лінії прийому від VESC керма (X6, GPIO5) увімкнено внутрішню підтяжку до +3,3 В. На X6 уже є зовнішні підтяжки через перетворювачі рівнів, тож поведінка не змінюється — внутрішня додана для однаковості з багі. Якщо підтяжку не вдалося ввімкнути, у журналі з’являється запис «VESC W rx_pullup»",
+"CAN: при вимкненому запалюванні (OFF) мовчання ECU більше не вважається збоєм — контролер CAN не перезапускається кожні 15 с, у журналі немає «obd_silent», лічильник can_reinit не росте (як уже було для датчика кута керма). Після перемикання в ACC/ON відлік 15 с починається заново"
+],"en":[
+"Quad: the internal pull-up to +3.3 V is enabled on the steering VESC receive line (X6, GPIO5). X6 already has external pull-ups through the level shifters, so behaviour does not change — the internal one is added for parity with the buggy. If the pull-up cannot be enabled, the journal shows “VESC W rx_pullup”",
+"CAN: with the ignition OFF a silent ECU is no longer treated as a fault — the CAN controller is not restarted every 15 s, no “obd_silent” in the journal, the can_reinit counter does not grow (as already done for the steering-angle sensor). After switching to ACC/ON the 15 s window starts afresh"
+]},
 {"version":"1.5.27","date":"2026-11-12","uk":[
 "Веб-панель: підтвердження без спливаючих вікон браузера — «Задати нуль датчика», «Скинути до типових» (коди передач), «Очистити» (журнал подій) і «Завантажити прошивку» тепер підтверджуються другим натисканням тієї ж кнопки протягом 5 с; попередження показується в рядку стану картки. Раніше у вікні входу в мережу на телефоні або після «заборонити сторінці створювати діалоги» в Chrome кнопка мовчки нічого не робила. Результат завантаження прошивки теж показується в картці. Потрібно залити оновлений образ LittleFS",
 "Калібрування керма: «Задати ліво», «Задати право» і «Задати нуль датчика» без з’єднання з платою тепер показують у рядку стану картки «Немає з'єднання з платою», а не мовчать"

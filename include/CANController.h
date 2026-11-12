@@ -198,6 +198,9 @@ public:
      * @brief LWS power state, fed every loop by the vehicle layer: true while the ignition is ACC
      * or IGNITION (the Bosch LWS hangs on the ACC line, Relay_1). The LWS silence watchdog runs
      * only while powered and arms on the first 0x305 frame after each off -> on transition.
+     * The ECU hangs on the same ACC line, so the OBD-II no-data watchdog is gated on the same flag
+     * and restarts its 15 s window at each off -> on transition
+     * (change gate-obd-watchdog-and-pull-up-vesc-rx).
      */
     void setLwsPowered(bool on);
 
@@ -301,7 +304,8 @@ private:
     uint8_t reinitAttempt_;           // attempts made in the running sequence
     uint32_t reinitAttemptMs_;        // millis() of the last attempt
     uint32_t reinitCount_;            // verified re-inits since boot (telemetry can_reinit)
-    bool lwsPowered_;                 // ignition ACC / IGNITION (setLwsPowered())
+    bool lwsPowered_;                 // ignition ACC / IGNITION (setLwsPowered()); gates both CAN watchdogs
+    uint32_t ignitionOnMs_;           // millis() of the last ignition off -> on edge (OBD-II window start)
     bool lwsSeenSinceOn_;             // a 0x305 frame arrived since the ignition was switched on (armed)
     uint32_t lastLwsFrameMs_;         // millis() of the last dispatched 0x305 frame
     bool lwsSilentObdDeadLogged_;     // "lws_silent obd_alive=0" journaled for this silence episode

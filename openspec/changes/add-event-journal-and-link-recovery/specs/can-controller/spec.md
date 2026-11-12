@@ -2,8 +2,9 @@
 ### Requirement: Steering Angle Frame Silence Watchdog
 The CAN controller SHALL re-initialize the MCP2515 when the Bosch LWS `0x305` stream stops while the
 rest of the bus demonstrably works, because the existing OBD-II no-data watchdog
-(`CAN_REINIT_NO_DATA_MS`, 15 s) never fires on a vehicle whose ECU keeps answering. The OBD-II
-watchdog SHALL stay unchanged. Because the LWS is powered from the ACC line (ignition Relay_1), the
+(`CAN_REINIT_NO_DATA_MS`, 15 s) never fires on a vehicle whose ECU keeps answering. This change
+leaves the OBD-II watchdog's trigger unchanged (its ignition gating is specified by change
+`gate-obd-watchdog-and-pull-up-vesc-rx`). Because the LWS is powered from the ACC line (ignition Relay_1), the
 watchdog SHALL run only while the relay controller's ignition state is `ACC` or `IGNITION`, SHALL arm
 only after the first `0x305` frame received since the ignition was switched on, and SHALL use a fixed
 re-init spacing of `CAN_LWS_REINIT_MIN_MS` (5 s) without any back-off.
