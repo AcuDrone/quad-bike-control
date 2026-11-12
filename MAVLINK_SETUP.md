@@ -323,15 +323,24 @@ which switches on the first character of the gear name):
 
 #### `pt_compensation` bitmask
 
-`EFI_DIGITAL_FLAG_*` in `include/Constants.h:351-352`, assembled in `src/main.cpp`, cast to float:
+`EFI_DIGITAL_FLAG_*` block in `include/Constants.h` (next to the RC lock / light thresholds),
+assembled in `src/main.cpp`, cast to float:
 
 | Bit | Mask | Meaning |
 |-----|------|---------|
 | 0 | `0x01` | `EFI_DIGITAL_FLAG_WHEEL_LOCK` — lock engaged (aztec: Relay_4+5+6 energized; quad (master): front-wheel lock) |
 | 1 | `0x02` | `EFI_DIGITAL_FLAG_FRONT_LIGHT` — front light on |
-| 2–7 | — | unassigned, always 0 |
+| 2 | `0x04` | `EFI_DIGITAL_FLAG_PARK_BRAKE` — parking brake **APPLIED** (aztec, X6) |
+| 3 | `0x08` | `EFI_DIGITAL_FLAG_PARK_BRAKE_UNSETTLED` — parking brake **APPLYING**, **RELEASING** or **UNKNOWN** (aztec) |
+| 4–7 | — | unassigned, always 0 |
 
-A `float` holding a small integer, so `0`, `1`, `2`, `3` are the only values on the wire today.
+Bits 2 and 3 both clear = parking brake **RELEASED**. Two bits are needed because one bit cannot
+tell "released" from "unknown / moving". Bit 3 stays set for the whole release run, including the
+part after the throttle release point in which the throttle already passes. On the quad (master)
+bits 2–3 are always 0.
+
+A `float` holding a small integer, so the value on the wire is `0`–`15` (e.g. `4.0` = applied,
+`5.0` = applied + lock engaged). Decoders that test bits 0/1 with a mask are unaffected.
 
 #### Odometer and trip distance
 

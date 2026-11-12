@@ -20,7 +20,10 @@
 //   GPIO19/20 — native USB D-/D+ (USB-CDC console, flashing). Never assign.
 //   GPIO45    — CFG_CH9121T (LAN config strap), untouched (the CH9121T is cut off
 //               from UART0 on the aztec board, see PIN_VESC_TX below).
-//   GPIO4/5   — FREE: X6 is reserved for a 4th BTS7960 driver (IS mux CH3/CH0).
+//   (GPIO4/5 are no longer free: X6 carries the aztec PARKING-BRAKE BTS7960 —
+//   PIN_PARK_BRAKE_LPWM / PIN_PARK_BRAKE_RPWM below, change add-aztec-parking-brake;
+//   its IS lines on mux CH3/CH0 are not sampled. Aztec only — on master X6 is the
+//   steering VESC.)
 //   GPIO0/21, GPIO10-13 — spare (system LED, Hall_1 B, Hall_2/3).
 //   GPIO14 (Hall_1 A, X3) is no longer spare on aztec: it is the ECU tacho input
 //   (PIN_TACHO, change add-tacho-rpm-input).
@@ -40,13 +43,13 @@
 // Steering Actuator — driven by a Flipsky 75200 VESC over UART0 (brushed-DC mode).
 // See "VESC STEERING DRIVER CONFIGURATION" below. The former BTS7960 steering PWM
 // pins (GPIO17/18) and their LEDC channels (6/7) are fully released: GPIO17/18 are
-// now the MAVLink UART and LEDC 6/7 are free for future use.
+// now the MAVLink UART and LEDC 6/7 drive the aztec parking brake on X6.
 
 // VESC steering driver UART (UART_NUM_0; UART1 = MAVLink, UART2 unused).
 // Prog header X1 (TxD/RxD, 3.3V direct through 510R R13/R14, no level shifters).
 // HARDWARE PRECONDITION (aztec board): R63/R64 (100R links GPIO43/44 -> CH9121T)
 // are REMOVED, so UART0 reaches only X1. With them fitted the LAN chip would fight
-// the VESC on GPIO44. X6 (GPIO4/5) is freed for a 4th BTS7960.
+// the VESC on GPIO44. X6 (GPIO4/5) carries the parking-brake BTS7960 (see below).
 // The ROM bootloader still prints on GPIO43 at reset (the VESC ignores unframed
 // bytes); runtime core/IDF logging is kept off UART0 in setup() (main.cpp).
 #define PIN_VESC_TX         GPIO_NUM_43   // UART0 TX -> VESC RX (X1 TxD)
@@ -71,6 +74,17 @@
 #define PIN_BRAKE_LPWM      GPIO_NUM_6   // LEDC Channel 5 (X7 pin 2)
 #define LEDC_CH_BRAKE_RPWM  4
 #define LEDC_CH_BRAKE_LPWM  5
+
+// Parking-brake linear actuator (BTS7960) — X6, AZTEC ONLY (change add-aztec-parking-brake).
+// Self-locking actuator with built-in limit switches, no position feedback: a run is timed
+// (travel + margin at full duty, then both PWM 0, no hold). Same shared motor timer
+// (LEDC_TIMER_1, MOTOR_PWM_FREQ 10 kHz, 8-bit) as the X7 brake. L_IS / R_IS go to the CD4051
+// mux CH3 / CH0 and are not sampled. Which pin tightens the cable is set by NVS "pbrake"/invert.
+// On master X6 is the steering VESC: never cherry-pick this into master.
+#define PIN_PARK_BRAKE_LPWM      GPIO_NUM_4   // LEDC Channel 7 (X6 pin 2)
+#define PIN_PARK_BRAKE_RPWM      GPIO_NUM_5   // LEDC Channel 6 (X6 pin 3)
+#define LEDC_CH_PARK_BRAKE_RPWM  6
+#define LEDC_CH_PARK_BRAKE_LPWM  7
 
 // SPI CAN Controller (MCP2515 + TJA1051T/3, 8 MHz crystal → MCP_8MHZ). One shared
 // 500 kbit/s bus: the engine ECU (OBD-II 0x7DF/0x7E8) AND the Bosch LWS steering
@@ -470,9 +484,11 @@ struct ServoChannelConfig {
 
 // Digital output states reported back to the GCS as a bitmask carried in
 // EFI_STATUS.pt_compensation (float). MUST stay in sync with the MP plugin decode.
-// bit2+ reserved for future digital outputs.
+// Value range 0–15; bit4+ reserved for future digital outputs.
 #define EFI_DIGITAL_FLAG_WHEEL_LOCK  0x01  // bit0 — lock engaged (aztec: Relay_4+5+6 energized)
 #define EFI_DIGITAL_FLAG_FRONT_LIGHT 0x02  // bit1 — front light on
+#define EFI_DIGITAL_FLAG_PARK_BRAKE  0x04  // bit2 — parking brake APPLIED (aztec)
+#define EFI_DIGITAL_FLAG_PARK_BRAKE_UNSETTLED 0x08  // bit3 — parking brake APPLYING / RELEASING / UNKNOWN; bits 2+3 clear = RELEASED
 
 // ============================================================================
 // SERVO CONFIGURATION
@@ -762,6 +778,31 @@ static_assert(STEER_PWM_MIN_DUTY >= STEER_PWM_TRACK_MIN_DUTY, "break-away floor 
 #define BRAKE_NVS_NAMESPACE    "brake"
 #define BRAKE_TRAVEL_NVS_KEY   "travel_ms"   // uint16, ms
 #define BRAKE_HOLD_NVS_KEY     "hold_pwm"    // uint8, PWM 0-255 scale
+
+// ============================================================================
+// PARKING BRAKE (aztec, X6) — change add-aztec-parking-brake
+// ============================================================================
+// Timed runs at full duty; law in include/ParkBrakeLaw.h (keep its literals in sync — checked by
+// static_assert in src/ParkBrakeController.cpp). Owned by ParkBrakeController; the speed interlock,
+// the drive-away release and the throttle hold are VehicleController's policy.
+#define PARK_BRAKE_DRIVE_DUTY             255     // PWM (0-255) during a run — full drive, no hold afterwards
+#define PARK_BRAKE_TRAVEL_MS_DEFAULT      2000    // ms — owner's estimate, replace with the bench measurement
+#define PARK_BRAKE_TRAVEL_MS_MIN          1000    // ms
+#define PARK_BRAKE_TRAVEL_MS_MAX          5000    // ms
+#define PARK_BRAKE_TRAVEL_MARGIN_MS       500     // ms added to every run (the limit switch cuts the motor at the end)
+#define PARK_BRAKE_REVERSE_DWELL_MS       200     // ms at zero duty before a reversal
+// Throttle release point: during a RELEASING run the operator throttle in gear is held at idle for
+// this share of travel_ms (from the start of the release drive), then passes through the slew.
+#define PARK_BRAKE_THR_PASS_PCT_DEFAULT   50      // %
+#define PARK_BRAKE_THR_PASS_PCT_MIN       20      // % (below is not offered: owner rejected "no hold")
+#define PARK_BRAKE_THR_PASS_PCT_MAX       100     // % (100 = hold until the run ends, margin included)
+#define PARK_BRAKE_APPLY_MAX_SPEED_MS     0.833f  // m/s (3 km/h) — APPLY refused above this (hall sensor)
+#define PARK_BRAKE_DRIVE_AWAY_THROTTLE_PCT 10.0f  // % — a rising operator demand above this releases (L/H/R, ignition on)
+#define PARK_BRAKE_NVS_NAMESPACE          "pbrake"
+#define PARK_BRAKE_STATE_NVS_KEY          "state"      // uint8: 0 unknown, 1 released, 2 applied, 3 applying, 4 releasing
+#define PARK_BRAKE_TRAVEL_NVS_KEY         "travel_ms"  // uint16, ms
+#define PARK_BRAKE_THR_PASS_NVS_KEY       "thr_pass"   // uint8, % of travel_ms
+#define PARK_BRAKE_INVERT_NVS_KEY         "invert"     // uint8 0/1
 
 // ============================================================================
 // VEHICLE SPEED SENSOR (12V toothed-ring pickup, PCNT on PIN_SPEED_SENSOR)
@@ -1064,7 +1105,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.28"
+#define FIRMWARE_VERSION "1.5.29"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

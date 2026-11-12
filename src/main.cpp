@@ -42,6 +42,8 @@ ThrottleController throttle;
 TransmissionController transmissionActuator;
 // Brake actuator (BTS7960)
 BTS7960Controller brakeActuator;
+// Parking-brake actuator (BTS7960 on X6, aztec only — on master X6 is the steering VESC)
+BTS7960Controller parkBrakeActuator;
 
 // MAVLink interface to Pixhawk (TELEM2)
 MavlinkInterface mavlinkInterface;
@@ -72,7 +74,7 @@ SpeedSensor speedSensor;
 
 // Vehicle Controller (coordinates all actuators and input sources)
 VehicleController vehicleController(steeringActuator, throttle, transmissionActuator, brakeActuator,
-                                     mavlinkInterface, relayController, boardInputs, speedSensor);
+                                     parkBrakeActuator, mavlinkInterface, relayController, boardInputs, speedSensor);
 
 // Web Portal for telemetry and manual control
 WebPortal webPortal;
@@ -276,6 +278,16 @@ void setup() {
 
     brakeActuator.stop();
 
+    // Parking brake on X6 (aztec): second BTS7960 on the already configured motor timer
+    // (LEDC_TIMER_1, 10 kHz, 8-bit). begin() leaves both outputs at zero duty; nothing is driven
+    // at boot — the stored state is only restored (vehicleController.initParkBrake() below).
+    if (!parkBrakeActuator.begin(PIN_PARK_BRAKE_RPWM, PIN_PARK_BRAKE_LPWM,
+                                 LEDC_CH_PARK_BRAKE_RPWM, LEDC_CH_PARK_BRAKE_LPWM)) {
+        Debug::printlnFeature(DebugFeature::BRAKE, "ERROR: Park brake actuator (X6) failed — park brake commands refused");
+    }
+    parkBrakeActuator.stop();
+    vehicleController.initParkBrake();
+
     // Initialize MAVLink interface (Pixhawk TELEM2)
     if (!mavlinkInterface.begin()) {
         Debug::printlnFeature(DebugFeature::MAVLINK, "ERROR: MAVLink interface failed");
@@ -399,8 +411,15 @@ void loop() {
     report.ignition     = getRelayIgnitionStateName(vehicleController.getIgnitionState());
     report.failsafe     = (vehicleController.getInputSource() == InputSource::FAILSAFE);
     // bit0 = the lock (aztec: Relay_4+5+6 energized), from the relay controller's commanded state.
-    report.digitalFlags = (vehicleController.getWheelLock()  ? EFI_DIGITAL_FLAG_WHEEL_LOCK  : 0)
-                        | (vehicleController.getFrontLight() ? EFI_DIGITAL_FLAG_FRONT_LIGHT : 0);
+    // bit2 = parking brake APPLIED, bit3 = parking brake APPLYING / RELEASING / UNKNOWN (both 0 = RELEASED).
+    {
+        const ParkBrakeState pb = vehicleController.getParkBrakeState();
+        report.digitalFlags = (vehicleController.getWheelLock()  ? EFI_DIGITAL_FLAG_WHEEL_LOCK  : 0)
+                            | (vehicleController.getFrontLight() ? EFI_DIGITAL_FLAG_FRONT_LIGHT : 0)
+                            | (pb == ParkBrakeState::APPLIED ? EFI_DIGITAL_FLAG_PARK_BRAKE : 0)
+                            | ((pb == ParkBrakeState::APPLYING || pb == ParkBrakeState::RELEASING ||
+                                pb == ParkBrakeState::UNKNOWN) ? EFI_DIGITAL_FLAG_PARK_BRAKE_UNSETTLED : 0);
+    }
     report.speedValid   = vehicleController.isVehicleSpeedValid();
     report.speedMs      = vehicleController.getVehicleSpeedMs();
     report.intakeTemp   = vd.intakeTemp;

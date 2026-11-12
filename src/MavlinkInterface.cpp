@@ -652,7 +652,8 @@ void MavlinkInterface::report(const StateReport& state) {
         float tpsVal = state.canValid ? (float)state.throttlePosition : NAN;
         float thrOutVal = (float)state.throttleCmdPct;
         // Digital output states packed as a bitmask (see EFI_DIGITAL_FLAG_* in Constants.h):
-        // bit0 = wheel lock, bit1 = front light. Always valid (relay ground-truth), never NaN.
+        // bit0 = wheel lock, bit1 = front light, bit2 = parking brake applied, bit3 = parking brake
+        // applying / releasing / unknown (aztec; value 0–15). Always valid, never NaN.
         // bit0 is the aztec lock (Relay_4+5+6), from RelayController::getWheelLock().
         float flagsVal = (float)state.digitalFlags;
 

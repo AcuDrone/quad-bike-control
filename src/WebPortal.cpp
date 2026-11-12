@@ -685,6 +685,10 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // JSON) — aztec worst case ≈ 8.7 KB, ≈ 0.5 KB under 9216 (size unchanged).
     // Journal flash-write switch since 1.5.26: journal_fs, 1 bool slot (key by pointer; ≈ 16 B of
     // memory, ≤ 20 B of JSON) — aztec worst case still ≈ 8.7 KB, ≈ 0.5 KB under 9216 (size unchanged).
+    // Parking brake since 1.5.29: pbrake_state / _remaining_ms / _thr_hold / _da_wait / _travel_ms /
+    // _thr_pass_pct / _invert, 7 scalar slots (keys by pointer, the two tokens static strings by
+    // pointer, nothing copied; 7 × 16 B = 112 B of memory, ≤ 190 B of JSON) — aztec worst case
+    // ≈ 8.82 KB, ≈ 0.4 KB under 9216 (size unchanged).
     // Static (single caller: the main-loop broadcast) so the larger document is off the stack.
     static StaticJsonDocument<9216> doc;
     doc.clear();
@@ -898,6 +902,15 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["i2c_unlock"] = telemetry.i2c_unlock;
     doc["journal_bytes"] = telemetry.journal_bytes;   // writes off: RAM tail bytes
     doc["journal_fs"] = telemetry.journal_fs;         // journal flash-write switch
+
+    // Aztec parking brake (X6): state / da_wait tokens are static strings, stored by pointer
+    doc["pbrake_state"] = telemetry.pbrake_state;
+    doc["pbrake_remaining_ms"] = telemetry.pbrake_remaining_ms;
+    doc["pbrake_thr_hold"] = telemetry.pbrake_thr_hold;
+    doc["pbrake_da_wait"] = telemetry.pbrake_da_wait;
+    doc["pbrake_travel_ms"] = telemetry.pbrake_travel_ms;
+    doc["pbrake_thr_pass_pct"] = telemetry.pbrake_thr_pass_pct;
+    doc["pbrake_invert"] = telemetry.pbrake_invert;
 
     // Firmware version and target board
     doc["firmware_version"] = telemetry.firmware_version;

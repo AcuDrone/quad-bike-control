@@ -50,6 +50,9 @@ public:
      */
     void stop() override;
 
+    /** @brief True once begin() configured both LEDC channels (false = every drive call is a no-op) */
+    bool isInitialized() const { return initialized_; }
+
 private:
     gpio_num_t rpwmPin_;
     gpio_num_t lpwmPin_;

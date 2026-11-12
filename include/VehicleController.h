@@ -19,6 +19,8 @@
 #include "SpeedLimiterLaw.h"
 #include "TachoLaw.h"
 #include "TachoSensor.h"
+#include "ParkBrakeController.h"
+#include "ParkBrakeLaw.h"
 
 /**
  * @brief Vehicle control coordination layer
@@ -32,6 +34,7 @@ public:
                       ThrottleController& throttle,
                       TransmissionController& transmission,
                       BTS7960Controller& brake,
+                      BTS7960Controller& parkBrake,
                       MavlinkInterface& mavlink,
                       RelayController& relayController,
                       BoardInputs& boardInputs,
@@ -49,6 +52,12 @@ public:
      * Call once from setup(), after NVS is up.
      */
     void initTacho() { tacho_.begin(); }
+
+    /**
+     * @brief Load the aztec parking-brake state and settings from NVS "pbrake". Call once from
+     * setup(), after the X6 driver's begin(). Never drives the actuator.
+     */
+    void initParkBrake() { parkBrake_.begin(); }
 
     /**
      * @brief Load the engine hour meter from NVS. Call once from setup().
@@ -198,6 +207,36 @@ public:
      */
     bool setBrakeTravelMs(uint16_t ms);
     bool setBrakeHoldPwm(uint8_t pwm);
+
+    // ---- Aztec parking brake on X6 (change add-aztec-parking-brake) ----
+
+    /** @brief commandParkBrake() outcome: result code, the trusted speed for REFUSED_MOVING, save flag */
+    struct ParkBrakeCommandResult {
+        ParkBrakeResult result;
+        float speedMs;        // hall speed used by the APPLY interlock (m/s)
+        bool stateNotSaved;   // a RELEASE ran although its moving state could not be written
+    };
+
+    /**
+     * @brief The ONE source-agnostic park-brake command entry point. The web is its only caller
+     * today; a MAV_CMD_USER_2 handler can call it with ParkBrakeSource::GCS unchanged.
+     * Not gated by input source, ignition, web control or fail-safe (the actuator is on permanent
+     * battery power). APPLY is refused above PARK_BRAKE_APPLY_MAX_SPEED_MS by the hall sensor
+     * (valid or suspicious; never pulsed → allowed, STARTED_SPEED_UNKNOWN). Every command is
+     * refused only when the X6 driver failed to initialise. A RELEASE disarms the drive-away
+     * latch; an APPLY that puts the throttle back under the hold idles it at once.
+     */
+    ParkBrakeCommandResult commandParkBrake(ParkBrakeRequest req, ParkBrakeSource src);
+
+    ParkBrakeState getParkBrakeState() const { return parkBrake_.getState(); }
+    uint32_t getParkBrakeRemainingMs() const { return parkBrake_.getRemainingMs(); }
+    uint16_t getParkBrakeTravelMs() const { return parkBrake_.getTravelMs(); }
+    uint8_t getParkBrakeThrPassPct() const { return parkBrake_.getThrPassPct(); }
+    bool isParkBrakeInverted() const { return parkBrake_.isInverted(); }
+    /** @brief The park brake is holding the operator throttle at idle right now (telemetry pbrake_thr_hold) */
+    bool isParkBrakeHoldingThrottle() const;
+    /** @brief Why a throttle press did not release the park brake (telemetry pbrake_da_wait) */
+    ParkBrakeDaWait getParkBrakeDaWait() const;
 
     /** @brief Latest calibrated 12 V battery voltage (V); meaningful only when isBatteryValid() */
     float getBatteryV() const { return batteryV_; }
@@ -469,6 +508,7 @@ private:
     ThrottleController& throttle_;
     TransmissionController& transmission_;
     BTS7960Controller& brake_;
+    ParkBrakeController parkBrake_;   // aztec parking brake on X6 (owns its BTS7960 reference)
 
     // Input and output references
     MavlinkInterface& mavlink_;
@@ -570,6 +610,13 @@ private:
     // idles the throttle — a demand that outlives an idle command would reopen the throttle.
     float    webThrottleDemandPct_;
 
+    // Park-brake drive-away latch (ParkBrakeLaw.h parkBrakeLatchStep). The demand is the operator
+    // throttle after the gear clip, fed by whichever throttle path ran this loop (0 when none did:
+    // fail-safe, a shift-owned throttle, calibration).
+    bool     pbArmed_;
+    float    pbDemandPct_;
+    ParkBrakeDaWait pbBlockLogged_;   // reason already logged for the current blocked press (rate limit)
+
     // Portal waiting for the final result of a "Set sensor zero" (steer_lws_zero): the
     // command is answered once when it starts and again when the zero-set ends.
     WebPortal* steerZeroResponsePortal_;
@@ -590,6 +637,24 @@ private:
      * @brief Process MAVLink commands from the autopilot
      */
     void processMavlinkCommands();
+
+    /** @brief Commanded transmission gear mapped for ParkBrakeLaw.h */
+    ParkBrakeGear parkBrakeGear() const;
+
+    /**
+     * @brief The operator throttle path with the park brake in it. Steps the drive-away latch with
+     * the clipped demand (may start a drive-away RELEASE), evaluates applySpeedLimit(demand) so the
+     * limiter state never freezes, then either throttle_.idle() (park-brake hold) or
+     * setThrottlePercent(limited). Used by the MAVLink path, the web re-apply and set_throttle.
+     * @return true when the park brake held the throttle at idle
+     */
+    bool applyOperatorThrottle(float demandPct);
+
+    /** @brief Web park-brake commands (any input source, like set_wheel_lock) */
+    void processParkBrakeCommand(const String& value, WebPortal& webPortal);
+    void processSetParkBrakeTravelMsCommand(float value, WebPortal& webPortal);
+    void processSetParkBrakeThrPassPctCommand(float value, WebPortal& webPortal);
+    void processSetParkBrakeInvertCommand(bool invert, WebPortal& webPortal);
 
     /**
      * @brief Apply brake control with percentage (0-100%)

@@ -262,6 +262,15 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.journal_bytes = EventJournal::journalBytes();
     telemetry.journal_fs = EventJournal::flashWritesEnabled();
 
+    // Aztec parking brake (X6)
+    telemetry.pbrake_state = parkBrakeStateToken(vehicleController_.getParkBrakeState());
+    telemetry.pbrake_remaining_ms = vehicleController_.getParkBrakeRemainingMs();
+    telemetry.pbrake_thr_hold = vehicleController_.isParkBrakeHoldingThrottle();
+    telemetry.pbrake_da_wait = parkBrakeDaWaitToken(vehicleController_.getParkBrakeDaWait());
+    telemetry.pbrake_travel_ms = vehicleController_.getParkBrakeTravelMs();
+    telemetry.pbrake_thr_pass_pct = vehicleController_.getParkBrakeThrPassPct();
+    telemetry.pbrake_invert = vehicleController_.isParkBrakeInverted();
+
     telemetry.firmware_version = FIRMWARE_VERSION;
     telemetry.board = BOARD_NAME;
     telemetry.wifi_ssid = WebPortal::getApSsid();   // suffixed SSID, static storage

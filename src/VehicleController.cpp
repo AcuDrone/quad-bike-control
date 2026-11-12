@@ -16,6 +16,7 @@ VehicleController::VehicleController(SteeringController& steering,
                                      ThrottleController& throttle,
                                      TransmissionController& transmission,
                                      BTS7960Controller& brake,
+                                     BTS7960Controller& parkBrake,
                                      MavlinkInterface& mavlink,
                                      RelayController& relayController,
                                      BoardInputs& boardInputs,
@@ -24,6 +25,7 @@ VehicleController::VehicleController(SteeringController& steering,
       throttle_(throttle),
       transmission_(transmission),
       brake_(brake),
+      parkBrake_(parkBrake),
       mavlink_(mavlink),
       relayController_(relayController),
       boardInputs_(boardInputs),
@@ -83,6 +85,9 @@ VehicleController::VehicleController(SteeringController& steering,
       steerTestSpeedMs_(0.0f),
       steerTestSpeedSetMs_(0),
       webThrottleDemandPct_(0.0f),
+      pbArmed_(false),
+      pbDemandPct_(0.0f),
+      pbBlockLogged_(ParkBrakeDaWait::NONE),
       steerZeroResponsePortal_(nullptr) {
     effRpm_ = EffectiveRpm{0, false, RpmSource::NONE, 0};
 }
@@ -470,6 +475,10 @@ void VehicleController::update() {
     // source (web takeover, FAILSAFE) or autopilot mode stops a rate drive in this same loop.
     updateSteerMode();
 
+    // The park-brake operator demand is re-fed by whichever throttle path runs below (0 when
+    // none does). processThrottleCommand() ran earlier in this loop; the web re-apply re-feeds it.
+    pbDemandPct_ = 0.0f;
+
     // Process MAVLink commands if MAVLink is active
     if (currentInputSource_ == InputSource::MAVLINK) {
         processMavlinkCommands();
@@ -503,6 +512,12 @@ void VehicleController::update() {
     // Apply fail-safe if needed
     applyFailsafe();
 
+    // Ignition OFF always disarms the park-brake drive-away latch, whether or not a throttle path
+    // runs this loop (a throttle already up when the ignition comes on then needs a new press).
+    if (relayController_.getIgnitionState() == RelayController::IgnitionState::OFF) {
+        pbArmed_ = false;
+    }
+
     // Re-apply the limiter to the STANDING web throttle demand every loop. The MAVLink path
     // already re-reads its channel every iteration, so it was always re-limited; the web path
     // used to clamp only at command time, which meant a vehicle accelerating past the ceiling on
@@ -514,7 +529,7 @@ void VehicleController::update() {
         if (shouldClipThrottle()) {
             demandPct = min(TRANS_UNKNOWN_GEAR_THROTTLE_MAX, demandPct);
         }
-        throttle_.setThrottlePercent(applySpeedLimit(demandPct));
+        applyOperatorThrottle(demandPct);   // park-brake drive-away / hold, then the limiter + slew
     }
 
     // PID-controlled RPM boost during gear changes or manual test (overrides MAVLink/web throttle).
@@ -558,6 +573,9 @@ void VehicleController::update() {
 
     // Update brake actuator control
     updateBrakeControl();
+
+    // Aztec parking brake on X6: reverse dwell / run timer / settle. Independent of the X7 brake.
+    parkBrake_.update();
 }
 
 void VehicleController::setInputSource(InputSource source) {
@@ -622,6 +640,20 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
     } else if (cmd.cmd == "set_wheel_lock") {
         // Lock (aztec: Relay_4+5+6): not restricted by input source, like the light
         processWheelLockCommand(cmd.boolValue, webPortal);
+        return;
+    } else if (cmd.cmd == "park_brake") {
+        // Aztec parking brake (X6): not restricted by input source, ignition or web control,
+        // like the lock — the actuator is on permanent battery power
+        processParkBrakeCommand(cmd.strValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_park_brake_travel_ms") {
+        processSetParkBrakeTravelMsCommand(cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_park_brake_thr_pass_pct") {
+        processSetParkBrakeThrPassPctCommand(cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_park_brake_invert") {
+        processSetParkBrakeInvertCommand(cmd.boolValue, webPortal);
         return;
     } else if (cmd.cmd == "set_relay_test") {
         // Relay wiring test: not restricted by input source; RelayController only
@@ -923,7 +955,7 @@ void VehicleController::processMavlinkCommands() {
         if (shouldClipThrottle()) {
             throttlePct = min(TRANS_UNKNOWN_GEAR_THROTTLE_MAX, throttlePct);
         }
-        throttle_.setThrottlePercent(applySpeedLimit(throttlePct));
+        applyOperatorThrottle(throttlePct);   // park-brake drive-away / hold, then the limiter + slew
     }
 
     // Apply gear selection — retry until setGear() accepts the command
@@ -1079,8 +1111,204 @@ void VehicleController::processThrottleCommand(float value, WebPortal& webPortal
     }
     // Record the operator's standing demand; update() re-limits it every loop from here on.
     webThrottleDemandPct_ = value;
-    throttle_.setThrottlePercent(applySpeedLimit(value));
+    if (applyOperatorThrottle(value)) {
+        // Still a success: the demand is stored and passes once the park brake lets it.
+        if (getParkBrakeDaWait() == ParkBrakeDaWait::IGN_OFF) {
+            webPortal.sendResponse(true, "Throttle set — held at idle: ignition off, the park brake stays applied");
+        } else {
+            webPortal.sendResponse(true, "Throttle set — held at idle until the park brake is released");
+        }
+        return;
+    }
     webPortal.sendResponse(true, "Throttle set");
+}
+
+// ============================================================================
+// AZTEC PARKING BRAKE (X6) — command entry point, drive-away release, throttle hold
+// ============================================================================
+
+ParkBrakeGear VehicleController::parkBrakeGear() const {
+    switch (transmission_.getTargetGear()) {
+        case TransmissionController::Gear::GEAR_NEUTRAL: return ParkBrakeGear::Neutral;
+        case TransmissionController::Gear::GEAR_LOW:     return ParkBrakeGear::Low;
+        case TransmissionController::Gear::GEAR_HIGH:    return ParkBrakeGear::High;
+        case TransmissionController::Gear::GEAR_REVERSE: return ParkBrakeGear::Reverse;
+        default:                                         return ParkBrakeGear::Unknown;
+    }
+}
+
+bool VehicleController::isParkBrakeHoldingThrottle() const {
+    return parkBrakeHoldsThrottle(parkBrake_.getState(), parkBrakeGear(),
+                                  parkBrake_.getReleaseElapsedMs(), parkBrake_.getThrPassMs());
+}
+
+ParkBrakeDaWait VehicleController::getParkBrakeDaWait() const {
+    const bool ignOn = relayController_.getIgnitionState() != RelayController::IgnitionState::OFF;
+    return parkBrakeDaWait(parkBrake_.getState(), parkBrakeGear(), ignOn, pbDemandPct_, pbArmed_);
+}
+
+bool VehicleController::applyOperatorThrottle(float demandPct) {
+    pbDemandPct_ = demandPct;
+
+    // Drive-away latch. "Ignition on" = the commanded ignition-relay state is not OFF (ACC,
+    // IGNITION and CRANKING all count; OFF also while the relay board is unavailable), never RPM.
+    const bool ignOn = relayController_.getIgnitionState() != RelayController::IgnitionState::OFF;
+    const ParkBrakeGear gear = parkBrakeGear();
+    const bool shiftBusy = transmission_.isGearChangeActive() || isThrottleLockedForShift();
+    const ParkBrakeLatchStep st = parkBrakeLatchStep(pbArmed_, parkBrake_.getState(), ignOn, gear,
+                                                     shiftBusy, demandPct);
+    pbArmed_ = st.armed;
+    if (st.fire) {
+        Debug::printfFeature(DebugFeature::BRAKE, "[PBRAKE] Drive-away: throttle %.1f %% > %.0f %% in gear — releasing\n",
+                             demandPct, PARK_BRAKE_DRIVE_AWAY_THROTTLE_PCT);
+        const ParkBrakeController::Outcome o = parkBrake_.request(ParkBrakeRequest::RELEASE, ParkBrakeSpeedCheck::OK);
+        if (o.result == ParkBrakeResult::STARTED || o.result == ParkBrakeResult::REVERSING) {
+            pbArmed_ = false;
+        }
+        pbBlockLogged_ = ParkBrakeDaWait::NONE;
+    } else {
+        // One BRAKE log line per blocked press (ignition off / needs a new press).
+        const ParkBrakeDaWait why = (demandPct > PARK_BRAKE_DRIVE_AWAY_THROTTLE_PCT)
+                                        ? parkBrakeDaWait(parkBrake_.getState(), gear, ignOn, demandPct, pbArmed_)
+                                        : ParkBrakeDaWait::NONE;
+        if (why != pbBlockLogged_ && why != ParkBrakeDaWait::NONE) {
+            Debug::printfFeature(DebugFeature::BRAKE, "[PBRAKE] Throttle %.1f %% does not release: %s\n", demandPct,
+                                 why == ParkBrakeDaWait::IGN_OFF ? "ignition off"
+                                                                : "drop the throttle to 10 %% or below and press again");
+        }
+        pbBlockLogged_ = why;
+    }
+
+    // The limiter keeps evaluating the demand under the hold, so its state never freezes.
+    const float limited = applySpeedLimit(demandPct);
+    if (isParkBrakeHoldingThrottle()) {
+        throttle_.idle();   // bypasses the opening slew; the pass later ramps from idle
+        return true;
+    }
+    throttle_.setThrottlePercent(limited);
+    return false;
+}
+
+VehicleController::ParkBrakeCommandResult VehicleController::commandParkBrake(ParkBrakeRequest req,
+                                                                              ParkBrakeSource src) {
+    const char* srcName = (src == ParkBrakeSource::GCS) ? "gcs" : "web";
+    ParkBrakeCommandResult r{ParkBrakeResult::STARTED, speedSensor_.getSpeedMs(), false};
+    ParkBrakeSpeedCheck speed = ParkBrakeSpeedCheck::OK;
+    if (req == ParkBrakeRequest::APPLY) {
+        speed = parkBrakeApplySpeedOk(r.speedMs, speedSensor_.isValid(), speedSensor_.isSuspicious());
+    }
+    const ParkBrakeController::Outcome o = parkBrake_.request(req, speed);
+    r.result = o.result;
+    r.stateNotSaved = o.stateNotSaved;
+
+    if (r.result == ParkBrakeResult::REFUSED_MOVING) {
+        Debug::printfFeature(DebugFeature::BRAKE,
+            "[PBRAKE] Apply refused (%s): moving at %.1f km/h (max %.1f)\n",
+            srcName, r.speedMs * 3.6f, PARK_BRAKE_APPLY_MAX_SPEED_MS * 3.6f);
+    } else if (r.result == ParkBrakeResult::STARTED || r.result == ParkBrakeResult::STARTED_SPEED_UNKNOWN ||
+               r.result == ParkBrakeResult::REVERSING) {
+        Debug::printfFeature(DebugFeature::BRAKE, "[PBRAKE] %s accepted (%s)\n",
+                             req == ParkBrakeRequest::APPLY ? "Apply" : "Release", srcName);
+        if (req == ParkBrakeRequest::RELEASE) {
+            pbArmed_ = false;   // a release always needs a new rising edge for the next drive-away
+        } else if (isParkBrakeHoldingThrottle() && !isThrottleLockedForShift() && !throttle_.isCalibrating() &&
+                   currentInputSource_ != InputSource::FAILSAFE) {
+            // An APPLY over a passing release (or any apply in gear): the operator throttle goes back
+            // to idle at once, not only at the next operator-path evaluation.
+            throttle_.idle();
+        }
+    }
+    return r;
+}
+
+void VehicleController::processParkBrakeCommand(const String& value, WebPortal& webPortal) {
+    ParkBrakeRequest req;
+    if (value == "apply") {
+        req = ParkBrakeRequest::APPLY;
+    } else if (value == "release") {
+        req = ParkBrakeRequest::RELEASE;
+    } else {
+        webPortal.sendResponse(false, "Park brake: unknown request");
+        return;
+    }
+    const bool apply = (req == ParkBrakeRequest::APPLY);
+    const ParkBrakeCommandResult r = commandParkBrake(req, ParkBrakeSource::WEB);
+    const char* notSaved = r.stateNotSaved ? " (state not saved)" : "";
+    switch (r.result) {
+        case ParkBrakeResult::STARTED:
+            webPortal.sendResponse(true, apply ? String("Park brake applying")
+                                               : String("Park brake releasing") + notSaved);
+            break;
+        case ParkBrakeResult::STARTED_SPEED_UNKNOWN:
+            webPortal.sendResponse(true, "Park brake applying (speed unknown)");
+            break;
+        case ParkBrakeResult::REVERSING:
+            webPortal.sendResponse(true, apply ? String("Park brake reversing to apply")
+                                               : String("Park brake reversing to release") + notSaved);
+            break;
+        case ParkBrakeResult::ALREADY_RUNNING:
+            webPortal.sendResponse(true, apply ? "Park brake already applying" : "Park brake already releasing");
+            break;
+        case ParkBrakeResult::REFUSED_MOVING:
+            webPortal.sendResponse(false, "Park brake apply refused: moving at " + String(r.speedMs * 3.6f, 1) +
+                                          " km/h (max " + String(PARK_BRAKE_APPLY_MAX_SPEED_MS * 3.6f, 1) + ")");
+            break;
+        case ParkBrakeResult::REFUSED_NVS:
+            webPortal.sendResponse(false, "Failed to save the park brake state — apply refused");
+            break;
+        case ParkBrakeResult::REFUSED_DRIVER:
+        default:
+            webPortal.sendResponse(false, "Park brake driver not available");
+            break;
+    }
+}
+
+void VehicleController::processSetParkBrakeTravelMsCommand(float value, WebPortal& webPortal) {
+    if (!isnan(value)) value = roundf(value);   // whole ms
+    if (isnan(value) || !parkBrakeTravelMsValid((int32_t)value)) {
+        webPortal.sendResponse(false, "Park brake travel time out of range (" +
+                                      String(PARK_BRAKE_TRAVEL_MS_MIN) + "-" +
+                                      String(PARK_BRAKE_TRAVEL_MS_MAX) + " ms)");
+        return;
+    }
+    const uint16_t ms = (uint16_t)value;
+    if (!parkBrake_.setTravelMs(ms)) {
+        webPortal.sendResponse(false, "Failed to save the park brake setting");
+        return;
+    }
+    webPortal.sendResponse(true, "Park brake travel time set to " + String(ms) + " ms");
+}
+
+void VehicleController::processSetParkBrakeThrPassPctCommand(float value, WebPortal& webPortal) {
+    if (!isnan(value)) value = roundf(value);   // whole %
+    if (isnan(value) || !parkBrakeThrPassPctValid((int32_t)value)) {
+        webPortal.sendResponse(false, "Park brake throttle release point out of range (" +
+                                      String(PARK_BRAKE_THR_PASS_PCT_MIN) + "-" +
+                                      String(PARK_BRAKE_THR_PASS_PCT_MAX) + " %)");
+        return;
+    }
+    const uint8_t pct = (uint8_t)value;
+    if (!parkBrake_.setThrPassPct(pct)) {
+        webPortal.sendResponse(false, "Failed to save the park brake setting");
+        return;
+    }
+    webPortal.sendResponse(true, "Park brake throttle release point set to " + String(pct) + " %");
+}
+
+void VehicleController::processSetParkBrakeInvertCommand(bool invert, WebPortal& webPortal) {
+    switch (parkBrake_.setInvert(invert)) {
+        case ParkBrakeController::InvertResult::OK:
+            pbArmed_ = false;   // the state became UNKNOWN: re-arm from a fresh sample
+            webPortal.sendResponse(true, invert ? "Park brake direction inverted — state unknown"
+                                                : "Park brake direction normal — state unknown");
+            break;
+        case ParkBrakeController::InvertResult::REFUSED_MOVING:
+            webPortal.sendResponse(false, "Park brake direction change refused: actuator moving");
+            break;
+        default:
+            webPortal.sendResponse(false, "Failed to save the park brake setting");
+            break;
+    }
 }
 
 // ============================================================================

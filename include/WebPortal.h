@@ -213,6 +213,15 @@ public:
                                   // write to flash); writes off: RAM tail bytes
         bool journal_fs;          // journal flash-write switch (NVS journal/fs, default off)
 
+        // Aztec parking brake on X6 (change add-aztec-parking-brake). Tokens are static strings.
+        const char* pbrake_state;      // "unknown" / "released" / "applied" / "applying" / "releasing"
+        uint32_t pbrake_remaining_ms;  // ms left in the run (dwell + travel + margin), 0 when settled
+        bool pbrake_thr_hold;          // the park brake holds the operator throttle at idle now
+        const char* pbrake_da_wait;    // "none" / "ign_off" / "rearm" — why a throttle press did not release
+        uint16_t pbrake_travel_ms;     // travel time in use, ms
+        uint8_t pbrake_thr_pass_pct;   // throttle release point in use, % of travel_ms
+        bool pbrake_invert;            // drive direction inverted
+
         // Firmware information
         String firmware_version;  // Firmware version string (e.g., "1.0.0")
         String board;             // Target board name (BOARD_NAME, e.g. "Control_v0")

@@ -502,6 +502,16 @@
         .relay-btn.active { background: color-mix(in srgb, var(--success) 40%, var(--card)); border-color: var(--success); }
         /* Two-press confirmation: the armed button waits for the second press (confirmTwice) */
         .confirm-armed { outline: 2px solid var(--warning); outline-offset: 2px; box-shadow: 0 0 0 4px color-mix(in srgb, var(--warning) 30%, transparent); }
+        /* Parking brake card (aztec, X6) */
+        .pb-state.applied { color: var(--danger); }
+        .pb-state.released { color: var(--success); }
+        .pb-state.moving, .pb-state.unknown { color: var(--warning); }
+        .pb-sub { margin-top: 4px; font-size: 0.85em; color: var(--muted-foreground); min-height: 1.2em; }
+        .pb-note { margin-top: 8px; font-size: 0.85em; line-height: 1.4; padding: 6px 10px; border-radius: 6px; }
+        .pb-note.hold { color: var(--warning); background: color-mix(in srgb, var(--warning) 10%, var(--card)); }
+        .pb-note.pass { color: var(--success); background: color-mix(in srgb, var(--success) 12%, var(--card)); }
+        .pb-note.block { color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, var(--card)); }
+        .pb-btn-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
         .relay-btn-name { font-size: 1.25em; line-height: 1.15; }
         .relay-btn-desc { font-size: 0.8em; font-weight: normal; color: var(--muted-foreground); line-height: 1.3; }
         .relay-btn.active .relay-btn-desc { color: var(--foreground); }
@@ -1377,6 +1387,39 @@
                     </div>
                 </div>
             </div>
+            <!-- Parking brake (aztec, X6): hidden unless telemetry carries pbrake_state -->
+            <div class="card" id="pbrake-card" style="display: none;">
+                <h2 class="card-title"><span data-i18n="card_pbrake">🅿️ Parking brake</span><button type="button" class="help-btn" onclick="openHelp('pbrake_help_apply,pbrake_help_driveaway,pbrake_help_pass,pbrake_help_end,pbrake_help_unknown,pbrake_help_bench', 'card_pbrake')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <div class="telemetry-item">
+                    <div class="telemetry-label" data-i18n="lbl_pbrake_state">State</div>
+                    <div class="telemetry-value pb-state" id="pbrake-state">--</div>
+                    <div class="pb-sub" id="pbrake-remaining"></div>
+                </div>
+                <div class="pb-note" id="pbrake-note" hidden></div>
+                <div class="pb-btn-pair">
+                    <button type="button" class="upload-btn" id="pbrake-apply-btn" onclick="parkBrakeCommand(this, 'apply')" data-i18n="btn_pbrake_apply">Apply</button>
+                    <button type="button" class="upload-btn" id="pbrake-release-btn" onclick="parkBrakeCommand(this, 'release')" data-i18n="btn_pbrake_release" style="background: var(--secondary);">Release</button>
+                </div>
+                <div id="pbrake-status" style="margin-top: 8px; font-size: 0.8em; color: var(--success); min-height: 1.2em; overflow-wrap: anywhere;"></div>
+                <div style="margin-top: 16px;">
+                    <label data-i18n="lbl_brake_travel" for="pbrake-travel-slider" style="font-size: 0.8em; color: var(--muted-foreground);">Full travel time</label>
+                    <div style="display: flex; gap: 8px; align-items: center; margin-top: 4px;">
+                        <input type="range" min="1000" max="5000" step="100" value="2000" id="pbrake-travel-slider" style="flex:1; min-width:0; height: 28px;">
+                        <span id="pbrake-travel-val" style="color:var(--foreground); min-width:4.5em; text-align:right; white-space: nowrap;">2000 ms</span>
+                    </div>
+                </div>
+                <div style="margin-top: 16px;">
+                    <label data-i18n="lbl_pbrake_pass" for="pbrake-pass-slider" style="font-size: 0.8em; color: var(--muted-foreground);">Throttle release point (share of travel when releasing)</label>
+                    <div style="display: flex; gap: 8px; align-items: center; margin-top: 4px;">
+                        <input type="range" min="20" max="100" step="5" value="50" id="pbrake-pass-slider" style="flex:1; min-width:0; height: 28px;">
+                        <span id="pbrake-pass-val" style="color:var(--foreground); text-align:right; white-space: nowrap;">50 % ≈ 1000 ms</span>
+                    </div>
+                    <div data-i18n="pbrake_pass_hint" style="margin-top: 4px; font-size: 0.75em; color: var(--muted-foreground); line-height: 1.4;">The throttle stays at idle up to this point, then opens smoothly while the brake finishes releasing. 100 % = until the run ends.</div>
+                </div>
+                <div style="margin-top: 16px;">
+                    <button type="button" class="upload-btn" id="pbrake-invert-btn" onclick="parkBrakeToggleInvert(this)" data-i18n="pbrake_dir_normal" style="background: var(--secondary);">Direction: normal</button>
+                </div>
+            </div>
             <!-- Relay Test (wiring check, ignition OFF only) -->
             <div class="card">
                 <h2 class="card-title"><span data-i18n="card_relay_test">🧪 Relay Test</span><button type="button" class="help-btn" onclick="openHelp('relay_test_help', 'card_relay_test')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
@@ -1712,6 +1755,43 @@
                 invalid_brake_travel: 'Travel time must be 1000-3000 ms',
                 invalid_brake_hold: 'Hold drive must be a whole number 0-100',
                 brake_saving: 'Saving the brake setting...',
+
+                // Parking brake card (aztec, X6)
+                card_pbrake: '🅿️ Parking brake',
+                lbl_pbrake_state: 'State',
+                pbrake_st_unknown: 'Unknown',
+                pbrake_st_released: 'Released',
+                pbrake_st_applied: 'Applied',
+                pbrake_st_applying: 'Applying…',
+                pbrake_st_releasing: 'Releasing…',
+                pbrake_remaining: '%s s left',
+                pbrake_note_hold: 'Throttle held at idle',
+                pbrake_note_pass: 'Throttle passing, brake still releasing',
+                pbrake_note_ign_off: 'Ignition off — throttle does not release the parking brake',
+                pbrake_note_rearm: 'Drop the throttle below 10 % and press again',
+                btn_pbrake_apply: 'Apply',
+                btn_pbrake_release: 'Release',
+                pbrake_confirm_apply_btn: 'Confirm apply',
+                pbrake_confirm_release_btn: 'Confirm release',
+                pbrake_confirm_invert_btn: 'Confirm direction change',
+                pbrake_warn_apply: 'The parking brake will be applied. Throttle in gear stays at idle.',
+                pbrake_warn_release: 'The parking brake will be released — on a slope the buggy may roll.',
+                pbrake_warn_invert: 'The direction will change and the state becomes unknown.',
+                lbl_pbrake_pass: 'Throttle release point (share of travel when releasing)',
+                pbrake_pass_val: '%s % ≈ %s ms',
+                pbrake_pass_val_end: '100 % — until the run ends',
+                pbrake_pass_hint: 'The throttle stays at idle up to this point, then opens smoothly while the brake finishes releasing. 100 % = until the run ends.',
+                pbrake_dir_normal: 'Direction: normal',
+                pbrake_dir_inverted: 'Direction: inverted',
+                invalid_pbrake_travel: 'Travel time must be 1000-5000 ms',
+                invalid_pbrake_pass: 'Release point must be 20-100 %',
+                pbrake_saving: 'Saving the park brake setting...',
+                pbrake_help_apply: '<b>Apply</b> — only by the operator\'s command (two presses within 5 s). Above 3 km/h the command is refused. The brake is never applied automatically: not on link loss, not in fail-safe, not when the ignition is switched off.',
+                pbrake_help_driveaway: '<b>Release by throttle.</b> With the brake applied (or the state unknown), the ignition on and L, H or R selected, pressing the throttle above 10 % releases the brake. If the throttle was already above 10 % (while applying or when the ignition was switched on), drop it below 10 % and press again. In N and with the ignition off the throttle does not release the brake; the Release button always works.',
+                pbrake_help_pass: '<b>Throttle release point.</b> While releasing, the throttle in gear is held at idle for this share of the travel time, then opens smoothly while the brake finishes releasing — so the buggy does not roll back on a slope. 100 % = hold until the run ends.',
+                pbrake_help_end: '<b>End of travel by time:</b> the actuator runs for the full travel time + 0.5 s and stops (it has its own limit switches and is self-locking). There is no position sensor.',
+                pbrake_help_unknown: 'After a power loss during a run the state is <b>“Unknown”</b>: the throttle in gear is held at idle until the brake has been released.',
+                pbrake_help_bench: '<b>Bench check</b> (rear wheels free): from “Unknown” press Release. If the cable tightens, change the direction and press Release again. Then time a full travel each way and set the longer one.',
 
                 // Throttle calibration card
                 card_throttle_cal: '🎚️ Throttle Calibration',
@@ -2254,6 +2334,43 @@
                 invalid_brake_travel: 'Час ходу має бути 1000-3000 мс',
                 invalid_brake_hold: 'Утримання має бути цілим числом 0-100',
                 brake_saving: 'Збереження налаштування гальма...',
+
+                // Стоянкове гальмо (багі, X6)
+                card_pbrake: '🅿️ Стоянкове гальмо',
+                lbl_pbrake_state: 'Стан',
+                pbrake_st_unknown: 'Невідомо',
+                pbrake_st_released: 'Відпущено',
+                pbrake_st_applied: 'Затягнуто',
+                pbrake_st_applying: 'Затягується…',
+                pbrake_st_releasing: 'Відпускається…',
+                pbrake_remaining: 'залишилось %s с',
+                pbrake_note_hold: 'Газ утримується на холостому',
+                pbrake_note_pass: 'Газ пропускається, гальмо ще відпускається',
+                pbrake_note_ign_off: 'Запалювання вимкнено — газ не відпускає стоянкове гальмо',
+                pbrake_note_rearm: 'Відпустіть газ нижче 10 % і натисніть знову',
+                btn_pbrake_apply: 'Затягнути',
+                btn_pbrake_release: 'Відпустити',
+                pbrake_confirm_apply_btn: 'Підтвердити затягування',
+                pbrake_confirm_release_btn: 'Підтвердити відпускання',
+                pbrake_confirm_invert_btn: 'Підтвердити зміну напрямку',
+                pbrake_warn_apply: 'Стоянкове гальмо буде затягнуто. Газ на передачі — лише холостий.',
+                pbrake_warn_release: 'Стоянкове гальмо буде відпущено — на схилі багі може покотитися.',
+                pbrake_warn_invert: 'Напрямок зміниться, стан стане «невідомо».',
+                lbl_pbrake_pass: 'Точка пропуску газу (частка ходу при відпусканні)',
+                pbrake_pass_val: '%s % ≈ %s мс',
+                pbrake_pass_val_end: '100 % — до кінця ходу',
+                pbrake_pass_hint: 'Газ тримається на холостому до цієї точки, далі плавно відкривається, поки гальмо довідпускається. 100 % = до кінця ходу.',
+                pbrake_dir_normal: 'Напрямок: звичайний',
+                pbrake_dir_inverted: 'Напрямок: інвертований',
+                invalid_pbrake_travel: 'Час ходу має бути 1000-5000 мс',
+                invalid_pbrake_pass: 'Точка пропуску має бути 20-100 %',
+                pbrake_saving: 'Збереження налаштування стоянкового гальма...',
+                pbrake_help_apply: '<b>Затягування</b> — лише командою оператора (два натискання кнопки протягом 5 с). Якщо багі їде швидше за 3 км/год, команду буде відхилено. Автоматично гальмо ніколи не затягується: ні при втраті зв\'язку, ні в аварійному режимі, ні при вимкненні запалювання.',
+                pbrake_help_driveaway: '<b>Відпускання газом.</b> Якщо гальмо затягнуте (або стан невідомий), увімкнено запалювання і вибрано L, H чи R, натискання газу понад 10 % відпускає гальмо. Якщо газ уже був понад 10 % (під час затягування або коли вмикали запалювання), відпустіть його нижче 10 % і натисніть знову. У N і з вимкненим запалюванням газ гальмо не відпускає; кнопка «Відпустити» працює завжди.',
+                pbrake_help_pass: '<b>Точка пропуску газу.</b> Під час відпускання газ на передачі тримається на холостому до цієї частки часу ходу, потім плавно відкривається, поки гальмо довідпускається — щоб багі не покотилася назад на схилі. 100 % = утримувати до кінця ходу.',
+                pbrake_help_end: '<b>Кінець ходу — за часом:</b> актуатор працює «час повного ходу» + 0,5 с і зупиняється (у ньому є власні кінцевики, він самоутримний). Датчика положення немає.',
+                pbrake_help_unknown: 'Після втрати живлення під час руху стан буде <b>«Невідомо»</b>: газ на передачі тримається на холостому, доки гальмо не буде відпущено.',
+                pbrake_help_bench: '<b>Перевірка на стенді</b> (задні колеса вільні): зі стану «Невідомо» натисніть «Відпустити». Якщо трос натягується — змініть напрямок і натисніть «Відпустити» ще раз. Потім заміряйте повний хід в обидва боки і встановіть більший.',
 
                 card_throttle_cal: '🎚️ Калібрування дроселя',
                 throttle_cal_help: 'Крайні точки серво дроселя (µs). <b>Двигун має бути вимкнено.</b> Натисніть <b>Почати</b>, потягніть повзунок — серво рухається наживо — потім <b>Зберегти</b>. Повний газ може бути меншим за холостий (дзеркальне серво).',
@@ -2837,10 +2954,18 @@
                                       data.success ? 'var(--success)' : 'var(--danger)');
                 }
                 // Steering park correction card
-                if (data.message && (data.message.startsWith('Park ') || data.message.startsWith('Invalid park') ||
+                if (data.message && ((data.message.startsWith('Park ') && !data.message.startsWith('Park brake')) ||
+                    data.message.startsWith('Invalid park') ||
                     data.message === 'Failed to save the park correction setting')) {
                     steerParkStatus(data.success ? data.message : t('error_prefix') + data.message,
                                     data.success ? 'var(--success)' : 'var(--danger)');
+                }
+                // Parking brake card (aztec) — includes the set_throttle reply while the brake holds it
+                if (data.message && (data.message.startsWith('Park brake') ||
+                    data.message.startsWith('Failed to save the park brake') ||
+                    data.message.startsWith('Throttle set — held'))) {
+                    pbrakeStatus(data.success ? data.message : t('error_prefix') + data.message,
+                                 data.success ? 'var(--success)' : 'var(--danger)');
                 }
                 // Brake tuning card
                 if (data.message && (data.message.startsWith('Brake travel') || data.message.startsWith('Brake hold') ||
@@ -3098,6 +3223,7 @@
             }
             updateSteerParkCard(data);
             updateBrakeCard(data);
+            updateParkBrakeCard(data);
 
             // Update gear button active state
             updateGearButtons(data.gear);
@@ -3789,6 +3915,141 @@
                 saveBrakeTravelMs(Math.round(Number(sl.value)));   // one send on release
                 brakeDragging = false;
             });
+        })();
+
+        // ---- Parking brake card (aztec, X6) ----
+        // Apply / Release / direction go through the two-press confirmation; the sliders send ONE
+        // command on `change` (each is an NVS write) and telemetry never moves a thumb that is being
+        // dragged. Hidden while telemetry carries no `pbrake_state` (other vehicle / older firmware).
+        let pbTravelDragging = false;
+        let pbPassDragging = false;
+        let pbTravelInUse = 2000;     // telemetry pbrake_travel_ms — the base of the "≈ M ms" label
+        let pbInvert = false;         // telemetry pbrake_invert
+        function pbrakeStatus(text, color) {
+            const el = document.getElementById('pbrake-status');
+            if (!el) return;
+            el.textContent = text;
+            el.style.color = color;
+        }
+        function pbrakeNoConnection() {
+            if (wsConnected) return false;
+            pbrakeStatus(t('steer_no_connection'), 'var(--danger)');
+            return true;
+        }
+        function pbTravelLabel(ms) {
+            const el = document.getElementById('pbrake-travel-val');
+            if (el) el.textContent = t('brake_travel_val', ms);
+        }
+        function pbPassLabel(pct) {
+            const el = document.getElementById('pbrake-pass-val');
+            if (!el) return;
+            const p = Number(pct);
+            el.textContent = (p >= 100) ? t('pbrake_pass_val_end')
+                                        : t('pbrake_pass_val', p, Math.round(pbTravelInUse * p / 100));
+        }
+        function pbInvertLabel() {
+            const btn = document.getElementById('pbrake-invert-btn');
+            if (!btn || confirmArmed.has(btn)) return;   // armed: keep the confirm label
+            const key = pbInvert ? 'pbrake_dir_inverted' : 'pbrake_dir_normal';
+            btn.setAttribute('data-i18n', key);
+            btn.textContent = t(key);
+        }
+        function updateParkBrakeCard(data) {
+            const card = document.getElementById('pbrake-card');
+            if (!card) return;
+            if (data.pbrake_state === undefined) { card.style.display = 'none'; return; }
+            card.style.display = '';
+            const st = data.pbrake_state;
+            const stEl = document.getElementById('pbrake-state');
+            stEl.textContent = t('pbrake_st_' + st);
+            stEl.className = 'telemetry-value pb-state ' +
+                (st === 'applied' ? 'applied' : st === 'released' ? 'released' : st === 'unknown' ? 'unknown' : 'moving');
+            const running = (st === 'applying' || st === 'releasing');
+            const rem = Number(data.pbrake_remaining_ms) || 0;
+            document.getElementById('pbrake-remaining').textContent =
+                running ? t('pbrake_remaining', Math.ceil(rem / 1000)) : '';
+
+            const hold = data.pbrake_thr_hold === true;
+            const da = data.pbrake_da_wait || 'none';
+            let text = '', cls = '';
+            if (da === 'ign_off') { text = t('pbrake_note_ign_off'); cls = 'block'; }
+            else if (da === 'rearm') { text = t('pbrake_note_rearm'); cls = 'block'; }
+            else if (hold) { text = t('pbrake_note_hold'); cls = 'hold'; }
+            else if (st === 'releasing') { text = t('pbrake_note_pass'); cls = 'pass'; }
+            if (da !== 'none' && hold) text = t('pbrake_note_hold') + '. ' + text;
+            const note = document.getElementById('pbrake-note');
+            note.hidden = !text;
+            note.textContent = text;
+            note.className = 'pb-note ' + cls;
+
+            if (Number.isFinite(data.pbrake_travel_ms)) {
+                pbTravelInUse = data.pbrake_travel_ms;
+                const sl = document.getElementById('pbrake-travel-slider');
+                if (sl && !pbTravelDragging) { sl.value = data.pbrake_travel_ms; pbTravelLabel(data.pbrake_travel_ms); }
+            }
+            if (Number.isFinite(data.pbrake_thr_pass_pct)) {
+                const sl = document.getElementById('pbrake-pass-slider');
+                if (sl && !pbPassDragging) { sl.value = data.pbrake_thr_pass_pct; pbPassLabel(data.pbrake_thr_pass_pct); }
+            }
+            if (data.pbrake_invert !== undefined) {
+                pbInvert = data.pbrake_invert === true;
+                pbInvertLabel();
+            }
+        }
+        function parkBrakeCommand(btn, req) {
+            if (pbrakeNoConnection()) return;
+            const apply = (req === 'apply');
+            if (!confirmTwice(btn, apply ? 'pbrake_confirm_apply_btn' : 'pbrake_confirm_release_btn',
+                              apply ? 'pbrake_warn_apply' : 'pbrake_warn_release', 'pbrake-status')) return;
+            sendCommand('park_brake', req);
+        }
+        function parkBrakeToggleInvert(btn) {
+            if (pbrakeNoConnection()) return;
+            if (!confirmTwice(btn, 'pbrake_confirm_invert_btn', 'pbrake_warn_invert', 'pbrake-status')) return;
+            sendCommand('set_park_brake_invert', !pbInvert);
+            pbInvertLabel();
+        }
+        (function initParkBrakeSliders() {
+            const tr = document.getElementById('pbrake-travel-slider');
+            if (tr) {
+                tr.addEventListener('pointerdown', () => { pbTravelDragging = true; });
+                tr.addEventListener('pointercancel', () => { pbTravelDragging = false; });
+                tr.addEventListener('input', () => {
+                    pbTravelDragging = true;      // keyboard drags too
+                    pbTravelLabel(tr.value);      // label only, nothing is sent while dragging
+                });
+                tr.addEventListener('change', () => {
+                    pbTravelDragging = false;
+                    const val = Math.round(Number(tr.value));
+                    if (pbrakeNoConnection()) return;
+                    if (!Number.isInteger(val) || val < 1000 || val > 5000) {
+                        pbrakeStatus(t('invalid_pbrake_travel'), 'var(--danger)');
+                        return;
+                    }
+                    sendCommand('set_park_brake_travel_ms', val);   // one send on release
+                    pbrakeStatus(t('pbrake_saving'), 'var(--muted-foreground)');
+                });
+            }
+            const ps = document.getElementById('pbrake-pass-slider');
+            if (ps) {
+                ps.addEventListener('pointerdown', () => { pbPassDragging = true; });
+                ps.addEventListener('pointercancel', () => { pbPassDragging = false; });
+                ps.addEventListener('input', () => {
+                    pbPassDragging = true;
+                    pbPassLabel(ps.value);
+                });
+                ps.addEventListener('change', () => {
+                    pbPassDragging = false;
+                    const val = Math.round(Number(ps.value));
+                    if (pbrakeNoConnection()) return;
+                    if (!Number.isInteger(val) || val < 20 || val > 100) {
+                        pbrakeStatus(t('invalid_pbrake_pass'), 'var(--danger)');
+                        return;
+                    }
+                    sendCommand('set_park_brake_thr_pass_pct', val);
+                    pbrakeStatus(t('pbrake_saving'), 'var(--muted-foreground)');
+                });
+            }
         })();
 
         // ---- Gear sensor code calibration ----

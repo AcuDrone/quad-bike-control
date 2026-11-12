@@ -33,6 +33,7 @@
 | Module | ESP32-S3-WROOM-1U (u.FL / external antenna) |
 | Programming & console | USB-C, native USB (GPIO19/20), USB-CDC console |
 | Analog current sense | 8× BTS7960 IS channels → CD4051 8:1 mux → GPIO3 (ADC1) |
+| Parking brake (aztec) | BTS7960 on **X6** (GPIO4/5, LEDC ch7/ch6, 10 kHz) driving the self-locking hand-brake cable actuator — timed runs, no position feedback (fw 1.5.29). **aztec only — on master X6 is the steering VESC** |
 | Digital inputs | 8× 5V opto-isolated (PC817) → PCA9557 U10 on **I2C2** (scan-verified, §4) |
 | Relays | off-board `Relay` PCB — 8× SRD-12VDC + PCA9557 @ 0x1F on **X15 / I2C2** (scan-verified, all relay functions bench-tested) |
 | 24V rail | master: off-board `Buck Boost` PCB — TL494 two-phase 12V→24V, 0-26V / 0-15A, INA180 current sense (X10). **aztec: no boost board** — the steering VESC runs from a 7s LiFePO4 pack; X10 pin 3 measures the 12 V battery |
@@ -53,8 +54,8 @@ document is the wiring / pin reference only.
 | **1** | I2C1 SDA — X14 header, **no device fitted** (`Wire` not started) | `PIN_I2C1_SDA` — defined, unused | FREE | MOVED (was 41) |
 | **2** | I2C1 SCL — same bus | `PIN_I2C1_SCL` — defined, unused | FREE | MOVED (was 42) |
 | **3** | CD4051 8:1 mux common out (Analog_1..8 = BTS7960 IS) | `PIN_ADC_IS_MUX` — ADC1 | `PIN_THROTTLE_PWM` | NEW (input only) |
-| **4** | PWM_1 → X6 pin 2 (L_PWM) | FREE — reserved for a 4th BTS7960 on X6 | `PIN_VESC_TX` | FREED (VESC moved to UART0 / X1) |
-| **5** | PWM_2 → X6 pin 3 (R_PWM) | FREE — reserved for a 4th BTS7960 on X6 | `PIN_VESC_RX` | FREED (VESC moved to UART0 / X1) |
+| **4** | PWM_1 → X6 pin 2 (L_PWM) | `PIN_PARK_BRAKE_LPWM` — LEDC ch7, aztec parking brake (10 kHz) | `PIN_VESC_TX` | NEW function (aztec only; VESC moved to UART0 / X1) |
+| **5** | PWM_2 → X6 pin 3 (R_PWM) | `PIN_PARK_BRAKE_RPWM` — LEDC ch6, aztec parking brake (10 kHz) | `PIN_VESC_RX` | NEW function (aztec only; VESC moved to UART0 / X1) |
 | **6** | PWM_3 → X7 pin 2 (L_PWM) | `PIN_BRAKE_LPWM` — LEDC ch5 | same | UNCHANGED |
 | **7** | PWM_4 → X7 pin 3 (R_PWM) | `PIN_BRAKE_RPWM` — LEDC ch4 | same | UNCHANGED |
 | **8** | Opto-isolated input via 6N137 (X2, ex-"S-BUS") | `PIN_SPEED_SENSOR` — driveline speed (PCNT) ⚠ inverted, see §3/§8.9 | `PIN_MAVLINK_RX` | RE-PINNED |
@@ -103,7 +104,7 @@ document is the wiring / pin reference only.
 | **X3** | Hall 1 — **ECU tacho input** (aztec) | 1=5V → PC817 collector, 2=Hall A (GPIO14) ← PC817 emitter, 3=Hall B (GPIO21, spare), 4=GND (unused). No pull-up — see §7a |
 | **X4** | Hall 2 — spare | 1=5V, 2=Hall A (GPIO12), 3=Hall B (GPIO13), 4=GND |
 | **X5** | Hall 3 — spare | 1=5V, 2=Hall A (GPIO10), 3=Hall B (GPIO11), 4=GND |
-| **X6** | FREE — reserved for a 4th BTS7960 | 1=5V(fused), 2=L_PWM (GPIO4), 3=R_PWM (GPIO5), 4/5=L_IS/R_IS (mux CH3/CH0), 6=GND. *History:* carried the steering VESC UART2 until it moved to X1 / UART0 |
+| **X6** | Parking-brake BTS7960 (aztec only — on master X6 is the steering VESC) | 1=5V(fused), 2=L_PWM (GPIO4, `PIN_PARK_BRAKE_LPWM`), 3=R_PWM (GPIO5, `PIN_PARK_BRAKE_RPWM`), 4/5=L_IS/R_IS (mux CH3/CH0, **not sampled**), 6=GND. Enables hard-wired as on X7. Which pin tightens the cable is not measured yet (NVS `pbrake`/`invert`, bench task). *History:* carried the steering VESC UART2 until it moved to X1 / UART0 |
 | **X7** | Brake BTS7960 | 1=5V(fused), 2=L_PWM (GPIO6), 3=R_PWM (GPIO7), 4=L_IS, 5=R_IS, 6=GND |
 | **X8** | Servos | 1=5V(fused, servo supply), 2=throttle PWM (GPIO15), 3=transmission PWM (GPIO16 — GXservo HS-1005SGT 150KG on aztec), 4/5=IS, 6=GND |
 | **X9** | MAVLink → Pixhawk TELEM | 2 → Pixhawk RX (GPIO17 TX), 3 ← Pixhawk TX (GPIO18 RX), 6=GND. ⚠ **Do NOT connect pin 1 (5V)**; leave 4/5 unconnected |
@@ -164,7 +165,7 @@ BAV199 clamp + 100n, into the CD4051 mux.
 |------|----|----|------|---------|
 | UART0 | 44 | 43 | 115200 | VESC steering driver (Flipsky 75200) via Prog header X1 (aztec: R63/R64 removed). Console is USB-CDC |
 | UART1 | 18 | 17 | 115200 | MAVLink 2 ↔ Pixhawk TELEM (via X9) |
-| UART2 | — | — | — | Unused (GPIO4/5 / X6 freed for a 4th BTS7960) |
+| UART2 | — | — | — | Unused (GPIO4/5 / X6 now drive the aztec parking-brake BTS7960 as LEDC PWM) |
 | — | — | — | — | No UART is free for S-BUS; **S-BUS is dropped for good** and GPIO8 (X2 opto) is now the speed-sensor pulse input |
 
 ### I2C Allocation
@@ -266,10 +267,14 @@ The MCP2515 crystal on this board is **8 MHz**; firmware already uses `MCP_8MHZ`
 |---------|------|----------|-----------|------------|
 | 1 | **15** | Throttle servo | 50 Hz | 14-bit |
 | 2 | **16** | Transmission servo | 50 Hz | 14-bit |
-| 3 | — | FREE | — | — |
+| 0 / 3 | — | FREE | — | — |
 | 4 | 7 | Brake RPWM | 10 kHz | 8-bit |
 | 5 | 6 | Brake LPWM | 10 kHz | 8-bit |
-| 6 / 7 | — | Freed (former steering PWM) — **released**, GPIO17/18 now MAVLink | — | — |
+| 6 | 5 | Parking brake RPWM (aztec, X6) | 10 kHz | 8-bit |
+| 7 | 4 | Parking brake LPWM (aztec, X6) | 10 kHz | 8-bit |
+
+Channels 4–7 share `LEDC_TIMER_1` (configured once by the first `BTS7960Controller::begin()`).
+Channels 6 / 7 were the former steering PWM channels (GPIO17/18 are now MAVLink).
 
 Channel numbers are unchanged; only the throttle/transmission pins move to 15/16.
 
@@ -613,6 +618,14 @@ The LED series resistor is now **1 kΩ** (was 1.5 kΩ) for more drive margin on 
 | `PIN_ADC_IS_MUX` | 3 | CD4051 common output — BTS7960 IS channels |
 | `PIN_SPEED_SENSOR` | 8 | Driveline speed sensor (PCNT) via the X2 6N137 opto input, inverted — from the pending speed-sensor change |
 | `PIN_TACHO` | 14 | ECU tacho input (aztec) on X3 Hall_1 A via an external PC817 emitter follower, not inverted, RISING-edge ISR (§7a) |
+| `PIN_PARK_BRAKE_LPWM` / `PIN_PARK_BRAKE_RPWM` | 4 / 5 | Aztec parking-brake BTS7960 on X6 (LEDC `LEDC_CH_PARK_BRAKE_LPWM` 7 / `LEDC_CH_PARK_BRAKE_RPWM` 6, 10 kHz, 8-bit) — aztec only |
+
+Parking-brake constants (fw 1.5.29, `include/ParkBrakeLaw.h` keeps the same literals):
+`PARK_BRAKE_DRIVE_DUTY` 255, `PARK_BRAKE_TRAVEL_MS_DEFAULT` 2000 (MIN 1000 / MAX 5000),
+`PARK_BRAKE_TRAVEL_MARGIN_MS` 500, `PARK_BRAKE_REVERSE_DWELL_MS` 200,
+`PARK_BRAKE_THR_PASS_PCT_DEFAULT` 50 (MIN 20 / MAX 100), `PARK_BRAKE_APPLY_MAX_SPEED_MS` 0.833 (3 km/h),
+`PARK_BRAKE_DRIVE_AWAY_THROTTLE_PCT` 10, NVS namespace `pbrake` (keys `state`, `travel_ms`, `thr_pass`,
+`invert`), GCS flags `EFI_DIGITAL_FLAG_PARK_BRAKE` 0x04 / `EFI_DIGITAL_FLAG_PARK_BRAKE_UNSETTLED` 0x08.
 
 ### Removed constants (function moved off-GPIO)
 
@@ -638,7 +651,7 @@ The LED series resistor is now **1 kΩ** (was 1.5 kΩ) for more drive margin on 
 | Battery sense / telemetry | `PIN_BOOST_EN` HIGH at boot (harmless); `PIN_ADC_24V` = 12 V battery → `ecu_voltage` telemetry and MAVLink `EFI_STATUS.ignition_voltage`, web calibration `cal_bat_v` |
 | `TachoSensor` (aztec) | New: `PIN_TACHO` IRAM ISR + period averaging (`include/TachoLaw.h`), ppr in NVS `tacho`; `VehicleController` composes the effective RPM (TACHO → CAN fallback); `ENGINE_RUNNING_RPM_THRESHOLD` 1500 → 800 |
 | Console | Add `ARDUINO_USB_CDC_ON_BOOT=1` build flag (USB-CDC over USB-C) |
-| CD4051 IS mux (future) | PCA9557 U2 @ 0x1C drives A/B/C + enable; read on `PIN_ADC_IS_MUX` — brake-motor current monitoring |
+| CD4051 IS mux (future) | PCA9557 U2 @ 0x1C drives A/B/C + enable; read on `PIN_ADC_IS_MUX` — brake-motor current monitoring, and the X6 IS lines (CH3 / CH0) for a current-based parking-brake end-of-travel / stall detection |
 
 **Source files touched by the removed constants:** `include/Constants.h`, `include/VehicleController.h`,
 `src/main.cpp`, `src/RelayController.cpp`, `src/TransmissionController.cpp`.
