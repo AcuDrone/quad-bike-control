@@ -159,7 +159,7 @@ outputs must align with these indices (see `ServoChannelConfig` in `include/Cons
 | `servo3_raw` | Transmission | R <1200, N 1201–1520, L >1520 |
 | `servo4_raw` | Ignition | OFF <1200, ACC 1201–1520, IGNITION >1520 |
 | `servo6_raw` | Front light | >1520 = ON |
-| `servo7_raw` | Lock — aztec: Relay_4 + Relay_5 + Relay_6 (relay board X7/X8/X9) switched together; quad (master): front-wheel lock | >1520 = LOCKED, ≤1520 = UNLOCKED |
+| `servo7_raw` | Lock — aztec (since firmware 1.5.25; 1.2.0–1.5.24 decoded but ignored): Relay_4 + Relay_5 + Relay_6 (relay board X7/X8/X9) switched together; quad (master): front-wheel lock | >1520 = LOCKED, ≤1520 = UNLOCKED |
 
 (Channel 5 is intentionally unused.)
 
@@ -257,7 +257,7 @@ documented exception, and the reason they are one is set out in their own sectio
 | 15 | `throttle_out` | [%] Output throttle | **COMMANDED (arbitrated) throttle** | **always valid**, never NaN | `state.throttleCmdPct` |
 | 16 | ⚑ `pt_compensation` | Pressure/temp compensation | **Digital-output bitmask** — repurposed: this ECU publishes no compensation factor | **always valid** (relay ground truth) | `state.digitalFlags` |
 | 17 | `health` | EFI health (`uint8_t`) | `1` = present. **Constant — not a CAN-health flag** | always `1` | literal |
-| 18 | `ignition_voltage` | [V] EFI supply voltage | **12 V battery voltage**, measured by this board (X10 pin 3 → 200K/24K divider → GPIO 9, calibrated via web `cal_bat_v`) — **not** an ECU PID | NaN if no battery is wired (`!bat_v_valid`) | `state.batteryV` |
+| 18 | `ignition_voltage` | [V] EFI supply voltage | **12 V battery voltage** (aztec, since firmware 1.5.8; the quad (master) sends the ECU module voltage, PID `0x42`, NaN if `!canValid`), measured by this board (X10 pin 3 → 200K/24K divider → GPIO 9, calibrated via web `cal_bat_v`) — **not** an ECU PID | NaN if no battery is wired (`!bat_v_valid`) | `state.batteryV` |
 | 19 | ⚑ `fuel_pressure` | [kPa] Fuel pressure | **TRIP distance, resettable, km** — repurposed: fuel PIDs absent | **always valid**, never NaN; **0 is a genuine zero** | `state.tripKm` |
 
 **Engine RPM source (aztec, fw 1.5.9).** The Delphi MT05 ECU answers PID `0x0C` with 0 and broadcasts
@@ -336,10 +336,10 @@ assembled in `src/main.cpp`, cast to float:
 
 | Bit | Mask | Meaning |
 |-----|------|---------|
-| 0 | `0x01` | `EFI_DIGITAL_FLAG_WHEEL_LOCK` — lock engaged (aztec: Relay_4+5+6 energized; quad (master): front-wheel lock) |
+| 0 | `0x01` | `EFI_DIGITAL_FLAG_WHEEL_LOCK` — lock engaged (aztec, since firmware 1.5.25: Relay_4+5+6 energized — 1.2.0–1.5.24 always 0; quad (master): front-wheel lock) |
 | 1 | `0x02` | `EFI_DIGITAL_FLAG_FRONT_LIGHT` — front light on |
-| 2 | `0x04` | `EFI_DIGITAL_FLAG_PARK_BRAKE` — parking brake **APPLIED** (aztec, X6) |
-| 3 | `0x08` | `EFI_DIGITAL_FLAG_PARK_BRAKE_UNSETTLED` — parking brake **APPLYING**, **RELEASING** or **UNKNOWN** (aztec) |
+| 2 | `0x04` | `EFI_DIGITAL_FLAG_PARK_BRAKE` — parking brake **APPLIED** (aztec, X6, since firmware 1.5.29) |
+| 3 | `0x08` | `EFI_DIGITAL_FLAG_PARK_BRAKE_UNSETTLED` — parking brake **APPLYING**, **RELEASING** or **UNKNOWN** (aztec, since firmware 1.5.29) |
 | 4–7 | — | unassigned, always 0 |
 
 Bits 2 and 3 both clear = parking brake **RELEASED**. Two bits are needed because one bit cannot
@@ -800,7 +800,7 @@ integer; `NaN` never matches.
 | 2 | Ignition | OFF 0, ACC 1, ON 2 (ON = auto-crank: 2 s pre-crank, starter ≤ 5 s) | bit2 |
 | 3 | Headlight | OFF 0, ON 1 | bit3 |
 | 4 | Diff lock | OFF 0, ON 1 | bit4 |
-| 5 | Handbrake | OFF 0 (release), ON 1 (apply) — **buggy (`aztec`) only** | bit5 |
+| 5 | Handbrake | OFF 0 (release), ON 1 (apply) — **buggy (`aztec`) only**, since firmware 1.5.30 | bit5 |
 
 ### Results
 
