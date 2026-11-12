@@ -2,6 +2,7 @@
 #include "Constants.h"
 #include "Debug.h"
 #include "EventJournal.h"
+#include <driver/gpio.h>
 
 VescMotorDriver::VescMotorDriver(uint8_t uartNum)
     : serial_(uartNum),
@@ -18,11 +19,30 @@ VescMotorDriver::VescMotorDriver(uint8_t uartNum)
 
 bool VescMotorDriver::begin(gpio_num_t rxPin, gpio_num_t txPin, uint32_t baud) {
     serial_.begin(baud, SERIAL_8N1, rxPin, txPin);
+    // Weak internal pull-up on the RX pad so the line idles HIGH (UART idle level) instead of
+    // floating between bytes or while the VESC is unpowered / unplugged. On aztec X1 (GPIO44) has
+    // only the 510 R series resistor — no pull-up, capacitor or ESD on the board (change
+    // gate-obd-watchdog-and-pull-up-vesc-rx). Applied AFTER begin(), never via pinMode() before
+    // it: Arduino-ESP32 3.3.x begin() -> uartSetPins() hands the pad to the UART through the
+    // peripheral manager and IDF 5.5 uart_set_pin(), whose RX path (IOMUX for UART0/GPIO44,
+    // GPIO matrix otherwise) only enables the input and enables NO pull-up (checked in the
+    // prebuilt libesp_driver_uart.a: its only gpio_pullup_en() is on the CTS pin), so after
+    // begin() the pad's pull is whatever reset / earlier code left. The pull bits live in the
+    // IO_MUX pad register, independent of the pad's function, so setting them here keeps the
+    // UART routing intact. Nothing re-opens this UART at runtime (link recovery only flushes the
+    // RX buffer and resets the parser in poll()), so begin() is the only place that needs it.
+    gpio_set_pull_mode(rxPin, GPIO_PULLUP_ONLY);
+    gpio_io_config_t io = {};
+    const bool pullUp = (gpio_get_io_config(rxPin, &io) == ESP_OK) && io.pu && !io.pd;
+    if (!pullUp) {
+        EventJournal::log(JSrc::VESC, JLvl::W, "rx_pullup", "pin=%d ok=0", (int)rxPin);
+    }
     initialized_ = true;
     lastRequestTime_ = millis();
     Debug::printfFeature(DebugFeature::SERVO,
-                         "[VESC] UART%d started: RX=%d TX=%d @ %lu baud\n",
-                         VESC_UART_NUM, (int)rxPin, (int)txPin, (unsigned long)baud);
+                         "[VESC] UART%d started: RX=%d (pull-up %s) TX=%d @ %lu baud\n",
+                         VESC_UART_NUM, (int)rxPin, pullUp ? "on" : "FAILED", (int)txPin,
+                         (unsigned long)baud);
     return true;   // structural success even if the VESC is silent (see driverOk())
 }
 

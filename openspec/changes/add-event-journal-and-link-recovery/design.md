@@ -196,7 +196,9 @@ Fix:
 ## D10 — CAN LWS watchdog and its interaction with the OBD watchdog
 - Existing (unchanged): no OBD reply for `CAN_REINIT_NO_DATA_MS` (15 s) while polling → re-init,
   min. spacing `CAN_REINIT_MIN_INTERVAL_MS` (15 s). On aztec the Delphi MT05 always answers, so this
-  never fires for a dead LWS path.
+  never fires for a dead LWS path. (Since fw 1.5.28, change `gate-obd-watchdog-and-pull-up-vesc-rx`,
+  it runs only while the ignition is `ACC` / `IGNITION`, on the same flag as the LWS watchdog, and its
+  15 s window restarts at each switch-on.)
 - New: `CANController` timestamps every dispatched `0x305` frame. The watchdog runs only while the
   ignition is `ACC` or `IGNITION` (the LWS is fed from the ACC line, Relay_1) and is armed after the
   first `0x305` seen since the ignition was switched on (a quad bike, an LWS that never powered up, or

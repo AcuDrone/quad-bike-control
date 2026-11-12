@@ -1,4 +1,5 @@
 #include "CANController.h"
+#include "CanWatchdogLaw.h"
 #include "Debug.h"
 #include "EventJournal.h"
 #include "Lws305.h"
@@ -43,6 +44,7 @@ CANController::CANController()
       reinitAttemptMs_(0),
       reinitCount_(0),
       lwsPowered_(false),
+      ignitionOnMs_(0),
       lwsSeenSinceOn_(false),
       lastLwsFrameMs_(0),
       lwsSilentObdDeadLogged_(false),
@@ -269,12 +271,16 @@ void CANController::update() {
             // send, and the boot case where the ECU was off and no response ever arrived —
             // measured from begin()/the last re-init until the first response lands.
             // Rate-limited so a genuinely absent ECU costs one re-init per interval.
+            // The ECU is powered from the ACC line like the LWS: the watchdog runs only while the
+            // ignition is ACC / IGNITION (same flag as the LWS watchdog) and counts the silence from
+            // the later of the last reply / re-init and the ignition switch-on, so a bus silent with
+            // the ignition OFF neither re-inits nor journals, and ACC/ON starts a fresh 15 s window
+            // (change gate-obd-watchdog-and-pull-up-vesc-rx; CanWatchdogLaw.h).
             uint32_t now = millis();
-            uint32_t noDataFor = (vehicleData_.lastUpdateTime != 0)
-                                     ? (now - vehicleData_.lastUpdateTime)
-                                     : (now - lastReinitTime_);
-            if (noDataFor >= CAN_REINIT_NO_DATA_MS &&
-                (now - lastReinitTime_) >= CAN_REINIT_MIN_INTERVAL_MS) {
+            uint32_t noDataFor = 0;
+            if (CanWatchdogLaw::obdNoDataDue(lwsPowered_, now, vehicleData_.lastUpdateTime, lastReinitTime_,
+                                             ignitionOnMs_, CAN_REINIT_NO_DATA_MS,
+                                             CAN_REINIT_MIN_INTERVAL_MS, &noDataFor)) {
                 Debug::printfFeature(DebugFeature::CAN,
                     "[CAN] No data for %lus, re-initializing controller\n",
                     (unsigned long)(noDataFor / 1000));
@@ -703,6 +709,13 @@ void CANController::handleBusOff(uint8_t eflg) {
 void CANController::setLwsPowered(bool on) {
     if (!(on && lwsPowered_)) {
         lwsSeenSinceOn_ = false;   // off, or switched on just now: disarmed until the next 0x305 frame
+    }
+    if (on && !lwsPowered_) {
+        // The ECU hangs on the same ACC line: the OBD-II no-data window starts fresh here, and the
+        // first silence of this power cycle is journaled again (change
+        // gate-obd-watchdog-and-pull-up-vesc-rx).
+        ignitionOnMs_ = millis();
+        obdEpisode_ = false;
     }
     lwsPowered_ = on;
 }

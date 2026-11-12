@@ -28,7 +28,10 @@ class VescMotorDriver : public IMotorDriver {
 public:
     explicit VescMotorDriver(uint8_t uartNum);
 
-    /** @brief Open the UART (8N1) on the given pins/baud. Always structurally succeeds. */
+    /**
+     * @brief Open the UART (8N1) on the given pins/baud and enable the internal pull-up on the RX
+     * pin (after the UART claimed it). Always structurally succeeds.
+     */
     bool begin(gpio_num_t rxPin, gpio_num_t txPin, uint32_t baud);
 
     // IMotorDriver
