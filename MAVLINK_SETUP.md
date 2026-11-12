@@ -4,6 +4,11 @@ The ESP32 talks to the Pixhawk 2.4.8 over a single MAVLink 2 serial link (replac
 SBUS-Out connection). This file is both the **setup guide** (wiring, ArduPilot parameters, servo
 mapping) and the **wire contract** (every outbound message field by field, with unit and validity).
 
+**Firmware-version marks.** "Since firmware X" names the first firmware release that carries an
+item. The MAVLink interface first shipped in **1.1.0** (2026-10-08; development builds before that
+still reported 1.0.4), so an item without a mark of its own has been on the wire since 1.1.0.
+Vehicle-specific marks say so (quad = `master`, buggy = `aztec`).
+
 ## Identity and transport
 
 | | |
@@ -153,25 +158,28 @@ outputs must align with these indices (see `ServoChannelConfig` in `include/Cons
 
 (Channel 5 is intentionally unused.)
 
+Channels as listed since firmware 1.1.0. Since 1.5.30 channels 3, 4, 6 and 7 are applied only when
+their value changes (see "RC and GCS: last change wins").
+
 ## Vehicle state reported back to the autopilot
 
 Eleven outbound message types: seven periodic, one reactive acknowledgement, three requests toward
 the autopilot. Scheduling is internal to `MavlinkInterface::report()`, called every loop iteration from
 `src/main.cpp`; the `StateReport` snapshot it consumes is declared in `include/MavlinkInterface.h`.
 
-| Message | Id | Rate | Purpose | Gating |
-|---------|----|------|---------|--------|
-| `HEARTBEAT` | 0 | 1 Hz (`MAVLINK_HEARTBEAT_TX_MS` = 1000 ms) | Component liveness + fail-safe state | none |
-| `EFI_STATUS` | 225 | 5 Hz (`MAVLINK_REPORT_TX_MS` = 200 ms) | All engine/vehicle telemetry in one message | none — fields go NaN instead |
-| `VFR_HUD` | 74 | 5 Hz (same tick) | Hall ground speed + throttle for a HUD | none |
-| `NAMED_VALUE_FLOAT` | 251 | 5 Hz (same tick) ×3 + 1 Hz (`MAVLINK_STEER_SLOW_TX_MS` = 1000 ms) ×3 | The six steering values: `STEER_POS`, `STEER_A`, `VESC_V`, `VESC_TEMP`, `VESC_OK`, `STEER_SCA` | none — values go NaN instead (`VESC_OK` and `STEER_SCA` never do) |
-| `NAMED_VALUE_INT` | 252 | 1 Hz (`MAVLINK_STEER_SLOW_TX_MS`) + once immediately on every change | `STEER_MODE`: steering control mode, `0` = position, `1` = rate (no sensor), `2` = blocked | none — always sent, never any other value |
-| `VISION_POSITION_DELTA` | 11011 | ≤ 5 Hz (same tick) | Wheel odometry as an EKF3-fusable body-frame delta | **heavily gated** — silence over zeros |
-| `STATUSTEXT` | 253 | on change, ≥ 250 ms apart | Gear / ignition / fail-safe transitions; steering mode changes | only on an actual change |
-| `COMMAND_ACK` | 77 | reactive | Answer to a `COMMAND_LONG` addressed exactly to 1/25 | broadcasts get **no** ACK |
-| `REQUEST_DATA_STREAM` | 66 | ≤ 1 per 3 s | Ask for `SERVO_OUTPUT_RAW` | while the command rate is below 10 Hz |
-| `COMMAND_LONG` (`SET_MESSAGE_INTERVAL`) | 76 | ≤ 1 per 3 s | Same request, modern form | same gate, sent together |
-| `PARAM_REQUEST_READ` | 20 | 0.2 Hz each | Poll `SPEED_MAX` and `MOT_SPD_SCA_BASE` (one request per loop iteration, never both at once) | link up + autopilot learned |
+| Message | Id | Rate | Purpose | Gating | Since |
+|---------|----|------|---------|--------|-------|
+| `HEARTBEAT` | 0 | 1 Hz (`MAVLINK_HEARTBEAT_TX_MS` = 1000 ms) | Component liveness + fail-safe state | none | 1.1.0 |
+| `EFI_STATUS` | 225 | 5 Hz (`MAVLINK_REPORT_TX_MS` = 200 ms) | All engine/vehicle telemetry in one message | none — fields go NaN instead | 1.1.0 |
+| `VFR_HUD` | 74 | 5 Hz (same tick) | Hall ground speed + throttle for a HUD | none | 1.1.0 |
+| `NAMED_VALUE_FLOAT` | 251 | 5 Hz (same tick) ×3 + 1 Hz (`MAVLINK_STEER_SLOW_TX_MS` = 1000 ms) ×3 | The six steering values: `STEER_POS`, `STEER_A`, `VESC_V`, `VESC_TEMP`, `VESC_OK`, `STEER_SCA` | none — values go NaN instead (`VESC_OK` and `STEER_SCA` never do) | 1.1.0 |
+| `NAMED_VALUE_INT` | 252 | 1 Hz (`MAVLINK_STEER_SLOW_TX_MS`) + once immediately on every change | `STEER_MODE`: steering control mode, `0` = position, `1` = rate (no sensor), `2` = blocked | none — always sent, never any other value | 1.5.0 (`QB_CAPS`, `IGN_STATE`: 1.5.30) |
+| `VISION_POSITION_DELTA` | 11011 | ≤ 5 Hz (same tick) | Wheel odometry as an EKF3-fusable body-frame delta | **heavily gated** — silence over zeros | 1.1.0 |
+| `STATUSTEXT` | 253 | on change, ≥ 250 ms apart | Gear / ignition / fail-safe transitions; steering mode changes | only on an actual change | 1.1.0 (steering mode texts: 1.5.0) |
+| `COMMAND_ACK` | 77 | reactive | Answer to a `COMMAND_LONG` addressed exactly to 1/25 | broadcasts get **no** ACK | 1.1.0 |
+| `REQUEST_DATA_STREAM` | 66 | ≤ 1 per 3 s | Ask for `SERVO_OUTPUT_RAW` | while the command rate is below 10 Hz | 1.1.0 |
+| `COMMAND_LONG` (`SET_MESSAGE_INTERVAL`) | 76 | ≤ 1 per 3 s | Same request, modern form | same gate, sent together | 1.1.0 |
+| `PARAM_REQUEST_READ` | 20 | 0.2 Hz each | Poll `SPEED_MAX` and `MOT_SPD_SCA_BASE` (one request per loop iteration, never both at once) | link up + autopilot learned | 1.1.0 |
 
 Engine data comes from the CAN bus (`CANController::VehicleData`); ground speed, odometer and trip
 come from the hall wheel-speed sensor (GPIO 8 / X2), independently of CAN health. Steering-VESC
@@ -464,6 +472,8 @@ days** — that is what the field is *defined* as (`uint32_t` ms since boot), no
 
 #### `STEER_MODE` (`NAMED_VALUE_INT` 252)
 
+Since firmware 1.5.0 (change `add-aztec-steering-rate-mode`), on both vehicles.
+
 The steering control mode the vehicle layer selected in the latest loop iteration (see "Steering
 without the angle sensor (rate mode)" below):
 
@@ -699,7 +709,7 @@ Emitted **outside** the 200 ms telemetry tick — the change test runs on every 
 `"OFF"` / `"ACC"` / `"IGNITION"` / `"CRANKING"`, `"?"` if null. Example: `gear=N ign=IGNITION`, or
 `gear=N ign=OFF FAILSAFE`.
 
-**Steering mode changes** produce a separate `STATUSTEXT` through the **same** 250 ms limiter:
+**Steering mode changes** (since firmware 1.5.0) produce a separate `STATUSTEXT` through the **same** 250 ms limiter:
 
 | New mode | `text` | `severity` |
 |----------|--------|------------|
