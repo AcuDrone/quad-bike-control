@@ -19,7 +19,8 @@ are refresh, download, clear and the journal's flash-write switch.
 - **THEN** the browser SHALL download `GET /api/events/download` as a text file
 
 #### Scenario: Clear
-- **WHEN** the engineer clicks "Очистити" / "Clear" and confirms the dialog
+- **WHEN** the engineer clicks "Очистити" / "Clear" and confirms it with a second press of the same
+  button within 5 s (two-press confirmation, change `replace-web-dialogs-with-two-press-confirm`)
 - **THEN** the card SHALL send `POST /api/events/clear` and reload the list
 
 #### Scenario: Counters and availability
