@@ -58,11 +58,11 @@
  * ignition/crank/light-on/wheel-lock command, allOff(), a relay-write fault and the
  * starter escalation.
  *
- * Front-wheel lock: fitted on the quad bike (RELAY_WHEEL_LOCK_FITTED = 1, Relay_5 +
- * Relay_6); allOff() deliberately leaves it in its last state. NOT fitted on aztec
- * (RELAY_WHEEL_LOCK_FITTED = 0): setWheelLock() is kept so the MAVLink/web plumbing
- * compiles, but it rejects a LOCK request (logged once), and getWheelLock() always
- * reports released.
+ * Lock ("wheel lock" in the API): fitted on both vehicles (RELAY_WHEEL_LOCK_FITTED = 1) —
+ * aztec Relay_4 + Relay_5 + Relay_6, quad bike Relay_5 + Relay_6. allOff() deliberately
+ * leaves it in its last state on both. With RELAY_WHEEL_LOCK_FITTED = 0 setWheelLock() is
+ * kept so the MAVLink/web plumbing compiles, but it rejects a LOCK request (logged once),
+ * and getWheelLock() always reports released.
  *
  * The whole 8-bit port is written from a single shadow byte and verified by reading
  * the PINS back (IRelayPort::readPins(), the input register), because over I2C a write
@@ -226,6 +226,12 @@ public:
      * @return true if light is ON, false if OFF
      */
     bool getFrontLight() const { return frontLightOn_; }
+
+    /**
+     * @brief True while a dwell-gated crank is armed (requestCrank() → pre-crank dwell).
+     * The reported state is ACC meanwhile; IGN_STATE shows it as CRANKING.
+     */
+    bool isCrankPending() const { return isAvailable() && crankArmed_; }
 
     /**
      * @brief Get current front-wheel lock state

@@ -16,6 +16,7 @@
 #include "SpeedSensor.h"
 #include "EngineHourMeter.h"
 #include "SpeedLimiterLaw.h"
+#include "VehicleCommandLaw.h"
 
 /**
  * @brief Vehicle control coordination layer
@@ -23,7 +24,7 @@
  * Handles input source priority (MAVLINK > WEB > FAILSAFE), processes commands,
  * and coordinates all vehicle actuators (steering, throttle, brake, transmission).
  */
-class VehicleController {
+class VehicleController : public VehicleCommandSink {
 public:
     VehicleController(SteeringController& steering,
                       ThrottleController& throttle,
@@ -408,6 +409,23 @@ public:
     /** @brief True if the front-wheel lock is fitted (false on aztec) */
     bool isWheelLockFitted() const { return RelayController::isWheelLockFitted(); }
 
+    // ---- GCS vehicle commands (MAV_CMD_USER_2, change add-gcs-vehicle-commands) -------------
+
+    /**
+     * @brief Execute one validated GCS function command (param1 1-5) and report the outcome.
+     * Called by MavlinkInterface inside its update(), i.e. before this loop's setInputSource();
+     * "under MAVLink control" therefore also requires a valid command stream (design D4).
+     */
+    VehicleCmdOutcome executeVehicleCommand(VehicleCmdFunction fn, int32_t value) override;
+
+    /** @brief Capability bitmask (VCMD_CAP_*), fixed at boot. */
+    uint16_t getVehicleCapsMask() const;
+
+    /** @brief IGN_STATE code of the applied relay state: 0 OFF, 1 ACC, 2 ON, 3 CRANKING. */
+    uint8_t getIgnStateCode() const {
+        return ignStateCode((uint8_t)relayController_.getIgnitionState(), relayController_.isCrankPending());
+    }
+
     /**
      * @brief Web relay test state, relay-number order (bit0 = Relay_1 … bit7 = Relay_8),
      * from the relay output shadow. Published in telemetry as `relay_test`.
@@ -492,9 +510,11 @@ private:
     float pidPrevError_;                // Previous error (for derivative)
     uint16_t lastPIDThrottleUs_;        // Last PID-computed throttle µs (held on CAN stale)
 
-    // Ignition state tracking
-    MavlinkInterface::IgnitionState previousIgnitionState_;  // Track previous state for transition detection
-    TransmissionController::Gear lastCommandedGear_;         // Last gear requested via MAVLink (dedup guard)
+    // RC gear / ignition / light / lock: last in-band value per channel + the pending RC gear.
+    // Applied only on a change ("last change wins" with the GCS commands); cleared in every loop
+    // in which the source is not MAVLink, so the first valid frame back re-applies everything
+    // (boot, fail-safe exit, return from the web portal — design D6).
+    VcmdRcState rc_;
 
     uint32_t lastSpeedLimitWarnMs_; // rate limit for the "limiter armed, speed invalid" log
 
@@ -556,6 +576,14 @@ private:
      * @brief Process MAVLink commands from the autopilot
      */
     void processMavlinkCommands();
+
+    /** @brief GCS / RC common actions (ignition OFF persists the counters on a transition). */
+    void ignitionOffAndPersist();
+
+    /** @brief True when the source is MAVLink AND its command stream is valid (design D4). */
+    bool isUnderMavlinkControl() const {
+        return currentInputSource_ == InputSource::MAVLINK && mavlink_.isSignalValid();
+    }
 
     /**
      * @brief Apply brake control with percentage (0-100%)

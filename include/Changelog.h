@@ -14,6 +14,17 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.30","date":"2026-11-13","uk":[
+"Наземна станція (Mission Planner, QGC, кнопки на кермі): передача, запалювання, фара і блокування тепер керуються командами з наземної станції (MAV_CMD_USER_2). Плата перевіряє всі блокування й відповідає на кожну команду: передача — лише з працюючим двигуном і не швидше 1,4 м/с (нейтраль — на будь-якій швидкості); запалювання OFF працює завжди, ACC/ON і блокування — лише коли керує MAVLink (не у failsafe і не з веб-керуванням); фара — завжди.",
+"Пульт і наземна станція рівноправні: діє остання зміна. Перемикач на пульті застосовується лише тоді, коли його положення змінилося, тож команда з наземної станції не скасовується наступним кадром. Канал поза діапазоном 880–2160 мкс більше не вмикає N / OFF / вимикає фару — стан лишається.",
+"Після завантаження, після failsafe і після виходу з веб-керування (або коли пульт повернувся при відкритій веб-сторінці) перший кадр із пульта знову виставляє передачу, запалювання, фару й блокування — якщо перемикач запалювання в ON, запускається автостарт.",
+"Для наземної станції: можливості плати (QB_CAPS кожні 10 с), стан запалювання (IGN_STATE: 0 OFF, 1 ACC, 2 ON, 3 прокрутка стартером), запити версії прошивки й обладнання. Без цієї прошивки станція нових кнопок не показує."
+],"en":[
+"Ground station (Mission Planner, QGC, steering-wheel buttons): gear, ignition, headlight and diff lock are now commanded from the ground station (MAV_CMD_USER_2). The board checks every interlock and answers each command: gear only with the engine running and at no more than 1.4 m/s (neutral at any speed); ignition OFF always works, ACC/ON and the lock only while MAVLink is in control (not in failsafe or under web control); headlight always.",
+"RC and ground station are equal: the last change wins. An RC switch is applied only when its position changes, so a ground-station command is not undone by the next frame. A channel outside 880–2160 µs no longer forces N / OFF / light off — the state is kept.",
+"After boot, after a failsafe and after leaving web control (or when RC returns while the web page is open) the first RC frame sets gear, ignition, headlight and lock again — with the ignition switch in ON this starts the auto-crank.",
+"For the ground station: board capabilities (QB_CAPS every 10 s), ignition state (IGN_STATE: 0 OFF, 1 ACC, 2 ON, 3 cranking), firmware and hardware version queries. Without this firmware the ground station shows no new buttons."
+]},
 {"version":"1.5.28","date":"2026-11-12","uk":[
 "Квадроцикл: на лінії прийому від VESC керма (X6, GPIO5) увімкнено внутрішню підтяжку до +3,3 В. На X6 уже є зовнішні підтяжки через перетворювачі рівнів, тож поведінка не змінюється — внутрішня додана для однаковості з багі. Якщо підтяжку не вдалося ввімкнути, у журналі з’являється запис «VESC W rx_pullup»",
 "CAN: при вимкненому запалюванні (OFF) мовчання ECU більше не вважається збоєм — контролер CAN не перезапускається кожні 15 с, у журналі немає «obd_silent», лічильник can_reinit не росте (як уже було для датчика кута керма). Після перемикання в ACC/ON відлік 15 с починається заново"
