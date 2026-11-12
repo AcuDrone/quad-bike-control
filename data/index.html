@@ -500,6 +500,8 @@
         .relay-btn:disabled { opacity: 0.5; cursor: not-allowed; }
         #steer-angle-input:disabled, #steer-angle-neg:disabled, #steer-angle-go:disabled, #steer-angle-zero:disabled { opacity: 0.5; cursor: not-allowed; }
         .relay-btn.active { background: color-mix(in srgb, var(--success) 40%, var(--card)); border-color: var(--success); }
+        /* Two-press confirmation: the armed button waits for the second press (confirmTwice) */
+        .confirm-armed { outline: 2px solid var(--warning); outline-offset: 2px; box-shadow: 0 0 0 4px color-mix(in srgb, var(--warning) 30%, transparent); }
         .relay-btn-name { font-size: 1.25em; line-height: 1.15; }
         .relay-btn-desc { font-size: 0.8em; font-weight: normal; color: var(--muted-foreground); line-height: 1.3; }
         .relay-btn.active .relay-btn-desc { color: var(--foreground); }
@@ -930,7 +932,7 @@
                     <button onclick="steerCapture('steer_cal_right')" data-i18n="btn_set_right" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Set Right</button>
                 </div>
                 <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 4px;">
-                    <button onclick="steerSensorZero()" data-i18n="btn_steer_zero" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--danger) 55%, black); color:var(--foreground); cursor:pointer;">Set sensor zero</button>
+                    <button onclick="steerSensorZero(this)" data-i18n="btn_steer_zero" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--danger) 55%, black); color:var(--foreground); cursor:pointer;">Set sensor zero</button>
                 </div>
                 <div style="margin-top: 8px; font-size: 0.8em; color: var(--muted-foreground);">
                     <span data-i18n="lbl_steer_angle">Angle:</span> <span data-bind="steer-angle" class="big-angle">--</span>°
@@ -1090,7 +1092,7 @@
                     <button type="button" class="relay-btn gc-save" id="gc-save-h" onclick="captureGearCode('H')"><span class="relay-btn-name" data-i18n="btn_save_as_h">Save as H</span><span class="relay-btn-desc" id="gc-saved-h">--</span></button>
                     <button type="button" class="relay-btn gc-save" id="gc-save-l" onclick="captureGearCode('L')"><span class="relay-btn-name" data-i18n="btn_save_as_l">Save as L</span><span class="relay-btn-desc" id="gc-saved-l">--</span></button>
                 </div>
-                <button onclick="resetGearCodes()" data-i18n="btn_reset_gear_codes" style="margin-top: 10px; width: 100%; padding:8px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer;">Reset to defaults</button>
+                <button onclick="resetGearCodes(this)" data-i18n="btn_reset_gear_codes" style="margin-top: 10px; width: 100%; padding:8px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer;">Reset to defaults</button>
                 <div id="gear-codes-status" style="margin-top: 10px; font-size: 0.8em; color: var(--muted-foreground); min-height: 1.2em;"></div>
             </div>
             <!-- Speed sensor calibration (pulses per revolution with the measurement, wheel circumference) -->
@@ -1409,10 +1411,11 @@
                             Click to select firmware (.bin)
                         </label>
                     </div>
-                    <button class="upload-btn" id="upload-btn" onclick="uploadFirmware()" data-i18n="btn_upload_firmware">Upload Firmware</button>
+                    <button class="upload-btn" id="upload-btn" onclick="uploadFirmware(this)" data-i18n="btn_upload_firmware">Upload Firmware</button>
                     <div class="progress-bar" id="progress-bar" style="display: none;">
                         <div class="progress-fill" id="progress-fill">0%</div>
                     </div>
+                    <div id="fw-status" style="margin-top: 8px; font-size: 0.8em; min-height: 1.2em; color: var(--muted-foreground);"></div>
                 </div>
                 <div class="slider-container" style="margin-top: 15px;">
                     <button class="upload-btn" onclick="openChangelog()" style="background: var(--secondary);">
@@ -1464,7 +1467,7 @@
                     </select>
                     <button class="gear-btn" onclick="loadJournal()" data-i18n="journal_refresh" style="flex: 1; padding: 8px 6px; font-size: 0.9em;">Refresh</button>
                     <button class="gear-btn" onclick="downloadJournal()" data-i18n="journal_download" style="flex: 1; padding: 8px 6px; font-size: 0.9em;">Download</button>
-                    <button class="gear-btn" onclick="clearJournal()" data-i18n="journal_clear" style="flex: 1; padding: 8px 6px; font-size: 0.9em;">Clear</button>
+                    <button class="gear-btn" onclick="clearJournal(this)" data-i18n="journal_clear" style="flex: 1; padding: 8px 6px; font-size: 0.9em;">Clear</button>
                 </div>
                 <pre id="journal-lines" style="margin: 0; max-height: 320px; overflow: auto; padding: 6px 8px; border-radius: 4px; border: 1px solid var(--border); font-family: var(--font-mono, monospace); font-size: 0.72em; line-height: 1.45; white-space: pre; color: var(--foreground);">--</pre>
                 <div id="journal-status" style="margin-top: 6px; font-size: 0.8em; min-height: 1.2em; color: var(--muted-foreground);"></div>
@@ -1565,6 +1568,7 @@
                 gear_codes_live: 'code %s → %s',
                 gear_codes_entry_default: 'default',
                 gear_codes_confirm_reset: 'Restore the default gear codes?',
+                gear_codes_confirm_btn: 'Confirm reset',
                 gear_codes_saving: 'Saving current code as %s…',
                 card_gear_defaults: '⚙️ Gear Position Defaults',
                 gear_defaults_help: 'Transmission servo position for each gear (0.0–100.0 %). Press <b>Start</b>, drag the slider until the lever sits in the wanted gear, then press <b>Save as &lt;gear&gt;</b>. Saving does not move the servo, so it also works without Start. The <b>▶</b> buttons move the servo to a saved position for checking; <b>Done</b> locks the slider again. <b>Gear-change RPM boost</b> turns the RPM blip on gear changes on or off; with it off the throttle is still held at idle while the gear shifts, and the manual RPM boost test is not affected.',
@@ -1599,8 +1603,10 @@
                 btn_set_left: 'Set Left',
                 btn_set_right: 'Set Right',
                 btn_steer_zero: 'Set sensor zero',
-                steer_zero_confirm: 'Set the sensor zero HERE?\n\nThe current wheel position becomes the steering center, and the stored Left and Right limits will be erased — capture them again afterwards.\n\nOnly do this with the wheels straight ahead, after restarting the vehicle.',
+                steer_zero_confirm: 'This position becomes the center. The limits will be erased.',
+                steer_zero_confirm_btn: 'Confirm zero',
                 steer_zero_sending: 'Setting sensor zero…',
+                steer_no_connection: 'No connection to the board',
                 lbl_steer_angle: 'Angle:',
                 lbl_lws_fps: 'fps',
                 lbl_lws_crc: 'checksum',
@@ -1943,7 +1949,8 @@
                 btn_upload_firmware: 'Upload Firmware',
                 fw_update_warning: '⚠️ Vehicle will enter safe state during update and reboot automatically.',
                 fw_select_first: 'Please select a firmware file first',
-                fw_confirm_upload: 'Upload firmware? Vehicle will enter safe state and reboot.',
+                fw_confirm_upload: 'The vehicle will enter safe state and reboot.',
+                fw_confirm_btn: 'Confirm upload',
                 fw_upload_success: 'Firmware uploaded successfully! Device will reboot.',
                 fw_upload_failed: 'Upload failed: %s',
                 fw_upload_error: 'Upload error occurred',
@@ -2024,7 +2031,8 @@
                 journal_refresh: 'Refresh',
                 journal_download: 'Download',
                 journal_clear: 'Clear',
-                journal_confirm_clear: 'Delete the whole event journal? The boot counter is kept.',
+                journal_confirm_clear: 'The journal will be deleted; the boot counter is kept.',
+                journal_confirm_btn: 'Confirm delete',
                 journal_cleared: 'Journal cleared',
                 journal_load_failed: 'Could not load the journal',
                 journal_empty: '(no lines)',
@@ -2102,6 +2110,7 @@
                 gear_codes_live: 'код %s → %s',
                 gear_codes_entry_default: 'типовий',
                 gear_codes_confirm_reset: 'Відновити типові коди передач?',
+                gear_codes_confirm_btn: 'Підтвердити скидання',
                 gear_codes_saving: 'Збереження поточного коду як %s…',
                 card_gear_defaults: '⚙️ Типові положення передач',
                 gear_defaults_help: 'Положення серво трансмісії для кожної передачі (0.0–100.0 %). Натисніть <b>Почати</b>, повзунком доведіть важіль у потрібну передачу, потім натисніть <b>Зберегти як &lt;передача&gt;</b>. Збереження не рухає серво, тому працює і без «Почати». Кнопки <b>▶</b> переводять серво в збережене положення для перевірки; <b>Готово</b> знову блокує повзунок. <b>Перегазовка при перемиканні</b> вмикає або вимикає підгазовку під час перемикання передач; коли її вимкнено, газ однаково тримається на холостому ходу, поки передача перемикається, а ручний тест буста обертів працює як раніше.',
@@ -2136,8 +2145,10 @@
                 btn_set_left: 'Задати ліво',
                 btn_set_right: 'Задати право',
                 btn_steer_zero: 'Задати нуль датчика',
-                steer_zero_confirm: 'Задати нуль датчика ТУТ?\n\nПоточне положення коліс стане центром керма, а збережені межі «ліво» та «право» буде стерто — після цього зафіксуйте їх знову.\n\nРобіть це лише з колесами, виставленими прямо, після перезапуску машини.',
+                steer_zero_confirm: 'Це положення стане центром. Межі буде стерто.',
+                steer_zero_confirm_btn: 'Підтвердити нуль',
                 steer_zero_sending: 'Встановлення нуля датчика…',
+                steer_no_connection: 'Немає з\'єднання з платою',
                 lbl_steer_angle: 'Кут:',
                 lbl_lws_fps: 'кадр/с',
                 lbl_lws_crc: 'контр. сума',
@@ -2479,7 +2490,8 @@
                 btn_upload_firmware: 'Завантажити прошивку',
                 fw_update_warning: '⚠️ Під час оновлення авто перейде в безпечний стан і автоматично перезавантажиться.',
                 fw_select_first: 'Спершу оберіть файл прошивки',
-                fw_confirm_upload: 'Завантажити прошивку? Авто перейде в безпечний стан і перезавантажиться.',
+                fw_confirm_upload: 'Авто перейде в безпечний стан і перезавантажиться.',
+                fw_confirm_btn: 'Підтвердити завантаження',
                 fw_upload_success: 'Прошивку успішно завантажено! Пристрій перезавантажиться.',
                 fw_upload_failed: 'Помилка завантаження: %s',
                 fw_upload_error: 'Сталася помилка завантаження',
@@ -2559,7 +2571,8 @@
                 journal_refresh: 'Оновити',
                 journal_download: 'Завантажити',
                 journal_clear: 'Очистити',
-                journal_confirm_clear: 'Видалити весь журнал подій? Лічильник запусків збережеться.',
+                journal_confirm_clear: 'Журнал буде видалено, лічильник запусків лишиться.',
+                journal_confirm_btn: 'Підтвердити видалення',
                 journal_cleared: 'Журнал очищено',
                 journal_load_failed: 'Не вдалося завантажити журнал',
                 journal_empty: '(рядків немає)',
@@ -2628,6 +2641,50 @@
             pprMeasRender();
             renderJournal();
             updateJournalFsUi();
+            confirmRefreshLang();
+        }
+
+        // ---- Two-press confirmation (replaces the native confirm dialog: captive-portal webviews and
+        // Chrome's "prevent additional dialogs" make it return false silently) ----
+        // First press arms the button: the label becomes the confirm label and the card's
+        // status line shows the warning; nothing is sent. A second press within
+        // CONFIRM_ARM_MS returns true and the caller runs the action. The label is swapped
+        // through data-i18n, so applyStaticTranslations() renders it in the new language.
+        const CONFIRM_ARM_MS = 5000;
+        const confirmArmed = new Map();   // button -> { origKey, warnKey, statusId, shown, timer }
+        function confirmTwice(btn, btnKey, warnKey, statusId) {
+            if (!btn) return false;
+            if (confirmArmed.has(btn)) { confirmDisarm(btn); return true; }
+            const a = { origKey: btn.getAttribute('data-i18n'), warnKey: warnKey, statusId: statusId, shown: t(warnKey) };
+            btn.setAttribute('data-i18n', btnKey);
+            btn.textContent = t(btnKey);
+            btn.classList.add('confirm-armed');
+            const st = document.getElementById(statusId);
+            if (st) { st.textContent = a.shown; st.style.color = 'var(--warning)'; }
+            a.timer = setTimeout(() => confirmDisarm(btn), CONFIRM_ARM_MS);
+            confirmArmed.set(btn, a);
+            return false;
+        }
+        // Restore the label; clear the warning only if the status line still shows it.
+        function confirmDisarm(btn) {
+            const a = confirmArmed.get(btn);
+            if (!a) return;
+            clearTimeout(a.timer);
+            confirmArmed.delete(btn);
+            btn.setAttribute('data-i18n', a.origKey);
+            btn.textContent = t(a.origKey);
+            btn.classList.remove('confirm-armed');
+            const st = document.getElementById(a.statusId);
+            if (st && st.textContent === a.shown) { st.textContent = ''; st.style.color = 'var(--muted-foreground)'; }
+        }
+        // Language switch while armed: re-render a warning that is still on screen.
+        function confirmRefreshLang() {
+            confirmArmed.forEach(a => {
+                const st = document.getElementById(a.statusId);
+                const next = t(a.warnKey);
+                if (st && st.textContent === a.shown) st.textContent = next;
+                a.shown = next;
+            });
         }
 
         function updateLangToggle() {
@@ -3799,8 +3856,8 @@
             }
         }
 
-        function resetGearCodes() {
-            if (!confirm(t('gear_codes_confirm_reset'))) return;
+        function resetGearCodes(btn) {
+            if (!confirmTwice(btn, 'gear_codes_confirm_btn', 'gear_codes_confirm_reset', 'gear-codes-status')) return;
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ cmd: 'reset_gear_codes' }));
             }
@@ -4463,15 +4520,21 @@
             if (el) { el.textContent = msg; el.style.color = color || 'var(--muted-foreground)'; }
         }
         function steerCapture(cmd) {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ cmd: cmd }));
-                steerCenterStatus(t('capturing'), 'var(--muted-foreground)');
+            if (!(ws && ws.readyState === WebSocket.OPEN)) {
+                steerCenterStatus(t('steer_no_connection'), 'var(--danger)');
+                return;
             }
+            ws.send(JSON.stringify({ cmd: cmd }));
+            steerCenterStatus(t('capturing'), 'var(--muted-foreground)');
         }
-        function steerSensorZero() {
-            if (!(ws && ws.readyState === WebSocket.OPEN)) return;
+        function steerSensorZero(btn) {
+            // Disconnected: say so in the card and do not arm the two-press confirmation
+            if (!(ws && ws.readyState === WebSocket.OPEN)) {
+                steerCenterStatus(t('steer_no_connection'), 'var(--danger)');
+                return;
+            }
             // The current position becomes the center and the stored limits are erased
-            if (!confirm(t('steer_zero_confirm'))) return;
+            if (!confirmTwice(btn, 'steer_zero_confirm_btn', 'steer_zero_confirm', 'steer-center-status')) return;
             ws.send(JSON.stringify({ cmd: 'steer_lws_zero' }));
             steerCenterStatus(t('steer_zero_sending'), 'var(--muted-foreground)');
         }
@@ -4641,14 +4704,19 @@
             }
         }
 
-        function uploadFirmware() {
+        function fwStatus(msg, color) {
+            const el = document.getElementById('fw-status');
+            if (el) { el.textContent = msg; el.style.color = color || 'var(--muted-foreground)'; }
+        }
+
+        function uploadFirmware(btn) {
             const fileInput = document.getElementById('firmware-file');
             if (fileInput.files.length === 0) {
-                alert(t('fw_select_first'));
+                fwStatus(t('fw_select_first'), 'var(--danger)');
                 return;
             }
 
-            if (!confirm(t('fw_confirm_upload'))) {
+            if (!confirmTwice(btn, 'fw_confirm_btn', 'fw_confirm_upload', 'fw-status')) {
                 return;
             }
 
@@ -4667,16 +4735,16 @@
 
             xhr.addEventListener('load', function() {
                 if (xhr.status === 200) {
-                    alert(t('fw_upload_success'));
+                    fwStatus(t('fw_upload_success'), 'var(--success)');
                     updateProgress(100);
                 } else {
-                    alert(t('fw_upload_failed', xhr.statusText));
+                    fwStatus(t('fw_upload_failed', xhr.statusText), 'var(--danger)');
                     hideProgress();
                 }
             });
 
             xhr.addEventListener('error', function() {
-                alert(t('fw_upload_error'));
+                fwStatus(t('fw_upload_error'), 'var(--danger)');
                 hideProgress();
             });
 
@@ -4988,8 +5056,8 @@
             a.click();
             a.remove();
         }
-        function clearJournal() {
-            if (!confirm(t('journal_confirm_clear'))) return;
+        function clearJournal(btn) {
+            if (!confirmTwice(btn, 'journal_confirm_btn', 'journal_confirm_clear', 'journal-status')) return;
             fetch('/api/events/clear', { method: 'POST' })
                 .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
                 .then(() => {

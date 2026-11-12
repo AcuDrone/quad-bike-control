@@ -14,6 +14,13 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.27","date":"2026-11-12","uk":[
+"Веб-панель: підтвердження без спливаючих вікон браузера — «Задати нуль датчика», «Скинути до типових» (коди передач), «Очистити» (журнал подій) і «Завантажити прошивку» тепер підтверджуються другим натисканням тієї ж кнопки протягом 5 с; попередження показується в рядку стану картки. Раніше у вікні входу в мережу на телефоні або після «заборонити сторінці створювати діалоги» в Chrome кнопка мовчки нічого не робила. Результат завантаження прошивки теж показується в картці. Потрібно залити оновлений образ LittleFS",
+"Калібрування керма: «Задати ліво», «Задати право» і «Задати нуль датчика» без з’єднання з платою тепер показують у рядку стану картки «Немає з'єднання з платою», а не мовчать"
+],"en":[
+"Web panel: confirmations without browser pop-ups — “Set sensor zero”, “Reset to defaults” (gear codes), “Clear” (event journal) and “Upload Firmware” are now confirmed by pressing the same button again within 5 s; the warning is shown in the card’s status line. Before, in the phone’s network sign-in window or after Chrome’s “prevent this page from creating additional dialogs” the button silently did nothing. The firmware upload result is also shown in the card. Upload the updated LittleFS image",
+"Steering calibration: “Set Left”, “Set Right” and “Set sensor zero” now show “No connection to the board” in the card’s status line when the board is not connected, instead of doing nothing"
+]},
 {"version":"1.5.26","date":"2026-11-10","uk":[
 "Журнал подій: нова картка «Журнал подій» у розділі «Система» — останні 100 подій (запуски й перезапуски, failsafe, режим керма, втрата зв’язку з VESC керма, збої CAN і шини реле, нестача пам’яті, знімок стану щохвилини) з фільтром за джерелом, кнопками «Завантажити» (весь журнал одним файлом, ≈ 1–2 доби) та «Очистити». Журнал зберігається у флеші й переживає оновлення прошивки",
 "Журнал подій: запис у флеш типово ВИМКНЕНО — вмикається перемикачем «Запис у flash» у картці «Журнал подій» (налаштування зберігається після перезапуску). Поки запис вимкнено, журнал тримається лише в пам’яті (останні ≈ 4 КБ рядків) і зникає після вимкнення живлення",
