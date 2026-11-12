@@ -323,6 +323,38 @@ static void test_ign_state_code() {
     TEST_ASSERT_EQUAL(0, ignStateCode(0, true));    // OFF never reads as cranking
 }
 
+// ---- Handbrake (aztec) -----------------------------------------------------------------------
+
+static void test_park_brake_ack() {
+    TEST_ASSERT_EQUAL((int)VehicleCmdResult::ACCEPTED, (int)vehicleCmdParkBrakeAck(ParkBrakeResult::STARTED).result);
+    TEST_ASSERT_EQUAL((int)VehicleCmdResult::ACCEPTED, (int)vehicleCmdParkBrakeAck(ParkBrakeResult::STARTED_SPEED_UNKNOWN).result);
+    TEST_ASSERT_EQUAL((int)VehicleCmdResult::ACCEPTED, (int)vehicleCmdParkBrakeAck(ParkBrakeResult::REVERSING).result);
+    TEST_ASSERT_EQUAL((int)VehicleCmdResult::ACCEPTED, (int)vehicleCmdParkBrakeAck(ParkBrakeResult::ALREADY_RUNNING).result);
+    VehicleCmdOutcome o = vehicleCmdParkBrakeAck(ParkBrakeResult::REFUSED_MOVING);
+    TEST_ASSERT_EQUAL((int)VehicleCmdResult::TEMPORARILY_REJECTED, (int)o.result);
+    TEST_ASSERT_EQUAL(VCMD_REASON_PBRAKE_SPEED, o.reason);
+    TEST_ASSERT_EQUAL((int)VehicleCmdResult::FAILED, (int)vehicleCmdParkBrakeAck(ParkBrakeResult::REFUSED_DRIVER).result);
+    TEST_ASSERT_EQUAL((int)VehicleCmdResult::FAILED, (int)vehicleCmdParkBrakeAck(ParkBrakeResult::REFUSED_NVS).result);
+    // Never reason 3
+    const ParkBrakeResult all[] = {ParkBrakeResult::STARTED, ParkBrakeResult::STARTED_SPEED_UNKNOWN,
+                                   ParkBrakeResult::ALREADY_RUNNING, ParkBrakeResult::REVERSING,
+                                   ParkBrakeResult::REFUSED_MOVING, ParkBrakeResult::REFUSED_DRIVER,
+                                   ParkBrakeResult::REFUSED_NVS};
+    for (ParkBrakeResult r : all) {
+        TEST_ASSERT_NOT_EQUAL(VCMD_REASON_FAILSAFE, vehicleCmdParkBrakeAck(r).reason);
+    }
+}
+
+static void test_park_brake_caps() {
+    // Buggy with the X6 driver: 0x3F, QB_CAPS 16777279; without it: 0x1F and function 5 unsupported.
+    const uint16_t withDriver = vehicleCapsMask(true, true, true, true, true, true);
+    const uint16_t noDriver   = vehicleCapsMask(true, true, true, true, true, false);
+    TEST_ASSERT_EQUAL_HEX16(0x3F, withDriver);
+    TEST_ASSERT_EQUAL_INT32(16777279, qbCapsValue(withDriver, 1));
+    TEST_ASSERT_EQUAL((int)VehicleCmdDecodeKind::FUNCTION, (int)vehicleCmdDecode(5.0f, 0.0f, withDriver).kind);
+    TEST_ASSERT_EQUAL((int)VehicleCmdDecodeKind::UNSUPPORTED, (int)vehicleCmdDecode(5.0f, 0.0f, noDriver).kind);
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_decode_functions_accepted);
@@ -342,5 +374,7 @@ int main(int, char**) {
     RUN_TEST(test_caps_and_qb_caps);
     RUN_TEST(test_version_codes);
     RUN_TEST(test_ign_state_code);
+    RUN_TEST(test_park_brake_ack);
+    RUN_TEST(test_park_brake_caps);
     return UNITY_END();
 }

@@ -219,8 +219,8 @@ public:
     };
 
     /**
-     * @brief The ONE source-agnostic park-brake command entry point. The web is its only caller
-     * today; a MAV_CMD_USER_2 handler can call it with ParkBrakeSource::GCS unchanged.
+     * @brief The ONE source-agnostic park-brake command entry point, called by the web card
+     * (ParkBrakeSource::WEB) and by the GCS command MAV_CMD_USER_2 param1 5 (ParkBrakeSource::GCS).
      * Not gated by input source, ignition, web control or fail-safe (the actuator is on permanent
      * battery power). APPLY is refused above PARK_BRAKE_APPLY_MAX_SPEED_MS by the hall sensor
      * (valid or suspicious; never pulsed → allowed, STARTED_SPEED_UNKNOWN). Every command is

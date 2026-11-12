@@ -1035,10 +1035,11 @@ void VehicleController::ignitionOffAndPersist() {
 
 uint16_t VehicleController::getVehicleCapsMask() const {
     // Fixed at boot. Both transmissions know R/N/H/L; ignition and headlight are relay functions
-    // on every build; the lock only where RELAY_WHEEL_LOCK_FITTED. No handbrake on this build
-    // (master: X6 is the steering VESC) — bit5 is never set. Relay availability is runtime and
-    // recoverable: it gives FAILED, it does not clear bits.
-    return vehicleCapsMask(true, true, true, true, isWheelLockFitted(), false);
+    // on every build; the lock only where RELAY_WHEEL_LOCK_FITTED. Handbrake (aztec): bit5 only
+    // when the X6 parking-brake driver initialised at boot (main.cpp registers the sink after
+    // initParkBrake()). Relay availability is runtime and recoverable: it gives FAILED, it does
+    // not clear bits.
+    return vehicleCapsMask(true, true, true, true, isWheelLockFitted(), parkBrake_.isDriverOk());
 }
 
 VehicleCmdOutcome VehicleController::executeVehicleCommand(VehicleCmdFunction fn, int32_t value) {
@@ -1114,7 +1115,17 @@ VehicleCmdOutcome VehicleController::executeVehicleCommand(VehicleCmdFunction fn
             Debug::printfFeature(DebugFeature::VEHICLE, "[GCS] Lock %s: result %u reason %u\n",
                                  value == 1 ? "ON" : "OFF", (unsigned)o.result, (unsigned)o.reason);
             break;
-        case VehicleCmdFunction::HANDBRAKE:   // no parking brake on this build (bit5 never set)
+        case VehicleCmdFunction::HANDBRAKE: {
+            // The existing controller decides (3 km/h apply limit, any source / ignition /
+            // fail-safe); no interlock here, never reason 3. Logged by commandParkBrake() as
+            // "[PBRAKE] ... accepted (gcs)". bit5 clear (no X6 driver) is UNSUPPORTED upstream.
+            const ParkBrakeCommandResult r = commandParkBrake(
+                value == 1 ? ParkBrakeRequest::APPLY : ParkBrakeRequest::RELEASE, ParkBrakeSource::GCS);
+            o = vehicleCmdParkBrakeAck(r.result);
+            Debug::printfFeature(DebugFeature::VEHICLE, "[GCS] Handbrake %s: result %u reason %u\n",
+                                 value == 1 ? "APPLY" : "RELEASE", (unsigned)o.result, (unsigned)o.reason);
+            break;
+        }
         case VehicleCmdFunction::QUERY:       // answered by the transport
         default:
             o = {VehicleCmdResult::UNSUPPORTED, VCMD_REASON_NONE};

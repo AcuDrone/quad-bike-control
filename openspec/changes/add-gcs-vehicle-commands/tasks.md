@@ -67,12 +67,12 @@
 - [x] 7.2 `pio test -e native` and `pio run -e esp32-s3-devkitc-1` on `aztec`.
 
 ## 8. Handbrake — `aztec` only
-- [ ] 8.1 `include/VehicleCommandLaw.h` (aztec): `vehicleCmdParkBrakeAck(ParkBrakeResult)` — STARTED / STARTED_SPEED_UNKNOWN / REVERSING / ALREADY_RUNNING → ACCEPTED; REFUSED_MOVING → TEMPORARILY_REJECTED reason 4; REFUSED_DRIVER / REFUSED_NVS → FAILED.
-- [ ] 8.2 `VehicleController::executeVehicleCommand()` function 5 → `commandParkBrake(value == 1 ? APPLY : RELEASE, ParkBrakeSource::GCS)`; no source / ignition / fail-safe check (never reason 3).
-- [ ] 8.3 Capability bit5 = `parkBrake_.isDriverOk()` at boot (mask 0x3F, or 0x1F without the X6 driver); `EFI_STATUS` bits 2 / 3, drive-away release and throttle hold unchanged.
-- [ ] 8.4 Native tests (aztec cases in `test_vehicle_cmd_law`): every `ParkBrakeResult` → ACK; function 5 with bit5 clear → UNSUPPORTED; QB_CAPS 16777279.
-- [ ] 8.5 Changelog 1.5.30 (aztec): add the handbrake-from-GCS line (uk + en, "багі").
-- [ ] 8.6 `pio test -e native`, `pio run -e esp32-s3-devkitc-1`, `openspec validate add-gcs-vehicle-commands --strict` on `aztec`.
+- [x] 8.1 `include/VehicleCommandLaw.h` (aztec): `vehicleCmdParkBrakeAck(ParkBrakeResult)` — STARTED / STARTED_SPEED_UNKNOWN / REVERSING / ALREADY_RUNNING → ACCEPTED; REFUSED_MOVING → TEMPORARILY_REJECTED reason 4; REFUSED_DRIVER / REFUSED_NVS → FAILED.
+- [x] 8.2 `VehicleController::executeVehicleCommand()` function 5 → `commandParkBrake(value == 1 ? APPLY : RELEASE, ParkBrakeSource::GCS)`; no source / ignition / fail-safe check (never reason 3).
+- [x] 8.3 Capability bit5 = `parkBrake_.isDriverOk()` at boot (mask 0x3F, or 0x1F without the X6 driver); `EFI_STATUS` bits 2 / 3, drive-away release and throttle hold unchanged.
+- [x] 8.4 Native tests (aztec cases in `test_vehicle_cmd_law`): every `ParkBrakeResult` → ACK; function 5 with bit5 clear → UNSUPPORTED; QB_CAPS 16777279.
+- [x] 8.5 Changelog 1.5.30 (aztec): add the handbrake-from-GCS line (uk + en, "багі").
+- [x] 8.6 `pio test -e native`, `pio run -e esp32-s3-devkitc-1`, `openspec validate add-gcs-vehicle-commands --strict` on `aztec`.
 
 ## 9. Bench — buggy (`aztec` 1.5.30)
 - [ ] 9.1 Repeat 6.1–6.6 on the buggy; caps 63 (0x3F) with the X6 driver, `QB_CAPS` 16777279; hardware 0x000X0200; diff lock = Relay_4 + Relay_5 + Relay_6.

@@ -36,7 +36,7 @@ enum class ParkBrakeState : uint8_t {
 
 enum class ParkBrakeRequest : uint8_t { APPLY, RELEASE };
 
-// Who issued a command. WEB is the only caller today; GCS is reserved for MAV_CMD_USER_2.
+// Who issued a command: the web card (WEB) or the ground station via MAV_CMD_USER_2 param1 5 (GCS).
 enum class ParkBrakeSource : uint8_t { WEB, GCS };
 
 // commandParkBrake() result codes (design D4). The web layer maps each one to a reply text;

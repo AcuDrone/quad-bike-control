@@ -12,6 +12,7 @@
 
 #include <stdint.h>
 #include <math.h>
+#include "ParkBrakeLaw.h"   // aztec only: ParkBrakeResult for the handbrake ACK mapping
 
 // ---- Protocol constants -------------------------------------------------------------------
 static const uint8_t VCMD_LAW_PROTOCOL_VERSION = 1;       // VCMD_PROTOCOL_VERSION
@@ -288,3 +289,22 @@ public:
   // Execute one decoded, validated function command (param1 1-5) and report the outcome.
   virtual VehicleCmdOutcome executeVehicleCommand(VehicleCmdFunction fn, int32_t value) = 0;
 };
+
+// ---- Handbrake (aztec only, owner decision D-C) ---------------------------------------------
+// The existing parking-brake controller decides; this only maps its result to the ACK. No
+// interlock of its own, never reason 3.
+inline VehicleCmdOutcome vehicleCmdParkBrakeAck(ParkBrakeResult r) {
+  switch (r) {
+    case ParkBrakeResult::STARTED:
+    case ParkBrakeResult::STARTED_SPEED_UNKNOWN:
+    case ParkBrakeResult::REVERSING:
+    case ParkBrakeResult::ALREADY_RUNNING:
+      return vcmdAccepted();
+    case ParkBrakeResult::REFUSED_MOVING:
+      return vcmdRejected(VCMD_REASON_PBRAKE_SPEED);
+    case ParkBrakeResult::REFUSED_DRIVER:
+    case ParkBrakeResult::REFUSED_NVS:
+    default:
+      return vcmdFailed();
+  }
+}
