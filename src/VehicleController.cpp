@@ -12,6 +12,17 @@ static_assert(BRAKE_LAW_HOLD_PWM_MAX == BRAKE_HOLD_PWM_MAX, "BrakeLaw.h hold max
 static_assert(BRAKE_LAW_HOLD_PWM_DEFAULT == BRAKE_HOLD_SPEED, "BrakeLaw.h hold default out of sync");
 #include <Preferences.h>
 
+// Vehicle-command gear code (VehicleCommandLaw.h: R -1, N 0, H 1, L 2) → transmission gear.
+static TransmissionController::Gear vcmdGearToTrans(int8_t code) {
+    switch (code) {
+        case VCMD_GEAR_R: return TransmissionController::Gear::GEAR_REVERSE;
+        case VCMD_GEAR_N: return TransmissionController::Gear::GEAR_NEUTRAL;
+        case VCMD_GEAR_H: return TransmissionController::Gear::GEAR_HIGH;
+        case VCMD_GEAR_L: return TransmissionController::Gear::GEAR_LOW;
+        default:          return TransmissionController::Gear::GEAR_UNKNOWN;
+    }
+}
+
 VehicleController::VehicleController(SteeringController& steering,
                                      ThrottleController& throttle,
                                      TransmissionController& transmission,
@@ -64,8 +75,6 @@ VehicleController::VehicleController(SteeringController& steering,
       pidIntegral_(0.0f),
       pidPrevError_(0.0f),
       lastPIDThrottleUs_(THROTTLE_DEFAULT_IDLE_US),
-      previousIgnitionState_(MavlinkInterface::IgnitionState::OFF),
-      lastCommandedGear_(TransmissionController::Gear::GEAR_UNKNOWN),
       lastSpeedLimitWarnMs_(0),
       lastSpeedLimitMs_(NAN),
       lastSpeedLimitLogMs_(0),
@@ -486,6 +495,10 @@ void VehicleController::update() {
         // No autopilot command path: keep the frame counter in step so a later return to
         // MAVLink never treats an old frame as a fresh rate command.
         lastMavCmdCount_ = mavlink_.getCommandCount();
+        // RC is not in control (fail-safe or web portal): the first valid frame after the
+        // return re-applies gear / ignition / light / lock, exactly as at boot (owner decisions
+        // D-A, D-H). A GCS / web command given meanwhile is not restored.
+        rc_.resync();
         // The scale is a property of the AUTOPILOT command path alone. With the web or the
         // fail-safe in charge nothing is being scaled, so the reported scale must say so rather
         // than freeze at whatever the autopilot path last computed — a stale 0.18 on the portal
@@ -863,8 +876,8 @@ void VehicleController::applyFailsafe() {
         // !failsafeApplied_ above.
         speedSensor_.persistDistance();
         engineHours_.persist();
-        previousIgnitionState_ = MavlinkInterface::IgnitionState::OFF;  // Reset ignition tracking
-        lastCommandedGear_ = TransmissionController::Gear::GEAR_UNKNOWN;  // Force re-eval on restore
+        // RC re-sync on the way back (re-crank on recovery) is armed by update(): the RC trackers
+        // are cleared in every loop whose source is not MAVLink (design D6).
         failsafeApplied_ = true;
     } else if (currentInputSource_ != InputSource::FAILSAFE && failsafeApplied_) {
         Debug::printlnFeature(DebugFeature::VEHICLE, "[FAILSAFE] Exiting safe state");
@@ -958,60 +971,156 @@ void VehicleController::processMavlinkCommands() {
         applyOperatorThrottle(throttlePct);   // park-brake drive-away / hold, then the limiter + slew
     }
 
-    // Apply gear selection — retry until setGear() accepts the command
-    TransmissionController::Gear gear = mavlink_.getGear();
-    if (gear != lastCommandedGear_ && isEngineRunning()) {
+    // Gear / ignition / light / lock: "last change wins" with the GCS commands (MAV_CMD_USER_2).
+    // Each RC channel is applied only when its in-band decoded value CHANGES (or on the first
+    // valid frame after a re-sync); an absent / out-of-band channel is not a change, so a GCS
+    // command is never overwritten by an unchanged switch (design D6).
+
+    // Gear: an RC edge becomes the pending RC gear, retried until the engine runs and setGear()
+    // accepts (today's retry). An accepted GCS gear cancels it.
+    rc_.stepGear(vcmdRcGear(mavlink_.getChannel(ServoChannelConfig::TRANSMISSION)));
+    if (rc_.gearPending && isEngineRunning()) {
+        const TransmissionController::Gear gear = vcmdGearToTrans(rc_.pendingGear);
         bool accepted = transmission_.setGear(gear);
         if (accepted || transmission_.getTargetGear() == gear) {
-            lastCommandedGear_ = gear;
+            rc_.gearDone();
         }
-        // If not accepted (e.g. speed interlock), lastCommandedGear_ stays unchanged → retry next loop
+        // If not accepted (e.g. speed interlock), the RC gear stays pending → retry next loop
     }
 
     // Apply brake
     float brakePct = mavlink_.getBrake();
     applyBrake(brakePct);
 
-    // Apply ignition state. Cranking is sequenced inside RelayController, which enforces a
-    // pre-crank dwell: the starter (R2) does not engage until the ignition/ECU line (R1) has
-    // been powered for ACC_PRECRANK_DWELL_MS (immediately if R1 was already up that long).
-    MavlinkInterface::IgnitionState ignitionState = mavlink_.getIgnitionState();
-
-    switch (ignitionState) {
-        case MavlinkInterface::IgnitionState::OFF:
-            relayController_.setIgnitionState(RelayController::IgnitionState::OFF);
-            // Flush the persisted counters (distance and engine hours) on the TRANSITION into
-            // OFF only, so a normal shutdown loses nothing — not on every iteration OFF is
-            // merely being held.
-            if (previousIgnitionState_ != MavlinkInterface::IgnitionState::OFF) {
-                speedSensor_.persistDistance();
-                engineHours_.persist();
-            }
-            break;
-        case MavlinkInterface::IgnitionState::ACC:
+    // Ignition, on an RC change only. Cranking is sequenced inside RelayController, which
+    // enforces a pre-crank dwell: the starter (R2) does not engage until the ignition/ECU line
+    // (R1) has been powered for ACC_PRECRANK_DWELL_MS (immediately if R1 was already up that long).
+    const int8_t rcIgn = vcmdRcIgnition(mavlink_.getChannel(ServoChannelConfig::IGNITION));
+    if (rc_.ignition.step(rcIgn)) {
+        if (rcIgn == VCMD_IGN_OFF) {
+            ignitionOffAndPersist();
+        } else if (rcIgn == VCMD_IGN_ACC) {
             relayController_.setIgnitionState(RelayController::IgnitionState::ACC);
-            break;
-        case MavlinkInterface::IgnitionState::IGNITION:
-            // Arm the dwell-gated auto-crank only on a FRESH transition into IGNITION.
-            // Holding IGNITION does not re-crank; RelayController::update() runs the sequence
-            // (ACC hold -> dwell -> CRANKING -> IGNITION) and reports ACC while waiting.
-            if (previousIgnitionState_ != MavlinkInterface::IgnitionState::IGNITION) {
-                Debug::printlnFeature(DebugFeature::VEHICLE, "[VEHICLE] IGNITION selected - arming pre-crank dwell");
-                relayController_.requestCrank();
-            }
-            break;
+        } else {
+            // A fresh RC ON (an edge, or the first frame after a re-sync) arms the dwell-gated
+            // auto-crank; RelayController::update() suppresses it while the engine runs.
+            Debug::printlnFeature(DebugFeature::VEHICLE, "[VEHICLE] IGNITION selected - arming pre-crank dwell");
+            relayController_.requestCrank();
+        }
     }
 
-    // Track state for next iteration (fresh-transition detection)
-    previousIgnitionState_ = ignitionState;
+    // Front light (channel 6), on an RC change only
+    const int8_t rcLight = vcmdRcSwitch(mavlink_.getChannel(ServoChannelConfig::FRONT_LIGHT));
+    if (rc_.light.step(rcLight)) {
+        relayController_.setFrontLight(rcLight == 1);
+    }
 
-    // Apply front light
-    bool frontLightOn = mavlink_.getFrontLight();
-    relayController_.setFrontLight(frontLightOn);
+    // Front-wheel / diff lock (channel 7), on an RC change only
+    const int8_t rcLock = vcmdRcSwitch(mavlink_.getChannel(ServoChannelConfig::WHEEL_LOCK));
+    if (rc_.lock.step(rcLock)) {
+        relayController_.setWheelLock(rcLock == 1);
+    }
+}
 
-    // Lock (channel 7, > RC_WHEEL_LOCK_THRESHOLD = LOCKED) — aztec: Relay_4+5+6 together.
-    // A LOCK drops every web test relay first (RelayController::setWheelLock()).
-    relayController_.setWheelLock(mavlink_.getWheelLock());
+void VehicleController::ignitionOffAndPersist() {
+    const bool wasOff = (relayController_.getIgnitionState() == RelayController::IgnitionState::OFF);
+    relayController_.setIgnitionState(RelayController::IgnitionState::OFF);
+    // Flush the persisted counters (distance and engine hours) on the TRANSITION into OFF only,
+    // so a normal shutdown loses nothing.
+    if (!wasOff) {
+        speedSensor_.persistDistance();
+        engineHours_.persist();
+    }
+}
+
+uint16_t VehicleController::getVehicleCapsMask() const {
+    // Fixed at boot. Both transmissions know R/N/H/L; ignition and headlight are relay functions
+    // on every build; the lock only where RELAY_WHEEL_LOCK_FITTED. No handbrake on this build
+    // (master: X6 is the steering VESC) — bit5 is never set. Relay availability is runtime and
+    // recoverable: it gives FAILED, it does not clear bits.
+    return vehicleCapsMask(true, true, true, true, isWheelLockFitted(), false);
+}
+
+VehicleCmdOutcome VehicleController::executeVehicleCommand(VehicleCmdFunction fn, int32_t value) {
+    const bool underMavlink = isUnderMavlinkControl();
+    const bool relaysOk = relayController_.isAvailable();
+    VehicleCmdOutcome o = vcmdFailed();
+
+    switch (fn) {
+        case VehicleCmdFunction::GEAR: {
+            const TransmissionController::Gear gear = vcmdGearToTrans((int8_t)value);
+            VcmdGearInputs in;
+            in.underMavlink = underMavlink;
+            in.engineRunning = isEngineRunning();
+            in.transInitialised = transmission_.isInitialised();
+            in.alreadyAtTarget = in.transInitialised && transmission_.getDestinationGear() == gear;
+            in.speedOk = transmission_.canChangeGear(gear);
+            bool doSet = false;
+            o = vcmdGearDecide(in, doSet);
+            if (doSet) {
+                const bool accepted = transmission_.setGear(gear);
+                if (!accepted && transmission_.getTargetGear() != gear) {
+                    o = vcmdFailed();   // defensive: setGear() refused for a reason not checked above
+                }
+            }
+            if (o.result == VehicleCmdResult::ACCEPTED) {
+                rc_.onGcsGearAccepted();   // last change wins over a pending RC gear
+            }
+            Debug::printfFeature(DebugFeature::VEHICLE, "[GCS] Gear %s: result %u reason %u\n",
+                                 transmission_.getGearName(gear), (unsigned)o.result, (unsigned)o.reason);
+            break;
+        }
+        case VehicleCmdFunction::IGNITION: {
+            VcmdIgnAction action = VcmdIgnAction::NONE;
+            o = vcmdIgnitionDecide(value, underMavlink, relaysOk, isEngineRunning(), action);
+            switch (action) {
+                case VcmdIgnAction::OFF:
+                    ignitionOffAndPersist();
+                    break;
+                case VcmdIgnAction::ACC:
+                    relayController_.setIgnitionState(RelayController::IgnitionState::ACC);
+                    break;
+                case VcmdIgnAction::IGNITION_NO_CRANK:
+                    // Engine already running: no crank. ACC and IGNITION drive the same relays.
+                    if (relayController_.getIgnitionState() != RelayController::IgnitionState::CRANKING) {
+                        relayController_.setIgnitionState(RelayController::IgnitionState::IGNITION);
+                    }
+                    break;
+                case VcmdIgnAction::CRANK:
+                    Debug::printlnFeature(DebugFeature::VEHICLE, "[GCS] IGNITION ON - arming pre-crank dwell");
+                    relayController_.requestCrank();
+                    break;
+                case VcmdIgnAction::NONE:
+                default:
+                    break;
+            }
+            Debug::printfFeature(DebugFeature::VEHICLE, "[GCS] Ignition %ld: result %u reason %u\n",
+                                 (long)value, (unsigned)o.result, (unsigned)o.reason);
+            break;
+        }
+        case VehicleCmdFunction::LIGHT:
+            o = vcmdLightDecide(relaysOk);
+            if (o.result == VehicleCmdResult::ACCEPTED) {
+                relayController_.setFrontLight(value == 1);
+            }
+            Debug::printfFeature(DebugFeature::VEHICLE, "[GCS] Headlight %s: result %u\n",
+                                 value == 1 ? "ON" : "OFF", (unsigned)o.result);
+            break;
+        case VehicleCmdFunction::LOCK:
+            o = vcmdLockDecide(underMavlink, relaysOk);
+            if (o.result == VehicleCmdResult::ACCEPTED && !relayController_.setWheelLock(value == 1)) {
+                o = vcmdFailed();
+            }
+            Debug::printfFeature(DebugFeature::VEHICLE, "[GCS] Lock %s: result %u reason %u\n",
+                                 value == 1 ? "ON" : "OFF", (unsigned)o.result, (unsigned)o.reason);
+            break;
+        case VehicleCmdFunction::HANDBRAKE:   // no parking brake on this build (bit5 never set)
+        case VehicleCmdFunction::QUERY:       // answered by the transport
+        default:
+            o = {VehicleCmdResult::UNSUPPORTED, VCMD_REASON_NONE};
+            break;
+    }
+    return o;
 }
 
 void VehicleController::processGearCommand(const String& gearStr, WebPortal& webPortal) {

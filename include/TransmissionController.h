@@ -210,6 +210,19 @@ public:
     Gear getTargetGear() const { return targetGear_; }
 
     /**
+     * @brief Final destination: the queued gear of a multi-step sequence, else the target.
+     */
+    Gear getDestinationGear() const {
+        return (queuedGear_ != Gear::GEAR_UNKNOWN) ? queuedGear_ : targetGear_;
+    }
+
+    /**
+     * @brief Speed interlock for a gear change (N always allowed). Read-only query, the same
+     * check setGear() runs; public for the GCS gear command's reason code.
+     */
+    bool canChangeGear(Gear targetGear) const;
+
+    /**
      * @brief Get the gear the current step is moving away from.
      * Valid while a step is active; equals the destination once settled.
      */
@@ -295,7 +308,6 @@ private:
     float gearPositions_[4];
     float overshootPcts_[4];
 
-    bool canChangeGear(Gear targetGear) const;
     void commandServo(float positionPct);
     uint32_t computeSettleMs(float fromPct, float toPct) const;
     void saveDefaultPosition(Gear gear, float positionPct);

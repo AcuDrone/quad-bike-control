@@ -427,11 +427,34 @@ struct ServoChannelConfig {
 #define MAVLINK_PARAM_STALE_MS        16000  // ms without a PARAM_VALUE before the value is unusable (~3 polls)
 #define MAVLINK_PARAM_EPSILON_MS      0.005f // m/s — smaller differences are "unchanged" (never compare floats with ==)
 
-// Inbound COMMAND_LONG handling. The only command implemented is a trip reset, carried as
+// Inbound COMMAND_LONG handling. Two commands are implemented: a trip reset, carried as
 // MAV_CMD_USER_1 with a magic param1 so that a stray, replayed or mis-scripted MAV_CMD_USER_1
-// cannot silently destroy the operator's trip reading.
+// cannot silently destroy the operator's trip reading, and the GCS vehicle commands below.
 #define MAVLINK_CMD_TRIP_RESET_MAGIC  1.0f   // param1 magic for MAV_CMD_USER_1 (trip reset)
-#define MAVLINK_CMD_PARAM_EPSILON     0.01f  // param1 match tolerance (never compare floats with ==)
+#define MAVLINK_CMD_PARAM_EPSILON     0.01f  // param1/param2 match tolerance (never compare floats with ==)
+
+// GCS vehicle commands: MAV_CMD_USER_2 (31011) to 1/25, control-protocol version 1
+// (change add-gcs-vehicle-commands). param1 = function, param2 = value, param3..7 ignored:
+//   0 query (0 caps, 1 firmware version, 2 hardware version)
+//   1 gear (R -1, N 0, H 1, L 2)        caps bit0 R/N/L, bit1 H
+//   2 ignition (OFF 0, ACC 1, ON 2)     caps bit2
+//   3 headlight (OFF 0, ON 1)           caps bit3
+//   4 diff lock (OFF 0, ON 1)           caps bit4
+//   5 handbrake (OFF 0, ON 1)           caps bit5 — aztec only, never on the quad bike
+// TEMPORARILY_REJECTED reasons in result_param2: 1 engine not running, 2 speed > 1.4 m/s,
+// 3 fail-safe / not under MAVLink control, 4 speed > 3 km/h (handbrake apply). The decisions
+// live in include/VehicleCommandLaw.h (its literals mirror these).
+#define VCMD_PROTOCOL_VERSION     1
+#define VCMD_CAPS_TX_MS           10000  // ms between QB_CAPS NAMED_VALUE_INT broadcasts
+#define VCMD_CAP_GEARS_RNL        0x01
+#define VCMD_CAP_GEAR_H           0x02
+#define VCMD_CAP_IGNITION         0x04
+#define VCMD_CAP_LIGHT            0x08
+#define VCMD_CAP_LOCK             0x10
+#define VCMD_CAP_HANDBRAKE        0x20
+// RC channels outside this band (incl. 0 = output disabled) are "absent": no change of state.
+#define RC_CHANNEL_VALID_MIN_US   880
+#define RC_CHANNEL_VALID_MAX_US   2160
 
 // Body-frame wheel odometry (VISION_POSITION_DELTA — wheel speed into the autopilot's EKF3).
 // The delta is measured along the vehicle's OWN longitudinal axis, so no heading is needed and
@@ -1105,11 +1128,17 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.29"
+#define FIRMWARE_VERSION "1.5.30"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry
 // so the web UI can tell which board the running firmware was built for.
 #define BOARD_NAME "Control_v0"
+
+// Hardware version reported by the GCS hardware-version query (change add-gcs-vehicle-commands):
+// bits 0-7 board revision (0 = Control_v0), bits 8-15 vehicle type (1 quad bike = master,
+// 2 buggy = aztec), bits 16-23 the relay board detected at boot (RelayBoardKind).
+#define BOARD_REVISION_CODE 0
+#define VEHICLE_TYPE_CODE   2
 
 #endif // CONSTANTS_H

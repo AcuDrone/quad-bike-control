@@ -316,6 +316,13 @@ void setup() {
         Debug::printlnFeature(DebugFeature::CAN, "WARNING: CAN controller failed (will continue without vehicle data)");
     }
 
+    // GCS vehicle commands (MAV_CMD_USER_2): the vehicle layer executes them. Capabilities and the
+    // hardware version are fixed at boot (the relay board is detected once, above).
+    mavlinkInterface.setVehicleCommandSink(
+        &vehicleController, vehicleController.getVehicleCapsMask(),
+        hardwareVersionCode(BOARD_REVISION_CODE, VEHICLE_TYPE_CODE,
+                            (uint8_t)relayController.getBoardKind()));
+
     // Initialize web portal
     if (!webPortal.begin()) {
         Debug::printlnFeature(DebugFeature::WEB, "ERROR: Web portal failed");
@@ -453,6 +460,8 @@ void loop() {
     report.steerScale       = vehicleController.getSteerScale();
     // Steering control mode (STEER_MODE NAMED_VALUE_INT): 0 position, 1 rate, 2 blocked.
     report.steerMode        = (uint8_t)vehicleController.getSteerMode();
+    // Applied ignition state (IGN_STATE NAMED_VALUE_INT): 0 OFF, 1 ACC, 2 ON, 3 CRANKING.
+    report.ignState         = vehicleController.getIgnStateCode();
     mavlinkInterface.report(report);
     loopTimer.mark(PH_REPORT);
 

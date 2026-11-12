@@ -237,6 +237,12 @@ public:
     bool getFrontLight() const { return frontLightOn_; }
 
     /**
+     * @brief True while a dwell-gated crank is armed (requestCrank() → pre-crank dwell).
+     * The reported state is ACC meanwhile; IGN_STATE shows it as CRANKING.
+     */
+    bool isCrankPending() const { return isAvailable() && crankArmed_; }
+
+    /**
      * @brief Get current front-wheel lock state
      * @return the commanded lock state when fitted; always false when not fitted
      *         (see isWheelLockFitted())
