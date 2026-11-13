@@ -666,53 +666,58 @@ depend on I2C.
 - **AND** the telemetry fault flag SHALL clear
 
 ### Requirement: Autopilot-Sourced Maximum-Speed Limit
-The maximum-speed limiter's ceiling SHALL have exactly one source: the autopilot's `SPEED_MAX`
-parameter, in metres per second. There SHALL be no locally stored ceiling, no local enable toggle
-and no arbitration. The limiter SHALL always be armed, and SHALL simply not limit whenever no
-usable `SPEED_MAX` is available. The value SHALL be held in RAM only and SHALL NOT be persisted.
-The only persisted limiter parameter SHALL be the throttle floor (see "Configurable
-Speed-Limiter Throttle Floor"), which shapes how the limit is enforced but SHALL never itself
-impose a limit.
+The maximum-speed limiter's operator-set ceiling SHALL have exactly one source: the autopilot's
+`SPEED_MAX` parameter, in metres per second. There SHALL be no locally stored ceiling, no local
+enable toggle and no arbitration between operator-set sources. The value SHALL be held in RAM
+only and SHALL NOT be persisted. The effective limit SHALL be the smaller of the usable
+`SPEED_MAX` and the fixed ceiling of the engaged gear (see "Fixed Per-Gear Maximum-Speed
+Ceiling"). Whichever side is absent or zero SHALL be ignored. The limiter SHALL always be armed,
+and SHALL not limit only when neither side provides a ceiling. The only persisted limiter
+parameters SHALL be the throttle floor and the ceiling rate. They shape how the limit is enforced
+but SHALL never themselves impose a limit.
 
 #### Scenario: A usable autopilot value is the limit
 - **WHEN** the MAVLink interface reports a usable `SPEED_MAX`
-- **THEN** the limit SHALL be that value in metres per second
-- **AND** no other source SHALL be consulted, because there is no other source
+- **AND** the engaged gear has no gear ceiling, or a gear ceiling at or above that value
+- **THEN** the limit SHALL be that value in metres per second, with source `SPEED_MAX`
 
 #### Scenario: No usable value means no limiting
 - **WHEN** the MAVLink interface reports no usable `SPEED_MAX` — never received, zero, rejected,
   stale, or the link is down
-- **THEN** the limit SHALL be reported as zero
-- **AND** a zero limit SHALL mean NO LIMITING: the throttle demand SHALL pass through untouched
-- **AND** the system SHALL NOT substitute any stored, default or last-known ceiling, because an
-  invisible ceiling the ground station cannot see or change is the more dangerous outcome
+- **THEN** `SPEED_MAX` SHALL contribute no ceiling
+- **AND** the system SHALL NOT substitute any stored, default or last-known `SPEED_MAX` value
+- **AND** the effective limit SHALL be the fixed gear ceiling when the engaged gear has one, and
+  otherwise zero
+- **AND** a zero effective limit SHALL mean NO LIMITING: the throttle demand SHALL pass through
+  untouched
 
 #### Scenario: Zero means "no limit", as the autopilot reads it
 - **WHEN** the autopilot's `SPEED_MAX` is zero
-- **THEN** the limiter SHALL not limit
-- **AND** this SHALL match ArduPilot's own reading of a zero `SPEED_MAX` and the value a ground
-  station writes to clear a speed limit
+- **THEN** `SPEED_MAX` SHALL impose no limit, matching ArduPilot's own reading of a zero
+  `SPEED_MAX` and the value a ground station writes to clear a speed limit
+- **AND** the fixed gear ceiling SHALL still apply in a gear that has one
 
 #### Scenario: No persisted limiter configuration
 - **WHEN** any `SPEED_MAX` value is received, accepted or applied
 - **THEN** no non-volatile write SHALL be performed on this path
 - **AND** the system SHALL NOT expose any command, key or web control for setting a local ceiling
-  or for enabling and disabling the limiter
+  or for enabling and disabling the limiter or the gear ceiling
 - **AND** the retired non-volatile limiter keys (`lim_on`, `lim_kmh`) SHALL be deleted on
   initialisation so a downgraded unit cannot resurrect a ceiling in the old units
 - **AND** the persisted throttle floor SHALL NOT be stored under either retired key name
 
 #### Scenario: The floor alone never limits
-- **WHEN** a throttle floor is stored and no usable `SPEED_MAX` is available
+- **WHEN** a throttle floor is stored and the effective limit is zero
 - **THEN** the demand SHALL pass through untouched, exactly as with no floor stored
 
 #### Scenario: Log a limit change once
-- **WHEN** the limit changes by more than `SPEED_LIMIT_LOG_EPSILON_MS`, or changes between "a
-  limit" and "no limit"
-- **THEN** the new limit SHALL be logged once, in m/s with km/h in parentheses, or as "none"
+- **WHEN** the effective limit changes by more than `SPEED_LIMIT_LOG_EPSILON_MS`, changes between
+  "a limit" and "no limit", or its source changes
+- **THEN** the new limit SHALL be logged once, in m/s with km/h in parentheses and its source
+  (`SPEED_MAX` or the gear ceiling with the gear letter L, H or R), or as "none"
 - **AND** a further log SHALL be suppressed until at least `SPEED_LIMIT_LOG_MIN_MS` has passed
-- **AND** while a log is suppressed the remembered limit SHALL NOT be updated, so the settled
-  value is logged on the next opportunity rather than lost
+- **AND** while a log is suppressed the remembered limit and source SHALL NOT be updated, so the
+  settled value is logged on the next opportunity rather than lost
 
 ### Requirement: Proportional Speed-Limiter Throttle Taper
 The maximum-speed limiter SHALL withdraw throttle authority proportionally as the vehicle
@@ -778,7 +783,10 @@ untouched.
 - **WHEN** a limit is in force but the speed reading is invalid or stale
 - **THEN** the demand SHALL pass through unclamped
 - **AND** the applied ceiling SHALL be reset to 100 % and the integral trim to zero
-- **AND** a warning SHALL be logged no more often than `SPEED_LIMIT_WARN_MS`
+- **AND** while the source of the effective limit is `SPEED_MAX` (including a tie with the gear
+  ceiling), a warning SHALL be logged no more often than `SPEED_LIMIT_WARN_MS`
+- **AND** while the source is the fixed gear ceiling — whether `SPEED_MAX` is unusable or a usable
+  `SPEED_MAX` lies above the gear ceiling — no warning SHALL be logged
 
 #### Scenario: The web throttle demand is re-limited every loop
 - **WHEN** a web throttle command is received
@@ -1498,4 +1506,52 @@ throttle SHALL never be rate-limited.
 - **WHEN** the rate is 60 %/s and the throttle is commanded from idle to 100 % in one step
 - **THEN** the servo SHALL take ≈1.7 s to reach full throttle
 - **AND** with the rate at 0 (the default) the servo SHALL snap open with no ramp
+
+### Requirement: Fixed Per-Gear Maximum-Speed Ceiling
+On the buggy (aztec), the maximum-speed limiter SHALL also enforce a fixed ceiling for the
+engaged gear. The ceilings SHALL be firmware constants in metres per second:
+`GEAR_SPEED_CEILING_LOW_MS` (45 km/h) for L, `GEAR_SPEED_CEILING_HIGH_MS` (75 km/h) for H and
+`GEAR_SPEED_CEILING_REVERSE_MS` (20 km/h) for R. N and an uninitialised (UNKNOWN) expected gear
+SHALL have no gear ceiling. The engaged
+gear SHALL be the transmission's expected (target) gear, the same gear the N/UNKNOWN throttle clip
+uses, not the opto gear-sensor reading. The ceilings SHALL NOT be configurable at runtime: no web
+control, no non-volatile key and no MAVLink parameter.
+
+#### Scenario: Gear ceiling applies alone when SPEED_MAX is "no limit"
+- **WHEN** no usable `SPEED_MAX` is available (zero, never received, rejected, stale or link down)
+- **AND** the expected gear is L
+- **THEN** the effective limit SHALL be `GEAR_SPEED_CEILING_LOW_MS` (12.5 m/s, 45 km/h)
+- **AND** in H it SHALL be `GEAR_SPEED_CEILING_HIGH_MS` (≈20.83 m/s, 75 km/h)
+- **AND** in R it SHALL be `GEAR_SPEED_CEILING_REVERSE_MS` (≈5.56 m/s, 20 km/h)
+
+#### Scenario: The lower of SPEED_MAX and the gear ceiling wins
+- **WHEN** a usable `SPEED_MAX` and a gear ceiling are both in force
+- **THEN** the effective limit SHALL be the smaller of the two
+- **AND** when they are equal the source SHALL be reported as `SPEED_MAX`
+- **AND** a `SPEED_MAX` above the gear ceiling SHALL NOT raise the limit above the gear ceiling
+
+#### Scenario: Reverse is capped at 20 km/h
+- **WHEN** the expected gear is R
+- **THEN** the effective limit SHALL be the smaller of the usable `SPEED_MAX` and
+  `GEAR_SPEED_CEILING_REVERSE_MS` (20 km/h), or 20 km/h when there is no usable `SPEED_MAX`
+
+#### Scenario: No gear ceiling in N or an unknown gear
+- **WHEN** the expected gear is N or UNKNOWN
+- **THEN** the gear SHALL contribute no ceiling, and the effective limit SHALL be the usable
+  `SPEED_MAX`, or no limit
+- **AND** the throttle there SHALL remain clipped to `TRANS_UNKNOWN_GEAR_THROTTLE_MAX` as before
+
+#### Scenario: Enforced by the existing limiter law
+- **WHEN** the gear ceiling is the effective limit
+- **THEN** it SHALL be enforced exactly as a `SPEED_MAX` limit: the same taper band, floor, ceiling
+  rate limit, integral trim and saturation indicator
+- **AND** an invalid speed reading SHALL fail open in the same way
+- **AND** while the gear ceiling is the source of the effective limit, the "speed reading invalid"
+  warning SHALL NOT be logged, even when a usable `SPEED_MAX` above the gear ceiling is in force
+
+#### Scenario: Changing gear causes no throttle step
+- **WHEN** the expected gear changes and the effective limit changes with it
+- **THEN** the limiter state SHALL NOT be reset, and the next evaluation SHALL use the new limit
+- **AND** because gear changes are only permitted at or below `TRANS_SPEED_INTERLOCK_THRESHOLD_MS`,
+  below every taper band, the applied ceiling SHALL already be 100 % at that moment
 
