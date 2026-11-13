@@ -13,9 +13,10 @@
 - [x] 3.2 `pio test -e native` green; `pio run` builds.
 - [x] 3.3 `include/Changelog.h` 1.5.31 entry (uk + en): throttle opening limit is now off by default (instant throttle, as before 1.5.16); a unit with a saved rate keeps it; to turn it off set 0 in the Speed limit and steering card; the limit stays available (30–100 %/s) for a softer opening. Leave the 1.5.16 entry as is.
 - [x] 3.4 `MAVLINK_SETUP.md`, `WEB_PORTAL_SETUP.md`, `UGV/API/README.md`: checked, no mention of the opening rate — nothing to update.
-- [ ] 3.5 Merge master → aztec (the slew code, test and `add-throttle-open-slew` folder are identical on both branches; only the line numbers in `Constants.h` / `index.html` / `Changelog.h` differ). Aztec `add-gear-speed-ceiling` becomes 1.5.32.
+- [x] 3.5 (done, aztec merge 49d0de2) Merge master → aztec (the slew code, test and `add-throttle-open-slew` folder are identical on both branches; only the line numbers in `Constants.h` / `index.html` / `Changelog.h` differ). Aztec `add-gear-speed-ceiling` becomes 1.5.32.
 
 ## 4. Bench (both vehicles: quad on master, buggy on aztec)
+Archived 2026-11-13 at the user's request before bench verification; bugs found later come back as new changes.
 - [ ] 4.1 Before flashing, note the "Throttle opening rate" value shown in the web. If it shows a number (e.g. 60) on a unit that should be off, that value is stored in NVS and will survive the update: after flashing set 0 and Save ("Throttle open rate off"), reboot, it reads back 0.
 - [ ] 4.2 Fresh NVS (no `open_slew` key, e.g. a board that never saved the row, or after an erase): the row shows 0 and the hint "0 = off".
 - [ ] 4.3 At 0: snap the stick (MAVLink) and the web slider idle → full — the servo goes to full with no ramp (≈0.15 s); closing is instant.

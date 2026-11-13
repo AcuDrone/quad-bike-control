@@ -75,18 +75,23 @@ The system SHALL provide steering control through the steering motor driver (`IM
 The system SHALL provide throttle control through a servo-driven acceleration mechanism. Throttle
 percent SHALL map linearly from the calibrated idle pulse width (0 %) to the calibrated full pulse
 width (100 %); the two endpoints MAY be in either order so that a mirrored servo mount (full below
-idle) is supported.
+idle) is supported. Every percentage command SHALL pass through the throttle opening rate limit
+(see "Configurable Throttle Opening Rate") at the servo input, before the percent-to-µs mapping:
+opening SHALL be rate-limited, closing SHALL never be slowed.
 
 #### Scenario: Set throttle position by percentage
 - **WHEN** ThrottleSystem.setPosition() is called with value from 0 to 100
-- **THEN** throttle servo moves to corresponding position
+- **THEN** throttle servo moves to corresponding position, rising no faster than the configured
+  opening rate
 - **AND** 0% maps to idle/closed throttle
 - **AND** 100% maps to full throttle
 
 #### Scenario: Return to idle
 - **WHEN** ThrottleSystem.idle() is called
-- **THEN** throttle servo returns to 0% position
+- **THEN** throttle servo returns to 0% position immediately, without any rate limit
 - **AND** throttle remains at idle until new command
+- **AND** the opening rate limit's last commanded percentage SHALL be reset to 0, so the next
+  opening ramps from idle
 
 #### Scenario: Throttle safety override
 - **WHEN** brake system is engaged above threshold (e.g., >50%)
@@ -109,6 +114,35 @@ idle) is supported.
   is larger
 - **AND** a rejected save SHALL report "Idle and full must differ by >= 100us"
 - **AND** an invalid stored pair SHALL fall back to the default endpoints
+
+#### Scenario: Opening is rate-limited at the servo input
+- **WHEN** the opening rate is 60 %/s, the last commanded throttle is 0 % and percentage commands
+  of 100 % arrive every control-loop iteration
+- **THEN** the commanded throttle SHALL rise by at most 60 %/s × the elapsed time per iteration,
+  reaching 100 % after ≈1.67 s
+- **AND** this SHALL hold identically for the MAVLink throttle, the web `set_throttle` command, the
+  per-loop web re-limit and the speed-limiter output, because all of them reach the servo through
+  the same percentage command
+
+#### Scenario: Closing is immediate
+- **WHEN** a percentage command is lower than or equal to the last commanded percentage
+- **THEN** it SHALL be applied in the same call, whatever the opening rate
+
+#### Scenario: Elapsed time is bounded
+- **WHEN** a percentage command arrives after a gap since the previous throttle write
+- **THEN** the elapsed time used by the opening rate limit SHALL be capped at
+  `THROTTLE_OPEN_SLEW_MAX_DT_S` (0.1 s), and the first command after start-up SHALL use zero
+- **AND** a stalled loop or a path that was silent for seconds SHALL therefore never open the
+  throttle in one step
+
+#### Scenario: Direct pulse-width writes bypass the opening limit
+- **WHEN** the gear-change boost PID writes the throttle in microseconds
+- **THEN** the opening rate limit SHALL NOT be applied, the PID keeping its own
+  `TRANS_GEAR_BOOST_SLEW_RATE_US` slew
+- **AND** the opening limit's last commanded percentage SHALL be re-seeded from the written pulse
+  width, so a later percentage command ramps from the servo's real position
+- **AND** the throttle calibration jog SHALL also drive the servo directly, and saving or
+  cancelling the calibration SHALL reset the last commanded percentage to 0
 
 ### Requirement: Transmission Control System
 The transmission control system SHALL enforce the physical gear sequence `[R, N, H, L]` and SHALL govern overshoot and rollback dwell timing via constants in `Constants.h`.
@@ -733,7 +767,9 @@ untouched.
 - **THEN** the applied ceiling SHALL move toward the target by at most
   `SPEED_LIMIT_CEILING_SLEW_PCT_S` per second, whether rising or falling
 - **AND** the rate limit SHALL be applied to the ceiling and not to the operator's demand, so the
-  driver's own throttle movements are never slowed by the limiter
+  driver's own throttle movements are never slowed by the limiter (the separate throttle opening
+  rate limit at the servo input may still slow an opening, see "Configurable Throttle Opening
+  Rate")
 - **AND** the elapsed time used SHALL be capped at one second, and the first evaluation after the
   limiter becomes active SHALL adopt the proportional target directly with a zero trim, so a
   stalled or restarted loop cannot produce a step change through an unbounded interval
@@ -765,6 +801,14 @@ untouched.
 - **THEN** it SHALL continue to command the throttle servo directly in microseconds
 - **AND** the limiter SHALL NOT be applied to it, because the boost holds engine speed while the
   drivetrain is disengaged and no road speed is being produced
+
+#### Scenario: The ceiling slew and the opening rate limit stack
+- **WHEN** a limit is in force and the ceiling is rising at the ceiling rate while the demand is
+  above it
+- **THEN** the limiter output SHALL then pass through the throttle opening rate limit before the
+  servo, so on opening the stricter of the two rates SHALL govern the throttle
+- **AND** on closing only the ceiling rate limit SHALL slow the fall, the opening rate limit
+  passing any lower value through immediately
 
 ### Requirement: Engine Hour Meter
 The system SHALL accumulate the wall-clock time the ENGINE HAS ACTUALLY BEEN TURNING into a single
@@ -1402,4 +1446,56 @@ immediately when changed. It SHALL apply to both vehicles alike.
 - **WHEN** the speed sensor removes the retired limiter keys at start-up
 - **THEN** `thr_floor` SHALL be left untouched
 - **AND** the `"speed"` namespace SHALL never be cleared as a whole
+
+### Requirement: Configurable Throttle Opening Rate
+The rate at which the throttle may OPEN SHALL be a persisted, operator-set, per-vehicle value in
+percent per second, applied by `ThrottleController::setThrottlePercent()` through the pure law
+`throttleSlewStep(targetPct, lastPct, dtS, ratePctS)` (`include/ThrottleSlewLaw.h`). A value of 0
+SHALL turn the limit off; any other accepted value SHALL lie in
+`THROTTLE_OPEN_SLEW_MIN_PCT_S`–`THROTTLE_OPEN_SLEW_MAX_PCT_S` (30–100 %/s). The default SHALL be
+`THROTTLE_OPEN_SLEW_DEFAULT_PCT_S` = 0 (off) on every vehicle; a non-zero rate is optional and
+set by the operator (for example 60 %/s, idle to full in ≈1.67 s).
+It SHALL be stored in the throttle calibration NVS namespace `"throttle"` under the key
+`open_slew` (float, %/s), loaded at start-up and written only when the operator sets a new value;
+the firmware SHALL NOT write it at start-up, on first run or when the default is used. Closing the
+throttle SHALL never be rate-limited.
+
+#### Scenario: The law limits rising and passes falling
+- **WHEN** `throttleSlewStep` is called with a rate above 0
+- **THEN** a target above `lastPct` SHALL return `min(target, lastPct + rate × dt)`
+- **AND** a target at or below `lastPct` SHALL return the target unchanged
+- **AND** the target SHALL be clamped to 0–100 % first
+
+#### Scenario: Rate 0 is off
+- **WHEN** the opening rate is 0
+- **THEN** every percentage command SHALL reach the servo unchanged, exactly as before this
+  setting existed
+
+#### Scenario: Default rate on a unit without a stored value
+- **WHEN** the system starts and `open_slew` has never been written
+- **THEN** the opening rate SHALL be 0 (off) and the throttle SHALL open without a ramp
+- **AND** `open_slew` SHALL still be absent afterwards
+
+#### Scenario: Stored rate is restored
+- **WHEN** the system starts and `open_slew` holds 0 or a value within 30–100 %/s
+- **THEN** that value SHALL be the opening rate
+- **AND** this SHALL hold after a firmware update that changed the default, so a unit on which
+  60 %/s was saved keeps 60 %/s until the operator sets another value
+
+#### Scenario: Invalid stored rate is ignored
+- **WHEN** the system starts and `open_slew` holds NaN, a negative value, a value between 0 and
+  30 %/s exclusive, or a value above 100 %/s
+- **THEN** the stored value SHALL be ignored and logged, and the default (0, off) SHALL be used
+- **AND** the stored value SHALL NOT be repaired or rewritten
+
+#### Scenario: Rate changed at runtime
+- **WHEN** a valid new rate is set
+- **THEN** it SHALL be persisted to `open_slew` immediately, and the value in use SHALL change only
+  after the write succeeded
+- **AND** it SHALL take effect on the next percentage command
+
+#### Scenario: Snap from idle on the bench
+- **WHEN** the rate is 60 %/s and the throttle is commanded from idle to 100 % in one step
+- **THEN** the servo SHALL take ≈1.7 s to reach full throttle
+- **AND** with the rate at 0 (the default) the servo SHALL snap open with no ramp
 
