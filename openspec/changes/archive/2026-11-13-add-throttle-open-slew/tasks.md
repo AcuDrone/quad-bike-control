@@ -12,6 +12,7 @@
 - [x] 3.1 `test/test_throttle_slew/test_main.cpp` + `platformio.ini` `test_filter` line and header comment: rising is limited (0 → 100 at 60 %/s over 0.1 s gives 6); falling is immediate (80 → 10 in one step); rate 0 is passthrough; many small dt steps accumulate to the same result as one step (1.67 s of 1 ms steps reaches ≈100); `reset(0)` after an opening makes the next opening ramp from 0; target clamped to 0–100.
 - [x] 3.2 `pio test -e native` green; `pio run` builds.
 - [x] 3.3 `Changelog.h` 1.5.16 bullet (uk + en).
+Archived 2026-11-13 at the user's request before bench verification (the 60 %/s default was later changed to 0 by `default-throttle-open-slew-off`); bugs found later come back as new changes.
 - [ ] 3.4 Bench: the row shows 60 on first boot; set 80, reboot, it reads back 80; 20 and 110 are refused.
 - [ ] 3.5 Bench: snap the stick (MAVLink) and the web slider idle → full: the servo takes ≈1.7 s at 60 %/s and the engine no longer stalls.
 - [ ] 3.6 Bench: set 0: the throttle snaps open as before; at any setting releasing the stick / fail-safe / gear-change idle closes the throttle immediately.
