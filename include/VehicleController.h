@@ -333,14 +333,26 @@ public:
     float getEngineTripHours() const { return engineHours_.getTripHours(); }
 
     /**
-     * @brief The ceiling the limiter is enforcing, in m/s. 0 = NO LIMIT.
+     * @brief The EFFECTIVE limit the limiter is enforcing, in m/s. 0 = NO LIMIT.
      *
-     * There is exactly one source: the autopilot's `SPEED_MAX` parameter, held in RAM only
-     * (never persisted — there is no local ceiling any more). When no usable value is
-     * available — never received, zero, out of range, stale, or the link is down — this
-     * returns 0 and the limiter does nothing, exactly as ArduPilot reads `SPEED_MAX = 0`.
+     * min(usable `SPEED_MAX`, fixed ceiling of the expected gear) — speedLimitEffective() in
+     * include/SpeedLimiterLaw.h. The operator-set side has exactly one source, the autopilot's
+     * `SPEED_MAX`, held in RAM only (never persisted); with no usable value — never received,
+     * zero, out of range, stale, or the link is down — it contributes nothing, exactly as
+     * ArduPilot reads `SPEED_MAX = 0`. The gear side is GEAR_SPEED_CEILING_* for the expected
+     * gear L / H / R and nothing in N / UNKNOWN (change add-gear-speed-ceiling).
      */
     float getSpeedLimitMs() const;
+
+    /** @brief Source of getSpeedLimitMs(): NONE, SPEED_MAX (incl. a tie) or GEAR */
+    SpeedLimitSource getSpeedLimitSource() const;
+
+    /**
+     * @brief Telemetry token for the limit's source: "none" / "speed_max" / "gear_l" /
+     * "gear_h" / "gear_r" (static string, safe to store by pointer). The gear letter is the
+     * expected gear the limiter uses, not the sensed gear.
+     */
+    const char* getSpeedLimitSourceKey() const;
 
     /**
      * @brief Throttle ceiling the limiter is currently applying (%, 100 = inactive): the
@@ -594,6 +606,7 @@ private:
 
     // Limiter ceiling tracking (log on change only)
     float    lastSpeedLimitMs_;     // NAN sentinel = nothing logged yet
+    const char* lastSpeedLimitSrcKey_; // source token last logged (getSpeedLimitSourceKey()), nullptr = none yet
     uint32_t lastSpeedLimitLogMs_;
 
     // Limiter law state (include/SpeedLimiterLaw.h). The ceiling is what gets rate-limited,
@@ -995,8 +1008,12 @@ private:
      * binds (demand ≥ ceiling − SPEED_LIMIT_BIND_MARGIN_PCT) and is held otherwise; it is reset
      * below the band, on "no limit", on an invalid sensor and on the first evaluation.
      *
+     * The limit is the EFFECTIVE one, min(SPEED_MAX, ceiling of the expected gear) — see
+     * getSpeedLimitMs(). A gear change does NOT reset the state (decision D5).
+     *
      * Fail-open: with no limit (0 m/s) or an invalid speed reading the state is reset (ceiling
-     * 100 %, trim 0) and the demand passes through untouched.
+     * 100 %, trim 0) and the demand passes through untouched. The "speed invalid" warning is
+     * logged only while the source is SPEED_MAX, never while a gear ceiling is (decision D7).
      *
      * Also updates the saturation indicator (design D6) after each step.
      * @return the throttle percentage to command
@@ -1004,11 +1021,27 @@ private:
     float applySpeedLimit(float throttlePct);
 
     /**
-     * @brief Log a limit change once, then hold off.
+     * @brief Fixed max-speed ceiling (m/s) of the expected gear, transmission_.getTargetGear():
+     * L → GEAR_SPEED_CEILING_LOW_MS, H → _HIGH_MS, R → _REVERSE_MS, N / UNKNOWN → 0 (none).
+     */
+    float gearSpeedCeilingMs() const;
+
+    /** @brief The usable SPEED_MAX in m/s, 0 when there is none */
+    float speedMaxMs() const;
+
+    /** @brief speedLimitEffective(speedMaxMs(), gearSpeedCeilingMs()) */
+    SpeedLimitEffective speedLimitNow() const;
+
+    /** @brief Source token for a given source + the current expected gear */
+    const char* speedLimitSourceKey(SpeedLimitSource source) const;
+
+    /**
+     * @brief Log a limit change once, then hold off. Logs on a value change beyond
+     * SPEED_LIMIT_LOG_EPSILON_MS or a change of source (incl. the gear letter).
      * Suppressed logs deliberately do NOT update the remembered state, so the settled value
      * is logged on the next opportunity rather than being lost.
      */
-    void logSpeedLimitChange(float limitMs);
+    void logSpeedLimitChange(float limitMs, SpeedLimitSource source);
 
     /** @brief End the live saturation (no-limit / fail-open paths); starts the display hold. */
     void clearSpeedLimitSaturation(uint32_t now);

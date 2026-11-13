@@ -1916,13 +1916,14 @@
                 lbl_speed_limit: 'Speed limit',
                 lbl_speed_limit_ceil: 'Limiting',
                 lim_none: 'none',
+                lim_src_gear: 'gear',
                 lbl_engine_hours: 'Engine hours',
                 lbl_engine_trip_hours: 'Trip hours',
                 unit_h: 'h',
                 lbl_odo: 'Odometer',
                 lbl_trip: 'Trip',
                 unit_km: 'km',
-                speed_limiter_hint: "The limit comes only from the autopilot's SPEED_MAX parameter; 0 (or no link) means no limit. Approaching it the throttle ceiling is tapered down smoothly instead of being stepped. The limiter then holds the limit itself: above it the throttle keeps closing, down to the floor, and below it authority is returned gradually until the speed sits at the limit. With no valid sensor reading the limiter does not act.",
+                speed_limiter_hint: "The operator limit comes only from the autopilot's SPEED_MAX parameter; 0 (or no link) means no operator limit. On top of it a fixed gear ceiling always applies and cannot be switched off: L 45 km/h, H 75 km/h, R 20 km/h (none in N); the lower of the two is enforced, and \"· gear L\" after the limit means the gear ceiling is the one in force. Approaching the limit the throttle ceiling is tapered down smoothly instead of being stepped. The limiter then holds the limit itself: above it the throttle keeps closing, down to the floor, and below it authority is returned gradually until the speed sits at the limit. With no valid sensor reading the limiter does not act.",
                 speed_limit_floor_hint: 'Limiter floor: the lowest throttle the speed limiter may leave at and above the limit. 0 % means idle and holds the limit most tightly; a higher floor (up to 20 %) softens engine braking at the cost of a limit that may not hold. The "Limiter at floor, speed above limit" badge (kept for 10 s after it clears) means the floor is too high or the vehicle is going downhill — the limiter does not brake.',
                 lbl_speed_limit_floor: 'Limiter floor (%)',
                 invalid_speed_limit_floor: 'Limiter floor must be 0-20 %',
@@ -2494,13 +2495,14 @@
                 lbl_speed_limit: 'Обмеження швидкості',
                 lbl_speed_limit_ceil: 'Обмежується',
                 lim_none: 'немає',
+                lim_src_gear: 'передача',
                 lbl_engine_hours: 'Мотогодини',
                 lbl_engine_trip_hours: 'Мотогодини місії',
                 unit_h: 'год',
                 lbl_odo: 'Одометр',
                 lbl_trip: 'Пробіг',
                 unit_km: 'км',
-                speed_limiter_hint: 'Обмеження береться лише з параметра SPEED_MAX автопілота; 0 (або відсутній зв\'язок) означає, що обмеження немає. При наближенні до нього стеля дроселя плавно знижується, а не падає стрибком. Далі обмежувач сам утримує ліміт: вище нього газ продовжує зменшуватися аж до мінімуму, а нижче — поступово повертається, доки швидкість не стане рівною ліміту. Без достовірних показань датчика обмежувач не діє.',
+                speed_limiter_hint: 'Обмеження оператора береться лише з параметра SPEED_MAX автопілота; 0 (або відсутній зв\'язок) означає, що обмеження оператора немає. Крім нього завжди діє фіксована стеля передачі, яку не можна вимкнути: L 45 км/год, H 75 км/год, R 20 км/год (у N її немає); застосовується менше з двох, а «· передача L» після ліміту означає, що діє саме стеля передачі. При наближенні до ліміту стеля дроселя плавно знижується, а не падає стрибком. Далі обмежувач сам утримує ліміт: вище нього газ продовжує зменшуватися аж до мінімуму, а нижче — поступово повертається, доки швидкість не стане рівною ліміту. Без достовірних показань датчика обмежувач не діє.',
                 speed_limit_floor_hint: 'Мінімальний газ обмежувача: найменший газ, який обмежувач швидкості може залишити на ліміті й вище нього. 0 % — це холостий хід, і ліміт утримується найточніше; вищий мінімум (до 20 %) пом\'якшує гальмування двигуном, але ліміт може не втриматися. Позначка «Обмежувач на мінімумі, швидкість вища за ліміт» (лишається ще 10 с після зникнення умови) означає, що мінімум зависокий або машина їде з гори — обмежувач не гальмує.',
                 lbl_speed_limit_floor: 'Мінімальний газ обмежувача (%)',
                 invalid_speed_limit_floor: 'Мінімальний газ обмежувача має бути 0-20 %',
@@ -4368,14 +4370,21 @@
             syncSpeedInput('speed-ppr-input', data.speed_ppr);
             syncSpeedInput('speed-circ-input', data.speed_circ_mm);
 
-            // The limit has exactly one source — the autopilot's SPEED_MAX. 0 (or no usable
-            // value at all) means no limiting, so it is shown as "none" rather than as 0 km/h,
+            // The limit is the EFFECTIVE one: min(the autopilot's SPEED_MAX, the fixed ceiling
+            // of the expected gear — L 45 / H 75 / R 20 km/h). 0 (no usable SPEED_MAX and no gear
+            // ceiling, i.e. N) means no limiting, so it is shown as "none" rather than as 0 km/h,
             // which would read like "stopped". Both units are shown: the operator sets the
-            // parameter in m/s in the ground station but reads the vehicle in km/h.
+            // parameter in m/s in the ground station but reads the vehicle in km/h. When the gear
+            // ceiling is the source (speed_limit_src "gear_l" / "gear_h" / "gear_r") the gear is
+            // appended; a missing key (older firmware) leaves the display as before.
             {
                 const lim = (typeof data.speed_limit_kmh === 'number') ? data.speed_limit_kmh : 0;
+                const src = (typeof data.speed_limit_src === 'string') ? data.speed_limit_src : '';
+                const gearSuffix = (lim > 0 && src.indexOf('gear_') === 0)
+                    ? ' · ' + t('lim_src_gear') + ' ' + src.substring(5).toUpperCase()
+                    : '';
                 setBound('speed-limit-value', (lim > 0)
-                    ? lim.toFixed(1) + ' ' + t('unit_kmh') + ' (' + (lim / 3.6).toFixed(1) + ' m/s)'
+                    ? lim.toFixed(1) + ' ' + t('unit_kmh') + ' (' + (lim / 3.6).toFixed(1) + ' m/s)' + gearSuffix
                     : t('lim_none'),
                     { color: (lim > 0) ? 'var(--foreground)' : 'var(--muted-foreground)' });
             }

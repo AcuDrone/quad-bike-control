@@ -12,7 +12,49 @@
 //  ceiling C: target = clamp(P + T, F, 100), C moves toward it by at most slew × dt,
 //             then C is clamped to [F, 100]. Output = min(D, C).
 // The caller owns the no-limit / invalid-sensor fail-open branch (state.reset()).
+//
+// Effective limit (change add-gear-speed-ceiling): the limit fed to speedLimiterStep() is
+// min(usable SPEED_MAX, fixed ceiling of the expected gear), chosen by speedLimitEffective().
+// A side that is not > 0 (zero, negative, NaN) contributes nothing; a tie reports SPEED_MAX.
 #pragma once
+
+#include <stdint.h>
+
+/** @brief Where the effective limit came from */
+enum class SpeedLimitSource : uint8_t {
+  NONE,       // no limit at all
+  SPEED_MAX,  // the autopilot's SPEED_MAX (also on a tie with the gear ceiling)
+  GEAR        // the fixed ceiling of the expected gear
+};
+
+struct SpeedLimitEffective {
+  float limitMs;            // effective limit, m/s (0 = no limit)
+  SpeedLimitSource source;
+};
+
+/**
+ * @brief Effective limit = the smaller of SPEED_MAX and the gear ceiling.
+ * @param speedMaxMs usable SPEED_MAX in m/s, or 0 when there is none
+ * @param gearCeilMs fixed ceiling of the expected gear in m/s, or 0 in N / UNKNOWN
+ * A value that is not > 0 (incl. NaN) does not count. Both count → the smaller, tie → SPEED_MAX.
+ * Neither → {0, NONE}.
+ */
+static inline SpeedLimitEffective speedLimitEffective(float speedMaxMs, float gearCeilMs) {
+  const bool hasMax = (speedMaxMs > 0.0f);    // false for NaN
+  const bool hasGear = (gearCeilMs > 0.0f);   // false for NaN
+  SpeedLimitEffective r;
+  if (hasMax && (!hasGear || speedMaxMs <= gearCeilMs)) {
+    r.limitMs = speedMaxMs;
+    r.source = SpeedLimitSource::SPEED_MAX;
+  } else if (hasGear) {
+    r.limitMs = gearCeilMs;
+    r.source = SpeedLimitSource::GEAR;
+  } else {
+    r.limitMs = 0.0f;
+    r.source = SpeedLimitSource::NONE;
+  }
+  return r;
+}
 
 struct SpeedLimiterParams {
   float taperFraction;   // band as a fraction of the limit (0.20)

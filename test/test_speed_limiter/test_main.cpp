@@ -197,12 +197,12 @@ static void test_lower_slew_falls_slower() {
 // ── toy plant ─────────────────────────────────────────────────────────────────
 // First-order speed response: dv/dt = (k·u − v) / tau, k chosen so that u* holds L.
 static float simulate(const SpeedLimiterParams& p, float uStar, float seconds,
-                      SpeedLimiterState& s) {
-    const float k = L10 / uStar;
+                      SpeedLimiterState& s, float limitMs = L10) {
+    const float k = limitMs / uStar;
     const float tau = 1.5f;
     float v = 0.0f;
     for (float t = 0.0f; t < seconds; t += DT) {
-        const float u = speedLimiterStep(s, p, 100.0f, v, L10, DT);
+        const float u = speedLimiterStep(s, p, 100.0f, v, limitMs, DT);
         v += (k * u - v) / tau * DT;
     }
     return v;
@@ -223,6 +223,44 @@ static void test_steady_state_saturates_at_floor() {
     TEST_ASSERT_TRUE(v > L10);
     TEST_ASSERT_FLOAT_WITHIN(1e-3f, 10.0f, s.ceilPct);
     TEST_ASSERT_FLOAT_WITHIN(1e-3f, 0.0f, s.trimPct);
+}
+
+// ── effective limit: SPEED_MAX vs the fixed gear ceiling (add-gear-speed-ceiling) ──
+static const float CEIL_L = 45.0f / 3.6f;   // 12.5 m/s
+static const float CEIL_H = 75.0f / 3.6f;   // ≈20.83 m/s
+static const float CEIL_R = 20.0f / 3.6f;   // ≈5.56 m/s
+
+static void checkEff(float speedMax, float gearCeil, float expLimit, SpeedLimitSource expSrc) {
+    const SpeedLimitEffective e = speedLimitEffective(speedMax, gearCeil);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, expLimit, e.limitMs);
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)expSrc, (uint8_t)e.source);
+}
+
+static void test_eff_gear_alone_when_speed_max_zero() { checkEff(0.0f, CEIL_L, CEIL_L, SpeedLimitSource::GEAR); }
+static void test_eff_lower_speed_max_wins()           { checkEff(5.0f, CEIL_L, 5.0f, SpeedLimitSource::SPEED_MAX); }
+static void test_eff_speed_max_above_gear_high()      { checkEff(25.0f, CEIL_H, CEIL_H, SpeedLimitSource::GEAR); }
+static void test_eff_speed_max_below_gear_high()      { checkEff(20.0f, CEIL_H, 20.0f, SpeedLimitSource::SPEED_MAX); }
+static void test_eff_tie_is_speed_max()               { checkEff(12.5f, 12.5f, 12.5f, SpeedLimitSource::SPEED_MAX); }
+static void test_eff_neither_is_none()                { checkEff(0.0f, 0.0f, 0.0f, SpeedLimitSource::NONE); }
+static void test_eff_nan_speed_max_ignored()          { checkEff(NAN, CEIL_L, CEIL_L, SpeedLimitSource::GEAR); }
+static void test_eff_no_gear_ceiling_in_n()           { checkEff(5.0f, 0.0f, 5.0f, SpeedLimitSource::SPEED_MAX); }
+static void test_eff_reverse_alone()                  { checkEff(0.0f, CEIL_R, CEIL_R, SpeedLimitSource::GEAR); }
+static void test_eff_reverse_lower_speed_max()        { checkEff(3.0f, CEIL_R, 3.0f, SpeedLimitSource::SPEED_MAX); }
+
+static void test_eff_constants_match_km_h() {
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 12.5f, CEIL_L);
+    TEST_ASSERT_FLOAT_WITHIN(1e-2f, 20.83f, CEIL_H);
+    TEST_ASSERT_FLOAT_WITHIN(1e-2f, 5.56f, CEIL_R);
+}
+
+// The gear ceiling is enforced by the same law: at L = 12.5 m/s (45 km/h) the speed settles at it.
+static void test_steady_state_converges_to_gear_ceiling_l() {
+    const SpeedLimiterParams p = params();
+    SpeedLimiterState s;
+    const float limit = speedLimitEffective(0.0f, CEIL_L).limitMs;
+    const float v = simulate(p, 30.0f, 120.0f, s, limit);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, CEIL_L, v);
+    TEST_ASSERT_FLOAT_WITHIN(1.0f, 30.0f, s.ceilPct);
 }
 
 // ── multiple calls per loop ───────────────────────────────────────────────────
@@ -261,5 +299,17 @@ int main(int, char**) {
     RUN_TEST(test_steady_state_converges_to_limit);
     RUN_TEST(test_steady_state_saturates_at_floor);
     RUN_TEST(test_two_half_steps_equal_one_step);
+    RUN_TEST(test_eff_gear_alone_when_speed_max_zero);
+    RUN_TEST(test_eff_lower_speed_max_wins);
+    RUN_TEST(test_eff_speed_max_above_gear_high);
+    RUN_TEST(test_eff_speed_max_below_gear_high);
+    RUN_TEST(test_eff_tie_is_speed_max);
+    RUN_TEST(test_eff_neither_is_none);
+    RUN_TEST(test_eff_nan_speed_max_ignored);
+    RUN_TEST(test_eff_no_gear_ceiling_in_n);
+    RUN_TEST(test_eff_reverse_alone);
+    RUN_TEST(test_eff_reverse_lower_speed_max);
+    RUN_TEST(test_eff_constants_match_km_h);
+    RUN_TEST(test_steady_state_converges_to_gear_ceiling_l);
     return UNITY_END();
 }

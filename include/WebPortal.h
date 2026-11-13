@@ -124,7 +124,8 @@ public:
         uint16_t speed_ppr;       // Calibration: pulses per revolution
         uint32_t speed_pulse_total; // Running pulse total since boot (web ppr measurement; counts up either way)
         float speed_circ_mm;      // Calibration: wheel circumference (mm)
-        float speed_limit_ms;     // Enforced ceiling (m/s) from SPEED_MAX, 0 = no limit — km/h in JSON
+        float speed_limit_ms;     // EFFECTIVE limit (m/s) = min(SPEED_MAX, gear ceiling), 0 = no limit — km/h in JSON
+        const char* speed_limit_src; // none | speed_max | gear_l | gear_h | gear_r (static token, stored by pointer)
         float speed_limit_ceil;   // Throttle ceiling the limiter is applying (taper + trim, %, 100 = inactive)
         float speed_limit_floor;  // Limiter throttle floor in use (%, 0 = calibrated idle)
         float speed_limit_slew;   // Limiter ceiling slew in use (%/s, both directions)

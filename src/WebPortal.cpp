@@ -689,6 +689,8 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // _thr_pass_pct / _invert, 7 scalar slots (keys by pointer, the two tokens static strings by
     // pointer, nothing copied; 7 × 16 B = 112 B of memory, ≤ 190 B of JSON) — aztec worst case
     // ≈ 8.82 KB, ≈ 0.4 KB under 9216 (size unchanged).
+    // Gear speed ceiling since 1.5.32: speed_limit_src, 1 slot (key and static token by pointer,
+    // nothing copied; 16 B of memory, ≤ 30 B of JSON) — aztec worst case ≈ 8.84 KB (size unchanged).
     // Static (single caller: the main-loop broadcast) so the larger document is off the stack.
     static StaticJsonDocument<9216> doc;
     doc.clear();
@@ -796,6 +798,7 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["speed_circ_mm"] = serialized(String(telemetry.speed_circ_mm, 0));
     // The enforced ceiling, from the autopilot's SPEED_MAX alone. 0 = no limit.
     doc["speed_limit_kmh"] = serialized(String(telemetry.speed_limit_ms * MS_TO_KMH, 1));
+    doc["speed_limit_src"] = telemetry.speed_limit_src ? telemetry.speed_limit_src : "none";  // static, by pointer
     doc["speed_limit_ceil"] = serialized(String(telemetry.speed_limit_ceil, 0));
     doc["speed_limit_floor"] = serialized(String(telemetry.speed_limit_floor, 1));
     doc["speed_limit_slew"] = serialized(String(telemetry.speed_limit_slew, 1));

@@ -14,6 +14,13 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.32","date":"2026-11-13","uk":[
+"Багі: фіксована максимальна швидкість для кожної передачі — L 45 км/год, H 75 км/год, R 20 км/год (у N обмеження немає). Діє завжди, навіть коли SPEED_MAX = 0, не отриманий або зв’язку з автопілотом немає; вимкнути її не можна. Менший SPEED_MAX і далі має перевагу, більший не підніме ліміт понад стелю передачі. У веб-панелі після ліміту видно «· передача L» (H, R), коли діє стеля передачі",
+"Без достовірних показань датчика швидкості коліс стеля передачі не діє (як і обмеження SPEED_MAX). Попередження «speed reading is invalid» тепер з’являється лише тоді, коли ліміт задає SPEED_MAX. Потрібно залити оновлений образ LittleFS"
+],"en":[
+"Buggy: a fixed maximum speed for each gear — L 45 km/h, H 75 km/h, R 20 km/h (no ceiling in N). It always applies, even with SPEED_MAX = 0, never received or with the autopilot link down, and cannot be switched off. A lower SPEED_MAX still wins; a higher one does not raise the limit above the gear ceiling. The web panel shows “· gear L” (H, R) after the limit when the gear ceiling is in force",
+"Without a valid wheel-speed reading the gear ceiling does not act (just like the SPEED_MAX limit). The “speed reading is invalid” warning now appears only when SPEED_MAX sets the limit. Upload the updated LittleFS image"
+]},
 {"version":"1.5.30","date":"2026-11-13","uk":[
 "Наземна станція (Mission Planner, QGC, кнопки на кермі): передача, запалювання, фара і блокування тепер керуються командами з наземної станції (MAV_CMD_USER_2). Плата перевіряє всі блокування й відповідає на кожну команду: передача — лише з працюючим двигуном і не швидше 1,4 м/с (нейтраль — на будь-якій швидкості); запалювання OFF працює завжди, ACC/ON і блокування — лише коли керує MAVLink (не у failsafe і не з веб-керуванням); фара — завжди.",
 "Пульт і наземна станція рівноправні: діє остання зміна. Перемикач на пульті застосовується лише тоді, коли його положення змінилося, тож команда з наземної станції не скасовується наступним кадром. Канал поза діапазоном 880–2160 мкс більше не вмикає N / OFF / вимикає фару — стан лишається.",

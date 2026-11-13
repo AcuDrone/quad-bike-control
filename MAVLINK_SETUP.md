@@ -61,7 +61,7 @@ Non-inverted, no inverter circuit (unlike SBUS).
 |-----------|-------------------------|-------------------|---------|
 | `SERIAL2_PROTOCOL` | `2` (MAVLink2) | same | TELEM2 speaks MAVLink 2 |
 | `SERIAL2_BAUD` | `115` (115200) | same | Match the ESP32 link baud |
-| `SPEED_MAX` | m/s, `0` = no limit | same | Read-only by the ESP32; the **only** source of the throttle limiter's ceiling — see below |
+| `SPEED_MAX` | m/s, `0` = no limit | same | Read-only by the ESP32; the **only** operator-set source of the throttle limiter's ceiling (buggy since 1.5.32: capped further by a fixed per-gear ceiling) — see below |
 | `MANUAL_OPTIONS` | **`0`** — REQUIRED | **`0`** — REQUIRED | Turns OFF ArduPilot's own speed-scaled steering. The ESP32 does that scaling now; leaving bit 0 set scales the steering **twice** — see below |
 | `MOT_SPD_SCA_BASE` | m/s, `0` = no scaling | same | Read-only by the ESP32; the **fallback** source of the steering speed-scaling base (the ESP32's own `steer_sca_base` wins) — see below |
 | `VISO_TYPE` | `1` (MAVLink) | `1` | Enable the visual-odometry backend. **Verify the parameter exists** — see the fmuv2 caveat |
@@ -904,7 +904,23 @@ stored value and no enable toggle — the limiter is always armed and does nothi
 | older than `MAVLINK_PARAM_STALE_MS` (16 s ≈ 3 polls) | *none* |
 | link down (no `HEARTBEAT` for 3 s) | *none* |
 
-**The fallback is no limiting** — losing the autopilot never leaves the vehicle throttled by a stale
+**Buggy (`aztec`) since firmware 1.5.32 — fixed per-gear ceiling.** On top of `SPEED_MAX` the buggy
+has a hard ceiling for the engaged gear that the operator cannot switch off (firmware constants
+`GEAR_SPEED_CEILING_*`, change `add-gear-speed-ceiling`): **L 45 km/h (12.5 m/s), H 75 km/h
+(≈20.83 m/s), R 20 km/h (≈5.56 m/s)**, none in N. The gear is the firmware's *expected* gear, not
+the opto sensor reading. The enforced limit is **min(usable `SPEED_MAX`, gear ceiling)**; a lower
+`SPEED_MAX` still wins, a higher one cannot raise the limit above the gear ceiling, and on a tie the
+source is reported as `SPEED_MAX`. The gear ceiling does not depend on MAVLink, so it also applies
+with `SPEED_MAX = 0`, never received, stale or with the link down. It is enforced by the same law
+below, so with no valid wheel-speed reading it does not act either. The ground station does not
+see it — it only sees that the buggy goes no faster. The quad bike (`master`) has no gear ceiling.
+
+| `SPEED_MAX` state (buggy, 1.5.32) | Limit enforced in L / H / R | in N |
+|---|---|---|
+| fresh and > 0 | the smaller of `SPEED_MAX` and 45 / 75 / 20 km/h | `SPEED_MAX` |
+| `0`, never received, rejected, stale or link down | the gear ceiling alone: 45 / 75 / 20 km/h | *none* |
+
+**The fallback is no limiting** (on the buggy: no *operator* limit, the gear ceiling stays) — losing the autopilot never leaves the vehicle throttled by a stale
 ceiling nobody can see or change. A rejected `PARAM_VALUE` is logged and the previously accepted
 value stays in force, so one corrupt frame cannot invalidate a good subscription; one whose sender
 system **or** component id is not the learned autopilot is dropped outright, so a ground station on
@@ -931,7 +947,10 @@ The throttle ceiling is **tapered**, not stepped, and then **held at the limit**
   The ceiling never steps down to the floor, it only reaches it gradually (100 → 0 takes ≥ 1.25 s).
 
 An invalid speed reading **fails open** (ceiling 100 %, trim reset), and the gear-change throttle
-boost is outside the limiter entirely.
+boost is outside the limiter entirely. The "speed reading is invalid" warning (at most every 5 s) is
+logged only while `SPEED_MAX` is the source of the limit; on the buggy, while a gear ceiling is the
+source it stays silent (since 1.5.32), so a buggy parked in gear before the first wheel pulse does
+not log it.
 
 This is a **throttle limiter, not a speed governor**: it only withholds throttle and **never applies
 the brake**. Reaction latency is a 200 ms speed sample plus the time the ceiling needs to slew down.
@@ -942,8 +961,11 @@ the web console then shows the **"Limiter at floor, speed above limit"** warning
 
 The 1 Hz `[MAV]` debug line reports `spdmax:<m/s> age:<ms> valid:<Y|N>`, separating "never received"
 (`nan`), "answered and fresh" (a 0 → 5000 ms age sawtooth) and "stale/link down" (`valid:N`). The
-vehicle layer logs `[SPEED] Speed limit: … m/s (… km/h) from SPEED_MAX` on each change, and
-`[SPEED] Speed limit: none …` when it stops limiting.
+vehicle layer logs `[SPEED] Speed limit: … m/s (… km/h) from SPEED_MAX` on each change (on the
+buggy since 1.5.32 also `… from gear ceiling (L)` / `(H)` / `(R)`, and a change of source alone is
+logged too), and `[SPEED] Speed limit: none …` when it stops limiting. The web telemetry key
+`speed_limit_src` (`none` / `speed_max` / `gear_l` / `gear_h` / `gear_r`, buggy since 1.5.32)
+names the source, and the console shows "· gear L" after the limit when a gear ceiling is in force.
 
 ## Steering without the angle sensor (rate mode)
 

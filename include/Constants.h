@@ -412,7 +412,8 @@ struct ServoChannelConfig {
 // Autopilot parameter subscription (READ-ONLY — the firmware never sends PARAM_SET).
 // TWO parameters are subscribed, both read-only, through ONE shared mechanism (one poll, one
 // PARAM_VALUE handler, one set of value-hygiene rules — see MavlinkInterface's param table):
-//   SPEED_MAX        (m/s) — the ONLY source of the firmware's max-speed limiter ceiling.
+//   SPEED_MAX        (m/s) — the ONLY operator-set source of the max-speed limiter ceiling (the
+//                            effective limit is min(SPEED_MAX, GEAR_SPEED_CEILING_* of the gear)).
 //   MOT_SPD_SCA_BASE (m/s) — the FALLBACK source of the steering speed-scaling base; the
 //                            ESP32's own NVS value (steer_sca_base) takes priority over it.
 // Both an unsolicited PARAM_VALUE and a periodic PARAM_REQUEST_READ are honored: ArduPilot's
@@ -878,12 +879,26 @@ static_assert(STEER_PWM_MIN_DUTY >= STEER_PWM_TRACK_MIN_DUTY, "break-away floor 
 // until pulses resume. A normal stop decelerates through the samples instead.
 #define SPEED_MAX_PLAUSIBLE_DECEL_MS2    2.2f   // m/s² (≈8 km/h per second)
 
-// Maximum-speed throttle limiter. The ceiling has exactly ONE source: the autopilot's SPEED_MAX
-// parameter (m/s), held in RAM only. There is no local ceiling, no ceiling NVS key and no master
-// switch (the persisted floor below shapes HOW the limit is enforced, it never imposes one) —
-// the limiter is always armed, and "no usable SPEED_MAX" (link down, stale, never received) or
-// SPEED_MAX = 0 simply means NO LIMITING, exactly as ArduPilot itself reads a zero.
+// Maximum-speed throttle limiter. The operator-set ceiling has exactly ONE source: the autopilot's
+// SPEED_MAX parameter (m/s), held in RAM only. There is no local ceiling, no ceiling NVS key and no
+// master switch (the persisted floor below shapes HOW the limit is enforced, it never imposes one).
+// On top of it sits the FIXED per-gear ceiling below (buggy, since 1.5.32): the effective limit is
+// min(usable SPEED_MAX, ceiling of the expected gear), a zero / absent side contributing nothing
+// (include/SpeedLimiterLaw.h speedLimitEffective()). The limiter is always armed; "no usable
+// SPEED_MAX" (link down, stale, never received) or SPEED_MAX = 0 means no OPERATOR limit, exactly
+// as ArduPilot itself reads a zero, and only N / UNKNOWN with no usable SPEED_MAX means NO LIMITING.
 #define SPEED_LIMIT_WARN_MS           5000   // ms between "limiter armed but speed invalid" warnings
+                                             // (only while the effective limit's source is SPEED_MAX)
+
+// Fixed per-gear maximum-speed ceiling (change add-gear-speed-ceiling, decisions D1–D8). Firmware
+// constants only: no web field, no NVS key, no MAVLink parameter — the operator cannot switch them
+// off. L tops out at ≈57 km/h at full engine RPM, H is faster. The gear is the transmission's
+// EXPECTED (target) gear, the same one the N/UNKNOWN throttle clip trusts. N and UNKNOWN have no
+// ceiling (the throttle there is already clipped to TRANS_UNKNOWN_GEAR_THROTTLE_MAX). Enforced by
+// the existing limiter law, so with no valid wheel-speed reading it does not act (fail open).
+#define GEAR_SPEED_CEILING_LOW_MS      (45.0f / MS_TO_KMH)  // m/s - L: 45 km/h = 12.5 m/s
+#define GEAR_SPEED_CEILING_HIGH_MS     (75.0f / MS_TO_KMH)  // m/s - H: 75 km/h ≈ 20.83 m/s
+#define GEAR_SPEED_CEILING_REVERSE_MS  (20.0f / MS_TO_KMH)  // m/s - R: 20 km/h ≈ 5.56 m/s
 
 // Proportional taper + integral trim. Authority is withdrawn GRADUALLY as the limit is approached
 // rather than in one step at the limit: a step lurches a heavy vehicle, invites hunting around the
@@ -959,6 +974,16 @@ static_assert(STEER_PWM_MIN_DUTY >= STEER_PWM_TRACK_MIN_DUTY, "break-away floor 
 // PRESENTATION ONLY. Every speed inside the firmware is m/s; this exists solely for the web JSON
 // and human-readable debug strings, and must never appear in a control-path computation.
 #define MS_TO_KMH                      3.6f
+// (Also used, at compile time only, to write the fixed gear ceilings above in km/h.)
+
+// Fixed gear ceilings (above): positive, and within the range a SPEED_MAX could take, so
+// min(SPEED_MAX, ceiling) never meets a value the rest of the limiter has not been sized for.
+static_assert(GEAR_SPEED_CEILING_LOW_MS > 0.0f && GEAR_SPEED_CEILING_LOW_MS <= MAVLINK_PARAM_SPEED_MAX_MS,
+              "GEAR_SPEED_CEILING_LOW_MS must be > 0 and <= MAVLINK_PARAM_SPEED_MAX_MS");
+static_assert(GEAR_SPEED_CEILING_HIGH_MS > 0.0f && GEAR_SPEED_CEILING_HIGH_MS <= MAVLINK_PARAM_SPEED_MAX_MS,
+              "GEAR_SPEED_CEILING_HIGH_MS must be > 0 and <= MAVLINK_PARAM_SPEED_MAX_MS");
+static_assert(GEAR_SPEED_CEILING_REVERSE_MS > 0.0f && GEAR_SPEED_CEILING_REVERSE_MS <= MAVLINK_PARAM_SPEED_MAX_MS,
+              "GEAR_SPEED_CEILING_REVERSE_MS must be > 0 and <= MAVLINK_PARAM_SPEED_MAX_MS");
 
 // ============================================================================
 // SERIAL DEBUG
@@ -1128,7 +1153,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.30"
+#define FIRMWARE_VERSION "1.5.32"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

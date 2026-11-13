@@ -150,8 +150,10 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     // separately maintained total. Never gated: time already run stays true.
     telemetry.engine_hours = vehicleController_.getEngineHours();
     telemetry.engine_trip_hours = vehicleController_.getEngineTripHours();
-    // The one and only ceiling: the autopilot's SPEED_MAX. 0 means no limit.
+    // The effective limit: min(SPEED_MAX, fixed ceiling of the expected gear). 0 means no limit.
+    // The source token's gear letter is the expected gear the limiter uses, not the sensed gear.
     telemetry.speed_limit_ms = vehicleController_.getSpeedLimitMs();
+    telemetry.speed_limit_src = vehicleController_.getSpeedLimitSourceKey();
     telemetry.speed_limit_ceil = vehicleController_.getSpeedLimitCeilingPct();
     // The persisted limiter settings, and the saturation indicator (live flag + the firmware's
     // display hold, so every client — including one that joins late — shows the same state).

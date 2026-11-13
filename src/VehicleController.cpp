@@ -77,6 +77,7 @@ VehicleController::VehicleController(SteeringController& steering,
       lastPIDThrottleUs_(THROTTLE_DEFAULT_IDLE_US),
       lastSpeedLimitWarnMs_(0),
       lastSpeedLimitMs_(NAN),
+      lastSpeedLimitSrcKey_(nullptr),
       lastSpeedLimitLogMs_(0),
       limiter_(),
       limiterLastMs_(0),
@@ -1432,23 +1433,69 @@ void VehicleController::processSetParkBrakeInvertCommand(bool invert, WebPortal&
 }
 
 // ============================================================================
-// MAX-SPEED LIMITER — SPEED_MAX ceiling, proportional taper and integral trim
+// MAX-SPEED LIMITER — SPEED_MAX + fixed gear ceiling, proportional taper and integral trim
 // ============================================================================
 
-float VehicleController::getSpeedLimitMs() const {
-    // ONE source, no arbitration and no master switch: the autopilot's SPEED_MAX. Anything that
-    // makes that value untrustworthy — never received, zero, out of range, stale, link down —
-    // is reported as 0, which means NO LIMITING. That matches ArduPilot's own reading of a zero
-    // SPEED_MAX and the value Mission Planner's speed-limit sign writes to clear a limit.
+float VehicleController::speedMaxMs() const {
+    // ONE operator-set source, no arbitration and no master switch: the autopilot's SPEED_MAX.
+    // Anything that makes that value untrustworthy — never received, zero, out of range, stale,
+    // link down — is reported as 0, which means "no operator limit". That matches ArduPilot's own
+    // reading of a zero SPEED_MAX and the value Mission Planner's speed-limit sign writes to clear
+    // a limit.
     if (!mavlink_.hasSpeedMaxParam()) {
         return 0.0f;
     }
     return mavlink_.getSpeedMaxMs();
 }
 
-void VehicleController::logSpeedLimitChange(float limitMs) {
+float VehicleController::gearSpeedCeilingMs() const {
+    // The EXPECTED gear (decision D2): the sensor reads UNKNOWN mid-shift and on code glitches;
+    // the target is what the N/UNKNOWN throttle clip already trusts. N / UNKNOWN: no ceiling (D4).
+    switch (transmission_.getTargetGear()) {
+        case TransmissionController::Gear::GEAR_LOW:     return GEAR_SPEED_CEILING_LOW_MS;
+        case TransmissionController::Gear::GEAR_HIGH:    return GEAR_SPEED_CEILING_HIGH_MS;
+        case TransmissionController::Gear::GEAR_REVERSE: return GEAR_SPEED_CEILING_REVERSE_MS;
+        default:                                         return 0.0f;
+    }
+}
+
+SpeedLimitEffective VehicleController::speedLimitNow() const {
+    // Effective limit = min(usable SPEED_MAX, gear ceiling); a zero side contributes nothing.
+    // The gear ceiling does not depend on MAVLink, so it still applies with the link down (D8).
+    return speedLimitEffective(speedMaxMs(), gearSpeedCeilingMs());
+}
+
+float VehicleController::getSpeedLimitMs() const {
+    return speedLimitNow().limitMs;
+}
+
+SpeedLimitSource VehicleController::getSpeedLimitSource() const {
+    return speedLimitNow().source;
+}
+
+const char* VehicleController::speedLimitSourceKey(SpeedLimitSource source) const {
+    switch (source) {
+        case SpeedLimitSource::SPEED_MAX: return "speed_max";
+        case SpeedLimitSource::GEAR:
+            switch (transmission_.getTargetGear()) {
+                case TransmissionController::Gear::GEAR_LOW:     return "gear_l";
+                case TransmissionController::Gear::GEAR_HIGH:    return "gear_h";
+                case TransmissionController::Gear::GEAR_REVERSE: return "gear_r";
+                default:                                         return "none";  // unreachable: N/UNKNOWN have no ceiling
+            }
+        default: return "none";
+    }
+}
+
+const char* VehicleController::getSpeedLimitSourceKey() const {
+    return speedLimitSourceKey(getSpeedLimitSource());
+}
+
+void VehicleController::logSpeedLimitChange(float limitMs, SpeedLimitSource source) {
+    const char* srcKey = speedLimitSourceKey(source);   // static strings: compare by pointer
     bool changed = isnan(lastSpeedLimitMs_) ||
-                   fabsf(limitMs - lastSpeedLimitMs_) > SPEED_LIMIT_LOG_EPSILON_MS;
+                   fabsf(limitMs - lastSpeedLimitMs_) > SPEED_LIMIT_LOG_EPSILON_MS ||
+                   srcKey != lastSpeedLimitSrcKey_;
     if (!changed) {
         return;
     }
@@ -1460,9 +1507,14 @@ void VehicleController::logSpeedLimitChange(float limitMs) {
     }
     lastSpeedLimitLogMs_ = now;
     lastSpeedLimitMs_ = limitMs;
-    if (limitMs <= 0.0f) {
+    lastSpeedLimitSrcKey_ = srcKey;
+    if (source == SpeedLimitSource::NONE || limitMs <= 0.0f) {
         Debug::printlnFeature(DebugFeature::VEHICLE,
-            "[SPEED] Speed limit: none (no usable SPEED_MAX) — not limiting");
+            "[SPEED] Speed limit: none (no usable SPEED_MAX, no gear ceiling) — not limiting");
+    } else if (source == SpeedLimitSource::GEAR) {
+        Debug::printfFeature(DebugFeature::VEHICLE,
+            "[SPEED] Speed limit: %.2f m/s (%.1f km/h) from gear ceiling (%s)\n",
+            limitMs, limitMs * MS_TO_KMH, getTargetGearString().c_str());
     } else {
         Debug::printfFeature(DebugFeature::VEHICLE,
             "[SPEED] Speed limit: %.2f m/s (%.1f km/h) from SPEED_MAX\n",
@@ -1479,12 +1531,16 @@ void VehicleController::clearSpeedLimitSaturation(uint32_t now) {
 }
 
 float VehicleController::applySpeedLimit(float throttlePct) {
-    float limitMs = getSpeedLimitMs();
-    logSpeedLimitChange(limitMs);
+    // Effective limit: min(usable SPEED_MAX, ceiling of the expected gear). A gear change only
+    // changes the limit; the law state is NOT reset (D5) — shifts happen at or below
+    // TRANS_SPEED_INTERLOCK_THRESHOLD_MS, below every taper band, where the ceiling is 100 %.
+    const SpeedLimitEffective eff = speedLimitNow();
+    const float limitMs = eff.limitMs;
+    logSpeedLimitChange(limitMs, eff.source);
     uint32_t now = millis();
 
     if (limitMs <= 0.0f) {
-        // No usable SPEED_MAX => no limiting at all. Reset the law (ceiling 100 %, trim 0) so the
+        // No usable SPEED_MAX and no gear ceiling (N / UNKNOWN) => no limiting at all. Reset the law (ceiling 100 %, trim 0) so the
         // next limit that arrives never resumes from a stale ceiling or a stale trim.
         limiter_.reset();
         limiterLastMs_ = 0;
@@ -1495,8 +1551,12 @@ float VehicleController::applySpeedLimit(float throttlePct) {
     // Fail OPEN on sensor loss. The limiter only ever acts NEAR AND ABOVE the maximum speed, and a
     // lost sensor reads 0 m/s — clamping throttle on a reading we do not trust, mid-manoeuvre,
     // is the more dangerous failure. Over-speed protection assumes a working sensor.
+    // The warning is for an OPERATOR limit that cannot be enforced: only while the source is
+    // SPEED_MAX (incl. a tie). A gear ceiling is always there in L/H/R, so warning for it would
+    // nag on every boot before the first wheel pulse (decision D7) — the reset still happens.
     if (!speedSensor_.isValid()) {
-        if (lastSpeedLimitWarnMs_ == 0 || (now - lastSpeedLimitWarnMs_) >= SPEED_LIMIT_WARN_MS) {
+        if (eff.source == SpeedLimitSource::SPEED_MAX &&
+            (lastSpeedLimitWarnMs_ == 0 || (now - lastSpeedLimitWarnMs_) >= SPEED_LIMIT_WARN_MS)) {
             lastSpeedLimitWarnMs_ = now;
             Debug::printlnFeature(DebugFeature::VEHICLE,
                 "[SPEED] WARNING: speed limit active but speed reading is invalid — not clamping (fail open)");
