@@ -1,6 +1,12 @@
 #include "WebPortal.h"
 #include "Changelog.h"
 #include "Debug.h"
+#include "DeviceId.h"
+#include "EventJournal.h"
+#include <esp_mac.h>
+
+char WebPortal::apSsid_[33] = "";
+char WebPortal::otaHostname_[33] = "";
 
 WebPortal::WebPortal()
     : server(WEB_SERVER_PORT),
@@ -20,11 +26,23 @@ WebPortal::~WebPortal() {
 bool WebPortal::begin() {
     Debug::printlnFeature(DebugFeature::WEB,"\n=== Initializing Web Portal ===");
 
-    // Mount filesystem first
+    // Per-chip names: last two octets of the eFuse base MAC (include/DeviceId.h).
+    {
+        uint8_t mac[6] = {0};
+        esp_efuse_mac_get_default(mac);
+        char suffix[5];
+        DeviceId::formatChipSuffix(mac, suffix);
+        DeviceId::buildSuffixedName(WIFI_AP_SSID, suffix, false, apSsid_, sizeof(apSsid_));
+        DeviceId::buildSuffixedName(OTA_HOSTNAME, suffix, true, otaHostname_, sizeof(otaHostname_));
+    }
+
+    // Mount filesystem first (the event journal starts writing to it from here on)
     if (!mountFilesystem()) {
         Debug::printlnFeature(DebugFeature::WEB,"  ✗ Filesystem mount failed");
+        EventJournal::attachFs(false);
         return false;
     }
+    EventJournal::attachFs(true);
 
     // Setup WiFi Access Point
     if (!setupWiFiAP()) {
@@ -129,10 +147,10 @@ bool WebPortal::setupWiFiAP() {
     bool success = false;
     if (strlen(WIFI_AP_PASSWORD) > 0) {
         // With password
-        success = WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASSWORD, WIFI_AP_CHANNEL, false, WIFI_AP_MAX_CLIENTS);
+        success = WiFi.softAP(apSsid_, WIFI_AP_PASSWORD, WIFI_AP_CHANNEL, false, WIFI_AP_MAX_CLIENTS);
     } else {
         // Open network (no password)
-        success = WiFi.softAP(WIFI_AP_SSID, NULL, WIFI_AP_CHANNEL, false, WIFI_AP_MAX_CLIENTS);
+        success = WiFi.softAP(apSsid_, NULL, WIFI_AP_CHANNEL, false, WIFI_AP_MAX_CLIENTS);
     }
 
     if (!success) {
@@ -141,7 +159,7 @@ bool WebPortal::setupWiFiAP() {
     }
 
     Debug::printfFeature(DebugFeature::WEB,"  ✓ WiFi AP started\n");
-    Debug::printfFeature(DebugFeature::WEB,"  ✓ SSID: %s\n", WIFI_AP_SSID);
+    Debug::printfFeature(DebugFeature::WEB,"  ✓ SSID: %s\n", apSsid_);
     Debug::printfFeature(DebugFeature::WEB,"  ✓ IP: %s\n", WiFi.softAPIP().toString().c_str());
     Debug::printfFeature(DebugFeature::WEB,"  ✓ Max clients: %d\n", WIFI_AP_MAX_CLIENTS);
 
@@ -231,6 +249,76 @@ void WebPortal::setupWebServer() {
         }
     );
 
+    // Event journal (text/plain, streamed in chunks from the AsyncTCP task; never blocks the loop).
+    // "/api/events" also matches "/api/events/<x>" in this server, so the longer routes go first.
+    // GET /api/events/download — /events.1 then /events.log, then the RAM lines, as one attachment
+    // (flash writes off: the files are read-only history and each part gets a "# ---" label line)
+    server.on("/api/events/download", HTTP_GET, [](AsyncWebServerRequest* request) {
+        std::shared_ptr<EventJournal::Stream> st = EventJournal::openStream(0);
+        AsyncWebServerResponse* response = request->beginChunkedResponse("text/plain",
+            [st](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {
+                (void)index;
+                const size_t r = st->read(buffer, maxLen);
+                return r == EventJournal::Stream::TRY_AGAIN ? RESPONSE_TRY_AGAIN : r;
+            });
+        char disp[80];
+        snprintf(disp, sizeof(disp), "attachment; filename=\"%s-events-boot%lu.log\"",
+                 apSsid_, (unsigned long)EventJournal::bootNumber());
+        response->addHeader("Content-Disposition", disp);
+        response->addHeader("Cache-Control", "no-cache");
+        request->send(response);
+    });
+    // Journal flash-write switch (NVS journal/fs, default off) — same style as /api/debug.
+    // GET → {"fs":bool}; POST {"fs":bool} → applied by the main loop (journal_fs line + flush).
+    server.on("/api/events/config", HTTP_GET, [](AsyncWebServerRequest* request) {
+        request->send(200, "application/json",
+                      EventJournal::flashWritesEnabled() ? "{\"fs\":true}" : "{\"fs\":false}");
+    });
+    server.on("/api/events/config", HTTP_POST, [](AsyncWebServerRequest* request) {}, nullptr,
+        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+            StaticJsonDocument<64> doc;
+            DeserializationError error = deserializeJson(doc, data, len);
+            if (error) {
+                request->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid JSON\"}");
+                return;
+            }
+            if (!doc["fs"].is<bool>()) {
+                request->send(400, "application/json", "{\"success\":false,\"message\":\"Missing 'fs' field\"}");
+                return;
+            }
+            const bool fs = doc["fs"];
+            EventJournal::setFlashWrites(fs);
+            request->send(200, "application/json",
+                          fs ? "{\"success\":true,\"fs\":true}" : "{\"success\":true,\"fs\":false}");
+        }
+    );
+    // POST /api/events/clear — executed by the main loop (both files + RAM, SYS I journal_cleared)
+    server.on("/api/events/clear", HTTP_POST, [](AsyncWebServerRequest* request) {
+        EventJournal::requestClear();
+        request->send(200, "application/json", "{\"ok\":true}");
+    });
+
+    // GET /api/events?tail=N — last N lines (default 100, max 500), RAM lines included.
+    // Headers X-Journal-Fs (0/1) and X-Journal-Ram-Lines (lines held in RAM) feed the card status.
+    server.on("/api/events", HTTP_GET, [](AsyncWebServerRequest* request) {
+        long n = 100;
+        if (request->hasParam("tail")) {
+            n = request->getParam("tail")->value().toInt();
+        }
+        if (n <= 0) n = 100;
+        if (n > 500) n = 500;
+        std::shared_ptr<EventJournal::Stream> st = EventJournal::openStream((size_t)n);
+        AsyncWebServerResponse* response = request->beginChunkedResponse("text/plain",
+            [st](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {
+                (void)index;
+                const size_t r = st->read(buffer, maxLen);
+                return r == EventJournal::Stream::TRY_AGAIN ? RESPONSE_TRY_AGAIN : r;
+            });
+        response->addHeader("Cache-Control", "no-cache");
+        response->addHeader("X-Journal-Fs", EventJournal::flashWritesEnabled() ? "1" : "0");
+        response->addHeader("X-Journal-Ram-Lines", String((unsigned long)st->ramLines()));
+        request->send(response);
+    });
     // OTA firmware update endpoint
     server.on("/update", HTTP_POST,
         // Handler when upload finishes
@@ -240,6 +328,10 @@ void WebPortal::setupWebServer() {
             if (success) {
                 Debug::printlnFeature(DebugFeature::WEB,"[WEB OTA] Update successful, rebooting...");
                 request->send(200, "text/plain", "OK");
+
+                // Controlled reboot: journal it and flush the journal first (a filesystem
+                // update has already suspended the journal's file output).
+                EventJournal::flushNow(otaUpdateType == U_SPIFFS ? "ota_fs" : "ota");
 
                 // Reboot after short delay to allow response to be sent
                 delay(1000);
@@ -267,6 +359,7 @@ void WebPortal::setupWebServer() {
                     if (type == "littlefs" || type == "spiffs" || type == "filesystem") {
                         otaUpdateType = U_SPIFFS;
                         updateTypeName = "LittleFS";
+                        EventJournal::suspendFs();   // no journal file I/O from here on
                         FILESYSTEM.end();
                     }
                 }
@@ -274,6 +367,7 @@ void WebPortal::setupWebServer() {
                 else if (filename.indexOf("littlefs") >= 0 || filename.indexOf("spiffs") >= 0 || filename.indexOf("filesystem") >= 0) {
                     otaUpdateType = U_SPIFFS;
                     updateTypeName = "LittleFS";
+                    EventJournal::suspendFs();   // no journal file I/O from here on
                     FILESYSTEM.end();
                 }
 
@@ -376,7 +470,7 @@ void WebPortal::setupOTA() {
     Debug::printlnFeature(DebugFeature::WEB,"Setting up OTA updates...");
 
     // Set OTA hostname
-    ArduinoOTA.setHostname(OTA_HOSTNAME);
+    ArduinoOTA.setHostname(otaHostname_);
 
     // Set OTA password if configured
     if (strlen(OTA_PASSWORD) > 0) {
@@ -390,7 +484,8 @@ void WebPortal::setupOTA() {
             type = "sketch";
         } else {  // U_SPIFFS or U_FILESYSTEM
             type = "filesystem";
-            // Unmount filesystem before OTA
+            // Unmount filesystem before OTA (the event journal stops its file I/O first)
+            EventJournal::suspendFs();
             FILESYSTEM.end();
         }
         Debug::printlnFeature(DebugFeature::WEB,"\n[OTA] Starting update: " + type);
@@ -402,6 +497,8 @@ void WebPortal::setupOTA() {
 
     ArduinoOTA.onEnd([this]() {
         Debug::printlnFeature(DebugFeature::WEB,"\n[OTA] Update complete");
+        // ArduinoOTA reboots right after this callback: journal + flush first.
+        EventJournal::flushNow(ArduinoOTA.getCommand() == U_FLASH ? "ota" : "ota_fs");
         otaInProgress = false;
     });
 
@@ -432,7 +529,7 @@ void WebPortal::setupOTA() {
     });
 
     ArduinoOTA.begin();
-    Debug::printfFeature(DebugFeature::WEB,"  ✓ OTA configured (hostname: %s)\n", OTA_HOSTNAME);
+    Debug::printfFeature(DebugFeature::WEB,"  ✓ OTA configured (hostname: %s)\n", otaHostname_);
 }
 
 void WebPortal::setupDNS() {
@@ -554,9 +651,15 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // Capacity headroom: ~80 top-level fields (incl. 4 steering-VESC fields, 20 steering
     // angle-sensor / mode fields (steer_mode: one more slot, static token stored by pointer;
     // steer_sensor_inv: one bool slot, ~25 B of JSON), wheel_lock_fitted, the relay_test bitfield, the
-    // 16 hall-speed / limiter / distance fields (incl. speed_limit_floor /
+    // the 17 hall-speed / limiter / distance fields (incl. speed_limit_floor /
     // speed_limit_sat / speed_limit_sat_held: 3 slots + one ~4 B copied string; speed_pulse_total: one
-    // more slot, key stored by pointer, ~30 B of JSON) and the
+    // more slot, key stored by pointer, ~30 B of JSON; speed_limit_slew since 1.5.12: one slot + a
+    // ~6 B copied string; boost_enabled since 1.5.13: one bool slot, ~21 B of JSON;
+    // throttle_open_slew since 1.5.16: one integer slot, key stored by pointer, ~25 B of JSON;
+    // the park correction since 1.5.18: 9 top-level slots (steer_park_enabled / _d1..3 / _t1..3 /
+    // _tol / _max) + the nested steer_park_last object (1 slot + 5 member slots), keys by
+    // pointer, two copied strings (tol ~4 B, residual ~6 B), ≈ 15 slots × 16 B ≈ 250 B of memory
+    // and ≈ 270 B of JSON) and the
     // 4 steering speed-scaling fields, steer_vin / steer_vin_low / ecu_voltage_low,
     // wifi_ssid / wifi_ip) + a 16-element
     // array + the nested probe / po / bm / dtc / gearDefaults objects, plus copied
@@ -565,14 +668,27 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // carries its whole reply frame ("frm", ~31 B copied string) and the list grew to 11 PIDs.
     // 8192 since 1.5.7: the transient `sniff` object (CAN sniffer) adds up to 32 rows of
     // 5 slots + a 17 B copied data string (~115 B each, ~3.8 KB) and can coexist with `probe`.
+    // 9216 since 1.5.18: counted at 16 B per slot (ESP32), the worst case — CAN connected, `probe`
+    // with all 11 PIDs answered (frm + dec) and a full 32-row `sniff` — is ≈ 438 slots (7008 B)
+    // + ≈ 1.23 KB of copied strings ≈ 8.24 KB with the park fields (≈ 7.99 KB without them), i.e.
+    // only ≈ 200 B of headroom at 8192 before and none after; 9216 restores ≈ 1 KB. The steady
+    // state (no probe / sniff) is ≈ 2.2 KB.
+    // Brake tuning since 1.5.23: brake_travel_ms / brake_hold_pwm / brake_released, 3 scalar
+    // slots (keys by pointer, ≈ 48 B of memory, ≈ 60 B of JSON; brake_pct already existed) —
+    // worst case ≈ 8.29 KB, still ≈ 0.9 KB of headroom at 9216 (size unchanged).
+    // (master's relay_board* fields, 1.5.24, and i2c_unlock do not exist on the DevKitC-1 build:
+    // no I2C relay board / bus — the size stays master's 9216 with that much more headroom.)
     // Static (single caller: the main-loop broadcast) so the larger document is off the stack.
-    static StaticJsonDocument<8192> doc;
+    static StaticJsonDocument<9216> doc;
     doc.clear();
 
     doc["timestamp"] = telemetry.timestamp;
     doc["gear"] = telemetry.gear;
     doc["hall_position"] = telemetry.hall_position;
-    doc["brake_pct"] = telemetry.brake_pct;
+    doc["brake_pct"] = telemetry.brake_pct;             // position estimate, 0-100 %
+    doc["brake_travel_ms"] = telemetry.brake_travel_ms; // ms
+    doc["brake_hold_pwm"] = telemetry.brake_hold_pwm;   // 0-100, 0 = no hold push
+    doc["brake_released"] = telemetry.brake_released;   // In5 endstop
     doc["throttle_us"] = telemetry.throttle_us;
     doc["throttle_idle_us"] = telemetry.throttle_idle_us;
     doc["throttle_full_us"] = telemetry.throttle_full_us;
@@ -620,6 +736,27 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // VESC input voltage (V) + low flag; the UI ignores both while steer_driver_ok is false.
     doc["steer_vin"] = serialized(String(isfinite(telemetry.steer_vin) ? telemetry.steer_vin : 0.0f, 1));
     doc["steer_vin_low"] = telemetry.steer_vin_low;
+    // Steering park correction: settings (the card fills from these) + the last result (RAM only).
+    // Keys are literals (stored by pointer); tokens are static strings (by pointer).
+    doc["steer_park_enabled"] = telemetry.steer_park_enabled;
+    doc["steer_park_d1"] = telemetry.steer_park_d[0];
+    doc["steer_park_d2"] = telemetry.steer_park_d[1];
+    doc["steer_park_d3"] = telemetry.steer_park_d[2];
+    doc["steer_park_t1"] = telemetry.steer_park_t[0];
+    doc["steer_park_t2"] = telemetry.steer_park_t[1];
+    doc["steer_park_t3"] = telemetry.steer_park_t[2];
+    doc["steer_park_tol"] = serialized(String(telemetry.steer_park_tol, 1));
+    doc["steer_park_max"] = telemetry.steer_park_max;
+    {
+        JsonObject parkLast = doc.createNestedObject("steer_park_last");
+        parkLast["outcome"] = telemetry.steer_park_last_outcome;
+        parkLast["pulses"] = telemetry.steer_park_last_pulses;
+        const bool none = strcmp(telemetry.steer_park_last_outcome, "none") == 0;
+        if (none) parkLast["residual"] = (const char*)nullptr;
+        else      parkLast["residual"] = serialized(String(telemetry.steer_park_last_residual, 2));
+        parkLast["duty"] = telemetry.steer_park_last_duty;
+        parkLast["ms"] = telemetry.steer_park_last_ms;
+    }
     doc["input_source"] = telemetry.input_source;
     doc["mav_active"] = telemetry.mav_active;
     doc["web_control"] = telemetry.web_control;
@@ -639,6 +776,8 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["speed_limit_kmh"] = serialized(String(telemetry.speed_limit_ms * MS_TO_KMH, 1));
     doc["speed_limit_ceil"] = serialized(String(telemetry.speed_limit_ceil, 0));
     doc["speed_limit_floor"] = serialized(String(telemetry.speed_limit_floor, 1));
+    doc["speed_limit_slew"] = serialized(String(telemetry.speed_limit_slew, 1));
+    doc["throttle_open_slew"] = telemetry.throttle_open_slew;   // %/s, 0 = opening limit off
     doc["speed_limit_sat"] = telemetry.speed_limit_sat;
     doc["speed_limit_sat_held"] = telemetry.speed_limit_sat_held;
     // Steering speed scaling. These four stay in m/s, NOT km/h: the base is the same quantity
@@ -698,6 +837,13 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["wheel_lock_fitted"] = telemetry.wheel_lock_fitted;   // false on aztec → UI shows "not fitted"
     doc["relay_test"] = telemetry.relay_test;   // web relay test, bit0 = Relay 1 … bit3 = Relay 4
 
+    // Link recovery session totals + event journal size (-1 = flash writes on but impossible).
+    // No i2c_unlock here: this board has no I2C bus (no expander, no relay board).
+    doc["vesc_resync"] = telemetry.vesc_resync;
+    doc["can_reinit"] = telemetry.can_reinit;
+    doc["journal_bytes"] = telemetry.journal_bytes;   // writes off: RAM tail bytes
+    doc["journal_fs"] = telemetry.journal_fs;         // journal flash-write switch
+
     // Firmware version and target board
     doc["firmware_version"] = telemetry.firmware_version;
     doc["board"] = telemetry.board;
@@ -713,6 +859,7 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     gearDefaults["H"] = telemetry.gear_default_h;
 
     doc["boost_target_rpm"] = telemetry.boost_target_rpm;
+    doc["boost_enabled"] = telemetry.boost_enabled;
 
     // ECU capability probe results — emitted only while running or freshly completed.
     if (telemetry.probe_present) {

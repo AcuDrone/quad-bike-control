@@ -26,11 +26,50 @@ static_assert(sizeof(NV_VESC_TEMP) - 1 <= 10, "NAMED_VALUE_FLOAT name field is 1
 static_assert(sizeof(NV_VESC_OK)   - 1 <= 10, "NAMED_VALUE_FLOAT name field is 10 bytes");
 static_assert(sizeof(NV_STEER_SCA) - 1 <= 10, "NAMED_VALUE_FLOAT name field is 10 bytes");
 
-// The ONE NAMED_VALUE_INT (252) name: the steering control mode, 0 = position, 1 = rate,
-// 2 = blocked. A different message id from the six floats above, so it does not widen the
-// NAMED_VALUE_FLOAT exception. Exactly 10 characters: goes out WITHOUT a NUL.
+// The three NAMED_VALUE_INT (252) names. A different message id from the six floats above, so
+// they do not widen the NAMED_VALUE_FLOAT exception.
+//   STEER_MODE — steering control mode, 0 = position, 1 = rate, 2 = blocked. Exactly 10
+//                characters: goes out WITHOUT a NUL.
+//   QB_CAPS    — GCS vehicle-command capabilities: mask (bits 0-15) | protocol version << 24.
+//   IGN_STATE  — applied ignition state, 0 OFF, 1 ACC, 2 ON, 3 CRANKING (incl. pre-crank dwell).
 constexpr char NV_STEER_MODE[] = "STEER_MODE";
+constexpr char NV_QB_CAPS[]    = "QB_CAPS";
+constexpr char NV_IGN_STATE[]  = "IGN_STATE";
 static_assert(sizeof(NV_STEER_MODE) - 1 <= 10, "NAMED_VALUE_INT name field is 10 bytes");
+static_assert(sizeof(NV_QB_CAPS)    - 1 <= 10, "NAMED_VALUE_INT name field is 10 bytes");
+static_assert(sizeof(NV_IGN_STATE)  - 1 <= 10, "NAMED_VALUE_INT name field is 10 bytes");
+
+// The vehicle-command result codes ARE the MAV_RESULT values (VehicleCommandLaw.h stays free of
+// mavlink headers, so the equivalence is pinned here).
+static_assert((uint8_t)VehicleCmdResult::ACCEPTED             == MAV_RESULT_ACCEPTED,             "MAV_RESULT");
+static_assert((uint8_t)VehicleCmdResult::TEMPORARILY_REJECTED == MAV_RESULT_TEMPORARILY_REJECTED, "MAV_RESULT");
+static_assert((uint8_t)VehicleCmdResult::DENIED               == MAV_RESULT_DENIED,               "MAV_RESULT");
+static_assert((uint8_t)VehicleCmdResult::UNSUPPORTED          == MAV_RESULT_UNSUPPORTED,          "MAV_RESULT");
+static_assert((uint8_t)VehicleCmdResult::FAILED               == MAV_RESULT_FAILED,               "MAV_RESULT");
+static_assert(VCMD_LAW_PROTOCOL_VERSION == VCMD_PROTOCOL_VERSION, "VehicleCommandLaw.h mirror");
+static_assert(VCMD_LAW_CAP_GEARS_RNL == VCMD_CAP_GEARS_RNL && VCMD_LAW_CAP_GEAR_H == VCMD_CAP_GEAR_H &&
+              VCMD_LAW_CAP_IGNITION == VCMD_CAP_IGNITION && VCMD_LAW_CAP_LIGHT == VCMD_CAP_LIGHT &&
+              VCMD_LAW_CAP_LOCK == VCMD_CAP_LOCK && VCMD_LAW_CAP_HANDBRAKE == VCMD_CAP_HANDBRAKE,
+              "VehicleCommandLaw.h mirror");
+static_assert(VCMD_RC_VALID_MIN_US == RC_CHANNEL_VALID_MIN_US && VCMD_RC_VALID_MAX_US == RC_CHANNEL_VALID_MAX_US &&
+              RC_GEAR_LOW_MIN == RC_CHANNEL_VALID_MIN_US && RC_GEAR_REVERSE_MAX == RC_CHANNEL_VALID_MAX_US &&
+              RC_GEAR_LOW_MAX == 1306 && RC_GEAR_NEUTRAL_MAX == 1733 &&
+              RC_IGNITION_OFF_MIN == RC_CHANNEL_VALID_MIN_US && RC_IGNITION_ON_MAX == RC_CHANNEL_VALID_MAX_US &&
+              RC_IGNITION_OFF_MAX == 1200 && RC_IGNITION_ACC_MAX == 1520 &&
+              RC_FRONT_LIGHT_THRESHOLD == 1520 && RC_WHEEL_LOCK_THRESHOLD == 1520,
+              "VehicleCommandLaw.h RC bands mirror");
+static_assert(firmwareVersionCode(FIRMWARE_VERSION) > 0, "FIRMWARE_VERSION must be major.minor.patch");
+
+const char* vcmdResultName(uint8_t r) {
+    switch (r) {
+        case MAV_RESULT_ACCEPTED:             return "ACCEPTED";
+        case MAV_RESULT_TEMPORARILY_REJECTED: return "TEMP_REJECTED";
+        case MAV_RESULT_DENIED:               return "DENIED";
+        case MAV_RESULT_UNSUPPORTED:          return "UNSUPPORTED";
+        case MAV_RESULT_FAILED:               return "FAILED";
+        default:                              return "OTHER";
+    }
+}
 }  // namespace
 
 MavlinkInterface::MavlinkInterface()
@@ -61,6 +100,12 @@ MavlinkInterface::MavlinkInterface()
       tripResetPending_(false),
       lastSteerModeTx_(0xFF),
       lastSteerModeAnnounced_(0xFF),
+      vcmdSink_(nullptr),
+      vcmdCaps_(0),
+      vcmdHwVersion_(0),
+      lastCapsTx_(0),
+      capsSentOnce_(false),
+      lastIgnStateTx_(0xFF),
       lastFailsafe_(false),
       stateInitialized_(false) {
     for (uint8_t i = 0; i < 16; i++) {
@@ -168,7 +213,7 @@ void MavlinkInterface::update() {
                     mavlink_command_long_t cl;
                     mavlink_msg_command_long_decode(&msg, &cl);
                     handleCommandLong(msg.sysid, msg.compid, cl.target_system,
-                                      cl.target_component, cl.command, cl.param1);
+                                      cl.target_component, cl.command, cl.param1, cl.param2);
                     break;
                 }
                 case MAVLINK_MSG_ID_COMMAND_ACK: {
@@ -476,7 +521,7 @@ uint32_t MavlinkInterface::getSpdScaBaseAgeMs() const { return getParamAgeMs(PAR
 
 void MavlinkInterface::handleCommandLong(uint8_t sysid, uint8_t compid,
                                         uint8_t targetSys, uint8_t targetComp,
-                                        uint16_t command, float param1) {
+                                        uint16_t command, float param1, float param2) {
     // STRICT addressing. This component deliberately shares the autopilot's system id and is
     // distinguished only by MAVLINK_COMPONENT_ID, so anything not addressed EXACTLY here is
     // dropped silently — no ACK and no log. A broadcast (target_component == 0) in particular
@@ -487,6 +532,8 @@ void MavlinkInterface::handleCommandLong(uint8_t sysid, uint8_t compid,
     }
 
     uint8_t result;
+    uint8_t progress = 0;
+    int32_t resultParam2 = 0;
     if (command == MAV_CMD_USER_1) {
         // The magic param1 exists so a stray, replayed or mis-scripted MAV_CMD_USER_1 cannot
         // silently destroy the operator's trip reading. Compared with a tolerance, never with
@@ -504,6 +551,8 @@ void MavlinkInterface::handleCommandLong(uint8_t sysid, uint8_t compid,
                 "[MAV] TRIP reset DENIED (param1=%.2f) from %u/%u\n",
                 param1, (unsigned)sysid, (unsigned)compid);
         }
+    } else if (command == MAV_CMD_USER_2) {
+        handleVehicleCommand(sysid, compid, param1, param2, result, progress, resultParam2);
     } else {
         result = MAV_RESULT_UNSUPPORTED;
         Debug::printfFeature(DebugFeature::MAVLINK,
@@ -511,6 +560,60 @@ void MavlinkInterface::handleCommandLong(uint8_t sysid, uint8_t compid,
             (unsigned)command, (unsigned)sysid, (unsigned)compid);
     }
 
+    sendCommandAck(command, result, progress, resultParam2, sysid, compid);
+}
+
+void MavlinkInterface::handleVehicleCommand(uint8_t sysid, uint8_t compid, float param1, float param2,
+                                            uint8_t& result, uint8_t& progress, int32_t& resultParam2) {
+    progress = 0;
+    resultParam2 = 0;
+    uint8_t reason = 0;
+
+    if (vcmdSink_ == nullptr) {
+        // Not registered: the pre-1.5.30 answer, so a client shows nothing new.
+        result = MAV_RESULT_UNSUPPORTED;
+    } else {
+        const VehicleCmdDecoded d = vehicleCmdDecode(param1, param2, vcmdCaps_);
+        switch (d.kind) {
+            case VehicleCmdDecodeKind::UNSUPPORTED:
+                result = MAV_RESULT_UNSUPPORTED;
+                break;
+            case VehicleCmdDecodeKind::DENIED:
+                result = MAV_RESULT_DENIED;
+                break;
+            case VehicleCmdDecodeKind::QUERY:
+                // Answered here from values fixed at boot; no vehicle state changes.
+                result = MAV_RESULT_ACCEPTED;
+                if (d.value == VCMD_QUERY_CAPS) {
+                    resultParam2 = (int32_t)vcmdCaps_;
+                    progress = VCMD_PROTOCOL_VERSION;
+                } else if (d.value == VCMD_QUERY_FW) {
+                    resultParam2 = firmwareVersionCode(FIRMWARE_VERSION);
+                } else {
+                    resultParam2 = vcmdHwVersion_;
+                }
+                break;
+            case VehicleCmdDecodeKind::FUNCTION:
+            default: {
+                const VehicleCmdOutcome o = vcmdSink_->executeVehicleCommand(d.fn, d.value);
+                result = (uint8_t)o.result;
+                if (o.result == VehicleCmdResult::TEMPORARILY_REJECTED) {
+                    reason = o.reason;
+                    resultParam2 = o.reason;
+                }
+                break;
+            }
+        }
+    }
+
+    Debug::printfFeature(DebugFeature::MAVLINK,
+        "[MAV] USER_2 fn=%.2f val=%.2f -> %s reason=%u p2=%ld from %u/%u\n",
+        param1, param2, vcmdResultName(result), (unsigned)reason, (long)resultParam2,
+        (unsigned)sysid, (unsigned)compid);
+}
+
+void MavlinkInterface::sendCommandAck(uint16_t command, uint8_t result, uint8_t progress,
+                                      int32_t resultParam2, uint8_t targetSys, uint8_t targetComp) {
     // The ACK goes back to the REQUESTER (typically the ground station, 255/190), not to the
     // learned autopilot: ArduPilot forwards it on the route it already learned from this
     // component's own outbound HEARTBEAT / EFI_STATUS traffic.
@@ -522,13 +625,23 @@ void MavlinkInterface::handleCommandLong(uint8_t sysid, uint8_t compid,
     mavlink_msg_command_ack_pack(
         MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &msg,
         command,        // command being acknowledged
-        result,         // ACCEPTED / DENIED / UNSUPPORTED
-        0,              // progress (not a long-running command)
-        0,              // result_param2
-        sysid,          // target_system    <- the requester
-        compid);        // target_component <- the requester
+        result,         // MAV_RESULT_*
+        progress,       // 0, or the control-protocol version for the caps query
+        resultParam2,   // reason code / query answer / 0
+        targetSys,      // target_system    <- the requester
+        targetComp);    // target_component <- the requester
     uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
     serial_->write(buf, len);
+}
+
+void MavlinkInterface::setVehicleCommandSink(VehicleCommandSink* sink, uint16_t capsMask, int32_t hwVersion) {
+    vcmdSink_ = sink;
+    vcmdCaps_ = capsMask;
+    vcmdHwVersion_ = hwVersion;
+    Debug::printfFeature(DebugFeature::MAVLINK,
+        "[MAV] Vehicle commands: caps 0x%02X, protocol %u, fw %ld, hw 0x%06lX\n",
+        (unsigned)capsMask, (unsigned)VCMD_PROTOCOL_VERSION,
+        (long)firmwareVersionCode(FIRMWARE_VERSION), (unsigned long)hwVersion);
 }
 
 bool MavlinkInterface::consumeTripResetRequest() {
@@ -570,8 +683,8 @@ void MavlinkInterface::report(const StateReport& state) {
     // packet subscription. The steering VESC's six named floats below are the ONE scoped
     // exception to this rule, forced by a dialect gap rather than by preference, and they are
     // the only NAMED_VALUE_FLOAT this component ever sends — see that block for the argument.
-    // The steering control mode rides a separate NAMED_VALUE_INT (252), STEER_MODE — the only
-    // NAMED_VALUE_INT this component sends; it does not widen the float exception.
+    // The steering control mode rides a separate NAMED_VALUE_INT (252), STEER_MODE; QB_CAPS and
+    // IGN_STATE are the other two NAMED_VALUE_INT names. They do not widen the float exception.
     //
     // PRINCIPLE: every value sits in the field that NAMES it, so the message is self-describing.
     // Only five fields are repurposed, and each is documented below.
@@ -853,6 +966,28 @@ void MavlinkInterface::report(const StateReport& state) {
             } else {
                 sendStatusText(MAV_SEVERITY_INFO, "Steer: position mode");
             }
+        }
+    }
+
+    // QB_CAPS (NAMED_VALUE_INT 252): the GCS vehicle-command capabilities, mask (bits 0-15) |
+    // control-protocol version << 24, every VCMD_CAPS_TX_MS — the safety net for a lost caps
+    // query answer. Only once a vehicle-command sink is registered: without one every
+    // MAV_CMD_USER_2 is UNSUPPORTED and the clients must show nothing new.
+    if (vcmdSink_ != nullptr && (!capsSentOnce_ || now - lastCapsTx_ >= VCMD_CAPS_TX_MS)) {
+        capsSentOnce_ = true;
+        lastCapsTx_ = now;
+        sendNamedInt(now, NV_QB_CAPS, qbCapsValue(vcmdCaps_, VCMD_PROTOCOL_VERSION));
+    }
+
+    // IGN_STATE (NAMED_VALUE_INT 252): the APPLIED ignition state, 0 OFF, 1 ACC, 2 ON,
+    // 3 CRANKING (pre-crank dwell + starter). On the 1 Hz slow tick and once immediately on every
+    // change, whatever the link or input source. Reporting only.
+    {
+        uint8_t ign = state.ignState;
+        if (ign > 3) ign = 3;
+        if (steerSlowTick || ign != lastIgnStateTx_) {
+            lastIgnStateTx_ = ign;
+            sendNamedInt(now, NV_IGN_STATE, (int32_t)ign);
         }
     }
 

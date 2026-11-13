@@ -50,7 +50,10 @@ public:
         uint32_t timestamp;       // System time in milliseconds
         String gear;              // Current gear: "R", "N", "L", "H"
         float hall_position;      // Transmission servo position (0.0–100.0 %)
-        float brake_pct;          // Brake position percentage (0-100)
+        float brake_pct;          // Brake position ESTIMATE (open loop, 0-100 %)
+        uint16_t brake_travel_ms; // Brake full travel time in use (ms)
+        uint8_t brake_hold_pwm;   // Brake hold drive in use (0-100 PWM, 0 = no push)
+        bool brake_released;      // Released endstop asserted (PIN_BRAKE_SENSOR, GPIO14, digitalRead)
         uint16_t throttle_us;         // Throttle servo pulse width (µs)
         uint16_t throttle_idle_us;    // Calibrated idle endpoint (µs)
         uint16_t throttle_full_us;    // Calibrated full-throttle endpoint (µs)
@@ -92,6 +95,17 @@ public:
         bool steer_driver_ok;      // True if the VESC telemetry link is healthy
         float steer_vin;           // VESC input voltage (V) — meaningless while !steer_driver_ok
         bool steer_vin_low;        // steer_driver_ok && steer_vin < STEER_VIN_LOW_V (warning only)
+        // Steering park correction (settings + last result, RAM only — SteeringController)
+        bool steer_park_enabled;
+        uint8_t steer_park_d[3];   // rung duty, rungs 1..3
+        uint16_t steer_park_t[3];  // rung length (ms), rungs 1..3
+        float steer_park_tol;      // done tolerance (deg) — 1 decimal in JSON
+        uint8_t steer_park_max;    // max pulses per parking
+        const char* steer_park_last_outcome; // none | done | gave_up | cancelled (static token)
+        uint8_t steer_park_last_pulses;
+        float steer_park_last_residual;      // deg, signed (target − position) — null for "none"
+        uint8_t steer_park_last_duty;        // last pulse duty × ms
+        uint16_t steer_park_last_ms;
         String input_source;      // Current input source: "MAVLINK", "WEB", "FAILSAFE"
         bool mav_active;          // True if MAVLink command stream is valid
         bool web_control;         // True if latched web-control override is engaged
@@ -106,6 +120,8 @@ public:
         float speed_limit_ms;     // Enforced ceiling (m/s) from SPEED_MAX, 0 = no limit — km/h in JSON
         float speed_limit_ceil;   // Throttle ceiling the limiter is applying (taper + trim, %, 100 = inactive)
         float speed_limit_floor;  // Limiter throttle floor in use (%, 0 = calibrated idle)
+        float speed_limit_slew;   // Limiter ceiling slew in use (%/s, both directions)
+        uint16_t throttle_open_slew; // Throttle opening rate limit in use (%/s, 0 = off)
         bool speed_limit_sat;     // Limiter saturated: ceiling at the floor, speed still above the limit
         bool speed_limit_sat_held; // speed_limit_sat, or within SPEED_LIMIT_SAT_UI_HOLD_MS after it cleared
         // Steering speed scaling — so "the steering feels weak" is diagnosable from the portal.
@@ -148,10 +164,17 @@ public:
         bool wheel_lock_fitted;   // False on aztec: no relay behind the wheel-lock function
         uint8_t relay_test;       // Web relay test bits, bit0 = Relay 1 … bit3 = Relay 4
 
+        // Link recovery session totals + event journal size (change add-event-journal-and-link-recovery)
+        uint32_t vesc_resync;     // VESC UART parser resyncs since boot
+        uint32_t can_reinit;      // verified MCP2515 re-initializations of any cause since boot
+        int32_t journal_bytes;    // writes on: both journal files + unflushed bytes (-1 = cannot
+                                  // write to flash); writes off: RAM tail bytes
+        bool journal_fs;          // journal flash-write switch (NVS journal/fs, default off)
+
         // Firmware information
         String firmware_version;  // Firmware version string (e.g., "1.0.0")
         String board;             // Target board name (BOARD_NAME, e.g. "DevKitC-1")
-        const char* wifi_ssid;    // WIFI_AP_SSID (static string, stored by pointer)
+        const char* wifi_ssid;    // broadcast SSID WIFI_AP_SSID-XXXX (static string, stored by pointer)
         char wifi_ip[16];         // WIFI_AP_IP as a dotted string, e.g. "192.168.10.1"
 
         // Gear default positions (user-configurable NVS values, 0.0–100.0 %)
@@ -162,6 +185,7 @@ public:
 
         // Boost PID configuration
         int32_t boost_target_rpm; // RPM target for gear boost PID
+        bool boost_enabled;       // Gear-change RPM boost switch in use (NVS "boost"/enabled)
 
         // ECU capability probe results (emitted transiently while fresh)
         bool probe_present;                 // true when the probe object should be serialized
@@ -224,7 +248,16 @@ public:
      */
     String getAPIP();
 
+    /**
+     * Broadcast AP SSID with the chip suffix (WIFI_AP_SSID-XXXX). Static storage, filled
+     * once in begin(); valid for the program's lifetime (empty before begin()).
+     */
+    static const char* getApSsid() { return apSsid_; }
+
 private:
+    static char apSsid_[33];         // WIFI_AP_SSID-XXXX (DeviceId::NAME_CAP)
+    static char otaHostname_[33];    // OTA_HOSTNAME-xxxx
+
     AsyncWebServer server;           // Async HTTP web server
     AsyncWebSocket ws;               // WebSocket for real-time communication
     DNSServer dnsServer;             // DNS server for captive portal

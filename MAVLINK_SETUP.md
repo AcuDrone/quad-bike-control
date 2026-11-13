@@ -4,6 +4,11 @@ The ESP32 talks to the Pixhawk 2.4.8 over a single MAVLink 2 serial link (replac
 SBUS-Out connection). This file is both the **setup guide** (wiring, ArduPilot parameters, servo
 mapping) and the **wire contract** (every outbound message field by field, with unit and validity).
 
+**Firmware-version marks.** "Since firmware X" names the first firmware release that carries an
+item. The MAVLink interface first shipped in **1.1.0** (2026-10-08; development builds before that
+still reported 1.0.4), so an item without a mark of its own has been on the wire since 1.1.0.
+Vehicle-specific marks say so (quad = `master`, buggy = `aztec`).
+
 ## Identity and transport
 
 | | |
@@ -148,25 +153,28 @@ outputs must align with these indices (see `ServoChannelConfig` in `include/Cons
 
 (Channel 5 is intentionally unused.)
 
+Channels as listed since firmware 1.1.0. Since 1.5.30 channels 3, 4, 6 and 7 are applied only when
+their value changes (see "RC and GCS: last change wins").
+
 ## Vehicle state reported back to the autopilot
 
 Eleven outbound message types: seven periodic, one reactive acknowledgement, three requests toward
 the autopilot. Scheduling is internal to `MavlinkInterface::report()`, called every loop iteration from
 `src/main.cpp`; the `StateReport` snapshot it consumes is declared in `include/MavlinkInterface.h`.
 
-| Message | Id | Rate | Purpose | Gating |
-|---------|----|------|---------|--------|
-| `HEARTBEAT` | 0 | 1 Hz (`MAVLINK_HEARTBEAT_TX_MS` = 1000 ms) | Component liveness + fail-safe state | none |
-| `EFI_STATUS` | 225 | 5 Hz (`MAVLINK_REPORT_TX_MS` = 200 ms) | All engine/vehicle telemetry in one message | none — fields go NaN instead |
-| `VFR_HUD` | 74 | 5 Hz (same tick) | Hall ground speed + throttle for a HUD | none |
-| `NAMED_VALUE_FLOAT` | 251 | 5 Hz (same tick) ×3 + 1 Hz (`MAVLINK_STEER_SLOW_TX_MS` = 1000 ms) ×3 | The six steering values: `STEER_POS`, `STEER_A`, `VESC_V`, `VESC_TEMP`, `VESC_OK`, `STEER_SCA` | none — values go NaN instead (`VESC_OK` and `STEER_SCA` never do) |
-| `NAMED_VALUE_INT` | 252 | 1 Hz (`MAVLINK_STEER_SLOW_TX_MS`) + once immediately on every change | `STEER_MODE`: steering control mode, `0` = position, `1` = rate (no sensor), `2` = blocked | none — always sent, never any other value |
-| `VISION_POSITION_DELTA` | 11011 | ≤ 5 Hz (same tick) | Wheel odometry as an EKF3-fusable body-frame delta | **heavily gated** — silence over zeros |
-| `STATUSTEXT` | 253 | on change, ≥ 250 ms apart | Gear / ignition / fail-safe transitions; steering mode changes | only on an actual change |
-| `COMMAND_ACK` | 77 | reactive | Answer to a `COMMAND_LONG` addressed exactly to 1/25 | broadcasts get **no** ACK |
-| `REQUEST_DATA_STREAM` | 66 | ≤ 1 per 3 s | Ask for `SERVO_OUTPUT_RAW` | while the command rate is below 10 Hz |
-| `COMMAND_LONG` (`SET_MESSAGE_INTERVAL`) | 76 | ≤ 1 per 3 s | Same request, modern form | same gate, sent together |
-| `PARAM_REQUEST_READ` | 20 | 0.2 Hz each | Poll `SPEED_MAX` and `MOT_SPD_SCA_BASE` (one request per loop iteration, never both at once) | link up + autopilot learned |
+| Message | Id | Rate | Purpose | Gating | Since |
+|---------|----|------|---------|--------|-------|
+| `HEARTBEAT` | 0 | 1 Hz (`MAVLINK_HEARTBEAT_TX_MS` = 1000 ms) | Component liveness + fail-safe state | none | 1.1.0 |
+| `EFI_STATUS` | 225 | 5 Hz (`MAVLINK_REPORT_TX_MS` = 200 ms) | All engine/vehicle telemetry in one message | none — fields go NaN instead | 1.1.0 |
+| `VFR_HUD` | 74 | 5 Hz (same tick) | Hall ground speed + throttle for a HUD | none | 1.1.0 |
+| `NAMED_VALUE_FLOAT` | 251 | 5 Hz (same tick) ×3 + 1 Hz (`MAVLINK_STEER_SLOW_TX_MS` = 1000 ms) ×3 | The six steering values: `STEER_POS`, `STEER_A`, `VESC_V`, `VESC_TEMP`, `VESC_OK`, `STEER_SCA` | none — values go NaN instead (`VESC_OK` and `STEER_SCA` never do) | 1.1.0 |
+| `NAMED_VALUE_INT` | 252 | 1 Hz (`MAVLINK_STEER_SLOW_TX_MS`) + once immediately on every change | `STEER_MODE`: steering control mode, `0` = position, `1` = rate (no sensor), `2` = blocked | none — always sent, never any other value | 1.5.0 (`QB_CAPS`, `IGN_STATE`: 1.5.30) |
+| `VISION_POSITION_DELTA` | 11011 | ≤ 5 Hz (same tick) | Wheel odometry as an EKF3-fusable body-frame delta | **heavily gated** — silence over zeros | 1.1.0 |
+| `STATUSTEXT` | 253 | on change, ≥ 250 ms apart | Gear / ignition / fail-safe transitions; steering mode changes | only on an actual change | 1.1.0 (steering mode texts: 1.5.0) |
+| `COMMAND_ACK` | 77 | reactive | Answer to a `COMMAND_LONG` addressed exactly to 1/25 | broadcasts get **no** ACK | 1.1.0 |
+| `REQUEST_DATA_STREAM` | 66 | ≤ 1 per 3 s | Ask for `SERVO_OUTPUT_RAW` | while the command rate is below 10 Hz | 1.1.0 |
+| `COMMAND_LONG` (`SET_MESSAGE_INTERVAL`) | 76 | ≤ 1 per 3 s | Same request, modern form | same gate, sent together | 1.1.0 |
+| `PARAM_REQUEST_READ` | 20 | 0.2 Hz each | Poll `SPEED_MAX` and `MOT_SPD_SCA_BASE` (one request per loop iteration, never both at once) | link up + autopilot learned | 1.1.0 |
 
 Engine data comes from the CAN bus (`CANController::VehicleData`); ground speed, odometer and trip
 come from the hall wheel-speed sensor (GPIO 17), independently of CAN health. Steering-VESC
@@ -459,6 +467,8 @@ days** — that is what the field is *defined* as (`uint32_t` ms since boot), no
 
 #### `STEER_MODE` (`NAMED_VALUE_INT` 252)
 
+Since firmware 1.5.0 (change `add-aztec-steering-rate-mode`), on both vehicles.
+
 The steering control mode the vehicle layer selected in the latest loop iteration (see "Steering
 without the angle sensor (rate mode)" below):
 
@@ -470,8 +480,9 @@ without the angle sensor (rate mode)" below):
 
 Sent from 1/25 on the 1 Hz slow steering timer and **once immediately** on every change, whatever the
 sensor, VESC or link state; never any value but 0, 1 or 2. `time_boot_ms` is the tick's `millis()`.
-The name is exactly 10 characters and goes out **without** a NUL (trim on length). It is the only
-`NAMED_VALUE_INT` this component sends, and it is reporting only: nothing is stopped or interlocked
+The name is exactly 10 characters and goes out **without** a NUL (trim on length). It is one of the
+three `NAMED_VALUE_INT` names this component sends (with `QB_CAPS` and `IGN_STATE`, see "Vehicle
+commands" below), and it is reporting only: nothing is stopped or interlocked
 by sending it. `STEER_POS` stays `NaN` in `rate` and `blocked`, because the sensor is unhealthy.
 
 #### Why `NAMED_VALUE_FLOAT` here, and only here
@@ -690,7 +701,7 @@ Emitted **outside** the 200 ms telemetry tick — the change test runs on every 
 `"OFF"` / `"ACC"` / `"IGNITION"` / `"CRANKING"`, `"?"` if null. Example: `gear=N ign=IGNITION`, or
 `gear=N ign=OFF FAILSAFE`.
 
-**Steering mode changes** produce a separate `STATUSTEXT` through the **same** 250 ms limiter:
+**Steering mode changes** (since firmware 1.5.0) produce a separate `STATUSTEXT` through the **same** 250 ms limiter:
 
 | New mode | `text` | `severity` |
 |----------|--------|------------|
@@ -714,8 +725,8 @@ within the field, never chunked.
 |-------|-----------------|--------------|
 | `command` | Command id being acknowledged | echo of the inbound `command` |
 | `result` | `MAV_RESULT` | see the table below |
-| `progress` | [%] when `IN_PROGRESS` | `0` — nothing here is long-running |
-| `result_param2` | Command-specific extra | `0` — unused |
+| `progress` | [%] when `IN_PROGRESS` | `0` — nothing here is long-running; the vehicle-command caps query puts the control-protocol version (`1`) here |
+| `result_param2` | Command-specific extra | `0`; for `MAV_CMD_USER_2` the reject reason or the query answer (see "Vehicle commands") |
 | `target_system` / `target_component` | The **requester** | inbound `msg.sysid` / `msg.compid` |
 
 **Addressing is strict.** This component shares the autopilot's system id (`1`) and is distinguished
@@ -730,6 +741,7 @@ and the ESP32 can never answer for the Pixhawk. The ACK goes back to the **reque
 |---------|----------|--------|
 | `MAV_CMD_USER_1` (31010), `param1` within `MAVLINK_CMD_PARAM_EPSILON` (0.01) of `MAVLINK_CMD_TRIP_RESET_MAGIC` (1.0) | `MAV_RESULT_ACCEPTED` (0) | **TRIP km *and* TRIP engine hours** both zeroed and persisted by the vehicle layer on its next iteration (< 40 ms at ≥ 25 Hz); **ODO and total engine hours unchanged**. On the wire: `fuel_pressure` **and** `injection_time` both fall to zero in the next `EFI_STATUS`, while `barometric_pressure` and `spark_dwell_time` are unchanged |
 | `MAV_CMD_USER_1`, any other `param1` — **`NaN` included**, since `fabsf(NaN - 1.0) <= eps` is false | `MAV_RESULT_DENIED` (2) | nothing changes; `param1` and the requester are logged |
+| `MAV_CMD_USER_2` (31011) | see "Vehicle commands (`MAV_CMD_USER_2`)" below | gear / ignition / headlight / diff lock / handbrake / queries |
 | Any other command | `MAV_RESULT_UNSUPPORTED` (3) | nothing changes; the command id and the requester are logged |
 
 The transport only **latches** the request (`tripResetPending_`); the vehicle layer consumes it via
@@ -737,6 +749,91 @@ The transport only **latches** the request (`tripResetPending_`); the vehicle la
 therefore means "accepted for execution", not "already done". Both trip counters are cleared inside
 that one consumption, so they can never diverge. **The odometer and the total engine hour meter
 cannot be reset by any means.**
+
+## Vehicle commands (`MAV_CMD_USER_2`)
+
+Since firmware 1.5.30 (change `add-gcs-vehicle-commands`) the ground station (Mission Planner
+plugin, QGC fork, steering-wheel buttons) commands gear, ignition, headlight, diff lock and — on the
+buggy — the handbrake directly on the ESP32. ARM/DISARM goes to the autopilot (comp 1), not here.
+The ESP32 is the arbiter of every interlock and answers each command with one `COMMAND_ACK`.
+
+`COMMAND_LONG` `MAV_CMD_USER_2` (31011), addressed **exactly** to 1/25 (strict addressing as above;
+a broadcast gets no ACK). Control-protocol version **1**. `param1` = function, `param2` = value,
+`param3..7` sent as 0 and ignored. Both are matched within `MAVLINK_CMD_PARAM_EPSILON` (0.01) of an
+integer; `NaN` never matches.
+
+| `param1` | Function | `param2` | Capability bit |
+|---|---|---|---|
+| 0 | Query | 0 caps, 1 firmware version, 2 hardware version | — |
+| 1 | Gear | R −1, N 0, H 1, L 2 | bit0 R/N/L, bit1 H |
+| 2 | Ignition | OFF 0, ACC 1, ON 2 (ON = auto-crank: 2 s pre-crank, starter ≤ 5 s) | bit2 |
+| 3 | Headlight | OFF 0, ON 1 | bit3 |
+| 4 | Diff lock | OFF 0, ON 1 | bit4 |
+| 5 | Handbrake | OFF 0 (release), ON 1 (apply) — **buggy (`aztec`) only** | bit5 |
+
+### Results
+
+| `result` | When | `result_param2` |
+|---|---|---|
+| `ACCEPTED` (0) | accepted for execution, also when already in the requested state | 0 (query: the answer) |
+| `TEMPORARILY_REJECTED` (1) | an interlock refused it | reason: **1** engine not running, **2** speed > 1.4 m/s, **3** fail-safe / not under MAVLink control, **4** speed > 3 km/h (handbrake apply) |
+| `DENIED` (2) | `param2` not an integer, `NaN`, or not in the table (query: not 0/1/2) | 0 |
+| `UNSUPPORTED` (3) | unknown `param1` (not 0…5, non-integer, `NaN`), or a function / gear H whose capability bit is clear | 0 |
+| `FAILED` (4) | the vehicle could not execute it: relay board unavailable (ignition / headlight / diff lock; never on the DevKitC-1, whose direct-GPIO relays are always available after boot); handbrake driver or NVS failure | 0 |
+
+### Interlocks
+
+"Not under MAVLink control" = the input source is not `MAVLINK` (fail-safe, or the web portal — also
+web control latched while RC is valid) or the `SERVO_OUTPUT_RAW` stream is stale.
+
+- **Gear**: reason 3 when not under MAVLink control; reason 1 when the engine is not running (the
+  command is not remembered); `ACCEPTED` without movement when already there; reason 2 when the
+  transmission's speed interlock refuses — R / H / L above 1.4 m/s; **N is accepted at any speed**,
+  exactly as the RC switch. H is allowed (RC cannot select it). The handbrake does not block gears.
+- **Ignition**: OFF always accepted (engine kill: also in fail-safe, web control and while cranking).
+  ACC / ON: reason 3 when not under MAVLink control. ON while the engine runs → no re-crank; ON
+  otherwise → auto-crank, as a fresh RC ON.
+- **Headlight**: always accepted.
+- **Diff lock**: reason 3 when not under MAVLink control; else the same relays as RC channel 7
+  (quad: Relay_5 + Relay_6; buggy: Relay_4 + Relay_5 + Relay_6), reported in `pt_compensation` bit0.
+- **Handbrake** (buggy): the existing parking-brake controller (`ParkBrakeSource::GCS`), no
+  extra interlock, accepted in every source / ignition state / fail-safe; apply above 3 km/h →
+  reason 4; `pt_compensation` bits 2 / 3 report it.
+
+### RC and GCS: last change wins
+
+RC channels 3 (gear), 4 (ignition), 6 (light) and 7 (lock) are applied only when their decoded
+value **changes**. A value outside 880–2160 µs (including 0) is "absent" and is **not** a change: the
+last state is kept (before 1.5.30 an out-of-band channel forced N / OFF / light off / unlock). So a
+GCS command holds until the RC switch is moved. Every time RC comes back in control — at boot, after a
+fail-safe, and on the return from the web portal (web control released, or RC back while a browser
+is connected) — the first valid frame applies all four channels again, including the auto-crank
+when the ignition switch is in ON. An RC gear requested with the engine stopped stays pending until
+the engine runs; a later accepted GCS gear cancels it.
+
+### Queries (`param1` = 0)
+
+| `param2` | `result_param2` | `progress` |
+|---|---|---|
+| 0 | capability bitmask (bits as in the table; bits 6–15 = 0). Quad bike `0x1F` (bit5 never; the same on the DevKitC-1 build); buggy `0x3F`, or `0x1F` when the X6 parking-brake driver did not initialise at boot | 1 (protocol version) |
+| 1 | firmware version `major*10000 + minor*100 + patch` (1.5.30 → 10530) | 0 |
+| 2 | hardware version: bits 0–7 board revision (0 = `Control_v0`, 1 = hand-wired `DevKitC-1`), bits 8–15 vehicle type (1 quad, 2 buggy), bits 16–23 relay board **detected at boot** (0 none, 1 PCA9557, 2 XL9535). The DevKitC-1 build reports `0x000101` (257): direct-GPIO relays, no I2C relay board | 0 |
+
+### Broadcasts (`NAMED_VALUE_INT` 252, from 1/25)
+
+| Name | Rate | Value |
+|---|---|---|
+| `QB_CAPS` | every 10 s, first on the first report | capability bitmask (bits 0–15) \| protocol version << 24 — quad 16777247, buggy 16777279 |
+| `IGN_STATE` | 1 Hz and immediately on change | applied relay state: 0 OFF, 1 ACC, 2 ON, 3 CRANKING (pre-crank dwell + starter) |
+
+A firmware without this feature answers `MAV_CMD_USER_2` with `UNSUPPORTED` and sends no `QB_CAPS`;
+clients then show nothing new.
+
+### Extension rules
+
+A new function takes the next `param1` and the next capability bit (plus the next
+`pt_compensation` bit if it is on/off); a new query takes the next `param2` under `param1` 0. The
+protocol version changes only on a breaking change; unknown functions keep answering `UNSUPPORTED`.
 
 ## Requests toward the autopilot
 

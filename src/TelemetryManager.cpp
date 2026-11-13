@@ -1,4 +1,5 @@
 #include "TelemetryManager.h"
+#include "EventJournal.h"
 
 TelemetryManager::TelemetryManager(VehicleController& vehicleController,
                                    WebPortal& webPortal,
@@ -79,6 +80,19 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.steer_driver_ok = steering.isDriverOk();
     telemetry.steer_vin = steering.getInputVoltage();
     telemetry.steer_vin_low = telemetry.steer_driver_ok && telemetry.steer_vin < STEER_VIN_LOW_V;
+    telemetry.steer_park_enabled = steering.isParkEnabled();
+    for (uint8_t i = 0; i < 3; i++) {
+        telemetry.steer_park_d[i] = steering.getParkRung(i).duty;
+        telemetry.steer_park_t[i] = steering.getParkRung(i).ms;
+    }
+    telemetry.steer_park_tol = (float)steering.getParkDoneTol() / 10.0f;
+    telemetry.steer_park_max = steering.getParkMaxPulses();
+    const SteeringController::ParkLastResult& parkLast = steering.getParkLast();
+    telemetry.steer_park_last_outcome = SteeringController::parkOutcomeToken(parkLast.outcome);
+    telemetry.steer_park_last_pulses = parkLast.pulses;
+    telemetry.steer_park_last_residual = (float)parkLast.residual / 10.0f;
+    telemetry.steer_park_last_duty = parkLast.duty;
+    telemetry.steer_park_last_ms = parkLast.ms;
     telemetry.throttle_us = vehicleController_.getThrottleUs();
     telemetry.throttle_idle_us = vehicleController_.getThrottleIdleUs();
     telemetry.throttle_full_us = vehicleController_.getThrottleFullUs();
@@ -88,7 +102,12 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     // Transmission servo position (0.0–100.0 %)
     telemetry.hall_position = vehicleController_.getTransmission().getCurrentServoPct();
 
-    telemetry.brake_pct = 0.0f;
+    // Brake: the open-loop position estimate the firmware acts on (not the target), the tuning
+    // values in use and the released endstop (direct digitalRead of PIN_BRAKE_SENSOR, GPIO14).
+    telemetry.brake_pct = vehicleController_.getBrakePositionPct();
+    telemetry.brake_travel_ms = vehicleController_.getBrakeTravelMs();
+    telemetry.brake_hold_pwm = vehicleController_.getBrakeHoldPwm();
+    telemetry.brake_released = vehicleController_.isBrakeReleased();
     telemetry.mav_active = mavlink_.isSignalValid();
     telemetry.web_control = vehicleController_.isWebControl();
 
@@ -110,9 +129,11 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     // The one and only ceiling: the autopilot's SPEED_MAX. 0 means no limit.
     telemetry.speed_limit_ms = vehicleController_.getSpeedLimitMs();
     telemetry.speed_limit_ceil = vehicleController_.getSpeedLimitCeilingPct();
-    // The one persisted limiter setting, and the saturation indicator (live flag + the firmware's
+    // The persisted limiter settings, and the saturation indicator (live flag + the firmware's
     // display hold, so every client — including one that joins late — shows the same state).
     telemetry.speed_limit_floor = vehicleController_.getSpeedLimitFloorPct();
+    telemetry.speed_limit_slew = vehicleController_.getSpeedLimitSlewPctS();
+    telemetry.throttle_open_slew = (uint16_t)lroundf(vehicleController_.getThrottleOpenSlewPctS());
     telemetry.speed_limit_sat = vehicleController_.isSpeedLimitSaturated();
     telemetry.speed_limit_sat_held = vehicleController_.isSpeedLimitSatHeld();
     // Steering speed scaling: the applied scale, the base actually in use, which source that
@@ -179,9 +200,15 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.wheel_lock_fitted = vehicleController_.isWheelLockFitted();
     telemetry.relay_test = vehicleController_.getRelayTestBits();
 
+    // Link recovery counters + event journal size
+    telemetry.vesc_resync = vehicleController_.getSteering().getLinkStats().resync;
+    telemetry.can_reinit = vehicleController_.getCanReinitCount();
+    telemetry.journal_bytes = EventJournal::journalBytes();
+    telemetry.journal_fs = EventJournal::flashWritesEnabled();
+
     telemetry.firmware_version = FIRMWARE_VERSION;
     telemetry.board = BOARD_NAME;
-    telemetry.wifi_ssid = WIFI_AP_SSID;
+    telemetry.wifi_ssid = WebPortal::getApSsid();   // suffixed SSID, static storage
     {
         // Static AP address — formatted once, then reused (no String churn at 5 Hz).
         static char wifiIp[16] = "";
@@ -199,6 +226,7 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.gear_default_h = trans.getGearPosition(TransmissionController::Gear::GEAR_HIGH);
 
     telemetry.boost_target_rpm = vehicleController_.getBoostTargetRpm();
+    telemetry.boost_enabled = vehicleController_.isGearBoostEnabled();
 
     return telemetry;
 }

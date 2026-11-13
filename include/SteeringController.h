@@ -5,11 +5,14 @@
 #include "Constants.h"
 #include "IMotorDriver.h"
 #include "LwsSensor.h"
+#include "SteerParkLaw.h"
+#include "EventJournalLaw.h"
 #include "SteerPositionLaw.h"
 #include "SteerRate.h"
 #include "SteerSensorDir.h"
 
 class CANController;
+class Preferences;
 
 /**
  * @brief Steering actuator controller: drives an IMotorDriver (VESC over UART)
@@ -38,10 +41,13 @@ class CANController;
  *  - Closed loop (SteerPositionLaw.h): states IDLE / DRIVING / PARKED. Continuous target
  *    tracking — while driving or parked a percent command only replaces the target (the
  *    former 5° re-command guard, STEER_RETARGET_TOLERANCE, is removed). Stop hysteresis —
- *    park (one coast; the self-locking 1:40 worm holds) within STEER_POSITION_TOLERANCE,
- *    drive again only beyond STEER_RESTART_TOLERANCE. Two duty floors — STEER_PWM_MIN_DUTY
- *    (break-away) from rest / after a reversal until 0.3° of progress, then
- *    STEER_PWM_TRACK_MIN_DUTY. Every stop / fault path coasts and goes to IDLE.
+ *    park (one coast; the self-locking 1:40 worm holds) within STEER_POSITION_TOLERANCE
+ *    (0.2° on the quad), drive again only beyond STEER_RESTART_TOLERANCE (1.0°). Two duty
+ *    floors — STEER_PWM_MIN_DUTY (break-away) from rest / after a reversal until 0.3° of
+ *    progress, then STEER_PWM_TRACK_MIN_DUTY; duty = clamp(max(|err| × STEER_KP, floor) +
+ *    boost, floor, STEER_PWM_MAX_DUTY), the anti-stall boost adds on top of the floor
+ *    (+STEER_BOOST_STEP per stalled check, −STEER_BOOST_DECAY per moving check, ≥ 0).
+ *    Every stop / fault path coasts and goes to IDLE.
  *  - Range guard: percent-driven (closed-loop) targets are clamped to the limits, then to
  *    ±STEER_LWS_SAFE_RANGE, and a closed-loop move driving outward at |pos| ≥ that range
  *    is stopped. Jog, nudge and captures are not guarded.
@@ -49,11 +55,25 @@ class CANController;
  *    sensor is healthy (closed loop, setSteeringPercent()); RATE while it is not, the
  *    source is MAVLink and the autopilot is in MANUAL/unknown; BLOCKED otherwise.
  *  - Rate drive (RATE mode only): setRateCommand(pct) is a continuous jog with variable
- *    duty (steerRateDuty(): deadband → 0, else 140..255 quadratic). Refused while the
+ *    duty (steerRateDuty(): deadband → 0, else STEER_PWM_MIN_DUTY..255 quadratic). Refused while the
  *    sensor is healthy, the VESC is down, or the path is disarmed (centre-to-arm: one
  *    zero-duty command arms it after disarmRate()). It reuses the jog refresh timeout
  *    (STEER_JOG_TIMEOUT_MS), the stall latch and the VESC fault / comm stops; position
  *    stall detection, boost, move timeout and range guard never apply to it.
+ *  - USB diagnostics lock (SteerDiag, change add-steering-serial-diagnostics): while
+ *    setDiagLock(true) is in force every external steering entry point — setSteeringPercent()
+ *    (MAVLink, web slider, failsafe centre, boot centring), setRateCommand(), jog(), nudge(),
+ *    the limit captures and the sensor zero-set — is refused. The diagnostics drive the motor
+ *    open loop through diagDrive() or run one closed-loop move through diagGoto(). Stop paths
+ *    (stop(), stopRate(), the sensor / VESC monitors) are never gated.
+ *  - Park correction (SteerParkLaw.h, change add-steering-park-correction): a sub-mode of
+ *    PARKED (the state stays PARKED, no jog). Once the loop has been parked with a target stable
+ *    within STEER_PARK_TARGET_STABLE for STEER_PARK_SETTLE_MS and |err| exceeds
+ *    max(STEER_PARK_TRIGGER_TOL (0.4°, independent of the park window), done tolerance), short pulses from a 3-rung ladder
+ *    (motor_.setSpeed(dir × duty) then motor_.stop(), no duty floor) finish the move to the done
+ *    tolerance, at most max-pulses per parking. Any target move beyond the stable band, any exit
+ *    from PARKED, jog / nudge / rate, captures, zero-set, the diag lock or a park setting change
+ *    cancels it (a running pulse coasts at once). Settings persist in NVS "steering" (park_*).
  *  - Jog ownership: an active jog is owned by WEB (jog()/nudge()) or RATE
  *    (setRateCommand()). Rate commands never stop or override a WEB jog/nudge; a zero
  *    rate command and stopRate() stop only a RATE-owned drive; jog(0) and stop() stop
@@ -100,10 +120,11 @@ public:
      * @brief Sensor health, zero-set and position control — call every loop
      * iteration, after CANController::update().
      *
-     * Closed loop (steerPosStep()): DRIVING applies duty = clamp(|err| × STEER_KP + boost,
-     * floor, STEER_PWM_MAX_DUTY), floor = STEER_PWM_MIN_DUTY until the wheel has moved 0.3°
-     * since the drive started or last reversed, then STEER_PWM_TRACK_MIN_DUTY. At
-     * |err| ≤ STEER_POSITION_TOLERANCE it parks (one stop(), no further commands); a parked
+     * Closed loop (steerPosStep()): DRIVING applies duty = clamp(max(|err| × STEER_KP, floor)
+     * + boost, floor, STEER_PWM_MAX_DUTY), floor = STEER_PWM_MIN_DUTY until the wheel has moved
+     * 0.3° since the drive started or last reversed, then STEER_PWM_TRACK_MIN_DUTY; the boost
+     * rises by STEER_BOOST_STEP per stalled check and decays by STEER_BOOST_DECAY per moving
+     * check. At |err| ≤ STEER_POSITION_TOLERANCE (0.2°) it parks (one stop(), no further commands); a parked
      * loop restarts only at |err| > STEER_RESTART_TOLERANCE. Stall (DRIVING only; window
      * restarts from rest or on a direction flip), move timeout (time continuously behind by
      * more than STEER_RESTART_TOLERANCE) and the range guard end in a coast and IDLE.
@@ -133,12 +154,99 @@ public:
     float getSteeringPercent() const;
 
     /**
+     * @brief Closed-loop move to an absolute angle in degrees (+ = right), for the web
+     * "Target angle" control. Converted to 0.1° and sent through the same path as
+     * setSteeringPercent() (commandTarget(): clamped to the captured limits and the safe
+     * range, same gates, same stall latch, continuous tracking).
+     * @return false if rejected (diag lock, not calibrated, sensor unhealthy, VESC down,
+     * non-finite value, stall latch from idle)
+     */
+    bool setSteeringAngleDeg(float deg);
+
+    /**
      * @brief Request a one-shot move to center once it becomes possible
      * (calibrated, sensor healthy, VESC link up). Issued from update();
      * dropped silently after STEER_BOOT_CENTER_TIMEOUT_MS, and cancelled by any
      * accepted steering/jog/nudge command, capture or zero-set made before it fires.
      */
     void requestBootCenter();
+
+    // === USB steering diagnostics (SteerDiag) ===
+
+    /**
+     * @brief Take (true) / release (false) exclusive ownership for the USB diagnostics.
+     * Both directions stop the motor and cancel any move, jog or pending boot centring.
+     */
+    void setDiagLock(bool on);
+    bool isDiagLocked() const { return diagLock_; }
+
+    /**
+     * @brief Open-loop drive for the diagnostics: setSpeed(speed) with no duty floor, no stall
+     * latch and no refresh timeout (the caller refreshes and bounds it). Drops the closed loop
+     * and any jog to idle first. Needs the diag lock and the VESC link.
+     * @return false if refused
+     */
+    bool diagDrive(int16_t speed);
+
+    /**
+     * @brief One closed-loop move to an absolute target (0.1°, firmware sign) under the diag
+     * lock, through the same path as setSteeringPercent() (clamped to the limits and the safe
+     * range, same gates, same stall latch).
+     * @return false if refused
+     */
+    bool diagGoto(int32_t targetPos);
+
+    /** @brief Last effort sent to the motor driver (-255..+255, 0 = coast) */
+    int16_t getLastDriveCommand() const { return motor_.lastSpeed(); }
+
+    /** @brief Closed-loop target, 0.1° (meaningful while the loop is active) */
+    int32_t getTargetPos() const { return targetRel_; }
+
+    /** @brief Closed-loop state */
+    SteerPosState getPosState() const { return posState_; }
+
+    /** @brief Closed-loop state token: idle, drive, park */
+    static const char* posStateToken(SteerPosState s);
+
+    // === Park correction (SteerParkLaw.h) ===
+
+    /** @brief Result of a park setting change (the web layer maps it to its reply) */
+    enum class ParkSetResult : uint8_t { OK, OUT_OF_RANGE, NOT_MONOTONIC, SAVE_FAILED };
+
+    /** @brief How the last park correction ended (RAM only, "none" after boot) */
+    enum class ParkOutcome : uint8_t { NONE, DONE, GAVE_UP, CANCELLED };
+
+    /** @brief Last park correction result for telemetry */
+    struct ParkLastResult {
+        ParkOutcome outcome = ParkOutcome::NONE;
+        uint8_t pulses = 0;      // pulses sent in that parking
+        int32_t residual = 0;    // target − position at the end, 0.1°, signed
+        uint8_t duty = 0;        // duty × ms of the last pulse
+        uint16_t ms = 0;
+        SteerParkNote note = SteerParkNote::NONE;   // why it ended (TOO_STRONG, OVERSHOOT_RESTART, …)
+    };
+
+    /**
+     * @brief Park correction settings: validated, written to NVS "steering" first, applied only
+     * after the write succeeded; any running correction is cancelled (a pulse coasts).
+     * setParkRung(): rung 1..3, duty STEER_PARK_DUTY_MIN..MAX, ms STEER_PARK_MS_MIN..MAX, and the
+     * ladder must stay non-decreasing (NOT_MONOTONIC otherwise). setParkDoneTol(): 0.1° units,
+     * STEER_PARK_DONE_TOL_MIN..MAX. setParkMaxPulses(): STEER_PARK_MAX_PULSES_MIN..MAX.
+     */
+    ParkSetResult setParkEnabled(bool on);
+    ParkSetResult setParkRung(uint8_t rung, int32_t duty, int32_t ms);
+    ParkSetResult setParkDoneTol(int32_t tol);
+    ParkSetResult setParkMaxPulses(int32_t count);
+
+    bool isParkEnabled() const { return parkEnabled_; }
+    /** @brief Ladder rung, index 0..2 */
+    const SteerParkRung& getParkRung(uint8_t i) const { return parkParams_.rung[i < STEER_PARK_RUNGS ? i : 0]; }
+    /** @brief Done tolerance, 0.1° */
+    int32_t getParkDoneTol() const { return parkParams_.doneTol; }
+    uint8_t getParkMaxPulses() const { return parkParams_.maxPulses; }
+    const ParkLastResult& getParkLast() const { return parkLast_; }
+    /** @brief Telemetry token: none, done, gave_up, cancelled */
+    static const char* parkOutcomeToken(ParkOutcome o);
 
     // === Calibration ===
 
@@ -256,6 +364,17 @@ public:
 
     /** @brief True while the steering motor driver link is healthy */
     bool isDriverOk() const { return steerDriverOk_; }
+
+    /**
+     * @brief The steering motor is being driven right now: closed-loop DRIVING, a jog / nudge /
+     * rate drive, a park-correction pulse, or any nonzero effort on the driver (e.g. a USB diag
+     * drive). The event journal defers its flash flush while this is true (at most
+     * JOURNAL_FLUSH_DEFER_MAX_MS).
+     */
+    bool isDriving() const {
+        return posState_ == SteerPosState::DRIVING || jogDir_ != 0 || parkPulseActive_ ||
+               motor_.lastSpeed() != 0;
+    }
     /** @brief Steering motor current (A) from the last VESC telemetry poll */
     float getMotorCurrent() const { return motor_.motorCurrentA(); }
     /** @brief VESC FET temperature (°C) from the last telemetry poll */
@@ -264,6 +383,8 @@ public:
     float getInputVoltage() const { return motor_.inputVoltageV(); }
     /** @brief VESC fault code (0 = no fault) */
     uint8_t getVescFault() const { return motor_.faultCode(); }
+    /** @brief Steering driver packet-link counters (all zero without a packet link) */
+    IMotorDriver::LinkStats getLinkStats() const { return motor_.linkStats(); }
 
 private:
     IMotorDriver& motor_;
@@ -300,6 +421,22 @@ private:
     SteerPosState posState_;
     SteerPosTimers posTimers_;   // move timer, stall window, boost, break-away (reset only from rest)
 
+    // Park correction (sub-mode of PARKED). The settle clock restarts on a target move beyond
+    // STEER_PARK_TARGET_STABLE (reference = that target) and on every entry into PARKED.
+    SteerParkParams parkParams_;   // ladder, done tolerance, max pulses + compile-time timings
+    bool parkEnabled_;
+    SteerParkState parkState_;
+    int32_t parkRefTarget_;        // target the stable band is measured from
+    uint32_t parkSettleStartMs_;   // settle clock start
+    bool parkPulseActive_;         // a pulse is being driven (ends with motor_.stop() at parkPulseEndMs_)
+    uint32_t parkPulseEndMs_;
+    // Correction disabled until the next stick command: the main loop restarted after a park
+    // pulse (overshoot beyond STEER_RESTART_TOLERANCE). Cleared only by a target move beyond
+    // STEER_PARK_TARGET_STABLE or a command from idle — never by RESTARTED / PARKED events,
+    // otherwise pulse → restart → re-park → pulse loops forever (wheels shaking).
+    bool parkBlocked_;
+    ParkLastResult parkLast_;
+
     // Jog state
     int8_t jogDir_;
     uint32_t lastJogRefresh_;
@@ -320,6 +457,12 @@ private:
 
     // VESC driver health / monitors
     bool steerDriverOk_;         // mirrors driver link health (false until first good reply)
+    uint32_t linkDownSinceMs_;   // event journal: when the link went down (0 = boot)
+    uint32_t linkDownSnapMs_;    // event journal: last link_down_snap line
+    uint8_t lastFaultCode_;      // event journal: last journaled VESC fault code
+
+    // USB diagnostics lock: external steering commands refused while true
+    bool diagLock_;
 
     // One-shot boot centering (deferred until sensor + VESC link are up)
     bool bootCenterPending_;
@@ -342,6 +485,21 @@ private:
     /** @brief Coast and drop the closed loop to IDLE (no-op when already idle) */
     void loopToIdle();
 
+    /**
+     * @brief Cancel the park correction: coast a running pulse, reset the law state. With
+     * record, a cycle in progress that sent ≥ 1 pulse is stored as "cancelled" with residual.
+     */
+    void parkCancel(bool record = false, int32_t residual = 0);
+
+    /** @brief Restart the park settle clock at the current target (new park entry / target move) */
+    void parkRestartSettle(uint32_t now);
+
+    /** @brief Run the park correction while PARKED (called from update()) */
+    void serviceParkCorrection(uint32_t now, int32_t pos, int32_t err);
+
+    /** @brief Load the park settings from an open "steering" Preferences session (missing → default) */
+    void loadParkSettings(Preferences& prefs);
+
     /** @brief True if a new move in direction d must be refused due to the stall latch */
     bool latchBlocks(int8_t d, uint32_t now) const;
 
@@ -362,6 +520,12 @@ private:
     /** @brief Issue the pending boot centering once possible, or drop it on timeout */
     void serviceBootCenter(uint32_t now, bool driverReady);
 
+    /**
+     * @brief Shared closed-loop command path (setSteeringPercent(), diagGoto()): clamp the
+     * target to the limits and the safe range, then track it or start from idle.
+     */
+    bool commandTarget(int32_t target);
+
     /** @brief Shared capture path for the two limits */
     bool captureLimit(bool left);
 
@@ -379,6 +543,9 @@ private:
 
     /** @brief One debug line: angle, pos, token, fps (+ suffix) */
     void logState(const char* suffix);
+
+    /** @brief Event journal: VESC link event with the parser snapshot (extra = trailing fields) */
+    void journalLink(JLvl lvl, const char* event, const char* extra);
 };
 
 #endif // STEERING_CONTROLLER_H

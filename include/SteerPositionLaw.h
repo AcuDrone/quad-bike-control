@@ -1,6 +1,7 @@
 // SteerPositionLaw.h — closed-loop steering position law: continuous target tracking,
 // stop hysteresis and the break-away / tracking duty floors
-// (change fix-steering-continuous-tracking, design D1–D7).
+// (change fix-steering-continuous-tracking, design D1–D7; boost on top of the floor, gentle
+// decay: change fix-steering-jerk-and-centre-undershoot, design D1/D2/D6).
 //
 // NO Arduino / Constants.h dependency: this header is compiled by the native unit
 // tests (test/test_steer_position). Callers pass the constants in through SteerPosParams.
@@ -15,10 +16,14 @@
 //   2. stall: |pos − stallPos| < stallThreshold over stallWindowMs → STALL (state IDLE);
 //   3. |err| ≤ posTol → PARKED;
 //   4. move timer re-armed while |err| ≤ restartTol; else after moveTimeoutMs → TIMEOUT (IDLE);
-//   5. anti-stall boost: < boostMinProgress per boostCheckMs → +boostStep, else −boostStep (≥ 0);
+//   5. anti-stall boost: < boostMinProgress per boostCheckMs → +boostStep (stalled, anywhere);
+//      moving and |err| > boostHoldErr → boost held (hold band: a loaded wheel that broke free
+//      far from the target keeps the extra duty instead of stalling again); moving inside
+//      boostHoldErr → −boostDecay, never below 0;
 //   6. break-away disarmed once |pos − breakawayStartPos| ≥ boostMinProgress;
-//   7. duty = clamp(|err| × kp + boost, floor, maxDuty), floor = breakawayMinDuty while
-//      break-away is armed, else trackMinDuty; signed toward the target.
+//   7. duty = clamp(max(|err| × kp, floor) + boost, floor, maxDuty), floor = breakawayMinDuty
+//      while break-away is armed, else trackMinDuty; signed toward the target. The boost always
+//      adds on top of the floor, so a stalled check is never hidden under it.
 // The range guard, sensor / driver health and the stall latch stay in SteeringController.
 #pragma once
 
@@ -43,7 +48,9 @@ struct SteerPosParams {
   uint32_t moveTimeoutMs;    // STEER_MOVE_TIMEOUT
   uint32_t boostCheckMs;     // STEER_BOOST_CHECK_MS
   int32_t boostMinProgress;  // STEER_BOOST_MIN_PROGRESS (also the break-away distance)
-  int16_t boostStep;         // STEER_BOOST_STEP
+  int16_t boostStep;         // STEER_BOOST_STEP: added per stalled check
+  int16_t boostDecay;        // STEER_BOOST_DECAY: removed per moving check (never below 0)
+  int32_t boostHoldErr;      // STEER_BOOST_HOLD_ERR: no decay while |err| > this (0.1°)
 };
 
 /** @brief Per-drive bookkeeping; reset only by startFromRest() */
@@ -155,8 +162,8 @@ static inline SteerPosEvent steerPosStep(SteerPosState& state, SteerPosTimers& t
   if (now - t.progressMs >= p.boostCheckMs) {
     if (steerPosAbs(pos - t.progressPos) < p.boostMinProgress) {
       if (t.boost < (int16_t)p.maxDuty) t.boost += p.boostStep;
-    } else if (t.boost > 0) {
-      t.boost -= (t.boost < p.boostStep) ? t.boost : p.boostStep;
+    } else if (t.boost > 0 && absErr <= p.boostHoldErr) {
+      t.boost -= (t.boost < p.boostDecay) ? t.boost : p.boostDecay;
     }
     t.progressPos = pos;
     t.progressMs = now;
@@ -166,9 +173,10 @@ static inline SteerPosEvent steerPosStep(SteerPosState& state, SteerPosTimers& t
     t.breakaway = false;
   }
 
-  float duty = (float)absErr * p.kp + (float)t.boost;
   const float minDuty = (float)steerPosFloor(t, p);
-  if (duty < minDuty) duty = minDuty;
+  float duty = (float)absErr * p.kp;
+  if (duty < minDuty) duty = minDuty;   // boost adds on top of the floor, never hidden under it
+  duty += (float)t.boost;               // boost ≥ 0, so the result stays ≥ floor
   if (duty > (float)p.maxDuty) duty = (float)p.maxDuty;
   const int16_t d = (int16_t)duty;
   if (dutyOut) *dutyOut = err > 0 ? d : (int16_t)-d;

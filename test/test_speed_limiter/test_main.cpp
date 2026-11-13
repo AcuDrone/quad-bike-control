@@ -13,7 +13,7 @@ static SpeedLimiterParams params(float floorPct = 0.0f) {
     p.floorPct = floorPct;     // SPEED_LIMIT_FLOOR_DEFAULT_PCT = 0
     p.kiPctSPerMs = 30.0f;     // SPEED_LIMIT_TRIM_KI_PCT_S_PER_MS
     p.risePctS = 10.0f;        // SPEED_LIMIT_TRIM_RISE_PCT_S
-    p.slewPctS = 80.0f;        // SPEED_LIMIT_CEILING_SLEW_PCT_S
+    p.slewPctS = 80.0f;        // SPEED_LIMIT_SLEW_DEFAULT_PCT_S (per-vehicle setting)
     p.bindMarginPct = 1.0f;    // SPEED_LIMIT_BIND_MARGIN_PCT
     return p;
 }
@@ -176,6 +176,24 @@ static void test_slew_both_directions() {
     TEST_ASSERT_FLOAT_WITHIN(1e-3f, 20.0f, s2.ceilPct);
 }
 
+// A lower per-vehicle slew (web setting set_speed_limit_slew) closes the throttle more gently:
+// over the same 0.5 s far above the limit, 20 %/s takes 10 % off the ceiling, 80 %/s takes 40 %.
+static void test_lower_slew_falls_slower() {
+    SpeedLimiterParams fast = params();
+    SpeedLimiterParams slow = params();
+    slow.slewPctS = 20.0f;
+    SpeedLimiterState sf, ss;
+    sf.primed = true; sf.trimPct = 100.0f; sf.ceilPct = 100.0f;
+    ss.primed = true; ss.trimPct = 100.0f; ss.ceilPct = 100.0f;
+    for (int i = 0; i < 25; i++) {   // 25 × 20 ms = 0.5 s
+        speedLimiterStep(sf, fast, 100.0f, L10 + 6.0f, L10, DT);
+        speedLimiterStep(ss, slow, 100.0f, L10 + 6.0f, L10, DT);
+    }
+    TEST_ASSERT_FLOAT_WITHIN(1e-2f, 60.0f, sf.ceilPct);
+    TEST_ASSERT_FLOAT_WITHIN(1e-2f, 90.0f, ss.ceilPct);
+    TEST_ASSERT_TRUE(ss.ceilPct > sf.ceilPct);
+}
+
 // ── toy plant ─────────────────────────────────────────────────────────────────
 // First-order speed response: dv/dt = (k·u − v) / tau, k chosen so that u* holds L.
 static float simulate(const SpeedLimiterParams& p, float uStar, float seconds,
@@ -239,6 +257,7 @@ int main(int, char**) {
     RUN_TEST(test_below_band_resets_trim);
     RUN_TEST(test_clamps_and_floor_change);
     RUN_TEST(test_slew_both_directions);
+    RUN_TEST(test_lower_slew_falls_slower);
     RUN_TEST(test_steady_state_converges_to_limit);
     RUN_TEST(test_steady_state_saturates_at_floor);
     RUN_TEST(test_two_half_steps_equal_one_step);

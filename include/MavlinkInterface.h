@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include "Constants.h"
 #include "TransmissionController.h"
+#include "VehicleCommandLaw.h"
 
 /**
  * @brief MAVLink 2 vehicle interface to a Pixhawk autopilot (TELEM2).
@@ -16,7 +17,9 @@
  * a VFR_HUD carrying hall-sensor ground speed, the steering VESC's telemetry plus the
  * applied steering speed-scale as exactly six NAMED_VALUE_FLOAT values (STEER_POS,
  * STEER_A, VESC_V at 5 Hz; VESC_TEMP, VESC_OK, STEER_SCA at 1 Hz), the steering control
- * mode as one NAMED_VALUE_INT (STEER_MODE, 1 Hz + on change), plus STATUSTEXT for state
+ * mode as one NAMED_VALUE_INT (STEER_MODE, 1 Hz + on change), the GCS vehicle-command
+ * capabilities (QB_CAPS, every 10 s) and the applied ignition state (IGN_STATE, 1 Hz + on
+ * change) as two more NAMED_VALUE_INT, plus STATUSTEXT for state
  * transitions (gear / ignition / fail-safe, and steering mode changes).
  *
  * Those six names are the project's ONE scoped exception to the "everything in the
@@ -40,10 +43,12 @@
  * carries the digital-output bitmask, and barometric_pressure / fuel_pressure carry
  * the total ODOMETER / TRIP distance in km. See the field-mapping block in the .cpp.
  *
- * Accepts exactly one inbound command: a TRIP RESET as COMMAND_LONG /
- * MAV_CMD_USER_1 with a magic param1, answered with a COMMAND_ACK. Addressing is
- * strict (this component shares the autopilot's system id), and the reset itself is
- * performed by the vehicle layer, which owns the counters.
+ * Accepts exactly two inbound commands, each answered with a COMMAND_ACK: a TRIP RESET as
+ * COMMAND_LONG / MAV_CMD_USER_1 with a magic param1 (the reset itself is performed by the
+ * vehicle layer, which owns the counters), and the GCS VEHICLE COMMANDS as MAV_CMD_USER_2
+ * (gear / ignition / headlight / diff lock / handbrake / queries — decoded here, executed by
+ * the registered VehicleCommandSink, see include/VehicleCommandLaw.h). Addressing is strict
+ * (this component shares the autopilot's system id).
  *
  * Also feeds the hall wheel speed to the autopilot's EKF3 as body-frame wheel
  * odometry (VISION_POSITION_DELTA). That message carries a BODY-FRAME distance
@@ -155,6 +160,11 @@ public:
         // SteerMode as selected by the vehicle layer this iteration: 0 = position, 1 = rate
         // (no sensor, stick = rotation rate), 2 = blocked. Reporting only, never a control input.
         uint8_t     steerMode;
+
+        // --- Applied ignition state (IGN_STATE NAMED_VALUE_INT) ---------------------------
+        // 0 OFF, 1 ACC, 2 ON, 3 CRANKING (incl. the pre-crank dwell) — ignStateCode() of the
+        // relay state. Reporting only.
+        uint8_t     ignState;
         // Note: oil temperature is not available from the ECU and is not reported.
         // Ground speed is NOT carried in EFI_STATUS — it comes from the hall speed
         // sensor and is reported separately via VFR_HUD.
@@ -296,6 +306,17 @@ public:
      */
     bool consumeTripResetRequest();
 
+    /**
+     * @brief Register the executor of the GCS vehicle commands (MAV_CMD_USER_2).
+     *
+     * Call once after the vehicle layer is up. Without a sink every MAV_CMD_USER_2 is answered
+     * UNSUPPORTED (the pre-1.5.30 behaviour) and no QB_CAPS is sent.
+     * @param sink        executes validated function commands (param1 1-5)
+     * @param capsMask    capability bitmask, fixed at boot (VCMD_CAP_*)
+     * @param hwVersion   hardware version code (hardwareVersionCode())
+     */
+    void setVehicleCommandSink(VehicleCommandSink* sink, uint16_t capsMask, int32_t hwVersion);
+
 private:
     HardwareSerial* serial_;
 
@@ -362,6 +383,14 @@ private:
     uint8_t  lastSteerModeTx_;         // value last sent as STEER_MODE (0xFF = none yet)
     uint8_t  lastSteerModeAnnounced_;  // mode last announced by STATUSTEXT (0xFF = baseline pending)
 
+    // GCS vehicle commands (MAV_CMD_USER_2) + QB_CAPS / IGN_STATE broadcasts
+    VehicleCommandSink* vcmdSink_;     // nullptr = not registered → USER_2 answered UNSUPPORTED
+    uint16_t vcmdCaps_;                // capability bitmask, fixed at boot
+    int32_t  vcmdHwVersion_;           // hardware version code, fixed at boot
+    uint32_t lastCapsTx_;              // millis() of the last QB_CAPS
+    bool     capsSentOnce_;            // the first QB_CAPS goes out on the first report()
+    uint8_t  lastIgnStateTx_;          // value last sent as IGN_STATE (0xFF = none yet)
+
     // Change detection for STATUSTEXT
     char     lastGear_[4];
     char     lastIgnition_[12];
@@ -401,7 +430,15 @@ private:
     // component shares the autopilot's system id, so only an exact target_system/target_component
     // match is handled and a broadcast is ignored WITHOUT an ACK.
     void handleCommandLong(uint8_t sysid, uint8_t compid, uint8_t targetSys, uint8_t targetComp,
-                           uint16_t command, float param1);
+                           uint16_t command, float param1, float param2);
+
+    // MAV_CMD_USER_2: decode, run the query or the sink, return the ACK fields.
+    void handleVehicleCommand(uint8_t sysid, uint8_t compid, float param1, float param2,
+                              uint8_t& result, uint8_t& progress, int32_t& resultParam2);
+
+    // One COMMAND_ACK to the requester.
+    void sendCommandAck(uint16_t command, uint8_t result, uint8_t progress, int32_t resultParam2,
+                        uint8_t targetSys, uint8_t targetComp);
 
     // Wheel speed as an EKF-fusable body-frame distance increment (gated — see the .cpp)
     void sendVisionPositionDelta(const StateReport& state);

@@ -36,6 +36,11 @@ pio run -t uploadfs
 
 **Important:** You must upload the filesystem after any changes to `data/index.html`.
 
+> ⚠ **`uploadfs` erases the event journal.** The journal files (`/events.log`, `/events.1`) live in
+> the same LittleFS partition, so `pio run -t uploadfs` — and a web LittleFS update
+> (`/update?type=littlefs`) — wipe them. **Download the journal first** (System → Event journal →
+> Download, or `GET /api/events/download`). A normal firmware (application) update keeps it.
+
 ### 3. Connect to WiFi
 
 After the ESP32 boots:
@@ -129,6 +134,15 @@ it. Cards are shown in one column.
 - **System maintenance**: debug output on/off, RPM boost test, firmware upload (OTA), "What's new".
 - **Мережа / Network**: the access point SSID and IP address as reported by the firmware
   (read-only; network settings will be added later).
+- **Журнал подій / Event journal** (after Network): the last 100 journal lines (monospace, newest
+  at the bottom) with a source filter (All, SYS, SRC, STEER, VESC, CAN, I2C, RELAY, SNAP, RTC),
+  Refresh, Download and Clear (with a confirm). It refreshes on open and every 5 s while the System
+  section is visible. The header shows the self-recovery counters VESC / CAN (`vesc_resync`,
+  `can_reinit` since boot; the DevKitC-1 has no I2C bus, so no `i2c_unlock`) and the journal size (`journal_bytes`); when the journal
+  cannot write to flash (`journal_bytes` = −1) a red note says so. A **«Запис у flash» / "Write to
+  flash"** toggle (default **OFF**, from telemetry `journal_fs`) switches the journal's flash writes;
+  the "Storage" row shows "RAM only" / "flash" and the number of lines held in RAM. See "Event
+  journal" below.
 
 **Odometer / trip (read-only):** the Speed card **displays** the total odometer (`odo_km`) and the
 trip distance (`trip_km`), both in km to 3 decimals and both shown whatever the sensor's health —
@@ -162,6 +176,10 @@ above the limit (`speed_limit_sat`), and reads "Limiter was at floor…" for 10 
 (`speed_limit_sat_held`, held by the firmware so every client shows it). It means the floor is too
 high or the vehicle is going downhill — the limiter does not brake.
 
+**Relay board:** the DevKitC-1 drives its four relays straight from GPIO36–39 — there is no I2C
+relay board, so master's relay-board selector (`set_relay_board`), the `relay_board*` telemetry and
+relay write verification do not exist on this build.
+
 **Measuring pulses per revolution (Speed sensor card):** lift the wheel off the ground, put the
 transmission in neutral and put a chalk mark on the tyre. Enter the number of turns (1–20, default
 5), press **Start**, turn the wheel by hand exactly that many turns in one direction, wait until the
@@ -173,6 +191,60 @@ pulses: on an overshoot, Cancel and start again. The hand-turned distance is add
 and trip like any pushed distance (about 2 m per turn). Nothing is stored until **Save as
 pulses/rev**, which sends the usual `speed_cal_ppr`; a disconnect or a page reload drops the
 measurement.
+
+**Event journal (System → Event journal):** a persistent post-mortem record kept on LittleFS as two
+plain-text files, `/events.log` (active) and `/events.1` (previous), 128 KB each (≈ 1500 lines,
+≈ 17–20 powered hours per file at the idle rate). When the active file is full it is renamed to
+`/events.1` (the old `.1` is deleted). Lines are buffered in RAM and written to flash at most once per
+second, never while the steering motor is being driven (deferred up to 10 s), and just before a
+controlled reboot (OTA). The last 16 unflushed lines also sit in RTC memory and are replayed after a
+panic / watchdog / software reset behind an `RTC I replay` line; up to ≈ 1 s of events is lost on a
+power cut. A boot counter (NVS `journal`/`boot`) numbers the boots.
+
+**Flash-write switch (default OFF).** Everything above about files applies only while «Запис у
+flash» / "Write to flash" is on (NVS `journal`/`fs`, uint8, default 0; survives a reboot). While it is
+**off** (the default, so an untested vehicle never sees a flash-erase stall from the journal) the
+journal does no LittleFS writes at all — no flush, no rotation, no file access at boot — and runs in
+RAM: the newest ≈ 4 KB of lines (`JOURNAL_RAM_BUF_BYTES`, ≈ 45–55 lines; oldest lines dropped) plus
+the RTC ring (last 16 lines across a reset). Dedupe, SNAP every 60 s, counters and replay work as
+usual; `journal_bytes` reports the RAM bytes, `jflush_max` stays 0, the pre-OTA flush is skipped.
+**Everything is lost at power-off.** Files from an earlier period with writes on are still served
+(read-only) by tail and download, before the RAM lines; with writes off each part is preceded by a
+label line `# --- flash: … ---` / `# --- RAM only: … ---`. Switching is journaled so gaps are
+explainable: on → `SYS I journal_fs on=1 ram_dropped=N` and the RAM lines are written to flash at
+once; off → `SYS I journal_fs on=0`, one final flush, then the files are left alone (both flushes
+still wait for the steering motor, at most 10 s). Clear deletes the files in either mode.
+
+Line format (ASCII, ≤ 120 bytes): `<boot> <uptime_s.mmm> <SRC> <LVL> <event> k=v k=v ...`, levels
+`I`/`W`/`E`, sources `SYS SRC STEER VESC CAN I2C RELAY SNAP RTC` (`I2C` never occurs on the DevKitC-1); each boot starts with
+`# boot=N fw=… reset=…`. The same (source, event) is written at most once per 2 s; repeats are counted
+as `sup=N` on the next line of that pair. Examples:
+
+```
+47 0.412 SYS I boot reset=POWERON fw=1.5.26 heap=131560 prev_heap_min=?
+47 612.447 VESC W resync state=PAYLOAD idle=287 bytes_since_good=1412 drop=1
+47 980.113 CAN W lws_silent ms=1200 obd_alive=1 -> reinit
+47 980.120 CAN I reinit reason=lws_silent result=ok attempt=1
+47 60.001 SNAP I heap=126840 min=118204 loop_max=4 jflush_max=38 vin=24.0 fet=40.1
+47 60.001 SNAP I lws_fps=100 vesc_good=198 drop=0 resync=0 can_reinit=0
+```
+
+The VESC link lines (`link_lost`, `link_up`, `link_down_snap`) use compact keys to stay within the
+line limit: `st` parser state, `bsg` bytes since the last good packet, `good`, `crc` / `stop` dropped
+packets, `rs` resyncs, `vin`, `fet`, `fault`, `down_ms`. The snapshot is written every 60 s as two
+`SNAP` lines.
+
+HTTP API (text/plain, streamed; the main loop never waits for a reader):
+- `GET /api/events?tail=N` — the last N lines (default 100, max 500), RAM lines included, oldest
+  first. Headers: `X-Journal-Fs` (`0`/`1`) and `X-Journal-Ram-Lines` (lines held in RAM).
+- `GET /api/events/download` — `/events.1` then `/events.log`, then the RAM lines, as one attachment
+  (`<SSID>-events-boot<N>.log`). Rotation is postponed while it streams.
+- `GET /api/events/config` → `{"fs":false}` — the flash-write switch.
+- `POST /api/events/config` with `{"fs":true}` / `{"fs":false}` → `{"success":true,"fs":…}`
+  (400 `{"success":false,"message":…}` for invalid JSON or a missing boolean `fs`). Applied by the
+  main loop on its next iteration (persisted to NVS, `journal_fs on=…` line, flush).
+- `POST /api/events/clear` — deletes both files and the RAM buffer (executed by the main loop) and
+  writes `SYS I journal_cleared`; answers `{"ok":true}`. The boot counter is kept.
 
 **OTA Firmware Update** (Система → System maintenance):
 1. Build new firmware: `pio run`
@@ -240,6 +312,7 @@ All settings are in [include/Constants.h](include/Constants.h):
 - Check that device has enough free space for new firmware
 - Try OTA update via Arduino IDE OTA (hostname: `quadbike-control`)
 - If update fails, device will automatically rollback to previous firmware
+- A filesystem (LittleFS) update erases the event journal — download it first
 
 ### Build errors
 If you see library-related errors:

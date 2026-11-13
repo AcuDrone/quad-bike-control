@@ -3,6 +3,7 @@
 
 #include "ServoController.h"
 #include "Constants.h"
+#include "TransmissionLaw.h"
 #include <Preferences.h>
 
 /**
@@ -50,7 +51,7 @@ public:
     /**
      * @brief Set transmission to target gear
      * @param gear Target gear
-     * @return true if gear change initiated
+     * @return true if gear change initiated (or queued); false while not initialised
      */
     bool setGear(Gear gear);
 
@@ -104,9 +105,24 @@ public:
     void update();
 
     /**
-     * @brief Restore servo position from NVS; return true to skip legacy autohome
+     * @brief True once the expected gear is known (targetGear_ != GEAR_UNKNOWN).
+     *
+     * GEAR_UNKNOWN as the expected gear only ever means "never initialised":
+     * startGearChange() never writes it.
      */
-    bool restoreStateIfValid();
+    bool isInitialised() const { return targetGear_ != Gear::GEAR_UNKNOWN; }
+
+    /**
+     * @brief Initialise the expected gear once (no-op when already initialised).
+     *
+     * Source, in order (decided by chooseTransmissionInit() in TransmissionLaw.h):
+     * the physical sensor reading exactly one gear (direct move to that gear's position,
+     * state saved valid); else a valid, plausible NVS state (direct move to state_pct);
+     * else a real shift step into NEUTRAL (overshoot with TRANS_INIT_SETTLE_MS, dwell,
+     * return) whose overshoot direction comes from the invalid NVS record.
+     * Always leaves the controller initialised.
+     */
+    void initialise();
 
     /**
      * @brief Load user-configured gear positions from NVS
@@ -125,6 +141,19 @@ public:
      * @brief Get the gear the transmission is moving toward (current step)
      */
     Gear getTargetGear() const { return targetGear_; }
+
+    /**
+     * @brief Final destination: the queued gear of a multi-step sequence, else the target.
+     */
+    Gear getDestinationGear() const {
+        return (queuedGear_ != Gear::GEAR_UNKNOWN) ? queuedGear_ : targetGear_;
+    }
+
+    /**
+     * @brief Speed interlock for a gear change (N always allowed). Read-only query, the same
+     * check setGear() runs; public for the GCS gear command's reason code.
+     */
+    bool canChangeGear(Gear targetGear) const;
 
     /**
      * @brief Get the gear the current step is moving away from.
@@ -169,7 +198,7 @@ private:
     enum class GearChangePhase {
         NONE,
         OVERSHOOT,        // servo moving to overshoot position
-        OVERSHOOT_DWELL,  // dwelling at overshoot for TRANS_OVERSHOOT_DWELL_MS
+        OVERSHOOT_DWELL,  // dwelling at overshoot until sensor-confirmed (TRANS_DWELL_CONFIRM_MS) or TRANS_OVERSHOOT_DWELL_MS
         RETURN            // servo moving back to final position (gear assumed engaged)
     };
 
@@ -187,11 +216,17 @@ private:
     uint32_t lastGearCheckTime_;
     uint32_t lastStatusLogTime_;
     bool lastGearMismatch_;
+    TransmissionResync resync_;     // idle consecutive-mismatch counter
+    bool initStepActive_;           // the initialisation step into NEUTRAL is running
     Gear lastLoggedGear_;
     bool lastLoggedMoving_;
 
     Gear queuedGear_;               // GEAR_UNKNOWN = no sequence pending, else = final destination
     uint32_t sequenceStepDwellStart_;  // millis() when step-dwell armed, 0 = not armed
+    ShiftConfirm dwellConfirm_;     // sensor confirmation of the overshoot dwell
+    ShiftConfirm pauseConfirm_;     // sensor confirmation of the inter-step pause
+    uint32_t shiftStartMs_;         // millis() when the current single step / sequence started
+    Gear shiftFromGear_;            // gear the current single step / sequence started from
 
     mutable Gear     cachedPhysicalGear_;
     mutable uint32_t lastGearReadTime_;
@@ -199,11 +234,12 @@ private:
     float gearPositions_[4];
     float overshootPcts_[4];
 
-    bool canChangeGear(Gear targetGear) const;
     void commandServo(float positionPct);
     uint32_t computeSettleMs(float fromPct, float toPct) const;
     void saveDefaultPosition(Gear gear, float positionPct);
     void startGearChange(Gear gear);
+    void startInitStep(float direction);
+    void markStateInvalid();
     static Gear nextGearToward(Gear from, Gear to);
 };
 

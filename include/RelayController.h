@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include "Constants.h"
+#include "RelayBoardLaw.h"   // RelayBoardKind only (getBoardKind() is always NONE here)
 
 /**
  * @brief Relay controller for ignition, starter, lighting and the front-wheel lock.
@@ -28,6 +29,12 @@
  *
  * Front-wheel lock: fitted on the quad bike (RELAY_WHEEL_LOCK_FITTED = 1, Relay 4);
  * allOff() deliberately leaves it in its last state.
+ *
+ * master's I2C relay-board API (PCA9557 / XL9535 detection, board selector, verified
+ * writes, fault state) does not exist on this board. The parts the shared callers use
+ * are kept with their direct-GPIO meaning: the relays are available as soon as begin()
+ * ran (isAvailable()), never faulted afterwards, and getBoardKind() is always
+ * RelayBoardKind::NONE (GCS hardware-version bits 16-23 = 0, "no I2C relay board").
  */
 class RelayController {
 public:
@@ -132,6 +139,21 @@ public:
      * @return Current ignition state
      */
     IgnitionState getIgnitionState() const { return currentIgnitionState_; }
+
+    /**
+     * @brief True while a dwell-gated crank is armed (requestCrank() → pre-crank dwell).
+     * The reported state is ACC meanwhile; IGN_STATE shows it as CRANKING.
+     */
+    bool isCrankPending() const { return initialized_ && crankArmed_; }
+
+    /** @brief Relays usable: begin() ran (a direct GPIO write cannot fail afterwards) */
+    bool isAvailable() const { return initialized_; }
+
+    /** @brief Inverse of isAvailable(): true only before begin() */
+    bool isFaulted() const { return !initialized_; }
+
+    /** @brief No I2C relay board on this board: always RelayBoardKind::NONE */
+    RelayBoardKind getBoardKind() const { return RelayBoardKind::NONE; }
 
     /**
      * @brief Get current front light state

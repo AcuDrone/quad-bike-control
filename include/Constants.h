@@ -41,7 +41,7 @@
 
 // VESC steering driver UART (UART_NUM_2; UART0 = debug console, UART1 = MAVLink)
 #define PIN_VESC_TX         GPIO_NUM_4    // ESP TX -> VESC RX (3.3V logic, direct wiring)
-#define PIN_VESC_RX         GPIO_NUM_5    // ESP RX <- VESC TX
+#define PIN_VESC_RX         GPIO_NUM_5    // ESP RX <- VESC TX; internal pull-up set in VescMotorDriver::begin()
 #define VESC_UART_NUM       2             // UART_NUM_2
 #define VESC_UART_BAUD      115200        // VESC app default baud
 
@@ -123,11 +123,12 @@
 #define RELAY_TEST_STARTER_MAX_MS  2000UL   // ms cap for a starter-relay (Relay 2) test
 
 // The front-wheel lock is fitted on the quad bike (Relay 4, RELAY_MASK_WHEEL_LOCK above);
-// RelayController drives it from MAVLink channel 7 and the web `set_wheel_lock`.
+// RelayController drives it from MAVLink channel 7, the GCS (MAV_CMD_USER_2) and the
+// web `set_wheel_lock`.
 #define RELAY_WHEEL_LOCK_FITTED 1           // 1 = relay behind the wheel-lock function
 
 // Cranking Parameters
-#define CRANKING_TIMEOUT           2000  // ms - maximum cranking duration
+#define CRANKING_TIMEOUT           5000  // ms - maximum cranking duration per start attempt; the starter is released earlier as soon as engineRpm ≥ ENGINE_RUNNING_RPM_THRESHOLD (2026-11-06: 2 s was too short)
 #define ACC_PRECRANK_DWELL_MS      2000  // ms - ignition/ECU line (R1) must be powered this long before the starter (R2) engages
 #define ENGINE_RUNNING_RPM_THRESHOLD 1500  // RPM - engine considered running above this
 
@@ -208,11 +209,34 @@ struct ServoChannelConfig {
 #define MAVLINK_PARAM_STALE_MS        16000  // ms without a PARAM_VALUE before the value is unusable (~3 polls)
 #define MAVLINK_PARAM_EPSILON_MS      0.005f // m/s — smaller differences are "unchanged" (never compare floats with ==)
 
-// Inbound COMMAND_LONG handling. The only command implemented is a trip reset, carried as
+// Inbound COMMAND_LONG handling. Two commands are implemented: a trip reset, carried as
 // MAV_CMD_USER_1 with a magic param1 so that a stray, replayed or mis-scripted MAV_CMD_USER_1
-// cannot silently destroy the operator's trip reading.
+// cannot silently destroy the operator's trip reading, and the GCS vehicle commands below.
 #define MAVLINK_CMD_TRIP_RESET_MAGIC  1.0f   // param1 magic for MAV_CMD_USER_1 (trip reset)
-#define MAVLINK_CMD_PARAM_EPSILON     0.01f  // param1 match tolerance (never compare floats with ==)
+#define MAVLINK_CMD_PARAM_EPSILON     0.01f  // param1/param2 match tolerance (never compare floats with ==)
+
+// GCS vehicle commands: MAV_CMD_USER_2 (31011) to 1/25, control-protocol version 1
+// (change add-gcs-vehicle-commands). param1 = function, param2 = value, param3..7 ignored:
+//   0 query (0 caps, 1 firmware version, 2 hardware version)
+//   1 gear (R -1, N 0, H 1, L 2)        caps bit0 R/N/L, bit1 H
+//   2 ignition (OFF 0, ACC 1, ON 2)     caps bit2
+//   3 headlight (OFF 0, ON 1)           caps bit3
+//   4 diff lock (OFF 0, ON 1)           caps bit4
+//   5 handbrake (OFF 0, ON 1)           caps bit5 — aztec only, never on the quad bike
+// TEMPORARILY_REJECTED reasons in result_param2: 1 engine not running, 2 speed > 1.4 m/s,
+// 3 fail-safe / not under MAVLink control, 4 speed > 3 km/h (handbrake apply). The decisions
+// live in include/VehicleCommandLaw.h (its literals mirror these).
+#define VCMD_PROTOCOL_VERSION     1
+#define VCMD_CAPS_TX_MS           10000  // ms between QB_CAPS NAMED_VALUE_INT broadcasts
+#define VCMD_CAP_GEARS_RNL        0x01
+#define VCMD_CAP_GEAR_H           0x02
+#define VCMD_CAP_IGNITION         0x04
+#define VCMD_CAP_LIGHT            0x08
+#define VCMD_CAP_LOCK             0x10
+#define VCMD_CAP_HANDBRAKE        0x20
+// RC channels outside this band (incl. 0 = output disabled) are "absent": no change of state.
+#define RC_CHANNEL_VALID_MIN_US   880
+#define RC_CHANNEL_VALID_MAX_US   2160
 
 // Body-frame wheel odometry (VISION_POSITION_DELTA — wheel speed into the autopilot's EKF3).
 // The delta is measured along the vehicle's OWN longitudinal axis, so no heading is needed and
@@ -298,8 +322,12 @@ struct ServoChannelConfig {
 //  - Percent commands need a healthy sensor + both limits; jog/nudge only need the VESC link
 //    (sensorless open loop is allowed, with no stall backstop).
 // The values marked bench-tune were converted from AS5600 counts (1 count ≈ 0.88 × 0.1°).
-#define STEER_POSITION_TOLERANCE  10    // 0.1° (1.0°) - park window: driving stops (coast, the worm holds) within this — bench-tune
-#define STEER_RESTART_TOLERANCE   30    // 0.1° (3.0°) - a parked loop drives again only beyond this (stop hysteresis) — bench-tune 2–5°
+#define STEER_POSITION_TOLERANCE  2     // 0.1° (0.2°) - park window: driving stops (coast, the worm holds) within this;
+                                        //      measured 2026-11-05 on the quad: coast after cut ≈ 0, a 0.4° window parked
+                                        //      0.3–0.4° short on the approach side (fix-steering-jerk-and-centre-undershoot).
+                                        //      If it overshoots / hunts: lower STEER_PWM_TRACK_MIN_DUTY first, then try 3
+#define STEER_RESTART_TOLERANCE   10    // 0.1° (1.0°) - a parked loop drives again only beyond this (stop hysteresis);
+                                        //      measured 2026-11-05 on the quad: no overshoot / no restarts from ±9.3°, 3.0° blocked small moves
 #define STEER_MOVE_TIMEOUT        7500  // ms - max time continuously behind the target by more than STEER_RESTART_TOLERANCE
                                         //      (re-armed whenever within it) — bench-check a full lock-to-lock move
 #define STEER_STALL_THRESHOLD     5     // 0.1° (0.5°) - progress below this over STEER_STALL_TIMEOUT = stall — bench-tune
@@ -317,27 +345,42 @@ struct ServoChannelConfig {
 #define STEER_LWS_ZERO_CONFIRM_MS 1000  // ms - after [53 30], wait this long for OK=1 fault=0 cal=1 |angle| ≤ tolerance
 #define STEER_LWS_ZERO_TOLERANCE  10    // 0.1° (1.0°) - |angle| accepted as "zero confirmed"
 
-// Proportional PWM control (include/SteerPositionLaw.h): duty = clamp(|error| * STEER_KP + boost, floor, MAX),
+// Proportional PWM control (include/SteerPositionLaw.h):
+//   duty = clamp(max(|error| * STEER_KP, floor) + boost, floor, MAX), signed toward the target;
 // floor = STEER_PWM_MIN_DUTY (break-away) from rest / after a reversal until 0.3° of progress
-// (STEER_BOOST_MIN_PROGRESS), then STEER_PWM_TRACK_MIN_DUTY while tracking.
+// (STEER_BOOST_MIN_PROGRESS), then STEER_PWM_TRACK_MIN_DUTY while tracking. The anti-stall boost
+// adds on top of the floor (never hidden under it). Measured 2026-11-05 on the quad (USB diag,
+// goto ±10): at a tracking floor of 70 a 10° move had 5–6 stop/go plateaus (17–27 A standing,
+// 2.0–2.5 s per move), each broke free at duty 89–107; parked 0.3–0.4° short at a 0.4° window.
 #define STEER_KP                  1.15f // PWM duty (0-255) per 0.1° of error (saturates at ≈22°) — bench-tune
-#define STEER_PWM_MIN_DUTY        140   // break-away floor: overcomes the worm's static friction (bench: no movement at 70);
+#define STEER_PWM_MIN_DUTY        85     // break-away floor (≥ STEER_PWM_TRACK_MIN_DUTY): overcomes the worm's static friction (measured 2026-11-05 on the quad:
+                                        // sustained break-away L 46–50 / R 42–44, 140 was ~3× too high);
                                         // used from rest until 0.3° of progress; also the rate-mode and jog floor
-#define STEER_PWM_TRACK_MIN_DUTY  100   // floor while driving after break-away; must exceed the worm's running friction — bench-tune 90–120
+#define STEER_PWM_TRACK_MIN_DUTY  85     // floor while driving after break-away; must exceed the running friction incl. tyre scrub
+                                        // (measured 2026-11-05 on the quad: plateaus at 70, broke free at 89–107) — bench-tune
+                                        // 90 → 85 → 80 if the wheel overshoots the 0.2° park window
 #define STEER_PWM_MAX_DUTY        255   // full speed for large errors
+static_assert(STEER_PWM_MIN_DUTY >= STEER_PWM_TRACK_MIN_DUTY, "break-away floor must not be below the tracking floor");
 
 // Anti-stall boost: steering load rises toward the locks; when commanded motion
 // makes no progress, duty escalates above the P term until movement resumes.
 // (Bench: closed-loop stalled ~72 counts short of the left lock at MIN duty.)
 #define STEER_BOOST_CHECK_MS      100   // ms - progress check period
 #define STEER_BOOST_MIN_PROGRESS  3     // 0.1° (0.3°) per check period considered "moving" — bench-tune
-#define STEER_BOOST_STEP          30    // duty added (stalled) or removed (moving) per check
+#define STEER_BOOST_STEP          30    // duty added per check when stalled (on top of the floor)
+#define STEER_BOOST_DECAY         30    // duty removed per check when moving inside STEER_BOOST_HOLD_ERR (never below 0): fast shed inside 2° (10 let a held +30 reach centre: 0.7° overshoot, 2026-11-06)
+// Boost hold band: while the wheel moves and |error| > this, the boost is held (no decay); a stalled
+// check still adds STEER_BOOST_STEP anywhere. Measured 2026-11-06 on the loaded quad (~200 kg, dry
+// steering, floors 70–100): outward 10° moves stalled at 35–44 A 2–3 times — +30 broke the wheel
+// free, the −10/100 ms decay removed it within ≈300 ms and it stalled again (duty 103–150).
+#define STEER_BOOST_HOLD_ERR      20    // 0.1° (2.0°) - bench-tune
 
 // Calibration jog (momentary open-loop drive from the web UI)
-#define STEER_JOG_DUTY            180   // PWM duty while jogging (default when the UI sends no speed; min working duty is ~140)
+#define STEER_JOG_DUTY            120   // PWM duty while jogging (default when the UI sends no speed; measured 2026-11-05 on the quad:
+                                        // break-away 42–50, so 120 is a controllable jog)
 #define STEER_JOG_TIMEOUT_MS      500   // ms - auto-stop if the jog command is not refreshed
-#define STEER_NUDGE_DUTY          150   // PWM duty for a precision nudge pulse (just above friction)
-#define STEER_NUDGE_MS            70    // ms - nudge pulse length (a degree or two per tap)
+#define STEER_NUDGE_DUTY          100   // PWM duty for a precision nudge pulse (measured 2026-11-05 on the quad: ≤ 100 × 70 ms does nothing)
+#define STEER_NUDGE_MS            100   // ms - nudge pulse length (measured 2026-11-05 on the quad: 100 duty × 100 ms = 0.4–0.6° per tap)
 
 // Sensorless rate mode (include/SteerRate.h): with the LWS unhealthy, the source MAVLink
 // and the autopilot in MANUAL/unknown, the stick is a rotation-rate command. It adds NO tunable:
@@ -352,6 +395,54 @@ struct ServoChannelConfig {
 // within STEER_RESTART_TOLERANCE. The stall latch is checked only on a command from idle.
 #define STEER_STALL_COOLDOWN_MS   700   // ms — same-direction moves refused after a stall; opposite direction always allowed
 
+// Park correction (include/SteerParkLaw.h, change add-steering-park-correction): a parking that
+// ended between STEER_PARK_TRIGGER_TOL (0.4°) and STEER_RESTART_TOLERANCE (1.0°) off target is
+// finished with a ladder of short open-loop pulses (setSpeed(dir × duty) then stop(), no
+// STEER_PWM_MIN_DUTY floor), escalating only when the wheel did not move. Measured 2026-11-05 on
+// the quad (USB steering diagnostics): sustained break-away L 46–50 / R 42–44, coast after the cut
+// ≈ 0 (self-locking 1:40 worm), ≤ 100 × 70 ms moves nothing at standstill, 100 × 100 ms moves
+// 0.4–0.6°, a closed-loop goto stops 0.2–0.4° short. Rolling tyres need less, hence rung 1 below
+// the standstill threshold.
+// Compile-time only (NOT web settings): these five decide WHEN the firmware moves the wheel by
+// itself and how a move is judged. A short settle, a small gap or a move threshold below the
+// sensor's 0.1° resolution gives pulses while driving or a buzzing wheel, which only the USB
+// diagnostics can show — change them only with a reflash after a diagnostics run.
+#define STEER_PARK_TRIGGER_TOL    4     // 0.1° (0.4°) — no correction within max(this, done tolerance); separate from the
+                                        //      0.2° park window STEER_POSITION_TOLERANCE (fix-steering-jerk-and-centre-undershoot D5)
+#define STEER_PARK_SETTLE_MS      1000  // ms — parked with a stable target this long before the first pulse
+#define STEER_PARK_TARGET_STABLE  3     // 0.1° (0.3°) — a target move beyond this cancels and restarts the settle clock
+#define STEER_PARK_PULSE_GAP_MS   500   // ms — wait after a pulse's end before its result is judged
+#define STEER_PARK_MOVE_MIN       1     // 0.1° (0.1°) — smaller position change = "did not move" (escalate)
+// Web settings (NVS "steering", owned by SteeringController): defaults and bounds
+#define STEER_PARK_ENABLED_DEFAULT     true
+#define STEER_PARK_DUTY1_DEFAULT       70    // rung 1 duty (0-255)
+#define STEER_PARK_DUTY2_DEFAULT       85
+#define STEER_PARK_DUTY3_DEFAULT       100
+#define STEER_PARK_MS1_DEFAULT         80    // rung 1 length, ms
+#define STEER_PARK_MS2_DEFAULT         90
+#define STEER_PARK_MS3_DEFAULT         100
+#define STEER_PARK_DONE_TOL_DEFAULT    2     // 0.1° (0.2°) — a correction ends within this
+#define STEER_PARK_MAX_PULSES_DEFAULT  5     // pulses per parking (a done does not refill the budget)
+#define STEER_PARK_DUTY_MIN            40
+#define STEER_PARK_DUTY_MAX            150
+#define STEER_PARK_MS_MIN              40    // ms
+#define STEER_PARK_MS_MAX              200   // ms
+#define STEER_PARK_DONE_TOL_MIN        1     // 0.1° (0.1°)
+#define STEER_PARK_DONE_TOL_MAX        5     // 0.1° (0.5°)
+#define STEER_PARK_MAX_PULSES_MIN      1
+#define STEER_PARK_MAX_PULSES_MAX      10
+// NVS keys in the EXISTING "steering" namespace (beside lim_l / lim_r / inv / cal_ver /
+// steer_sca_base). Never clear() it; the v4 migration and eraseLimits() leave these keys alone.
+#define STEER_PARK_EN_NVS_KEY     "park_en"    // bool
+#define STEER_PARK_D1_NVS_KEY     "park_d1"    // uint8 duty, rung 1..3
+#define STEER_PARK_D2_NVS_KEY     "park_d2"
+#define STEER_PARK_D3_NVS_KEY     "park_d3"
+#define STEER_PARK_T1_NVS_KEY     "park_t1"    // uint16 ms, rung 1..3
+#define STEER_PARK_T2_NVS_KEY     "park_t2"
+#define STEER_PARK_T3_NVS_KEY     "park_t3"
+#define STEER_PARK_TOL_NVS_KEY    "park_tol"   // int32, 0.1°
+#define STEER_PARK_MAX_NVS_KEY    "park_max"   // uint8
+
 // VESC steering driver telemetry monitor + failsafe
 // (Over-current is left to the VESC itself: Motor Current Max clamp, Absolute Max
 //  Current fault — surfaced here as a fault code — and MOSFET temperature limiting.
@@ -359,10 +450,38 @@ struct ServoChannelConfig {
 //  while the sensor is healthy; sensorless jog relies on the VESC current clamp + fault stop.)
 #define STEER_VESC_TELEM_MS         300   // ms — COMM_GET_VALUES poll period (~3 Hz)
 #define STEER_VESC_COMM_TIMEOUT_MS  1000  // ms — no valid GET_VALUES reply for this long -> driver fault (stop, reject moves)
+#define VESC_RX_GAP_MS              5     // ms — byte gap that ends an incomplete frame (VescRxParser resync)
+#define VESC_LINK_DOWN_SNAP_MS      10000 // ms — journal `VESC W link_down_snap` period while the link is down
 // Steering VESC input voltage below this = "low" (telemetry steer_vin_low → web "Увага" warning only,
 // no control action). 21.5 V ≈ 3.58 V/cell on a 6s NMC pack, ≈ 3.07 V/cell on a 7s LiFePO4 pack —
 // low but not yet harmful for either. Adjust per vehicle build.
 #define STEER_VIN_LOW_V             21.5f // V
+
+// ----------------------------------------------------------------------------
+// STEERING DIAGNOSTICS (USB serial) — include/SteerDiag.h, include/SteerDiagLaw.h,
+// host script tools/steer_diag.py (change add-steering-serial-diagnostics).
+// Line commands on the USB-CDC `Serial` console only (never UART0 / UART2). While
+// `diag on` the console owns the steering: external commands are refused.
+// ----------------------------------------------------------------------------
+#define STEER_DIAG_LINE_MAX          96     // bytes — longest accepted command line (longer lines are dropped)
+#define STEER_DIAG_LOG_MS            20     // ms — D-line period (50 Hz) while an experiment runs
+#define STEER_DIAG_KEEPALIVE_MS        100    // ms — `K` line period inside the keepalive window (HWCDC stuck-TX workaround)
+#define STEER_DIAG_KEEPALIVE_WINDOW_MS 30000  // ms — keepalive while diag on and this long after the last command line
+#define STEER_DIAG_REFRESH_MS        100    // ms — open-loop duty re-sent to the VESC at least this often
+#define STEER_DIAG_VESC_TELEM_MS     50     // ms — COMM_GET_VALUES period while diag is on (normal: STEER_VESC_TELEM_MS)
+#define STEER_DIAG_IDLE_TIMEOUT_MS   60000  // ms — automatic `diag off` (motor stopped) without any command line
+#define STEER_DIAG_HOST_LOST_MS      500    // ms — `(bool)Serial` false this long (after it was true once since diag on) = USB host lost
+#define STEER_DIAG_MAX_SPEED_KMH     0.5f   // km/h — diag on / experiments refused, running ones aborted, above this
+#define STEER_DIAG_LIMIT_MARGIN      20     // 0.1° (2.0°) — abort when driving to within this of a captured limit
+#define STEER_DIAG_MOVE_POS          5      // 0.1° (0.5°) — ramp: |angle − start| at which the wheel counts as moving
+#define STEER_DIAG_MOVE_RATE         5      // °/s — ramp: LWS rate (toward the drive) at which the wheel counts as moving
+#define STEER_DIAG_SETTLE_MS         600    // ms — logging after the duty is cut (coast) / after the loop stops (goto)
+#define STEER_DIAG_RAMP_TIMEOUT_MS   15000  // ms — ramp hard timeout
+#define STEER_DIAG_RAMP_MAXHOLD_MS   1000   // ms — ramp ends "no_move" after this long at its max duty without movement
+#define STEER_DIAG_GOTO_TIMEOUT_MS   12000  // ms — goto hard timeout (longer than STEER_MOVE_TIMEOUT)
+#define STEER_DIAG_PULSE_MAX_MS      1000   // ms — longest `pulse`
+#define STEER_DIAG_HOLD_MAX_MS       1500   // ms — longest `hold`
+#define STEER_DIAG_GOTO_MAX_DEG      60.0f  // °  — |goto| target bound (the targets are also clamped to the limits)
 
 // Throttle Servo Parameters
 #define THROTTLE_SERVO_MIN_US    800   // Minimum servo pulse width (µs) — mechanical range floor / slider bound
@@ -374,6 +493,17 @@ struct ServoChannelConfig {
 #define THROTTLE_DEFAULT_IDLE_US 901   // idle pulse width (previously 13° over the 800–2200µs range)
 #define THROTTLE_DEFAULT_FULL_US 1344  // full-throttle pulse width (previously 70° over the 800–2200µs range)
 #define THROTTLE_MIN_SPAN_US     100   // minimum accepted |full_us - idle_us| separation (full may be below idle on a mirrored servo)
+// Throttle OPENING rate limit (anti-stall; include/ThrottleSlewLaw.h, applied in
+// ThrottleController::setThrottlePercent). Snapping the throttle open from idle stalls the engine
+// (air before fuel, the CVT takes load before the RPM rises). Closing is never rate-limited.
+// Range: the engine needs ≈0.5–1 s from idle before it can take load, so a 1–2 s idle→full ramp
+// is the useful window; faster than 100 %/s brought the stall back; 30 %/s (3.3 s) is the slowest
+// still drivable. 0 = limit off (exactly the old snap). Per-vehicle, NVS "throttle"/open_slew.
+#define THROTTLE_OPEN_SLEW_DEFAULT_PCT_S 60.0f   // %/s - idle→full in 1.67 s, 0→30 % in 0.5 s
+#define THROTTLE_OPEN_SLEW_MIN_PCT_S     30.0f   // %/s - lowest accepted non-zero rate (3.3 s to full)
+#define THROTTLE_OPEN_SLEW_MAX_PCT_S     100.0f  // %/s - highest accepted rate (1 s to full)
+#define THROTTLE_OPEN_SLEW_NVS_KEY       "open_slew"  // NVS "throttle" namespace, float %/s (owned by ThrottleController)
+#define THROTTLE_OPEN_SLEW_MAX_DT_S      0.1f    // s - cap on the elapsed time per write, so a silent path never steps open
 
 // ============================================================================
 // BTS7960 MOTOR DRIVER CONFIGURATION
@@ -401,8 +531,9 @@ struct ServoChannelConfig {
 #define TRANS_GEAR_OVERSHOOT_L_PCT          5.0f
 #define TRANS_GEAR_OVERSHOOT_H_PCT          5.0f
 
-#define TRANS_OVERSHOOT_DWELL_MS            2000    // ms to hold at overshoot position before assuming gear engaged
-#define TRANS_SEQUENCE_STEP_DWELL_MS        1000    // ms to dwell after a step completes before starting the next step
+#define TRANS_OVERSHOOT_DWELL_MS            2000    // ms - overshoot dwell TIMEOUT: ends earlier on sensor confirmation, else gear assumed engaged
+#define TRANS_SEQUENCE_STEP_DWELL_MS        1000    // ms - inter-step pause TIMEOUT: ends earlier when the sensor confirms the completed step
+#define TRANS_DWELL_CONFIRM_MS              200     // ms - sensor must read the expected gear continuously this long to end a dwell / pause early (300–400 if the linkage bounces)
 
 // Default gear positions (percent: 0.0 = 800µs, 100.0 = 2200µs)
 #define TRANS_GEAR_DEFAULT_REVERSE_PCT      40.0f
@@ -415,16 +546,32 @@ struct ServoChannelConfig {
 #define TRANS_GEAR_CHECK_INTERVAL           500        // ms - physical gear verification period
 #define TRANS_GEAR_READ_INTERVAL_MS         100        // ms - GPIO debounce cache for getPhysicalGear()
 #define TRANS_GEAR_READ_RETRY_COUNT         3          // extra reads when all switches read inactive while servo is idle
+#define TRANS_RESYNC_CONFIRM_CHECKS         2          // consecutive idle checks with the same sensor gear != target before adopting it
+#define TRANS_INIT_SETTLE_MS                1500       // ms - init-step overshoot move from an unknown servo position (max 20 % + 1 % overshoot ≈ 0.75 s at 35 ms/%, doubled)
 
 // ============================================================================
 // BRAKE SYSTEM CONFIGURATION
 // ============================================================================
 
 // Brake Movement Parameters
-#define BRAKE_FULL_TRAVEL_TIME 1500  // ms - estimated time for 0-100% brake travel
+// BRAKE_FULL_TRAVEL_TIME and BRAKE_HOLD_SPEED are the DEFAULTS of the per-vehicle, web-tunable
+// values (change add-brake-tuning-card; NVS "brake"/travel_ms and hold_pwm, owned by
+// VehicleController, law in include/BrakeLaw.h — keep its literals in sync).
+#define BRAKE_FULL_TRAVEL_TIME 1500  // ms - default estimated time for 0-100% brake travel (measured on the quad)
 #define BRAKE_TOLERANCE        1  // % - position tolerance for "at target"
 #define BRAKE_SENSOR_OVERRUN_TIME 1000  // ms - continue moving after sensor triggers (full retraction)
-#define BRAKE_HOLD_SPEED          30    // PWM (0-255) applied against spring return when at target position
+#define BRAKE_HOLD_SPEED          30    // PWM (0-255) default push against the hydraulic return when at target position
+// Travel 1000–3000 ms around the measured 1500 ms: covers a faster or slower actuator on the other
+// vehicle; the cap also bounds how long a too-long setting stalls the actuator at full drive.
+#define BRAKE_TRAVEL_MS_MIN    1000  // ms
+#define BRAKE_TRAVEL_MS_MAX    3000  // ms
+// Hold 0–100 on the 0–255 PWM scale: 0 = no push (coast); above ~100 the stalled actuator and the
+// BTS7960 heat up for as long as the brake is held, so the cap is well below full drive.
+#define BRAKE_HOLD_PWM_MIN     0
+#define BRAKE_HOLD_PWM_MAX     100
+#define BRAKE_NVS_NAMESPACE    "brake"
+#define BRAKE_TRAVEL_NVS_KEY   "travel_ms"   // uint16, ms
+#define BRAKE_HOLD_NVS_KEY     "hold_pwm"    // uint8, PWM 0-255 scale
 
 // ============================================================================
 // VEHICLE SPEED SENSOR (12V toothed-ring pickup, PCNT on PIN_SPEED_SENSOR)
@@ -495,7 +642,10 @@ struct ServoChannelConfig {
 //    authority that holds the limit — no proportional droop, whatever the engine, CVT or grade.
 //  - The floor defaults to 0 % = the CALIBRATED IDLE position (ThrottleController::percentToUs(0)),
 //    persisted per vehicle (0–20 %). That is not a hard cut: the ceiling only reaches the floor
-//    through the taper, the trim and the 80 %/s slew (100 → 0 takes ≥ 1.25 s), never as a step.
+//    through the taper, the trim and the ceiling slew, never as a step.
+//  - The ceiling slew (both directions) is also persisted per vehicle (10–200 %/s, default 80 %/s:
+//    100 → 0 takes ≥ 1.25 s); lower = gentler closing and return of the throttle. It caps the
+//    trim's fall as well (inside the law), so a gentler slew also slows how fast it can close.
 #define SPEED_LIMIT_TAPER_FRACTION     0.20f  // band = 0.20 × limit — the limiter takes the last fifth
 #define SPEED_LIMIT_TAPER_MIN_MS       0.5f   // m/s - ≈3.5 speed quanta (0.142 m/s); narrower hunts
 #define SPEED_LIMIT_TAPER_MAX_MS       1.4f   // m/s (≈5 km/h) - the old fixed band, proven at road limits
@@ -503,13 +653,16 @@ struct ServoChannelConfig {
 #define SPEED_LIMIT_FLOOR_MIN_PCT      0.0f   // % - accepted floor range (web command / NVS validation)
 #define SPEED_LIMIT_FLOOR_MAX_PCT      20.0f  // % - above this the floor itself becomes a hidden speed floor
 #define SPEED_LIMIT_FLOOR_NVS_KEY      "thr_floor"  // NVS "speed" namespace, float % (owned by VehicleController)
+#define SPEED_LIMIT_SLEW_DEFAULT_PCT_S 80.0f  // %/s - default max ceiling movement (both directions) — no servo snap.
+                                              // Applied to the CEILING, not the demand: the driver's own
+                                              // stick moves are never slowed by the limiter.
+#define SPEED_LIMIT_SLEW_MIN_PCT_S     10.0f  // %/s - accepted slew range (web command / NVS validation)
+#define SPEED_LIMIT_SLEW_MAX_PCT_S     200.0f // %/s - 100 → 0 in 0.5 s; faster is a step in all but name
+#define SPEED_LIMIT_SLEW_NVS_KEY       "thr_slew"   // NVS "speed" namespace, float %/s (owned by VehicleController)
 #define SPEED_LIMIT_TRIM_KI_PCT_S_PER_MS 30.0f // %/s per m/s - 1.4 m/s over takes the trim 100 → 0 in ≈2.4 s
 #define SPEED_LIMIT_TRIM_RISE_PCT_S    10.0f  // %/s - trim recovery cap; far below the slew, never a surge
 #define SPEED_LIMIT_BIND_MARGIN_PCT    1.0f   // % - demand within this of the ceiling = limiter binding
                                               // (the trim only rises while binding: anti-windup)
-#define SPEED_LIMIT_CEILING_SLEW_PCT_S 80.0f // %/s - max ceiling movement (both directions) — no servo snap.
-                                              // Applied to the CEILING, not the demand: the driver's own
-                                              // stick moves are never slowed by the limiter.
 // Saturation indicator (web console only — no serial log line, no MAVLink message): the ceiling is
 // at the floor yet the vehicle stays above the limit, i.e. the floor is too high or it is downhill.
 #define SPEED_LIMIT_SAT_MARGIN_MS      0.3f   // m/s (≈1 km/h, ~2 speed quanta) above the limit to count
@@ -575,7 +728,7 @@ struct ServoChannelConfig {
 // WiFi ACCESS POINT CONFIGURATION
 // ============================================================================
 
-#define WIFI_AP_SSID          "QuadBike-Control"  // WiFi AP SSID
+#define WIFI_AP_SSID          "QuadBike-Control"  // WiFi AP SSID base; "-XXXX" chip suffix (eFuse MAC) appended at boot
 #define WIFI_AP_PASSWORD      ""                  // No password (open network)
 #define WIFI_AP_CHANNEL       1                   // WiFi channel (1-13)
 #define WIFI_AP_MAX_CLIENTS   5                   // Maximum simultaneous clients
@@ -596,7 +749,7 @@ struct ServoChannelConfig {
 // OTA UPDATE CONFIGURATION
 // ============================================================================
 
-#define OTA_HOSTNAME          "quadbike-control"  // OTA hostname for identification
+#define OTA_HOSTNAME          "quadbike-control"  // OTA hostname base; "-xxxx" chip suffix appended at boot
 #define OTA_PASSWORD          ""                  // OTA password (empty = no password)
 
 // ============================================================================
@@ -634,8 +787,18 @@ enum class InputSource {
 #define CAN_RX_LOG_INTERVAL          1000  // ms - rate limit for unmatched-RX-frame logging
 #define CAN_HEALTH_LOG_INTERVAL      5000  // ms - rate limit for TEC/REC/EFLG health logging
 #define CAN_OVERFLOW_LOG_INTERVAL    5000  // ms - rate limit for RXnOVR overflow logging
-#define CAN_REINIT_NO_DATA_MS        15000 // ms - full chip re-init when polling but no valid OBD response for this long (heals a wedged TX / latched ABAT once the ECU powers up)
+#define CAN_REINIT_NO_DATA_MS        15000 // ms - full chip re-init when polling but no valid OBD response for this long (heals a wedged TX / latched ABAT once the ECU powers up); only while the ignition is ACC/IGNITION, window restarts at switch-on (CanWatchdogLaw.h)
 #define CAN_REINIT_MIN_INTERVAL_MS   15000 // ms - minimum spacing between forced re-inits
+// LWS silence watchdog (change add-event-journal-and-link-recovery D10). Runs only while the
+// ignition is ACC or IGNITION (the LWS is fed from the ACC line) and arms on the first 0x305
+// frame since the ignition was switched on. Fixed spacing, no back-off.
+#define CAN_LWS_SILENT_MS            1000  // ms - no 0x305 frame for this long = LWS path silent
+#define CAN_LWS_WD_OBD_ALIVE_MS      2000  // ms - an OBD reply within this window proves the bus works
+#define CAN_LWS_REINIT_MIN_MS        5000  // ms - min spacing from the last re-init of any kind
+#define CAN_REINIT_MAX_ATTEMPTS      3     // re-init attempts per trigger (retried on later update() calls)
+#define CAN_REINIT_RETRY_MS          100   // ms - spacing between the attempts of one trigger
+#define CAN_FIRST_FRAME_WAIT_MS      10000 // ms - give up waiting for the first LWS/OBD frame after a re-init
+#define CAN_WD_REPEAT_LOG_MS         600000 // ms - journal a still-silent watchdog episode again after this long (with a count)
 
 // MCP2515 hardware acceptance filtering (standard 11-bit IDs only), two paths on ONE bus.
 // The ECU floods the bus with broadcast frames (Delphi MT05 sends 0x301 etc.) which
@@ -686,6 +849,24 @@ enum class InputSource {
 #define TRANS_GEAR_BOOST_PID_KI          0.01f // integral gain (tunable)
 #define TRANS_GEAR_BOOST_PID_KD          0.0f  // derivative gain (0 = disabled; noisy on RPM signal)
 #define TRANS_GEAR_BOOST_SLEW_RATE_US    16    // µs per CAN update
+#define BOOST_ENABLED_NVS_KEY            "enabled" // NVS "boost" namespace, bool — gear-change RPM boost on/off
+#define BOOST_ENABLED_DEFAULT            true  // absent key → boost on (quad behaviour); off → idle hold during the shift
+
+// ============================================================================
+// EVENT JOURNAL (LittleFS /events.log + /events.1, change add-event-journal-and-link-recovery)
+// ============================================================================
+
+#define JOURNAL_FILE_MAX_BYTES     131072  // bytes per journal file (active + one rotated)
+#define JOURNAL_LINE_MAX           120     // bytes per line incl. '\n'; longer lines end with '~'
+#define JOURNAL_RAM_BUF_BYTES      4096    // unflushed lines held in RAM
+#define JOURNAL_FLUSH_MS           1000    // ms — at most one flash flush per interval
+#define JOURNAL_FLUSH_DEFER_MAX_MS 10000   // ms — max flush deferral while the steering motor drives
+#define JOURNAL_DEDUPE_MS          2000    // ms — same (source, event) written at most once per window
+#define JOURNAL_SNAP_MS            60000   // ms — SNAP line period
+#define JOURNAL_RTC_RING           16      // unflushed lines kept in RTC memory across a reset
+#define JOURNAL_LOOP_OVERRUN_MS    50      // ms — loop iteration longer than this is journaled
+#define JOURNAL_HEAP_WARN_BYTES    40960   // bytes — free heap below this = heap_low (40 KB)
+#define JOURNAL_HEAP_HYST_BYTES    8192    // bytes — heap_ok once free heap is this far above the threshold
 
 // ============================================================================
 // FIRMWARE VERSION
@@ -694,11 +875,19 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.7"
+#define FIRMWARE_VERSION "1.5.30"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry
 // so the web UI can tell which board the running firmware was built for.
 #define BOARD_NAME "DevKitC-1"
+
+// Hardware version reported by the GCS hardware-version query (change add-gcs-vehicle-commands):
+// bits 0-7 board revision (0 = Control_v0 on master, 1 = hand-wired DevKitC-1 here),
+// bits 8-15 vehicle type (1 quad bike = master / old-board, 2 buggy = aztec), bits 16-23
+// the relay board detected at boot (RelayBoardKind) — always 0 (NONE) here: the relays are
+// direct GPIO, there is no I2C relay board.
+#define BOARD_REVISION_CODE 1
+#define VEHICLE_TYPE_CODE   1
 
 #endif // CONSTANTS_H

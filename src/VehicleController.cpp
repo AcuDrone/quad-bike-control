@@ -1,6 +1,27 @@
 #include "VehicleController.h"
 #include "Debug.h"
+#include "EventJournal.h"
+#include "BrakeLaw.h"
+
+// BrakeLaw.h cannot include Constants.h (native tests): keep its literals in sync.
+static_assert(BRAKE_LAW_TRAVEL_MS_MIN == BRAKE_TRAVEL_MS_MIN, "BrakeLaw.h travel min out of sync");
+static_assert(BRAKE_LAW_TRAVEL_MS_MAX == BRAKE_TRAVEL_MS_MAX, "BrakeLaw.h travel max out of sync");
+static_assert(BRAKE_LAW_TRAVEL_MS_DEFAULT == BRAKE_FULL_TRAVEL_TIME, "BrakeLaw.h travel default out of sync");
+static_assert(BRAKE_LAW_HOLD_PWM_MIN == BRAKE_HOLD_PWM_MIN, "BrakeLaw.h hold min out of sync");
+static_assert(BRAKE_LAW_HOLD_PWM_MAX == BRAKE_HOLD_PWM_MAX, "BrakeLaw.h hold max out of sync");
+static_assert(BRAKE_LAW_HOLD_PWM_DEFAULT == BRAKE_HOLD_SPEED, "BrakeLaw.h hold default out of sync");
 #include <Preferences.h>
+
+// Vehicle-command gear code (VehicleCommandLaw.h: R -1, N 0, H 1, L 2) → transmission gear.
+static TransmissionController::Gear vcmdGearToTrans(int8_t code) {
+    switch (code) {
+        case VCMD_GEAR_R: return TransmissionController::Gear::GEAR_REVERSE;
+        case VCMD_GEAR_N: return TransmissionController::Gear::GEAR_NEUTRAL;
+        case VCMD_GEAR_H: return TransmissionController::Gear::GEAR_HIGH;
+        case VCMD_GEAR_L: return TransmissionController::Gear::GEAR_LOW;
+        default:          return TransmissionController::Gear::GEAR_UNKNOWN;
+    }
+}
 
 VehicleController::VehicleController(SteeringController& steering,
                                      ThrottleController& throttle,
@@ -17,6 +38,7 @@ VehicleController::VehicleController(SteeringController& steering,
       relayController_(relayController),
       speedSensor_(speedSensor),
       currentInputSource_(InputSource::FAILSAFE),
+      prevInputSource_(InputSource::FAILSAFE),
       steerMode_(SteerMode::BLOCKED),   // the sensor starts unhealthy (no frames yet)
       lastMavCmdCount_(0),
       failsafeApplied_(false),
@@ -27,24 +49,26 @@ VehicleController::VehicleController(SteeringController& steering,
       lastBrakeUpdateTime_(0),
       brakeSensorTriggerTime_(0),
       brakeIsMoving_(false),
+      brakeTravelMs_(BRAKE_FULL_TRAVEL_TIME),
+      brakeHoldPwm_(BRAKE_HOLD_SPEED),
       boostTargetRpm_(TRANS_GEAR_BOOST_TARGET_RPM),
+      boostGearEnabled_(BOOST_ENABLED_DEFAULT),
       gearBoostActive_(false),
       boostManualActive_(false),
+      shiftIdleHold_(false),
       gearBoostStartTime_(0),
       pidLastUpdateTime_(0),
       lastCanUpdateTime_(0),
       pidIntegral_(0.0f),
       pidPrevError_(0.0f),
       lastPIDThrottleUs_(THROTTLE_DEFAULT_IDLE_US),
-      previousIgnitionState_(MavlinkInterface::IgnitionState::OFF),
-      lastCommandedGear_(TransmissionController::Gear::GEAR_UNKNOWN),
-      transmissionInitialized_(false),
       lastSpeedLimitWarnMs_(0),
       lastSpeedLimitMs_(NAN),
       lastSpeedLimitLogMs_(0),
       limiter_(),
       limiterLastMs_(0),
       limiterFloorPct_(SPEED_LIMIT_FLOOR_DEFAULT_PCT),
+      limiterSlewPctS_(SPEED_LIMIT_SLEW_DEFAULT_PCT_S),
       satSinceMs_(0),
       satActive_(false),
       satClearedMs_(0),
@@ -68,6 +92,7 @@ bool VehicleController::initCAN() {
     Preferences prefs;
     if (prefs.begin("boost", true)) {
         boostTargetRpm_ = prefs.getInt("target_rpm", TRANS_GEAR_BOOST_TARGET_RPM);
+        boostGearEnabled_ = prefs.getBool(BOOST_ENABLED_NVS_KEY, BOOST_ENABLED_DEFAULT);
         prefs.end();
     }
 
@@ -98,6 +123,7 @@ bool VehicleController::initCAN() {
     // the default; NaN or anything outside 0–20 % is ignored (and never rewritten).
     if (prefs.begin("speed", true)) {
         float floorPct = prefs.getFloat(SPEED_LIMIT_FLOOR_NVS_KEY, SPEED_LIMIT_FLOOR_DEFAULT_PCT);
+        float slewPctS = prefs.getFloat(SPEED_LIMIT_SLEW_NVS_KEY, SPEED_LIMIT_SLEW_DEFAULT_PCT_S);
         prefs.end();
         if (isnan(floorPct) || floorPct < SPEED_LIMIT_FLOOR_MIN_PCT ||
             floorPct > SPEED_LIMIT_FLOOR_MAX_PCT) {
@@ -107,8 +133,41 @@ bool VehicleController::initCAN() {
             floorPct = SPEED_LIMIT_FLOOR_DEFAULT_PCT;
         }
         limiterFloorPct_ = floorPct;
+        // The ceiling slew, same rules: absent = default, NaN or outside 10–200 %/s ignored.
+        if (isnan(slewPctS) || slewPctS < SPEED_LIMIT_SLEW_MIN_PCT_S ||
+            slewPctS > SPEED_LIMIT_SLEW_MAX_PCT_S) {
+            Debug::printfFeature(DebugFeature::VEHICLE,
+                "[SPEED] Stored limiter slew %.1f out of range (%.0f-%.0f %%/s) — ignored\n",
+                slewPctS, SPEED_LIMIT_SLEW_MIN_PCT_S, SPEED_LIMIT_SLEW_MAX_PCT_S);
+            slewPctS = SPEED_LIMIT_SLEW_DEFAULT_PCT_S;
+        }
+        limiterSlewPctS_ = slewPctS;
     }
-    Debug::printfFeature(DebugFeature::VEHICLE, "[SPEED] Limiter floor: %.1f %%\n", limiterFloorPct_);
+    Debug::printfFeature(DebugFeature::VEHICLE, "[SPEED] Limiter floor: %.1f %%, slew: %.1f %%/s\n",
+                         limiterFloorPct_, limiterSlewPctS_);
+
+    // Brake full travel time and hold drive, NVS "brake" (VehicleController owns the brake
+    // estimate). A missing key reads as the default; an out-of-range stored value is logged and
+    // ignored (default used, never rewritten).
+    if (prefs.begin(BRAKE_NVS_NAMESPACE, true)) {
+        int32_t travel = prefs.getUShort(BRAKE_TRAVEL_NVS_KEY, BRAKE_FULL_TRAVEL_TIME);
+        int32_t hold = prefs.getUChar(BRAKE_HOLD_NVS_KEY, BRAKE_HOLD_SPEED);
+        prefs.end();
+        if (!brakeTravelMsValid(travel)) {
+            Debug::printfFeature(DebugFeature::VEHICLE,
+                "[BRAKE] Stored travel time %ld ms out of range (%d-%d ms) — ignored\n",
+                (long)travel, BRAKE_TRAVEL_MS_MIN, BRAKE_TRAVEL_MS_MAX);
+        }
+        if (!brakeHoldPwmValid(hold)) {
+            Debug::printfFeature(DebugFeature::VEHICLE,
+                "[BRAKE] Stored hold drive %ld out of range (%d-%d) — ignored\n",
+                (long)hold, BRAKE_HOLD_PWM_MIN, BRAKE_HOLD_PWM_MAX);
+        }
+        brakeTravelMs_ = (uint16_t)brakeTravelMsOrDefault(travel);
+        brakeHoldPwm_ = (uint8_t)brakeHoldPwmOrDefault(hold);
+    }
+    Debug::printfFeature(DebugFeature::VEHICLE, "[BRAKE] Travel time: %u ms, hold drive: %u\n",
+                         (unsigned)brakeTravelMs_, (unsigned)brakeHoldPwm_);
 
     bool result = canController_.begin();
     canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM);
@@ -120,16 +179,28 @@ bool VehicleController::initCAN() {
     return result;
 }
 
+static const char* inputSourceName(InputSource s) {
+    return (s == InputSource::MAVLINK) ? INPUT_SOURCE_NAME_MAVLINK :
+           (s == InputSource::WEB) ? INPUT_SOURCE_NAME_WEB : INPUT_SOURCE_NAME_FAILSAFE;
+}
+
 void VehicleController::update() {
+    // The Bosch LWS is powered from the ACC line (ignition Relay_1): its CAN silence watchdog
+    // runs only while the ignition is ACC or IGNITION (decision 1 of change
+    // add-event-journal-and-link-recovery). Read-only use of the relay state.
+    {
+        const RelayController::IgnitionState ign = relayController_.getIgnitionState();
+        canController_.setLwsPowered(ign == RelayController::IgnitionState::ACC ||
+                                     ign == RelayController::IgnitionState::IGNITION);
+    }
+
     // Update CAN controller (read vehicle data from ECU)
     canController_.update();
 
-    // Restore transmission state once, on first engine-running detection
-    if (!transmissionInitialized_ && isEngineRunning()) {
-        transmissionInitialized_ = true;
-        if (!transmission_.restoreStateIfValid()) {
-            transmission_.setGear(TransmissionController::Gear::GEAR_NEUTRAL);
-        }
+    // Initialise the transmission once, on first engine-running detection (unless a web
+    // gear command already did): sensor, else valid NVS state, else a step into NEUTRAL.
+    if (!transmission_.isInitialised() && isEngineRunning()) {
+        transmission_.initialise();
         Debug::printlnFeature(DebugFeature::VEHICLE, "[VEHICLE] Transmission initialized on engine start");
     }
 
@@ -179,6 +250,10 @@ void VehicleController::update() {
         // No autopilot command path: keep the frame counter in step so a later return to
         // MAVLink never treats an old frame as a fresh rate command.
         lastMavCmdCount_ = mavlink_.getCommandCount();
+        // RC is not in control (fail-safe or web portal): the first valid frame after the
+        // return re-applies gear / ignition / light / lock, exactly as at boot (owner decisions
+        // D-A, D-H). A GCS / web command given meanwhile is not restored.
+        rc_.resync();
         // The scale is a property of the AUTOPILOT command path alone. With the web or the
         // fail-safe in charge nothing is being scaled, so the reported scale must say so rather
         // than freeze at whatever the autopilot path last computed — a stale 0.18 on the portal
@@ -209,8 +284,9 @@ void VehicleController::update() {
     // already re-reads its channel every iteration, so it was always re-limited; the web path
     // used to clamp only at command time, which meant a vehicle accelerating past the ceiling on
     // an unchanged 80 % slider was never clamped until the operator touched the slider again.
-    // Calibration owns the servo directly, and the gear-boost PID writes µs — both stay clear.
-    if (currentInputSource_ == InputSource::WEB && !gearBoostActive_ && !throttle_.isCalibrating()) {
+    // Calibration owns the servo directly, and the gear-boost PID writes µs (or the shift idle
+    // hold keeps idle) — both stay clear.
+    if (currentInputSource_ == InputSource::WEB && !isThrottleLockedForShift() && !throttle_.isCalibrating()) {
         float demandPct = webThrottleDemandPct_;
         if (shouldClipThrottle()) {
             demandPct = min(TRANS_UNKNOWN_GEAR_THROTTLE_MAX, demandPct);
@@ -218,10 +294,17 @@ void VehicleController::update() {
         throttle_.setThrottlePercent(applySpeedLimit(demandPct));
     }
 
-    // PID-controlled RPM boost during gear changes or manual test (overrides MAVLink/web throttle)
-    if (transmission_.needsThrottleBoost() || gearBoostActive_ || boostManualActive_) {
+    // PID-controlled RPM boost during gear changes or manual test (overrides MAVLink/web throttle).
+    // A gear change starts the PID only with the boost switch on and no idle hold in progress
+    // (switching it on mid-shift keeps the hold; the PID runs from the next gear change). The
+    // manual test ignores the switch.
+    if (gearBoostActive_ || boostManualActive_ ||
+        (transmission_.needsThrottleBoost() && boostGearEnabled_ && !shiftIdleHold_)) {
         updateGearBoostPID();
     }
+
+    // Boost switched off: the gear change holds the throttle at idle instead
+    updateShiftIdleHold();
 
     // Update steering position control (after canController_.update(): it sees this
     // iteration's angle frames)
@@ -263,10 +346,13 @@ void VehicleController::setInputSource(InputSource source) {
                      (source == InputSource::MAVLINK) ? INPUT_SOURCE_NAME_MAVLINK :
                      (source == InputSource::WEB) ? INPUT_SOURCE_NAME_WEB :
                      INPUT_SOURCE_NAME_FAILSAFE);
+        EventJournal::log(JSrc::SRC, JLvl::I, "change", "from=%s to=%s",
+                          inputSourceName(currentInputSource_), inputSourceName(source));
         if (source == InputSource::WEB) {
             webThrottleDemandPct_ = 0.0f;
             throttle_.idle();
         }
+        prevInputSource_ = currentInputSource_;
     }
     currentInputSource_ = source;
 }
@@ -341,6 +427,9 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
     } else if (cmd.cmd == "set_boost_rpm") {
         processSetBoostRpmCommand((int32_t)cmd.floatValue, webPortal);
         return;
+    } else if (cmd.cmd == "set_boost_enabled") {
+        processSetBoostEnabledCommand(cmd.boolValue, webPortal);
+        return;
     } else if (cmd.cmd == "throttle_cal_begin") {
         processThrottleCalBegin(webPortal);
         return;
@@ -365,8 +454,32 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
     } else if (cmd.cmd == "set_speed_limit_floor") {
         processSetSpeedLimitFloorCommand(cmd.floatValue, webPortal);
         return;
+    } else if (cmd.cmd == "set_speed_limit_slew") {
+        processSetSpeedLimitSlewCommand(cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_throttle_open_slew") {
+        processSetThrottleOpenSlewCommand(cmd.floatValue, webPortal);
+        return;
     } else if (cmd.cmd == "set_steer_sca_base") {
         processSetSteerScaBaseCommand(cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_steer_park_enabled") {
+        processSetSteerParkEnabledCommand(cmd.boolValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_steer_park_rung") {
+        processSetSteerParkRungCommand(cmd.floatValue, cmd.strValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_steer_park_tol") {
+        processSetSteerParkTolCommand(cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_steer_park_max") {
+        processSetSteerParkMaxCommand(cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_brake_travel_ms") {
+        processSetBrakeTravelMsCommand(cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_brake_hold_pwm") {
+        processSetBrakeHoldPwmCommand(cmd.floatValue, webPortal);
         return;
     } else if (cmd.cmd == "set_test_speed") {
         processSetTestSpeedCommand(cmd.floatValue, webPortal);
@@ -392,6 +505,8 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
         processGearCommand(cmd.strValue, webPortal);
     } else if (cmd.cmd == "set_steering") {
         processSteeringCommand(cmd.floatValue, webPortal);
+    } else if (cmd.cmd == "steer_angle") {
+        processSteerAngleCommand(cmd.floatValue, webPortal);
     } else if (cmd.cmd == "set_throttle") {
         processThrottleCommand(cmd.floatValue, webPortal);
     } else if (cmd.cmd == "set_brake") {
@@ -432,7 +547,7 @@ String VehicleController::getTargetGearString() const {
         case TransmissionController::Gear::GEAR_NEUTRAL: return "N";
         case TransmissionController::Gear::GEAR_LOW: return "L";
         case TransmissionController::Gear::GEAR_HIGH: return "H";
-        default: return "N";
+        default: return "?";   // GEAR_UNKNOWN: not initialised
     }
 }
 
@@ -443,13 +558,14 @@ String VehicleController::getFromGearString() const {
         case TransmissionController::Gear::GEAR_NEUTRAL: return "N";
         case TransmissionController::Gear::GEAR_LOW: return "L";
         case TransmissionController::Gear::GEAR_HIGH: return "H";
-        default: return "N";
+        default: return "?";   // GEAR_UNKNOWN: not initialised
     }
 }
 
 void VehicleController::applyFailsafe() {
     if (currentInputSource_ == InputSource::FAILSAFE && !failsafeApplied_) {
         Debug::printlnFeature(DebugFeature::VEHICLE, "[FAILSAFE] Entering safe state");
+        EventJournal::log(JSrc::SRC, JLvl::W, "failsafe_enter", "from=%s", inputSourceName(prevInputSource_));
         // Centres with a healthy sensor; refused without one (never centres blind). A rate
         // drive was already stopped this iteration: FAILSAFE makes the mode BLOCKED and
         // updateSteerMode() ran stopRate() before this.
@@ -466,11 +582,12 @@ void VehicleController::applyFailsafe() {
         // !failsafeApplied_ above.
         speedSensor_.persistDistance();
         engineHours_.persist();
-        previousIgnitionState_ = MavlinkInterface::IgnitionState::OFF;  // Reset ignition tracking
-        lastCommandedGear_ = TransmissionController::Gear::GEAR_UNKNOWN;  // Force re-eval on restore
+        // RC re-sync on the way back (re-crank on recovery) is armed by update(): the RC trackers
+        // are cleared in every loop whose source is not MAVLink (design D6).
         failsafeApplied_ = true;
     } else if (currentInputSource_ != InputSource::FAILSAFE && failsafeApplied_) {
         Debug::printlnFeature(DebugFeature::VEHICLE, "[FAILSAFE] Exiting safe state");
+        EventJournal::log(JSrc::SRC, JLvl::I, "failsafe_exit", "to=%s", inputSourceName(currentInputSource_));
         brake_.stop();  // Ensure brake is stopped before handing control
         failsafeApplied_ = false;
     }
@@ -502,6 +619,14 @@ void VehicleController::updateSteerMode() {
     }
     Debug::printfFeature(DebugFeature::SERVO, "[STEER] mode: %s -> %s (%s)\n",
                          steerModeToken(steerMode_), steerModeToken(mode), reason);
+    {
+        char tok[sizeof(reason)];   // journal values carry no spaces
+        size_t i = 0;
+        for (; reason[i] != '\0' && i < sizeof(tok) - 1; i++) tok[i] = (reason[i] == ' ') ? '_' : reason[i];
+        tok[i] = '\0';
+        EventJournal::log(JSrc::STEER, JLvl::I, "mode", "from=%s to=%s reason=%s",
+                          steerModeToken(steerMode_), steerModeToken(mode), tok);
+    }
 
     // Every change stops a rate-owned drive (a web jog/nudge and a closed-loop move are
     // untouched) and every entry into RATE needs the stick centred once before motion.
@@ -543,8 +668,8 @@ void VehicleController::processMavlinkCommands() {
         steering_.setSteeringPercent(steeringPct);
     }
 
-    // Apply throttle — skipped when gear boost PID is active (PID overrides)
-    if (!gearBoostActive_) {
+    // Apply throttle — skipped while the gear change owns it (boost PID or shift idle hold)
+    if (!isThrottleLockedForShift()) {
         float throttlePct = mavlink_.getThrottle();
         if (shouldClipThrottle()) {
             throttlePct = min(TRANS_UNKNOWN_GEAR_THROTTLE_MAX, throttlePct);
@@ -552,60 +677,156 @@ void VehicleController::processMavlinkCommands() {
         throttle_.setThrottlePercent(applySpeedLimit(throttlePct));
     }
 
-    // Apply gear selection — retry until setGear() accepts the command
-    TransmissionController::Gear gear = mavlink_.getGear();
-    if (gear != lastCommandedGear_ && isEngineRunning()) {
+    // Gear / ignition / light / lock: "last change wins" with the GCS commands (MAV_CMD_USER_2).
+    // Each RC channel is applied only when its in-band decoded value CHANGES (or on the first
+    // valid frame after a re-sync); an absent / out-of-band channel is not a change, so a GCS
+    // command is never overwritten by an unchanged switch (design D6).
+
+    // Gear: an RC edge becomes the pending RC gear, retried until the engine runs and setGear()
+    // accepts (today's retry). An accepted GCS gear cancels it.
+    rc_.stepGear(vcmdRcGear(mavlink_.getChannel(ServoChannelConfig::TRANSMISSION)));
+    if (rc_.gearPending && isEngineRunning()) {
+        const TransmissionController::Gear gear = vcmdGearToTrans(rc_.pendingGear);
         bool accepted = transmission_.setGear(gear);
         if (accepted || transmission_.getTargetGear() == gear) {
-            lastCommandedGear_ = gear;
+            rc_.gearDone();
         }
-        // If not accepted (e.g. speed interlock), lastCommandedGear_ stays unchanged → retry next loop
+        // If not accepted (e.g. speed interlock), the RC gear stays pending → retry next loop
     }
 
     // Apply brake
     float brakePct = mavlink_.getBrake();
     applyBrake(brakePct);
 
-    // Apply ignition state. Cranking is sequenced inside RelayController, which enforces a
-    // pre-crank dwell: the starter (R2) does not engage until the ignition/ECU line (R1) has
-    // been powered for ACC_PRECRANK_DWELL_MS (immediately if R1 was already up that long).
-    MavlinkInterface::IgnitionState ignitionState = mavlink_.getIgnitionState();
-
-    switch (ignitionState) {
-        case MavlinkInterface::IgnitionState::OFF:
-            relayController_.setIgnitionState(RelayController::IgnitionState::OFF);
-            // Flush the persisted counters (distance and engine hours) on the TRANSITION into
-            // OFF only, so a normal shutdown loses nothing — not on every iteration OFF is
-            // merely being held.
-            if (previousIgnitionState_ != MavlinkInterface::IgnitionState::OFF) {
-                speedSensor_.persistDistance();
-                engineHours_.persist();
-            }
-            break;
-        case MavlinkInterface::IgnitionState::ACC:
+    // Ignition, on an RC change only. Cranking is sequenced inside RelayController, which
+    // enforces a pre-crank dwell: the starter (R2) does not engage until the ignition/ECU line
+    // (R1) has been powered for ACC_PRECRANK_DWELL_MS (immediately if R1 was already up that long).
+    const int8_t rcIgn = vcmdRcIgnition(mavlink_.getChannel(ServoChannelConfig::IGNITION));
+    if (rc_.ignition.step(rcIgn)) {
+        if (rcIgn == VCMD_IGN_OFF) {
+            ignitionOffAndPersist();
+        } else if (rcIgn == VCMD_IGN_ACC) {
             relayController_.setIgnitionState(RelayController::IgnitionState::ACC);
-            break;
-        case MavlinkInterface::IgnitionState::IGNITION:
-            // Arm the dwell-gated auto-crank only on a FRESH transition into IGNITION.
-            // Holding IGNITION does not re-crank; RelayController::update() runs the sequence
-            // (ACC hold -> dwell -> CRANKING -> IGNITION) and reports ACC while waiting.
-            if (previousIgnitionState_ != MavlinkInterface::IgnitionState::IGNITION) {
-                Debug::printlnFeature(DebugFeature::VEHICLE, "[VEHICLE] IGNITION selected - arming pre-crank dwell");
-                relayController_.requestCrank();
-            }
-            break;
+        } else {
+            // A fresh RC ON (an edge, or the first frame after a re-sync) arms the dwell-gated
+            // auto-crank; RelayController::update() suppresses it while the engine runs.
+            Debug::printlnFeature(DebugFeature::VEHICLE, "[VEHICLE] IGNITION selected - arming pre-crank dwell");
+            relayController_.requestCrank();
+        }
     }
 
-    // Track state for next iteration (fresh-transition detection)
-    previousIgnitionState_ = ignitionState;
+    // Front light (channel 6), on an RC change only
+    const int8_t rcLight = vcmdRcSwitch(mavlink_.getChannel(ServoChannelConfig::FRONT_LIGHT));
+    if (rc_.light.step(rcLight)) {
+        relayController_.setFrontLight(rcLight == 1);
+    }
 
-    // Apply front light
-    bool frontLightOn = mavlink_.getFrontLight();
-    relayController_.setFrontLight(frontLightOn);
+    // Front-wheel / diff lock (channel 7), on an RC change only
+    const int8_t rcLock = vcmdRcSwitch(mavlink_.getChannel(ServoChannelConfig::WHEEL_LOCK));
+    if (rc_.lock.step(rcLock)) {
+        relayController_.setWheelLock(rcLock == 1);
+    }
+}
 
-    // Front-wheel lock (channel 7) — fitted on the quad; on aztec (not fitted)
-    // RelayController rejects a LOCK
-    relayController_.setWheelLock(mavlink_.getWheelLock());
+void VehicleController::ignitionOffAndPersist() {
+    const bool wasOff = (relayController_.getIgnitionState() == RelayController::IgnitionState::OFF);
+    relayController_.setIgnitionState(RelayController::IgnitionState::OFF);
+    // Flush the persisted counters (distance and engine hours) on the TRANSITION into OFF only,
+    // so a normal shutdown loses nothing.
+    if (!wasOff) {
+        speedSensor_.persistDistance();
+        engineHours_.persist();
+    }
+}
+
+uint16_t VehicleController::getVehicleCapsMask() const {
+    // Fixed at boot. Both transmissions know R/N/H/L; ignition and headlight are relay functions
+    // on every build; the lock only where RELAY_WHEEL_LOCK_FITTED. No handbrake on this build
+    // (master: X6 is the steering VESC) — bit5 is never set. Relay availability is runtime and
+    // recoverable: it gives FAILED, it does not clear bits.
+    return vehicleCapsMask(true, true, true, true, isWheelLockFitted(), false);
+}
+
+VehicleCmdOutcome VehicleController::executeVehicleCommand(VehicleCmdFunction fn, int32_t value) {
+    const bool underMavlink = isUnderMavlinkControl();
+    const bool relaysOk = relayController_.isAvailable();
+    VehicleCmdOutcome o = vcmdFailed();
+
+    switch (fn) {
+        case VehicleCmdFunction::GEAR: {
+            const TransmissionController::Gear gear = vcmdGearToTrans((int8_t)value);
+            VcmdGearInputs in;
+            in.underMavlink = underMavlink;
+            in.engineRunning = isEngineRunning();
+            in.transInitialised = transmission_.isInitialised();
+            in.alreadyAtTarget = in.transInitialised && transmission_.getDestinationGear() == gear;
+            in.speedOk = transmission_.canChangeGear(gear);
+            bool doSet = false;
+            o = vcmdGearDecide(in, doSet);
+            if (doSet) {
+                const bool accepted = transmission_.setGear(gear);
+                if (!accepted && transmission_.getTargetGear() != gear) {
+                    o = vcmdFailed();   // defensive: setGear() refused for a reason not checked above
+                }
+            }
+            if (o.result == VehicleCmdResult::ACCEPTED) {
+                rc_.onGcsGearAccepted();   // last change wins over a pending RC gear
+            }
+            Debug::printfFeature(DebugFeature::VEHICLE, "[GCS] Gear %s: result %u reason %u\n",
+                                 transmission_.getGearName(gear), (unsigned)o.result, (unsigned)o.reason);
+            break;
+        }
+        case VehicleCmdFunction::IGNITION: {
+            VcmdIgnAction action = VcmdIgnAction::NONE;
+            o = vcmdIgnitionDecide(value, underMavlink, relaysOk, isEngineRunning(), action);
+            switch (action) {
+                case VcmdIgnAction::OFF:
+                    ignitionOffAndPersist();
+                    break;
+                case VcmdIgnAction::ACC:
+                    relayController_.setIgnitionState(RelayController::IgnitionState::ACC);
+                    break;
+                case VcmdIgnAction::IGNITION_NO_CRANK:
+                    // Engine already running: no crank. ACC and IGNITION drive the same relays.
+                    if (relayController_.getIgnitionState() != RelayController::IgnitionState::CRANKING) {
+                        relayController_.setIgnitionState(RelayController::IgnitionState::IGNITION);
+                    }
+                    break;
+                case VcmdIgnAction::CRANK:
+                    Debug::printlnFeature(DebugFeature::VEHICLE, "[GCS] IGNITION ON - arming pre-crank dwell");
+                    relayController_.requestCrank();
+                    break;
+                case VcmdIgnAction::NONE:
+                default:
+                    break;
+            }
+            Debug::printfFeature(DebugFeature::VEHICLE, "[GCS] Ignition %ld: result %u reason %u\n",
+                                 (long)value, (unsigned)o.result, (unsigned)o.reason);
+            break;
+        }
+        case VehicleCmdFunction::LIGHT:
+            o = vcmdLightDecide(relaysOk);
+            if (o.result == VehicleCmdResult::ACCEPTED) {
+                relayController_.setFrontLight(value == 1);
+            }
+            Debug::printfFeature(DebugFeature::VEHICLE, "[GCS] Headlight %s: result %u\n",
+                                 value == 1 ? "ON" : "OFF", (unsigned)o.result);
+            break;
+        case VehicleCmdFunction::LOCK:
+            o = vcmdLockDecide(underMavlink, relaysOk);
+            if (o.result == VehicleCmdResult::ACCEPTED && !relayController_.setWheelLock(value == 1)) {
+                o = vcmdFailed();
+            }
+            Debug::printfFeature(DebugFeature::VEHICLE, "[GCS] Lock %s: result %u reason %u\n",
+                                 value == 1 ? "ON" : "OFF", (unsigned)o.result, (unsigned)o.reason);
+            break;
+        case VehicleCmdFunction::HANDBRAKE:   // no parking brake on this build (bit5 never set)
+        case VehicleCmdFunction::QUERY:       // answered by the transport
+        default:
+            o = {VehicleCmdResult::UNSUPPORTED, VCMD_REASON_NONE};
+            break;
+    }
+    return o;
 }
 
 void VehicleController::processGearCommand(const String& gearStr, WebPortal& webPortal) {
@@ -630,6 +851,13 @@ void VehicleController::processGearCommand(const String& gearStr, WebPortal& web
         return;
     }
 
+    // Allowed with the engine off (gear calibration). An uninitialised transmission is
+    // initialised first, so the shift starts from the real gear / servo position; during the
+    // initialisation step into NEUTRAL setGear() queues the request like any active step.
+    if (!transmission_.isInitialised()) {
+        transmission_.initialise();
+    }
+
     if (transmission_.setGear(targetGear)) {
         Debug::printfFeature(DebugFeature::VEHICLE, "[WEB] Moving %s\n", gearName);
         webPortal.sendResponse(true, "Moving to " + gearName + " gear");
@@ -640,6 +868,10 @@ void VehicleController::processGearCommand(const String& gearStr, WebPortal& web
 }
 
 void VehicleController::processSteeringCommand(float value, WebPortal& webPortal) {
+    if (steering_.isDiagLocked()) {
+        webPortal.sendResponse(false, "Steering is held by the USB diagnostics console — send \"diag off\" first");
+        return;
+    }
     if (!steering_.isSensorOk()) {
         // Defence in depth: the web UI locks the slider while steer_mode != position.
         webPortal.sendResponse(false, "Steering rejected: no steering sensor — use Jog/Nudge");
@@ -652,17 +884,41 @@ void VehicleController::processSteeringCommand(float value, WebPortal& webPortal
     webPortal.sendResponse(true, "Steering set");
 }
 
+void VehicleController::processSteerAngleCommand(float deg, WebPortal& webPortal) {
+    // Same gating as processSteeringCommand() (web control is checked by the caller).
+    if (steering_.isDiagLocked()) {
+        webPortal.sendResponse(false, "Steering is held by the USB diagnostics console — send \"diag off\" first");
+        return;
+    }
+    if (!steering_.isSensorOk()) {
+        // Defence in depth: the web UI locks the angle input while steer_mode != position.
+        webPortal.sendResponse(false, "Steering rejected: no steering sensor — use Jog/Nudge");
+        return;
+    }
+    if (!isfinite(deg)) {
+        webPortal.sendResponse(false, "Invalid steering angle");
+        return;
+    }
+    if (!steering_.setSteeringAngleDeg(deg)) {
+        webPortal.sendResponse(false, "Steering rejected (not calibrated or sensor fault)");
+        return;
+    }
+    webPortal.sendResponse(true, "Steering angle set: " + String(deg, 1) + "°");
+}
+
 bool VehicleController::shouldClipThrottle() const {
     if (transmission_.isGearChangeActive())
         return true;
     if (transmission_.getTargetGear() == TransmissionController::Gear::GEAR_NEUTRAL)
         return true;
+    if (transmission_.getTargetGear() == TransmissionController::Gear::GEAR_UNKNOWN)
+        return true;   // not initialised: expected gear unknown
     return false;
 }
 
 void VehicleController::processThrottleCommand(float value, WebPortal& webPortal) {
-    if (gearBoostActive_) {
-        webPortal.sendResponse(false, "Gear boost active");
+    if (isThrottleLockedForShift()) {
+        webPortal.sendResponse(false, "Gear change active");
         return;
     }
     if (shouldClipThrottle()) {
@@ -761,7 +1017,7 @@ float VehicleController::applySpeedLimit(float throttlePct) {
     params.floorPct = limiterFloorPct_;
     params.kiPctSPerMs = SPEED_LIMIT_TRIM_KI_PCT_S_PER_MS;
     params.risePctS = SPEED_LIMIT_TRIM_RISE_PCT_S;
-    params.slewPctS = SPEED_LIMIT_CEILING_SLEW_PCT_S;
+    params.slewPctS = limiterSlewPctS_;   // also caps the trim's fall (step ≤ slew), intended
     params.bindMarginPct = SPEED_LIMIT_BIND_MARGIN_PCT;
 
     float dt = 0.0f;
@@ -978,6 +1234,117 @@ void VehicleController::processSetSpeedLimitFloorCommand(float value, WebPortal&
     Debug::printfFeature(DebugFeature::VEHICLE, "[SPEED] Limiter floor set to %.1f %%\n", value);
 }
 
+void VehicleController::processSetSpeedLimitSlewCommand(float value, WebPortal& webPortal) {
+    if (isnan(value) || value < SPEED_LIMIT_SLEW_MIN_PCT_S || value > SPEED_LIMIT_SLEW_MAX_PCT_S) {
+        webPortal.sendResponse(false, "Speed-limiter throttle rate out of range (" +
+                                      String(SPEED_LIMIT_SLEW_MIN_PCT_S, 0) + "-" +
+                                      String(SPEED_LIMIT_SLEW_MAX_PCT_S, 0) + " %/s)");
+        return;
+    }
+
+    // Persist first, exactly like the floor: RAM only changes once NVS holds the new value.
+    // One key in the shared "speed" namespace — never clear() it.
+    Preferences prefs;
+    bool ok = false;
+    if (prefs.begin("speed", false)) {
+        ok = prefs.putFloat(SPEED_LIMIT_SLEW_NVS_KEY, value) == sizeof(float);
+        prefs.end();
+    }
+    if (!ok) {
+        webPortal.sendResponse(false, "Failed to save the speed-limiter throttle rate");
+        return;
+    }
+
+    limiterSlewPctS_ = value;   // used from the law's next evaluation
+    webPortal.sendResponse(true, "Speed-limiter throttle rate set to " + String(value, 1) + " %/s");
+    Debug::printfFeature(DebugFeature::VEHICLE, "[SPEED] Limiter slew set to %.1f %%/s\n", value);
+}
+
+void VehicleController::processSetThrottleOpenSlewCommand(float value, WebPortal& webPortal) {
+    if (!isnan(value)) value = roundf(value);   // whole %/s
+    if (!ThrottleController::isValidOpenSlew(value)) {
+        webPortal.sendResponse(false, "Throttle open rate out of range (0 or " +
+                                      String(THROTTLE_OPEN_SLEW_MIN_PCT_S, 0) + "-" +
+                                      String(THROTTLE_OPEN_SLEW_MAX_PCT_S, 0) + " %/s)");
+        return;
+    }
+    // ThrottleController persists first (NVS "throttle"/open_slew), then applies.
+    if (!throttle_.setOpenSlewPctS(value)) {
+        webPortal.sendResponse(false, "Failed to save the throttle open rate");
+        return;
+    }
+    if (value == 0.0f) {
+        webPortal.sendResponse(true, "Throttle open rate off");
+    } else {
+        webPortal.sendResponse(true, "Throttle open rate set to " + String(value, 0) + " %/s");
+    }
+}
+
+bool VehicleController::setBrakeTravelMs(uint16_t ms) {
+    if (!brakeTravelMsValid(ms)) return false;
+    // Persist first: RAM only changes once NVS holds the new value. Own namespace, one key.
+    Preferences prefs;
+    bool ok = false;
+    if (prefs.begin(BRAKE_NVS_NAMESPACE, false)) {
+        ok = prefs.putUShort(BRAKE_TRAVEL_NVS_KEY, ms) == sizeof(uint16_t);
+        prefs.end();
+    }
+    if (!ok) return false;
+    brakeTravelMs_ = ms;   // the estimate's rate changes from the next updateBrakeControl(); no rescale
+    Debug::printfFeature(DebugFeature::BRAKE, "[BRAKE] Travel time set to %u ms\n", (unsigned)ms);
+    return true;
+}
+
+bool VehicleController::setBrakeHoldPwm(uint8_t pwm) {
+    if (!brakeHoldPwmValid(pwm)) return false;
+    Preferences prefs;
+    bool ok = false;
+    if (prefs.begin(BRAKE_NVS_NAMESPACE, false)) {
+        ok = prefs.putUChar(BRAKE_HOLD_NVS_KEY, pwm) == sizeof(uint8_t);
+        prefs.end();
+    }
+    if (!ok) return false;
+    brakeHoldPwm_ = pwm;   // read every hold cycle
+    Debug::printfFeature(DebugFeature::BRAKE, "[BRAKE] Hold drive set to %u\n", (unsigned)pwm);
+    return true;
+}
+
+void VehicleController::processSetBrakeTravelMsCommand(float value, WebPortal& webPortal) {
+    if (!isnan(value)) value = roundf(value);   // whole ms
+    if (isnan(value) || !brakeTravelMsValid((int32_t)value)) {
+        webPortal.sendResponse(false, "Brake travel time out of range (" +
+                                      String(BRAKE_TRAVEL_MS_MIN) + "-" +
+                                      String(BRAKE_TRAVEL_MS_MAX) + " ms)");
+        return;
+    }
+    const uint16_t ms = (uint16_t)value;
+    if (!setBrakeTravelMs(ms)) {
+        webPortal.sendResponse(false, "Failed to save the brake setting");
+        return;
+    }
+    webPortal.sendResponse(true, "Brake travel time set to " + String(ms) + " ms");
+}
+
+void VehicleController::processSetBrakeHoldPwmCommand(float value, WebPortal& webPortal) {
+    if (!isnan(value)) value = roundf(value);   // whole PWM step
+    if (isnan(value) || !brakeHoldPwmValid((int32_t)value)) {
+        webPortal.sendResponse(false, "Brake hold out of range (" +
+                                      String(BRAKE_HOLD_PWM_MIN) + "-" +
+                                      String(BRAKE_HOLD_PWM_MAX) + ")");
+        return;
+    }
+    const uint8_t pwm = (uint8_t)value;
+    if (!setBrakeHoldPwm(pwm)) {
+        webPortal.sendResponse(false, "Failed to save the brake setting");
+        return;
+    }
+    if (pwm == 0) {
+        webPortal.sendResponse(true, "Brake hold off");
+    } else {
+        webPortal.sendResponse(true, "Brake hold set to " + String(pwm));
+    }
+}
+
 void VehicleController::processSetSteerScaBaseCommand(float value, WebPortal& webPortal) {
     if (isnan(value) || value < 0.0f || value > STEER_SCALE_BASE_MAX_MS) {
         webPortal.sendResponse(false, "Steering scale base out of range (0-" +
@@ -1004,6 +1371,101 @@ void VehicleController::processSetSteerScaBaseCommand(float value, WebPortal& we
     }
     Debug::printfFeature(DebugFeature::VEHICLE,
         "[STEER] Speed-scaling base (local) set to %.2f m/s\n", value);
+}
+
+// === Steering park correction settings (SteeringController owns them, NVS "steering") ===
+
+static const char* const PARK_SAVE_FAILED = "Failed to save the park correction setting";
+
+void VehicleController::processSetSteerParkEnabledCommand(bool on, WebPortal& webPortal) {
+    if (steering_.setParkEnabled(on) != SteeringController::ParkSetResult::OK) {
+        webPortal.sendResponse(false, PARK_SAVE_FAILED);
+        return;
+    }
+    webPortal.sendResponse(true, on ? "Park correction enabled" : "Park correction disabled");
+}
+
+// Strict non-negative integer (digits only, at most 5 of them); false otherwise
+static bool parseParkInt(const String& s, int32_t& out) {
+    if (s.length() == 0 || s.length() > 5) return false;
+    int32_t v = 0;
+    for (unsigned i = 0; i < s.length(); i++) {
+        const char c = s[i];
+        if (c < '0' || c > '9') return false;
+        v = v * 10 + (c - '0');
+    }
+    out = v;
+    return true;
+}
+
+void VehicleController::processSetSteerParkRungCommand(float rung, const String& strValue, WebPortal& webPortal) {
+    static const char* const OUT_OF_RANGE = "Park rung out of range (duty 40-150, 40-200 ms)";
+    if (isnan(rung) || rung != roundf(rung) || rung < 1.0f || rung > (float)STEER_PARK_RUNGS) {
+        webPortal.sendResponse(false, "Invalid park rung (use 1-3)");
+        return;
+    }
+    const uint8_t n = (uint8_t)rung;
+    // strValue "D,T": two whole numbers, duty and ms
+    String v = strValue;
+    v.trim();
+    const int comma = v.indexOf(',');
+    int32_t duty = 0, ms = 0;
+    String ds = comma > 0 ? v.substring(0, comma) : String();
+    String ts = comma > 0 ? v.substring(comma + 1) : String();
+    ds.trim();
+    ts.trim();
+    if (comma <= 0 || !parseParkInt(ds, duty) || !parseParkInt(ts, ms)) {
+        webPortal.sendResponse(false, OUT_OF_RANGE);
+        return;
+    }
+    switch (steering_.setParkRung(n, duty, ms)) {
+        case SteeringController::ParkSetResult::OK:
+            webPortal.sendResponse(true, "Park rung " + String(n) + " set to " + String(duty) + "×" + String(ms));
+            return;
+        case SteeringController::ParkSetResult::OUT_OF_RANGE:
+            webPortal.sendResponse(false, OUT_OF_RANGE);
+            return;
+        case SteeringController::ParkSetResult::NOT_MONOTONIC:
+            webPortal.sendResponse(false, "Park ladder must not decrease (rung " + String(n) + ")");
+            return;
+        case SteeringController::ParkSetResult::SAVE_FAILED:
+        default:
+            webPortal.sendResponse(false, PARK_SAVE_FAILED);
+            return;
+    }
+}
+
+void VehicleController::processSetSteerParkTolCommand(float deg, WebPortal& webPortal) {
+    // Degrees from the page, rounded to the repo's 0.1° unit
+    const int32_t tol = isfinite(deg) ? (int32_t)lroundf(deg * 10.0f) : -1;
+    switch (steering_.setParkDoneTol(tol)) {
+        case SteeringController::ParkSetResult::OK:
+            webPortal.sendResponse(true, "Park tolerance set to " + String((float)tol / 10.0f, 1) + "°");
+            return;
+        case SteeringController::ParkSetResult::SAVE_FAILED:
+            webPortal.sendResponse(false, PARK_SAVE_FAILED);
+            return;
+        default:
+            webPortal.sendResponse(false, "Park tolerance out of range (0.1-0.5°)");
+            return;
+    }
+}
+
+void VehicleController::processSetSteerParkMaxCommand(float count, WebPortal& webPortal) {
+    // Whole numbers only: 2.5 is refused, not rounded
+    const bool whole = isfinite(count) && count == roundf(count) && count >= -1000.0f && count <= 1000.0f;
+    const int32_t n = whole ? (int32_t)count : -1;
+    switch (steering_.setParkMaxPulses(n)) {
+        case SteeringController::ParkSetResult::OK:
+            webPortal.sendResponse(true, "Park max pulses set to " + String(n));
+            return;
+        case SteeringController::ParkSetResult::SAVE_FAILED:
+            webPortal.sendResponse(false, PARK_SAVE_FAILED);
+            return;
+        default:
+            webPortal.sendResponse(false, "Park max pulses out of range (1-10)");
+            return;
+    }
 }
 
 void VehicleController::processSetTestSpeedCommand(float value, WebPortal& webPortal) {
@@ -1143,6 +1605,41 @@ void VehicleController::processSetBoostRpmCommand(int32_t rpm, WebPortal& webPor
     webPortal.sendResponse(true, "Boost RPM set to " + String(rpm));
 }
 
+void VehicleController::processSetBoostEnabledCommand(bool enabled, WebPortal& webPortal) {
+    // Persist first: RAM only changes once NVS holds the new value. One key in the shared
+    // "boost" namespace (beside target_rpm) — never clear() it.
+    Preferences prefs;
+    bool ok = false;
+    if (prefs.begin("boost", false)) {
+        ok = prefs.putBool(BOOST_ENABLED_NVS_KEY, enabled) == sizeof(uint8_t);
+        prefs.end();
+    }
+    if (!ok) {
+        webPortal.sendResponse(false, "Failed to save gear boost setting");
+        return;
+    }
+
+    boostGearEnabled_ = enabled;
+
+    // Switched off while the PID holds RPM for a gear change (not the manual test): release it
+    // exactly like the normal end of a gear change, then let the idle hold own the rest of the
+    // shift. Switching on mid-shift keeps any idle hold; update() starts no PID while it lasts.
+    if (!enabled && gearBoostActive_ && !boostManualActive_) {
+        Debug::printlnFeature(DebugFeature::VEHICLE, "[BOOST] Switched off, releasing PID");
+        canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM);
+        throttle_.idle();
+        webThrottleDemandPct_ = 0.0f;
+        gearBoostActive_ = false;
+        if (transmission_.needsThrottleBoost()) {
+            shiftIdleHold_ = true;
+            Debug::printlnFeature(DebugFeature::VEHICLE, "[BOOST] Idle hold for the rest of the gear change");
+        }
+    }
+
+    Debug::printfFeature(DebugFeature::VEHICLE, "[BOOST] Gear-change boost %s\n", enabled ? "enabled" : "disabled");
+    webPortal.sendResponse(true, enabled ? "Gear boost enabled" : "Gear boost disabled");
+}
+
 
 void VehicleController::processCanProbeCommand(WebPortal& webPortal) {
     // Defer while a gear change is active to protect the high-rate RPM feedback the shift relies on.
@@ -1270,6 +1767,10 @@ void VehicleController::processRelayTestCommand(int32_t relayNumber, bool on, We
 }
 
 void VehicleController::processSteerCalCommand(const String& which, WebPortal& webPortal) {
+    if (steering_.isDiagLocked()) {
+        webPortal.sendResponse(false, "Steering is held by the USB diagnostics console — send \"diag off\" first");
+        return;
+    }
     if (which == "steer_cal_center") {
         // The center is the steering sensor's own stored zero: there is no center capture.
         webPortal.sendResponse(false,
@@ -1305,6 +1806,10 @@ void VehicleController::processSteerCalCommand(const String& which, WebPortal& w
 }
 
 void VehicleController::processSteerZeroCommand(WebPortal& webPortal) {
+    if (steering_.isDiagLocked()) {
+        webPortal.sendResponse(false, "Steering is held by the USB diagnostics console — send \"diag off\" first");
+        return;
+    }
     if (!steering_.requestSensorZero()) {
         const char* why = steering_.getZeroRefusal();
         webPortal.sendResponse(false, "Sensor zero refused: " + String(why ? why : "unknown"));
@@ -1315,6 +1820,10 @@ void VehicleController::processSteerZeroCommand(WebPortal& webPortal) {
 }
 
 void VehicleController::processSteerJogCommand(float value, WebPortal& webPortal) {
+    if (steering_.isDiagLocked()) {
+        webPortal.sendResponse(false, "Steering is held by the USB diagnostics console — send \"diag off\" first");
+        return;
+    }
     // value encodes direction and speed: sign = direction, |value| = PWM duty.
     // |value| <= 1 (legacy -1/0/1 form) uses the default jog duty.
     int8_t direction = (value > 0.0f) ? 1 : (value < 0.0f) ? -1 : 0;
@@ -1325,6 +1834,10 @@ void VehicleController::processSteerJogCommand(float value, WebPortal& webPortal
 }
 
 void VehicleController::processSteerNudgeCommand(int8_t direction, WebPortal& webPortal) {
+    if (steering_.isDiagLocked()) {
+        webPortal.sendResponse(false, "Steering is held by the USB diagnostics console — send \"diag off\" first");
+        return;
+    }
     if (direction == 0) {
         webPortal.sendResponse(false, "Nudge needs a direction");
         return;
@@ -1446,7 +1959,7 @@ void VehicleController::updateBrakeControl() {
 
         // Calculate movement rate based on speed
         float speedFraction = abs(speed) / 255.0f;
-        float movementRate = (100.0f / BRAKE_FULL_TRAVEL_TIME) * speedFraction;  // %/ms
+        float movementRate = brakeRatePctPerMs(brakeTravelMs_) * speedFraction;  // %/ms
         float expectedMovement = movementRate * dt;
 
         currentBrakePosition_ += direction * expectedMovement;
@@ -1486,7 +1999,37 @@ void VehicleController::updateBrakeControl() {
         }
 
         // Hold position against cylinder hydraulic preassure return
-        brake_.setSpeed(BRAKE_HOLD_SPEED);
+        // (configured hold drive; 0 = no push, the actuator coasts)
+        if (brakeHoldPwm_ > 0) {
+            brake_.setSpeed(brakeHoldPwm_);
+        } else {
+            brake_.stop();
+        }
+    }
+}
+
+void VehicleController::updateShiftIdleHold() {
+    bool shifting = transmission_.needsThrottleBoost();
+
+    if (shiftIdleHold_) {
+        // A manual boost test started mid-hold owns the servo (gearBoostActive_): don't fight it.
+        if (!shifting) {
+            Debug::printlnFeature(DebugFeature::VEHICLE, "[BOOST] Gear change complete, releasing idle hold");
+            if (!gearBoostActive_) throttle_.idle();
+            webThrottleDemandPct_ = 0.0f;  // the hold ended at IDLE — don't let the old web demand undo it
+            shiftIdleHold_ = false;
+            return;
+        }
+        if (!gearBoostActive_) throttle_.idle();
+        return;
+    }
+
+    // Start only with the switch off and nothing else owning the throttle (PID / manual test).
+    // Idle is always safe: no CAN / engine-RPM precondition, the RPM poll rate is left alone.
+    if (shifting && !boostGearEnabled_ && !gearBoostActive_ && !boostManualActive_) {
+        shiftIdleHold_ = true;
+        throttle_.idle();
+        Debug::printlnFeature(DebugFeature::VEHICLE, "[BOOST] Boost off, holding idle during gear change");
     }
 }
 

@@ -1,0 +1,20 @@
+## 1. Firmware
+- [x] 1.1 `Constants.h`: `BRAKE_TRAVEL_MS_MIN` (1000), `BRAKE_TRAVEL_MS_MAX` (3000), `BRAKE_HOLD_PWM_MIN` (0), `BRAKE_HOLD_PWM_MAX` (100), `BRAKE_NVS_NAMESPACE` ("brake"), `BRAKE_TRAVEL_NVS_KEY` ("travel_ms"), `BRAKE_HOLD_NVS_KEY` ("hold_pwm") in the brake block; comment that `BRAKE_FULL_TRAVEL_TIME` / `BRAKE_HOLD_SPEED` are now the defaults, with the range reasoning; bump `FIRMWARE_VERSION` to "1.5.23".
+- [x] 1.2 `include/BrakeLaw.h` (header-only, no Arduino): `brakeRatePctPerMs(travelMs)`, `brakeTravelMsValid(ms)`, `brakeHoldPwmValid(pwm)`, `brakeTravelMsOrDefault(stored)`, `brakeHoldPwmOrDefault(stored)`.
+- [x] 1.3 `VehicleController`: members `brakeTravelMs_`, `brakeHoldPwm_`; load from NVS "brake" in `begin()` (missing → default; out of range → logged, default, not rewritten); `updateBrakeControl()` uses `brakeRatePctPerMs(brakeTravelMs_) × speedFraction` and, in the hold branch, `brake_.setSpeed(brakeHoldPwm_)` or `brake_.stop()` when 0; getters `getBrakePositionPct()`, `getBrakeTravelMs()`, `getBrakeHoldPwm()`; setters persist first, then apply (false on NVS failure). Nothing else in the brake logic changes.
+- [x] 1.4 `VehicleController::processWebCommand`: `set_brake_travel_ms` → round to whole ms, validate 1000–3000; `set_brake_hold_pwm` → round, validate 0–100; replies "Brake travel time set to N ms" / "Brake travel time out of range (1000-3000 ms)" / "Brake hold set to N" / "Brake hold off" / "Brake hold out of range (0-100)" / "Failed to save the brake setting"; accepted from any input source.
+
+## 2. Telemetry and web
+- [x] 2.1 `TelemetryManager`: `brake_pct = getBrakePositionPct()` (replaces the hard-coded 0.0); new `brake_travel_ms`, `brake_hold_pwm`, `brake_released` (`isBrakeReleased()`, false on an invalid snapshot) in `WebPortal::Telemetry`, `TelemetryManager`, `createTelemetryJSON`; update the capacity comment (+3 slots, 9216 unchanged).
+- [x] 2.2 `data/index.html`: card `id="brake-card"` "🛑 Гальмо" / "🛑 Brake" after the Throttle Calibration card: travel time slider (`<input type="range">` 1000–3000, step 50, default 1500) with a live value label "N мс" / "N ms" updated on `input` (as `steer-jog-speed` / `steer-jog-speed-val`), sending `set_brake_travel_ms` once on `change` (as the final send in `initGearDefSlider()`, no streaming while dragging) with a dragging flag so telemetry does not move the thumb mid-drag; hold row (number 0–100, step 5, Save → `saveBrakeHoldPwm()`, hint "0 = без утримання" / "0 = no hold push"), local validation with translated messages, fill from telemetry when not being edited / dragged, status line "Кінцевик: відпущено" / "Кінцевик: ні" ("Endstop: released" / "Endstop: no") from `brake_released`, card reply line fed by replies starting with "Brake travel" / "Brake hold" / "Failed to save the brake", help (ⓘ) text; uk + en keys. The panel tile keeps showing `brake_pct` (now the estimate).
+
+## 3. Tests, docs
+- [x] 3.1 `test/test_brake_law/test_main.cpp` + `platformio.ini` `test_filter` line and header comment: rate at 1500 ms = 0.0667 %/ms and 100 % after 1500 ms of 10 ms steps; rate at 1000 / 3000 ms; travel 999 / 3001 / 0 rejected, 1000 / 3000 accepted; hold −1 / 101 rejected, 0 / 100 accepted; or-default helpers return the default for invalid stored values and the value otherwise.
+- [x] 3.2 `pio test -e native` green; `pio run` builds.
+- [x] 3.3 `Changelog.h` 1.5.23 bullet (uk + en).
+- [ ] 3.4 Merge into aztec (same brake code; only the version / changelog lines expected to need attention); upload the LittleFS image on both vehicles (new card).
+- [ ] 3.5 Bench: the card shows 1500 / 30 on first boot; 999, 3001, −1 and 101 are refused.
+- [ ] 3.6 Bench: set 2000 ms, release fully, then command 100 %: `brake_pct` on the panel tile reaches 100 when the actuator reaches its end; adjust until they match.
+- [ ] 3.7 Bench: hold 0 — the actuator gets no push while a brake is held; hold 60 — a firmer push; restore the working value.
+- [ ] 3.8 Bench: the endstop line reads "відпущено" after a full release and "ні" otherwise.
+- [ ] 3.9 Bench: both values survive a reboot.

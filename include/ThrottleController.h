@@ -20,6 +20,12 @@
  * jogFull() drive the servo live to the pending endpoint (the servo holds the last
  * previewed value); saveCalibration() validates and persists; cancelCalibration()
  * reverts. Entry is refused while the engine is running.
+ *
+ * Opening rate limit (anti-stall): setThrottlePercent() passes every percent command through
+ * throttleSlewStep() (include/ThrottleSlewLaw.h) — rising is limited to openSlewPctS_ %/s,
+ * falling is immediate, 0 = off. idle() and setThrottleUs() (gear-boost PID, own slew) bypass it;
+ * idle() resets the last commanded percent to 0, setThrottleUs() re-seeds it from the pulse.
+ * The rate is persisted in the same "throttle" namespace (key open_slew).
  */
 class ThrottleController {
 public:
@@ -51,6 +57,11 @@ public:
     uint16_t percentToUs(float pct) const;
     uint8_t usToPercent(uint16_t us) const;   // inverse of percentToUs(), clamped 0..100
 
+    // ---- Opening rate limit (0 = off, else THROTTLE_OPEN_SLEW_MIN..MAX_PCT_S) ----
+    float getOpenSlewPctS() const { return openSlewPctS_; }
+    static bool isValidOpenSlew(float pctS);   // 0, or within MIN..MAX
+    bool setOpenSlewPctS(float pctS);          // validate, persist first, then apply; false on reject / NVS failure
+
 private:
     ServoController servo_;
     uint16_t idleUs_;          // active calibration endpoints
@@ -58,7 +69,11 @@ private:
     uint16_t pendingIdleUs_;   // working endpoints during a calibration session
     uint16_t pendingFullUs_;
     bool calibrating_;
+    float openSlewPctS_;       // opening rate limit in use (%/s, 0 = off)
+    float lastPct_;            // last commanded percent (opening-limit state)
+    uint32_t lastMs_;          // millis() of the last throttle write, 0 = never
 
+    void markWritten(float pct);   // record pct as the last commanded percent, now
     void loadCalibration();
     static uint16_t clampToServoRange(int32_t us);
     static bool isValidCalibration(uint16_t idleUs, uint16_t fullUs);  // both in servo range, |full-idle| >= min span

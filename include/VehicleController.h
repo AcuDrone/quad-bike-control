@@ -15,6 +15,7 @@
 #include "SpeedSensor.h"
 #include "EngineHourMeter.h"
 #include "SpeedLimiterLaw.h"
+#include "VehicleCommandLaw.h"
 
 /**
  * @brief Vehicle control coordination layer
@@ -22,7 +23,7 @@
  * Handles input source priority (MAVLINK > WEB > FAILSAFE), processes commands,
  * and coordinates all vehicle actuators (steering, throttle, brake, transmission).
  */
-class VehicleController {
+class VehicleController : public VehicleCommandSink {
 public:
     VehicleController(SteeringController& steering,
                       ThrottleController& throttle,
@@ -156,11 +157,30 @@ public:
      */
     bool isBrakeReleased() const { return digitalRead(PIN_BRAKE_SENSOR); }
 
+    /** @brief Current open-loop brake position estimate, 0–100 % (telemetry `brake_pct`) */
+    float getBrakePositionPct() const { return currentBrakePosition_; }
+    /** @brief Brake full travel time in use, ms (NVS "brake"/travel_ms, default BRAKE_FULL_TRAVEL_TIME) */
+    uint16_t getBrakeTravelMs() const { return brakeTravelMs_; }
+    /** @brief Brake hold drive in use, PWM 0–100 on the 0–255 scale, 0 = no push (NVS "brake"/hold_pwm) */
+    uint8_t getBrakeHoldPwm() const { return brakeHoldPwm_; }
+
+    /**
+     * @brief Set the brake full travel time / hold drive. Validated (BrakeLaw.h), persisted to
+     * NVS "brake" FIRST, then applied; false (value in use unchanged) on an invalid value or a
+     * failed NVS write. A new travel time changes the estimate's rate from the next
+     * updateBrakeControl() without rescaling the estimate; a new hold applies at the next hold cycle.
+     */
+    bool setBrakeTravelMs(uint16_t ms);
+    bool setBrakeHoldPwm(uint8_t pwm);
+
     /**
      * @brief Get vehicle data from CAN bus
      * @return VehicleData structure with engine RPM, speed, temperatures, etc.
      */
     CANController::VehicleData getVehicleData() const { return canController_.getVehicleData(); }
+
+    /** @brief Completed MCP2515 re-initializations of any cause since boot (telemetry / journal) */
+    uint32_t getCanReinitCount() const { return canController_.getReinitCount(); }
 
     /**
      * @brief Get the latest ECU capability probe snapshot (for telemetry)
@@ -227,6 +247,16 @@ public:
      * @brief Speed-limiter throttle floor in use (%, 0 = calibrated idle), NVS "speed"/thr_floor
      */
     float getSpeedLimitFloorPct() const { return limiterFloorPct_; }
+
+    /**
+     * @brief Speed-limiter ceiling slew in use (%/s, both directions), NVS "speed"/thr_slew
+     */
+    float getSpeedLimitSlewPctS() const { return limiterSlewPctS_; }
+
+    /**
+     * @brief Throttle opening rate limit in use (%/s, 0 = off), NVS "throttle"/open_slew
+     */
+    float getThrottleOpenSlewPctS() const { return throttle_.getOpenSlewPctS(); }
 
     /**
      * @brief Live saturation: ceiling at the floor while the speed stays more than
@@ -328,6 +358,23 @@ public:
     /** @brief True if the front-wheel lock is fitted (false on aztec) */
     bool isWheelLockFitted() const { return RelayController::isWheelLockFitted(); }
 
+    // ---- GCS vehicle commands (MAV_CMD_USER_2, change add-gcs-vehicle-commands) -------------
+
+    /**
+     * @brief Execute one validated GCS function command (param1 1-5) and report the outcome.
+     * Called by MavlinkInterface inside its update(), i.e. before this loop's setInputSource();
+     * "under MAVLink control" therefore also requires a valid command stream (design D4).
+     */
+    VehicleCmdOutcome executeVehicleCommand(VehicleCmdFunction fn, int32_t value) override;
+
+    /** @brief Capability bitmask (VCMD_CAP_*), fixed at boot. */
+    uint16_t getVehicleCapsMask() const;
+
+    /** @brief IGN_STATE code of the applied relay state: 0 OFF, 1 ACC, 2 ON, 3 CRANKING. */
+    uint8_t getIgnStateCode() const {
+        return ignStateCode((uint8_t)relayController_.getIgnitionState(), relayController_.isCrankPending());
+    }
+
     /**
      * @brief Web relay test state, relay-number order (bit0 = Relay 1 … bit3 = Relay 4),
      * from the relay output shadow. Published in telemetry as `relay_test`.
@@ -338,6 +385,12 @@ public:
      * @brief Get current boost RPM target (NVS-backed, runtime-editable)
      */
     int32_t getBoostTargetRpm() const { return boostTargetRpm_; }
+
+    /**
+     * @brief Gear-change RPM boost switch in use (NVS "boost"/enabled, default true).
+     * Off: a gear change holds the throttle at idle instead of running the PID.
+     */
+    bool isGearBoostEnabled() const { return boostGearEnabled_; }
 
     /**
      * @brief Check if engine is running based on CAN RPM data
@@ -364,6 +417,7 @@ private:
 
     // State tracking
     InputSource currentInputSource_;
+    InputSource prevInputSource_;   // source before the last change (event journal: failsafe_enter from=)
 
     // Steering control mode (change add-aztec-steering-rate-mode)
     SteerMode steerMode_;           // re-derived every update() before the MAVLink commands
@@ -378,13 +432,17 @@ private:
     uint32_t lastBrakeUpdateTime_;      // Last position update timestamp
     uint32_t brakeSensorTriggerTime_;   // Time when brake sensor detected release (0 = not triggered)
     bool brakeIsMoving_;
+    uint16_t brakeTravelMs_;            // full travel time in use, ms (NVS "brake"/travel_ms)
+    uint8_t brakeHoldPwm_;              // hold drive in use, 0–100 PWM, 0 = coast (NVS "brake"/hold_pwm)
 
     // Gear boost configuration (NVS-backed, runtime-editable)
     int32_t boostTargetRpm_;            // RPM target for gear boost PID (default TRANS_GEAR_BOOST_TARGET_RPM)
+    bool boostGearEnabled_;             // Gear-change boost switch (NVS "boost"/enabled, default BOOST_ENABLED_DEFAULT)
 
     // Gear boost PID state
     bool gearBoostActive_;              // True while PID is holding RPM during gear change
     bool boostManualActive_;            // True when boost is triggered manually via web for testing
+    bool shiftIdleHold_;                // True while a gear change holds the throttle at idle (boost switched off)
     uint32_t gearBoostStartTime_;       // millis() when boost activated (for timeout)
     uint32_t pidLastUpdateTime_;        // millis() of last PID compute (for dt)
     uint32_t lastCanUpdateTime_;        // CAN lastUpdateTime seen on previous PID iteration
@@ -392,11 +450,11 @@ private:
     float pidPrevError_;                // Previous error (for derivative)
     uint16_t lastPIDThrottleUs_;        // Last PID-computed throttle µs (held on CAN stale)
 
-    // Ignition state tracking
-    MavlinkInterface::IgnitionState previousIgnitionState_;  // Track previous state for transition detection
-    TransmissionController::Gear lastCommandedGear_;         // Last gear requested via MAVLink (dedup guard)
-
-    bool transmissionInitialized_;  // True after first engine-running restore
+    // RC gear / ignition / light / lock: last in-band value per channel + the pending RC gear.
+    // Applied only on a change ("last change wins" with the GCS commands); cleared in every loop
+    // in which the source is not MAVLink, so the first valid frame back re-applies everything
+    // (boot, fail-safe exit, return from the web portal — design D6).
+    VcmdRcState rc_;
 
     uint32_t lastSpeedLimitWarnMs_; // rate limit for the "limiter armed, speed invalid" log
 
@@ -409,6 +467,7 @@ private:
     SpeedLimiterState limiter_;     // applied ceiling (%, 100 = inactive), integral trim, primed
     uint32_t limiterLastMs_;        // millis() of the last limiter evaluation (0 = first call)
     float    limiterFloorPct_;      // floor in use (%), from NVS "speed"/thr_floor or the default
+    float    limiterSlewPctS_;      // ceiling slew in use (%/s), from NVS "speed"/thr_slew or the default
 
     // Saturation indicator (web console only — no log line, no MAVLink message)
     uint32_t satSinceMs_;           // millis() the raw condition started holding (0 = not holding)
@@ -458,6 +517,14 @@ private:
      */
     void processMavlinkCommands();
 
+    /** @brief GCS / RC common actions (ignition OFF persists the counters on a transition). */
+    void ignitionOffAndPersist();
+
+    /** @brief True when the source is MAVLink AND its command stream is valid (design D4). */
+    bool isUnderMavlinkControl() const {
+        return currentInputSource_ == InputSource::MAVLINK && mavlink_.isSignalValid();
+    }
+
     /**
      * @brief Apply brake control with percentage (0-100%)
      * @param brakePct Brake percentage (0 = released, 100 = fully applied)
@@ -476,6 +543,19 @@ private:
     void updateGearBoostPID();
 
     /**
+     * @brief Throttle owned by the gear change: the boost PID is active or the idle hold is on.
+     * MAVLink throttle, the web re-limit and the web `throttle` command stay clear while true.
+     */
+    bool isThrottleLockedForShift() const { return gearBoostActive_ || shiftIdleHold_; }
+
+    /**
+     * @brief Idle hold for a gear change while the boost switch is off: holds throttle_.idle()
+     * as long as needsThrottleBoost() is true (no CAN/RPM precondition, poll rate untouched),
+     * then releases with throttle_.idle() and the web demand zeroed.
+     */
+    void updateShiftIdleHold();
+
+    /**
      * @brief Process gear change command
      * @param gearStr Gear string ("R", "N", "L", "H")
      * @param webPortal Reference to web portal for sending responses
@@ -488,6 +568,13 @@ private:
      * @param webPortal Reference to web portal for sending responses
      */
     void processSteeringCommand(float value, WebPortal& webPortal);
+
+    /**
+     * @brief Process exact steering angle command (steer_angle, web control only)
+     * @param deg Target angle in degrees (+ = right), clamped to the captured limits
+     * @param webPortal Reference to web portal for sending responses
+     */
+    void processSteerAngleCommand(float deg, WebPortal& webPortal);
 
     /**
      * @brief Process throttle command
@@ -579,6 +666,8 @@ private:
 
     void processBoostTestCommand(bool enable, WebPortal& webPortal);
     void processSetBoostRpmCommand(int32_t rpm, WebPortal& webPortal);
+    /** @brief Persist NVS "boost"/enabled, then apply; turning off mid-boost releases the PID into the idle hold. */
+    void processSetBoostEnabledCommand(bool enabled, WebPortal& webPortal);
 
     /**
      * @brief Process can_probe command — trigger a one-shot ECU capability probe.
@@ -596,16 +685,23 @@ private:
 
     /**
      * @brief Speed-sensor calibration commands (`speed_cal_ppr`, `speed_cal_circ`) and the
-     * speed-limiter floor (`set_speed_limit_floor`).
+     * speed-limiter floor (`set_speed_limit_floor`) and throttle rate (`set_speed_limit_slew`).
      * Accepted regardless of the active input source, like the other calibration commands.
      * There is deliberately no limiter CEILING command: the ceiling is the autopilot's alone.
-     * The floor is the one limiter setting: it shapes how the limit is enforced and never
-     * imposes a limit by itself.
+     * The floor and the throttle rate are the limiter settings: they shape how the limit is
+     * enforced and never impose a limit by themselves.
      */
     void processSpeedCalPprCommand(float value, WebPortal& webPortal);
     void processSpeedCalCircCommand(float value, WebPortal& webPortal);
     /** @brief Validate (NaN, 0–20 %), persist to NVS "speed"/thr_floor, then apply in RAM. */
     void processSetSpeedLimitFloorCommand(float value, WebPortal& webPortal);
+    /** @brief Validate (NaN, 10–200 %/s), persist to NVS "speed"/thr_slew, then apply in RAM. */
+    void processSetSpeedLimitSlewCommand(float value, WebPortal& webPortal);
+    /**
+     * @brief `set_throttle_open_slew`: round to a whole %/s, validate (NaN, 0 or 30–100 %/s),
+     * persist to NVS "throttle"/open_slew, then apply. Accepted from any input source.
+     */
+    void processSetThrottleOpenSlewCommand(float value, WebPortal& webPortal);
 
     /**
      * @brief Steering speed-scaling commands (`set_steer_sca_base`, `set_test_speed`).
@@ -614,6 +710,25 @@ private:
      */
     void processSetSteerScaBaseCommand(float value, WebPortal& webPortal);
     void processSetTestSpeedCommand(float value, WebPortal& webPortal);
+
+    /**
+     * @brief Steering park correction settings (`set_steer_park_enabled` bool,
+     * `set_steer_park_rung` value = rung 1–3 + strValue "D,T", `set_steer_park_tol` degrees,
+     * `set_steer_park_max` count). Accepted from any input source; SteeringController validates,
+     * persists to NVS "steering" first, then applies.
+     */
+    void processSetSteerParkEnabledCommand(bool on, WebPortal& webPortal);
+    void processSetSteerParkRungCommand(float rung, const String& strValue, WebPortal& webPortal);
+    void processSetSteerParkTolCommand(float deg, WebPortal& webPortal);
+    void processSetSteerParkMaxCommand(float count, WebPortal& webPortal);
+
+    /**
+     * @brief Brake tuning (`set_brake_travel_ms` ms, `set_brake_hold_pwm` 0–100). Rounded to a
+     * whole number, validated, persisted to NVS "brake" first, then applied. Accepted from any
+     * input source (settings, not the brake command).
+     */
+    void processSetBrakeTravelMsCommand(float value, WebPortal& webPortal);
+    void processSetBrakeHoldPwmCommand(float value, WebPortal& webPortal);
 
     /**
      * @brief Speed-scale the AUTOPILOT steering command. ArduPilot's own formula,
@@ -657,7 +772,7 @@ private:
      * the slew), so the throttle keeps closing toward the floor; below the limit it rises at
      * Ki × deficit, capped at SPEED_LIMIT_TRIM_RISE_PCT_S, so the speed settles AT the limit
      * instead of drooping inside the band. The ceiling clamp(taper + trim, floor, 100) is then
-     * slew-limited at SPEED_LIMIT_CEILING_SLEW_PCT_S (dt capped at 1 s), so it never steps —
+     * slew-limited at the per-vehicle slew (limiterSlewPctS_, dt capped at 1 s), so it never steps —
      * it reaches the floor (default 0 % = calibrated idle) only gradually.
      *
      * Anti-windup: the trim is clamped to [0, 100 − floor]; it rises only while the limiter
@@ -682,9 +797,9 @@ private:
     /** @brief End the live saturation (no-limit / fail-open paths); starts the display hold. */
     void clearSpeedLimitSaturation(uint32_t now);
 
-    // Returns true when throttle should be clamped to TRANS_UNKNOWN_GEAR_THROTTLE_MAX.
-    // Clips when gear position is invalid and physical gear is not neutral
-    // (neutral is safe — drivetrain disconnected).
+    // Returns true when throttle should be clamped to TRANS_UNKNOWN_GEAR_THROTTLE_MAX:
+    // while a gear change is active, the expected gear is NEUTRAL, or the transmission is
+    // not initialised (expected gear GEAR_UNKNOWN).
     bool shouldClipThrottle() const;
 };
 

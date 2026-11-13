@@ -13,6 +13,8 @@
 #include "MavlinkInterface.h"
 #include "RelayController.h"
 #include "SpeedSensor.h"
+#include "SteerDiag.h"
+#include "EventJournal.h"
 #include "nvs_flash.h"
 
 // ============================================================================
@@ -54,6 +56,32 @@ WebPortal webPortal;
 
 // Telemetry Manager (collects and broadcasts telemetry data)
 TelemetryManager telemetryManager(vehicleController, webPortal, mavlinkInterface);
+
+// Steering diagnostics console on `Serial` (tools/steer_diag.py). On this board `Serial` is
+// UART0 through the DevKit's USB-UART bridge (no native USB CDC: GPIO19/20 are gear inputs).
+SteerDiag steerDiag(steeringActuator, steeringVesc, speedSensor);
+
+// ============================================================================
+// BRING-UP HELPERS
+// ============================================================================
+
+// Event journal snapshot fields (EventJournal SNAP lines, every JOURNAL_SNAP_MS): VESC input
+// voltage / FET temperature, LWS frame rate, VESC good / dropped packets in the window, and the
+// session totals of VESC resyncs and CAN re-inits. (No I2C bus on this board, so no i2c_unlock.)
+static void journalSnapFields(char* a, size_t capA, char* b, size_t capB) {
+    static uint32_t lastGood = 0;
+    static uint32_t lastDrop = 0;
+    const SteeringController& steering = vehicleController.getSteering();
+    const IMotorDriver::LinkStats ls = steeringVesc.linkStats();
+    const uint32_t drop = ls.dropCrc + ls.dropStop;
+    snprintf(a, capA, "vin=%.1f fet=%.1f", (double)steering.getInputVoltage(), (double)steering.getFetTemp());
+    snprintf(b, capB, "lws_fps=%u vesc_good=%lu drop=%lu resync=%lu can_reinit=%lu",
+             (unsigned)steering.lwsSensor().fps(), (unsigned long)(ls.good - lastGood),
+             (unsigned long)(drop - lastDrop), (unsigned long)ls.resync,
+             (unsigned long)vehicleController.getCanReinitCount());
+    lastGood = ls.good;
+    lastDrop = drop;
+}
 
 // ============================================================================
 // SETUP
@@ -103,6 +131,11 @@ void setup() {
                   Debug::isFeatureEnabled(DebugFeature::SERVO) ? "ON" : "OFF");
 
     Debug::println("\n=== ESP32-S3 Quad Bike Control (DevKitC-1) ===");
+
+    // Event journal: boot counter (NVS "journal"/"boot"), RTC replay, boot header + line. Lines
+    // stay in RAM until LittleFS is mounted (WebPortal::begin() -> EventJournal::attachFs()).
+    EventJournal::begin();
+    EventJournal::setSnapProvider(journalSnapFields);
 
     // Initialize throttle servo (loads calibration from NVS, moves to calibrated idle)
     if (!throttle.begin(PIN_THROTTLE_PWM, LEDC_CH_THROTTLE)) {
@@ -155,6 +188,8 @@ void setup() {
         Debug::printlnFeature(DebugFeature::MAVLINK, "ERROR: MAVLink interface failed");
     }
 
+    // Relays: configure GPIO36-39 as outputs, all OFF. Runs before anything else
+    // writes a relay (VehicleController / MAVLink only command relays from loop()).
     if (!relayController.begin()) {
         Debug::printlnFeature(DebugFeature::RELAY, "ERROR: Relay controller failed");
     }
@@ -173,28 +208,64 @@ void setup() {
         Debug::printlnFeature(DebugFeature::CAN, "WARNING: CAN controller failed (will continue without vehicle data)");
     }
 
+    // GCS vehicle commands (MAV_CMD_USER_2): the vehicle layer executes them. Capabilities and the
+    // hardware version are fixed at boot (DevKitC-1: board revision 1, relay board NONE = direct GPIO).
+    mavlinkInterface.setVehicleCommandSink(
+        &vehicleController, vehicleController.getVehicleCapsMask(),
+        hardwareVersionCode(BOARD_REVISION_CODE, VEHICLE_TYPE_CODE,
+                            (uint8_t)relayController.getBoardKind()));
+
     // Initialize web portal
     if (!webPortal.begin()) {
         Debug::printlnFeature(DebugFeature::WEB, "ERROR: Web portal failed");
     }
 
     Debug::println("\n✓ Ready");
+    Serial.printf("I,steer_diag,ready,fw=%s\n", FIRMWARE_VERSION);   // banner for tools/steer_diag.py (may be lost before the host enumerates)
 }
 
 // ============================================================================
 // MAIN LOOP
 // ============================================================================
 
+// Loop timing (event journal): micros() stamps between the phases; the slowest phase of an
+// iteration longer than JOURNAL_LOOP_OVERRUN_MS is journaled (never for the journal flush itself).
+namespace {
+enum LoopPhase : uint8_t { PH_INPUTS, PH_SPEED, PH_MAVLINK, PH_WEB, PH_SOURCE, PH_VEHICLE, PH_DIAG,
+                           PH_REPORT, PH_TELEMETRY, PH_JOURNAL, PH_COUNT };
+const char* const kPhaseNames[PH_COUNT] = { "inputs", "speed", "mavlink", "web", "source", "vehicle",
+                                            "diag", "report", "telemetry", "journal" };
+struct LoopTimer {
+    uint32_t start = 0, last = 0, worstUs = 0;
+    uint8_t worst = 0;
+    void begin() { start = last = micros(); worstUs = 0; worst = 0; }
+    void mark(uint8_t phase) {
+        const uint32_t t = micros();
+        const uint32_t d = t - last;
+        last = t;
+        if (d > worstUs) { worstUs = d; worst = phase; }
+    }
+    uint32_t total() const { return last - start; }
+};
+LoopTimer loopTimer;
+}  // namespace
+
 void loop() {
+    loopTimer.begin();
+    loopTimer.mark(PH_INPUTS);   // no input expander on this board: gear / brake are direct digitalRead()
+
     // Sample the hall speed counter (rate-limited internally) before the control
     // logic and telemetry read the speed this iteration.
     speedSensor.update();
+    loopTimer.mark(PH_SPEED);
 
     // Update MAVLink interface (parse inbound, request command stream)
     mavlinkInterface.update();
+    loopTimer.mark(PH_MAVLINK);
 
     // Update web portal (handles OTA, WebSocket cleanup, etc.)
     webPortal.update();
+    loopTimer.mark(PH_WEB);
 
     // Determine current input source (MAVLINK > WEB > FAILSAFE)
     InputSource currentSource = telemetryManager.determineInputSource();
@@ -206,9 +277,16 @@ void loop() {
         vehicleController.processWebCommand(cmd, webPortal);
         webPortal.clearCommand();
     }
+    loopTimer.mark(PH_SOURCE);
 
     // Update vehicle controller (failsafe, actuators, etc.)
     vehicleController.update();
+    loopTimer.mark(PH_VEHICLE);
+
+    // USB steering diagnostics: command lines, experiment step + safety checks. After
+    // vehicleController.update() so it sees this iteration's LWS frame and VESC telemetry.
+    steerDiag.update();
+    loopTimer.mark(PH_DIAG);
 
     // Report vehicle state back to the MAVLink network (rate-limited internally)
     CANController::VehicleData vd = vehicleController.getVehicleData();
@@ -260,8 +338,18 @@ void loop() {
     report.steerScale       = vehicleController.getSteerScale();
     // Steering control mode (STEER_MODE NAMED_VALUE_INT): 0 position, 1 rate, 2 blocked.
     report.steerMode        = (uint8_t)vehicleController.getSteerMode();
+    // Applied ignition state (IGN_STATE NAMED_VALUE_INT): 0 OFF, 1 ACC, 2 ON, 3 CRANKING.
+    report.ignState         = vehicleController.getIgnStateCode();
     mavlinkInterface.report(report);
+    loopTimer.mark(PH_REPORT);
 
     // Broadcast telemetry to web clients
     telemetryManager.update();
+    loopTimer.mark(PH_TELEMETRY);
+
+    // Event journal: SNAP, heap watch, and the flash flush (≤ 1/s, only with data) — the last
+    // step of the iteration, deferred while the steering motor is driven (≤ 10 s).
+    EventJournal::service(steeringActuator.isDriving());
+    loopTimer.mark(PH_JOURNAL);
+    EventJournal::noteLoop(loopTimer.total(), kPhaseNames[loopTimer.worst], loopTimer.worstUs);
 }

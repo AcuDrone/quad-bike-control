@@ -1,4 +1,5 @@
 #include "ThrottleController.h"
+#include "ThrottleSlewLaw.h"
 #include "Debug.h"
 #include <Preferences.h>
 
@@ -7,7 +8,10 @@ ThrottleController::ThrottleController()
       fullUs_(THROTTLE_DEFAULT_FULL_US),
       pendingIdleUs_(THROTTLE_DEFAULT_IDLE_US),
       pendingFullUs_(THROTTLE_DEFAULT_FULL_US),
-      calibrating_(false) {
+      calibrating_(false),
+      openSlewPctS_(THROTTLE_OPEN_SLEW_DEFAULT_PCT_S),
+      lastPct_(0.0f),
+      lastMs_(0) {
 }
 
 bool ThrottleController::begin(gpio_num_t pin, uint8_t channel) {
@@ -60,19 +64,62 @@ uint8_t ThrottleController::usToPercent(uint16_t us) const {
     return (uint8_t)pct;
 }
 
+void ThrottleController::markWritten(float pct) {
+    lastPct_ = pct;
+    uint32_t now = millis();
+    lastMs_ = now ? now : 1;   // 0 is the "never written" sentinel
+}
+
 void ThrottleController::setThrottlePercent(float pct) {
     if (calibrating_) return;
-    servo_.setMicroseconds(percentToUs(pct));
+    // Opening rate limit (anti-stall). dt is capped so a stalled loop or a path that was
+    // silent for seconds cannot open the throttle in one step; the first write uses dt = 0.
+    float dt = 0.0f;
+    if (lastMs_ != 0) {
+        dt = (millis() - lastMs_) / 1000.0f;
+        if (dt > THROTTLE_OPEN_SLEW_MAX_DT_S) dt = THROTTLE_OPEN_SLEW_MAX_DT_S;
+    }
+    const float out = throttleSlewStep(pct, lastPct_, dt, openSlewPctS_);
+    markWritten(out);
+    servo_.setMicroseconds(percentToUs(out));
 }
 
 void ThrottleController::setThrottleUs(uint16_t us) {
     if (calibrating_) return;
-    servo_.setMicroseconds(clampToServoRange(us));
+    uint16_t clamped = clampToServoRange(us);
+    servo_.setMicroseconds(clamped);
+    // Bypasses the opening limit (the gear-boost PID has its own slew); re-seed from the real
+    // position so a percent command after the PID ramps from where the servo actually is.
+    markWritten((float)usToPercent(clamped));
 }
 
 void ThrottleController::idle() {
     if (calibrating_) return;
     servo_.setMicroseconds(idleUs_);
+    markWritten(0.0f);   // closing is immediate; the next opening ramps from idle
+}
+
+bool ThrottleController::isValidOpenSlew(float pctS) {
+    if (isnan(pctS)) return false;
+    if (pctS == 0.0f) return true;
+    return pctS >= THROTTLE_OPEN_SLEW_MIN_PCT_S && pctS <= THROTTLE_OPEN_SLEW_MAX_PCT_S;
+}
+
+bool ThrottleController::setOpenSlewPctS(float pctS) {
+    if (!isValidOpenSlew(pctS)) return false;
+    // Persist first: RAM only changes once NVS holds the new value. One key in the shared
+    // "throttle" namespace (beside idle_us / full_us) — never clear() it.
+    Preferences prefs;
+    bool ok = false;
+    if (prefs.begin("throttle", false)) {
+        ok = prefs.putFloat(THROTTLE_OPEN_SLEW_NVS_KEY, pctS) == sizeof(float);
+        prefs.end();
+    }
+    if (!ok) return false;
+    openSlewPctS_ = pctS;   // used from the next percent command
+    Debug::printfFeature(DebugFeature::VEHICLE, "[THROTTLE] Opening rate set to %.0f %%/s%s\n",
+                         pctS, pctS == 0.0f ? " (off)" : "");
+    return true;
 }
 
 bool ThrottleController::beginCalibration(bool engineRunning) {
@@ -126,6 +173,7 @@ bool ThrottleController::saveCalibration(String& err) {
 
     calibrating_ = false;
     servo_.setMicroseconds(idleUs_);
+    markWritten(0.0f);
     Debug::printfFeature(DebugFeature::VEHICLE,
         "[THROTTLE] Calibration saved idle=%uus full=%uus%s\n", idleUs_, fullUs_,
         fullUs_ < idleUs_ ? " (inverted)" : "");
@@ -136,6 +184,7 @@ void ThrottleController::cancelCalibration() {
     if (!calibrating_) return;
     calibrating_ = false;
     servo_.setMicroseconds(idleUs_);   // discard pending, return to active idle
+    markWritten(0.0f);
     Debug::printlnFeature(DebugFeature::VEHICLE, "[THROTTLE] Calibration cancelled");
 }
 
@@ -144,6 +193,18 @@ void ThrottleController::loadCalibration() {
     if (prefs.begin("throttle", true)) {
         idleUs_ = prefs.getUShort("idle_us", THROTTLE_DEFAULT_IDLE_US);
         fullUs_ = prefs.getUShort("full_us", THROTTLE_DEFAULT_FULL_US);
+        // Opening rate: absent -> default; invalid -> logged, default, NOT rewritten.
+        if (prefs.isKey(THROTTLE_OPEN_SLEW_NVS_KEY)) {
+            float stored = prefs.getFloat(THROTTLE_OPEN_SLEW_NVS_KEY, THROTTLE_OPEN_SLEW_DEFAULT_PCT_S);
+            if (isValidOpenSlew(stored)) {
+                openSlewPctS_ = stored;
+            } else {
+                Debug::printfFeature(DebugFeature::VEHICLE,
+                    "[THROTTLE] Stored opening rate %.1f %%/s invalid - using default %.0f %%/s\n",
+                    stored, THROTTLE_OPEN_SLEW_DEFAULT_PCT_S);
+                openSlewPctS_ = THROTTLE_OPEN_SLEW_DEFAULT_PCT_S;
+            }
+        }
         prefs.end();
     }
     // Guard against corrupt/incompatible stored values (an inverted but valid pair is kept).

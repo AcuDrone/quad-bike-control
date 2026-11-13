@@ -14,6 +14,113 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.30","date":"2026-11-13","uk":[
+"Наземна станція (Mission Planner, QGC, кнопки на кермі): передача, запалювання, фара і блокування тепер керуються командами з наземної станції (MAV_CMD_USER_2). Плата перевіряє всі блокування й відповідає на кожну команду: передача — лише з працюючим двигуном і не швидше 1,4 м/с (нейтраль — на будь-якій швидкості); запалювання OFF працює завжди, ACC/ON і блокування — лише коли керує MAVLink (не у failsafe і не з веб-керуванням); фара — завжди.",
+"Пульт і наземна станція рівноправні: діє остання зміна. Перемикач на пульті застосовується лише тоді, коли його положення змінилося, тож команда з наземної станції не скасовується наступним кадром. Канал поза діапазоном 880–2160 мкс більше не вмикає N / OFF / вимикає фару — стан лишається.",
+"Після завантаження, після failsafe і після виходу з веб-керування (або коли пульт повернувся при відкритій веб-сторінці) перший кадр із пульта знову виставляє передачу, запалювання, фару й блокування — якщо перемикач запалювання в ON, запускається автостарт.",
+"Для наземної станції: можливості плати (QB_CAPS кожні 10 с), стан запалювання (IGN_STATE: 0 OFF, 1 ACC, 2 ON, 3 прокрутка стартером), запити версії прошивки й обладнання. Без цієї прошивки станція нових кнопок не показує."
+],"en":[
+"Ground station (Mission Planner, QGC, steering-wheel buttons): gear, ignition, headlight and diff lock are now commanded from the ground station (MAV_CMD_USER_2). The board checks every interlock and answers each command: gear only with the engine running and at no more than 1.4 m/s (neutral at any speed); ignition OFF always works, ACC/ON and the lock only while MAVLink is in control (not in failsafe or under web control); headlight always.",
+"RC and ground station are equal: the last change wins. An RC switch is applied only when its position changes, so a ground-station command is not undone by the next frame. A channel outside 880–2160 µs no longer forces N / OFF / light off — the state is kept.",
+"After boot, after a failsafe and after leaving web control (or when RC returns while the web page is open) the first RC frame sets gear, ignition, headlight and lock again — with the ignition switch in ON this starts the auto-crank.",
+"For the ground station: board capabilities (QB_CAPS every 10 s), ignition state (IGN_STATE: 0 OFF, 1 ACC, 2 ON, 3 cranking), firmware and hardware version queries. Without this firmware the ground station shows no new buttons."
+]},
+{"version":"1.5.28","date":"2026-11-12","uk":[
+"Квадроцикл: на лінії прийому від VESC керма (X6, GPIO5) увімкнено внутрішню підтяжку до +3,3 В. На X6 уже є зовнішні підтяжки через перетворювачі рівнів, тож поведінка не змінюється — внутрішня додана для однаковості з багі. Якщо підтяжку не вдалося ввімкнути, у журналі з’являється запис «VESC W rx_pullup»",
+"CAN: при вимкненому запалюванні (OFF) мовчання ECU більше не вважається збоєм — контролер CAN не перезапускається кожні 15 с, у журналі немає «obd_silent», лічильник can_reinit не росте (як уже було для датчика кута керма). Після перемикання в ACC/ON відлік 15 с починається заново"
+],"en":[
+"Quad: the internal pull-up to +3.3 V is enabled on the steering VESC receive line (X6, GPIO5). X6 already has external pull-ups through the level shifters, so behaviour does not change — the internal one is added for parity with the buggy. If the pull-up cannot be enabled, the journal shows “VESC W rx_pullup”",
+"CAN: with the ignition OFF a silent ECU is no longer treated as a fault — the CAN controller is not restarted every 15 s, no “obd_silent” in the journal, the can_reinit counter does not grow (as already done for the steering-angle sensor). After switching to ACC/ON the 15 s window starts afresh"
+]},
+{"version":"1.5.27","date":"2026-11-12","uk":[
+"Веб-панель: підтвердження без спливаючих вікон браузера — «Задати нуль датчика», «Скинути до типових» (коди передач), «Очистити» (журнал подій) і «Завантажити прошивку» тепер підтверджуються другим натисканням тієї ж кнопки протягом 5 с; попередження показується в рядку стану картки. Раніше у вікні входу в мережу на телефоні або після «заборонити сторінці створювати діалоги» в Chrome кнопка мовчки нічого не робила. Результат завантаження прошивки теж показується в картці. Потрібно залити оновлений образ LittleFS",
+"Калібрування керма: «Задати ліво», «Задати право» і «Задати нуль датчика» без з’єднання з платою тепер показують у рядку стану картки «Немає з'єднання з платою», а не мовчать"
+],"en":[
+"Web panel: confirmations without browser pop-ups — “Set sensor zero”, “Reset to defaults” (gear codes), “Clear” (event journal) and “Upload Firmware” are now confirmed by pressing the same button again within 5 s; the warning is shown in the card’s status line. Before, in the phone’s network sign-in window or after Chrome’s “prevent this page from creating additional dialogs” the button silently did nothing. The firmware upload result is also shown in the card. Upload the updated LittleFS image",
+"Steering calibration: “Set Left”, “Set Right” and “Set sensor zero” now show “No connection to the board” in the card’s status line when the board is not connected, instead of doing nothing"
+]},
+{"version":"1.5.26","date":"2026-11-10","uk":[
+"Журнал подій: нова картка «Журнал подій» у розділі «Система» — останні 100 подій (запуски й перезапуски, failsafe, режим керма, втрата зв’язку з VESC керма, збої CAN і шини реле, нестача пам’яті, знімок стану щохвилини) з фільтром за джерелом, кнопками «Завантажити» (весь журнал одним файлом, ≈ 1–2 доби) та «Очистити». Журнал зберігається у флеші й переживає оновлення прошивки",
+"Журнал подій: запис у флеш типово ВИМКНЕНО — вмикається перемикачем «Запис у flash» у картці «Журнал подій» (налаштування зберігається після перезапуску). Поки запис вимкнено, журнал тримається лише в пам’яті (останні ≈ 4 КБ рядків) і зникає після вимкнення живлення",
+"Самовідновлення: зв’язок із VESC керма більше не «зависає» на хвилини після одного пошкодженого байта (відновлюється з наступною відповіддю); датчик кута керма на CAN перезапускається сам, якщо замовк при ввімкненому запалюванні (ACC/ON), а ECU відповідає; шина I2C плати реле звільняється й перезапускається сама. Кожне таке відновлення записується в журнал, лічильники показано в картці",
+"Потрібно залити оновлений образ LittleFS. Увага: заливання образу файлової системи (uploadfs або оновлення LittleFS з веб-сторінки) стирає журнал — спершу завантажте його"
+],"en":[
+"Event journal: new “Event journal” card in the System section — the last 100 events (boots and resets, fail-safe, steering mode, steering VESC link loss, CAN and relay-bus faults, low memory, a status snapshot every minute) with a source filter, “Download” (the whole journal as one file, ≈ 1–2 days) and “Clear”. The journal is kept in flash and survives a firmware update",
+"Event journal: writing to flash is OFF by default — switch it on with “Write to flash” in the “Event journal” card (the setting survives a reboot). While it is off, the journal is kept only in RAM (the last ≈ 4 KB of lines) and is lost at power-off",
+"Self-recovery: the steering VESC link no longer stays stuck for minutes after one corrupted byte (it recovers with the next reply); the CAN steering-angle sensor is restarted automatically when it goes silent with the ignition on (ACC/ON) while the ECU still answers; the relay board I2C bus frees and restarts itself. Every such recovery is written to the journal and counted in the card",
+"Upload the updated LittleFS image. Note: uploading the filesystem image (uploadfs or a LittleFS update from the web page) erases the journal — download it first"
+]},
+{"version":"1.5.24","date":"2026-11-07","uk":[
+"Реле: підтримка плати реле XL9535-K8V5 (адреса 0x20–0x27) поряд із платою PCA9557 (0x1F). Плата визначається автоматично під час запуску; нова картка «Плата реле» в розділі «Система» дозволяє вибрати Авто / PCA9557 / XL9535 (діє після перезавантаження) і показує активну плату та помилку. Якщо відповідають обидві плати, жодна або кілька адрес XL9535 — жодне реле не вмикається. Кожне перемикання реле тепер перевіряється за станом виводів, а після збою живлення плати реле відновлюються самі приблизно за 1 с. Потрібно залити оновлений образ LittleFS"
+],"en":[
+"Relays: support for the XL9535-K8V5 relay board (address 0x20–0x27) alongside the PCA9557 board (0x1F). The board is detected automatically at boot; the new “Relay board” card in the System section selects Auto / PCA9557 / XL9535 (applies after reboot) and shows the active board and any error. If both boards, no board or several XL9535 addresses answer, no relay is switched on. Every relay write is now verified on the pins, and after a relay-board power glitch the relays recover by themselves within about 1 s. Upload the updated LittleFS image"
+]},
+{"version":"1.5.23","date":"2026-11-06","uk":[
+"Гальмо: нова картка «Гальмо» — час повного ходу актуатора (повзунок 1000–3000 мс, типово 1500) і сила утримання (0–100, типово 30, 0 = без утримання) налаштовуються з веба для кожної машини окремо; показує стан кінцевика; плитка «Гальмо» на панелі тепер показує оцінене положення гальма замість 0. Потрібно залити оновлений образ LittleFS"
+],"en":[
+"Brake: new “Brake” card — the actuator full travel time (slider 1000–3000 ms, default 1500) and the hold drive (0–100, default 30, 0 = no hold push) are set from the web, per vehicle; it shows the endstop state; the panel “Brake” tile now shows the estimated brake position instead of 0. Upload the updated LittleFS image"
+]},
+{"version":"1.5.22","date":"2026-11-06","uk":[
+"Запуск двигуна: стартер крутить до 5 с за одну спробу (було 2 с) і, як і раніше, відпускається одразу, щойно двигун завівся"
+],"en":[
+"Engine start: the starter cranks for up to 5 s per attempt (was 2 s) and, as before, is released immediately once the engine starts"
+]},
+{"version":"1.5.21","date":"2026-11-06","uk":[
+"WiFi: назва мережі тепер унікальна для кожної плати — QuadBike-Control-XXXX (XXXX — останні 4 символи MAC чипа), тож кілька машин поруч не плутаються; після прошивки один раз підключіть телефон до нової мережі. Ім'я OTA теж з суфіксом (quadbike-control-xxxx), адреса 192.168.10.1 без змін"
+],"en":[
+"WiFi: the network name is now unique per board — QuadBike-Control-XXXX (XXXX = the last 4 hex digits of the chip MAC), so several vehicles nearby are no longer confused; after flashing, join the new network on the phone once. The OTA hostname gets the same suffix (quadbike-control-xxxx); the address 192.168.10.1 is unchanged"
+]},
+{"version":"1.5.20","date":"2026-11-06","uk":[
+"Кермо: прибрано ривки на повороті (буст додається поверх мінімальної потужності, тримається до 2° від цілі й лише тоді скидається, мінімальна потужність 85) і недоїзд до центру на 0,3–0,4° (зупинка в межах 0,2°)"
+],"en":[
+"Steering: no stop-go jerks on a turn (the anti-stall boost adds on top of the duty floor, is held until 2° from the target and only then is shed, floor 85) and no 0.3–0.4° undershoot of centre (parks within 0.2°)"
+]},
+{"version":"1.5.19","date":"2026-11-06","uk":[
+"Доводка центру: захист від петлі (переліт → перезапуск → знову імпульс); після занадто сильного імпульсу доводка чекає нової команди стіка"
+],"en":[
+"Steering park correction: loop protection (overshoot → restart → pulse again); after a too-strong pulse the correction waits for the next stick command"
+]},
+{"version":"1.5.18","date":"2026-11-06","uk":[
+"Доводка керма в центр: якщо після повороту колесо зупинилось за 0,4–1,0° від цілі, прошивка через ≈1 с доводить його короткими імпульсами до 0,2° (до 5 імпульсів); налаштовується в новій картці «Доводка центру керма» (можна вимкнути)"
+],"en":[
+"Steering park correction: when the wheel parks 0.4–1.0° off target after a turn, the firmware finishes the move after ≈1 s with short pulses to within 0.2° (up to 5 pulses); set it in the new “Steering park correction” card (can be switched off)"
+]},
+{"version":"1.5.17","date":"2026-11-06","uk":[
+"Поле точного кута керма на телефоні приймає від'ємні (ліві) кути: кнопка «±» змінює знак, а клавіатура тепер має мінус"
+],"en":[
+"The exact steering angle field accepts negative (left) angles on the phone: a “±” button flips the sign and the keyboard now has a minus key"
+]},
+{"version":"1.5.16","date":"2026-11-06","uk":[
+"Плавне відкриття газу проти глухнення двигуна: газ відкривається не швидше заданої швидкості (типово 60 %/с — від холостих до повного за 1,7 с), скидання газу завжди миттєве; налаштовується у веб-панелі (картка «Обмеження швидкості та кермо», 0 = вимкнено, 30–100 %/с)"
+],"en":[
+"Smooth throttle opening against engine stalls: the throttle opens no faster than a set rate (default 60 %/s — idle to full in 1.7 s), closing is always instant; set it from the web (Speed limit and steering card, 0 = off, 30–100 %/s)"
+]},
+{"version":"1.5.15","date":"2026-11-06","uk":[
+"Перемикання передач швидше: очікування в крайньому положенні та пауза між кроками закінчуються, щойно датчик ≈0,2 с стабільно показує потрібну передачу (N→L ≈2,6 с замість ≈6,7 с); без датчика — як раніше (2 с і 1 с), перегазовка/холостий хід тримаються лише на час очікування"
+],"en":[
+"Faster gear changes: the overshoot wait and the pause between steps end as soon as the gear sensor steadily reports the expected gear for ≈0.2 s (N→L ≈2.6 s instead of ≈6.7 s); without the sensor they time out as before (2 s and 1 s), and the RPM boost / idle hold only lasts for the wait"
+]},
+{"version":"1.5.14","date":"2026-11-06","uk":[
+"Передача звіряється з датчиком положення: при старті вона береться з датчика (або зі збереженого стану, якщо датчик мовчить; інакше — один повний крок у нейтраль замість сліпого стрибка), а якщо в спокої датчик ≈1 с стабільно показує іншу передачу — прошивка приймає її; до ініціалізації передача показується як «?» і газ обмежено"
+],"en":[
+"The gear is reconciled with the gear sensor: at start it comes from the sensor (or the saved state if the sensor is silent; otherwise one full step into neutral instead of a blind jump), and when idle the firmware adopts the gear the sensor steadily reports for ≈1 s; until initialised the gear shows as “?” and throttle is capped"
+]},
+{"version":"1.5.13","date":"2026-11-05","uk":[
+"Перегазовку при перемиканні передач можна вимкнути у веб-панелі (картка «Положення передач»); коли вимкнено, газ на час перемикання тримається на холостому ходу"
+],"en":[
+"The gear-change RPM boost can be switched off from the web (Gear Position Defaults card); when off, the throttle is held at idle while the gear shifts"
+]},
+{"version":"1.5.12","date":"2026-11-05","uk":[
+"Діагностика керма через USB: консоль на USB-порту (скрипт tools/steer_diag.py) вимірює мінімальну потужність зрушення, вибіг, кут за імпульс і точність повернення в центр; поки вона увімкнена, інші команди керма не виконуються (лише на місці)",
+"Налаштування керма за вимірами на машині: зона зупинки 0,4°, повторний рух від 1,0°, мінімальна потужність 80 (зрушення) / 70 (рух), точний імпульс 100 × 100 мс, ручний рух 120",
+"Веб-панель: швидкість провороту 80–255 (типово 120), поле точного кута керма з кнопками «Перейти» та «0°», один Nudge ≈ 0,4°",
+"Плавність обмежувача швидкості (як швидко він прибирає й повертає газ) налаштовується у веб-панелі: 10–200 %/с, типово 80"
+],"en":[
+"USB steering diagnostics: a console on the USB port (script tools/steer_diag.py) measures the break-away duty, coast, degrees per pulse and centring accuracy; while it is on, other steering commands are ignored (standing still only)",
+"Steering tuning from measurements on the vehicle: park window 0.4°, restart beyond 1.0°, duty floors 80 (break-away) / 70 (tracking), nudge 100 × 100 ms, jog 120",
+"Web UI: jog speed 80–255 (default 120), exact target angle input with Go and 0° buttons, one nudge ≈ 0.4°",
+"Speed limiter throttle rate (how fast it closes and returns the throttle) adjustable from the web: 10–200 %/s, default 80"
+]},
 {"version":"1.5.7","date":"2026-11-03","uk":[
 "Діагностика: кнопка «Сніфер CAN (10 с)» показує всі ID на шині CAN з лічильниками й даними (лише на місці)"
 ],"en":[

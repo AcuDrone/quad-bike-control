@@ -498,7 +498,10 @@
         }
         .relay-btn:hover:not(:disabled) { background: var(--accent); transform: translateY(-2px); }
         .relay-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        #steer-angle-input:disabled, #steer-angle-neg:disabled, #steer-angle-go:disabled, #steer-angle-zero:disabled { opacity: 0.5; cursor: not-allowed; }
         .relay-btn.active { background: color-mix(in srgb, var(--success) 40%, var(--card)); border-color: var(--success); }
+        /* Two-press confirmation: the armed button waits for the second press (confirmTwice) */
+        .confirm-armed { outline: 2px solid var(--warning); outline-offset: 2px; box-shadow: 0 0 0 4px color-mix(in srgb, var(--warning) 30%, transparent); }
         .relay-btn-name { font-size: 1.25em; line-height: 1.15; }
         .relay-btn-desc { font-size: 0.8em; font-weight: normal; color: var(--muted-foreground); line-height: 1.3; }
         .relay-btn.active .relay-btn-desc { color: var(--foreground); }
@@ -909,16 +912,29 @@
                 </div>
                 <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 16px; font-size: 0.85em; color: var(--muted-foreground);">
                     <span data-i18n="lbl_jog_speed">Jog&nbsp;speed</span>
-                    <input type="range" min="140" max="255" value="180" id="steer-jog-speed" style="flex:1; height: 28px;"
+                    <input type="range" min="80" max="255" value="120" id="steer-jog-speed" style="flex:1; height: 28px;"
                            oninput="document.getElementById('steer-jog-speed-val').textContent = this.value">
-                    <span id="steer-jog-speed-val" style="color:var(--foreground); min-width:2.2em; text-align:right;">180</span>
+                    <span id="steer-jog-speed-val" style="color:var(--foreground); min-width:2.2em; text-align:right;">120</span>
                 </div>
+                <!-- Exact target angle (steer_angle, degrees): closed loop, needs web control and Position mode -->
+                <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 4px; font-size: 0.85em; color: var(--muted-foreground);">
+                    <label for="steer-angle-input" data-i18n="lbl_steer_target_angle">Target angle, °</label>
+                    <input type="number" id="steer-angle-input" step="0.1" value="0" inputmode="text"
+                           style="flex:1; min-width:0; padding:10px 8px; border-radius:6px; border:1px solid var(--border); background:var(--input, var(--secondary)); color:var(--foreground); font-size:1em;"
+                           onkeydown="if (event.key === 'Enter') steerAngleGo()">
+                    <button id="steer-angle-neg" onclick="steerAngleFlipSign()" data-i18n="btn_steer_angle_flip" style="padding:12px 14px; border-radius:6px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">±</button>
+                    <button id="steer-angle-go" onclick="steerAngleGo()" data-i18n="btn_steer_angle_go" style="padding:12px 14px; border-radius:6px; border:none; background:var(--primary, var(--accent)); color:var(--primary-foreground, var(--foreground)); cursor:pointer;">Go</button>
+                    <button id="steer-angle-zero" onclick="steerAngleZero()" data-i18n="btn_steer_angle_zero" style="padding:12px 14px; border-radius:6px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">0°</button>
+                </div>
+                <div data-i18n="steer_angle_hint" style="margin-bottom: 4px; font-size: 0.75em; color: var(--muted-foreground);">Steering drives to the target angle within about 0.3°; negative = left; one Nudge ≈ 0.4°</div>
+                <div id="steer-angle-lock-hint" style="display: none; margin-bottom: 8px; font-size: 0.8em; color: var(--warning);"></div>
+                <div style="margin-bottom: 12px;"></div>
                 <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 8px;">
                     <button onclick="steerCapture('steer_cal_left')" data-i18n="btn_set_left" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Set Left</button>
                     <button onclick="steerCapture('steer_cal_right')" data-i18n="btn_set_right" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Set Right</button>
                 </div>
                 <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 4px;">
-                    <button onclick="steerSensorZero()" data-i18n="btn_steer_zero" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--danger) 55%, black); color:var(--foreground); cursor:pointer;">Set sensor zero</button>
+                    <button onclick="steerSensorZero(this)" data-i18n="btn_steer_zero" style="flex:1; padding:12px 8px; border-radius:6px; border:none; background:color-mix(in srgb, var(--danger) 55%, black); color:var(--foreground); cursor:pointer;">Set sensor zero</button>
                 </div>
                 <div style="margin-top: 8px; font-size: 0.8em; color: var(--muted-foreground);">
                     <span data-i18n="lbl_steer_angle">Angle:</span> <span data-bind="steer-angle" class="big-angle">--</span>°
@@ -936,6 +952,56 @@
                     <span data-i18n="lbl_calibration">Calibration:</span> <span data-bind="steer-cal-status">--</span>
                 </div>
                 <div id="steer-center-status" style="margin-top: 8px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
+            </div>
+            <!-- Steering park correction: finish a parking with short pulses (NVS "steering" park_*, telemetry steer_park_*) -->
+            <div class="card" id="steer-park-card">
+                <h2 class="card-title"><span data-i18n="card_steer_park">🎯 Steering park correction</span><button type="button" class="help-btn" onclick="openHelp('steer_park_help', 'card_steer_park')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <button class="upload-btn" id="steer-park-btn" onclick="toggleSteerPark()" style="background: var(--secondary); width: 100%;">
+                    <span data-i18n="lbl_steer_park_enabled">Park correction</span>: <span id="steer-park-status">--</span>
+                </button>
+                <div style="margin-top: 10px;">
+                    <label style="font-size: 0.8em; color: var(--muted-foreground);"><span data-i18n="lbl_steer_park_rung">Rung</span> 1 <span data-i18n="lbl_steer_park_rung_units">(duty × ms)</span></label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px; align-items: center;">
+                        <input type="number" id="steer-park-d1" min="40" max="150" step="1" inputmode="numeric" aria-label="duty" style="flex:1; min-width:0; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <span style="color: var(--muted-foreground);">×</span>
+                        <input type="number" id="steer-park-t1" min="40" max="200" step="5" inputmode="numeric" aria-label="ms" style="flex:1; min-width:0; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button onclick="saveSteerParkRung(1)" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                    </div>
+                </div>
+                <div style="margin-top: 10px;">
+                    <label style="font-size: 0.8em; color: var(--muted-foreground);"><span data-i18n="lbl_steer_park_rung">Rung</span> 2 <span data-i18n="lbl_steer_park_rung_units">(duty × ms)</span></label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px; align-items: center;">
+                        <input type="number" id="steer-park-d2" min="40" max="150" step="1" inputmode="numeric" aria-label="duty" style="flex:1; min-width:0; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <span style="color: var(--muted-foreground);">×</span>
+                        <input type="number" id="steer-park-t2" min="40" max="200" step="5" inputmode="numeric" aria-label="ms" style="flex:1; min-width:0; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button onclick="saveSteerParkRung(2)" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                    </div>
+                </div>
+                <div style="margin-top: 10px;">
+                    <label style="font-size: 0.8em; color: var(--muted-foreground);"><span data-i18n="lbl_steer_park_rung">Rung</span> 3 <span data-i18n="lbl_steer_park_rung_units">(duty × ms)</span></label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px; align-items: center;">
+                        <input type="number" id="steer-park-d3" min="40" max="150" step="1" inputmode="numeric" aria-label="duty" style="flex:1; min-width:0; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <span style="color: var(--muted-foreground);">×</span>
+                        <input type="number" id="steer-park-t3" min="40" max="200" step="5" inputmode="numeric" aria-label="ms" style="flex:1; min-width:0; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button onclick="saveSteerParkRung(3)" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                    </div>
+                </div>
+                <div style="margin-top: 10px;">
+                    <label data-i18n="lbl_steer_park_tol" style="font-size: 0.8em; color: var(--muted-foreground);">Done tolerance (°)</label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px;">
+                        <input type="number" id="steer-park-tol" min="0.1" max="0.5" step="0.1" inputmode="decimal" style="flex:1; min-width:0; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button onclick="saveSteerParkTol()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                    </div>
+                </div>
+                <div style="margin-top: 10px;">
+                    <label data-i18n="lbl_steer_park_max" style="font-size: 0.8em; color: var(--muted-foreground);">Max pulses per parking</label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px;">
+                        <input type="number" id="steer-park-max" min="1" max="10" step="1" inputmode="numeric" style="flex:1; min-width:0; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button onclick="saveSteerParkMax()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                    </div>
+                </div>
+                <div id="steer-park-last" style="margin-top: 12px; font-size: 0.8em; color: var(--muted-foreground);">--</div>
+                <div id="steer-park-status-msg" style="margin-top: 8px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
             </div>
             <!-- Throttle Calibration -->
             <div class="card">
@@ -956,6 +1022,27 @@
                         <button onclick="throttleCalCancel()" data-i18n="btn_cancel" style="flex:1; padding:8px; border-radius:4px; border:none; background:var(--secondary); color:var(--foreground); cursor:pointer;">Cancel</button>
                 </div>
                 <div id="throttle-cal-status" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
+            </div>
+            <!-- Brake tuning (travel time + hold drive, endstop state) -->
+            <div class="card" id="brake-card">
+                <h2 class="card-title"><span data-i18n="card_brake">🛑 Brake</span><button type="button" class="help-btn" onclick="openHelp('brake_help', 'card_brake')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <div>
+                    <label data-i18n="lbl_brake_travel" for="brake-travel-slider" style="font-size: 0.8em; color: var(--muted-foreground);">Full travel time</label>
+                    <div style="display: flex; gap: 8px; align-items: center; margin-top: 4px;">
+                        <input type="range" min="1000" max="3000" step="50" value="1500" id="brake-travel-slider" style="flex:1; min-width:0; height: 28px;">
+                        <span id="brake-travel-val" style="color:var(--foreground); min-width:4.5em; text-align:right;">1500 ms</span>
+                    </div>
+                </div>
+                <div style="margin-top: 10px;">
+                    <label data-i18n="lbl_brake_hold" for="brake-hold-input" style="font-size: 0.8em; color: var(--muted-foreground);">Hold drive (PWM 0-100)</label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px;">
+                        <input type="number" id="brake-hold-input" min="0" max="100" step="5" inputmode="numeric" style="flex:1; min-width:0; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button onclick="saveBrakeHoldPwm()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                    </div>
+                    <div data-i18n="brake_hold_hint" style="margin-top: 4px; font-size: 0.75em; color: var(--muted-foreground);">0 = no hold push</div>
+                </div>
+                <div id="brake-endstop" style="margin-top: 12px; font-size: 0.8em; color: var(--muted-foreground);">--</div>
+                <div id="brake-status-msg" style="margin-top: 8px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
             </div>
             <!-- Gear Position Defaults -->
             <div class="card">
@@ -986,6 +1073,9 @@
                         <input type="number" id="boost-rpm-input" min="500" max="5000" step="50" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
                         <button onclick="saveBoostRpm()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
                     </div>
+                    <button class="upload-btn" id="gear-boost-btn" onclick="toggleGearBoost()" style="background: var(--secondary); width: 100%; margin-top: 8px;">
+                        <span data-i18n="lbl_gear_boost_enabled">Gear-change RPM boost</span>: <span id="gear-boost-status">--</span>
+                    </button>
                 </div>
                 <div id="gear-default-status" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
             </div>
@@ -1004,7 +1094,7 @@
                     <button type="button" class="relay-btn gc-save" id="gc-save-h" onclick="captureGearCode('H')"><span class="relay-btn-name" data-i18n="btn_save_as_h">Save as H</span><span class="relay-btn-desc" id="gc-saved-h">--</span></button>
                     <button type="button" class="relay-btn gc-save" id="gc-save-l" onclick="captureGearCode('L')"><span class="relay-btn-name" data-i18n="btn_save_as_l">Save as L</span><span class="relay-btn-desc" id="gc-saved-l">--</span></button>
                 </div>
-                <button onclick="resetGearCodes()" data-i18n="btn_reset_gear_codes" style="margin-top: 10px; width: 100%; padding:8px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer;">Reset to defaults</button>
+                <button onclick="resetGearCodes(this)" data-i18n="btn_reset_gear_codes" style="margin-top: 10px; width: 100%; padding:8px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--warning) 60%, black); color:var(--foreground); cursor:pointer;">Reset to defaults</button>
                 <div id="gear-codes-status" style="margin-top: 10px; font-size: 0.8em; color: var(--muted-foreground); min-height: 1.2em;"></div>
             </div>
             <!-- Speed sensor calibration (pulses per revolution with the measurement, wheel circumference) -->
@@ -1050,13 +1140,29 @@
             </div>
             <!-- Speed limit and steering (limiter floor, speed-limit readout, steering authority, scaling base, bench test speed) -->
             <div class="card" id="speed-limit-card">
-                <h2 class="card-title"><span data-i18n="card_speed_limit_steer">🚦 Speed limit and steering</span><button type="button" class="help-btn" onclick="openHelp('speed_limit_help,speed_limiter_hint,speed_limit_floor_hint,steer_scale_hint,steer_test_speed_hint', 'card_speed_limit_steer')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <h2 class="card-title"><span data-i18n="card_speed_limit_steer">🚦 Speed limit and steering</span><button type="button" class="help-btn" onclick="openHelp('speed_limit_help,speed_limiter_hint,speed_limit_floor_hint,speed_limit_slew_help,throttle_open_slew_help,steer_scale_hint,steer_test_speed_hint', 'card_speed_limit_steer')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
                 <div style="margin-top: 14px;">
                     <label data-i18n="lbl_speed_limit_floor" style="font-size: 0.8em; color: var(--muted-foreground);">Limiter floor (%)</label>
                     <div style="display: flex; gap: 6px; margin-top: 4px;">
                         <input type="number" id="speed-limit-floor-input" min="0" max="20" step="0.5" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
                         <button onclick="saveSpeedLimitFloor()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
                     </div>
+                </div>
+                <div style="margin-top: 10px;">
+                    <label data-i18n="lbl_speed_limit_slew" style="font-size: 0.8em; color: var(--muted-foreground);">Limiter throttle rate (%/s)</label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px;">
+                        <input type="number" id="speed-limit-slew-input" min="10" max="200" step="5" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button onclick="saveSpeedLimitSlew()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                    </div>
+                    <div data-i18n="speed_limit_slew_note" style="margin-top: 4px; font-size: 0.75em; color: var(--muted-foreground);">Lower = gentler closing and return of the throttle; 80 = previous behaviour</div>
+                </div>
+                <div style="margin-top: 10px;">
+                    <label data-i18n="lbl_throttle_open_slew" style="font-size: 0.8em; color: var(--muted-foreground);">Throttle opening rate (%/s)</label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px;">
+                        <input type="number" id="throttle-open-slew-input" min="0" max="100" step="5" oninput="updateThrottleOpenSlewHint()" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button onclick="saveThrottleOpenSlew()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                    </div>
+                    <div id="throttle-open-slew-hint" style="margin-top: 4px; font-size: 0.75em; color: var(--muted-foreground);"></div>
                 </div>
                 <div style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px;">
                     <div style="display: flex; justify-content: space-between; align-items: baseline; font-size: 0.85em;">
@@ -1229,10 +1335,11 @@
                             Click to select firmware (.bin)
                         </label>
                     </div>
-                    <button class="upload-btn" id="upload-btn" onclick="uploadFirmware()" data-i18n="btn_upload_firmware">Upload Firmware</button>
+                    <button class="upload-btn" id="upload-btn" onclick="uploadFirmware(this)" data-i18n="btn_upload_firmware">Upload Firmware</button>
                     <div class="progress-bar" id="progress-bar" style="display: none;">
                         <div class="progress-fill" id="progress-fill">0%</div>
                     </div>
+                    <div id="fw-status" style="margin-top: 8px; font-size: 0.8em; min-height: 1.2em; color: var(--muted-foreground);"></div>
                 </div>
                 <div class="slider-container" style="margin-top: 15px;">
                     <button class="upload-btn" onclick="openChangelog()" style="background: var(--secondary);">
@@ -1246,6 +1353,34 @@
                 <div class="ro-row"><span data-i18n="lbl_ssid">SSID</span><span class="ro-val" id="net-ssid">--</span></div>
                 <div class="ro-row"><span data-i18n="lbl_ip">IP address</span><span class="ro-val" id="net-ip">--</span></div>
                 <div data-i18n="network_later" style="margin-top: 10px; font-size: 0.8em; color: var(--muted-foreground);">Settings will appear later.</div>
+            </div>
+            <!-- Event journal (GET /api/events?tail=100 / /api/events/download, POST /api/events/clear,
+                 POST /api/events/config {"fs":bool} = flash-write switch; counters vesc_resync / can_reinit /
+                 journal_bytes / journal_fs from telemetry; no I2C bus on the DevKitC-1). No vehicle command. -->
+            <div class="card">
+                <h2 class="card-title"><span data-i18n="card_journal">📜 Event journal</span><button type="button" class="help-btn" onclick="openHelp('journal_help,journal_fs_help,journal_format_help,journal_erase_help', 'card_journal')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <div class="ro-row"><span data-i18n="lbl_journal_counters">Recoveries VESC / CAN</span><span class="ro-val" id="journal-counters">--</span></div>
+                <div class="ro-row"><span data-i18n="lbl_journal_size">Journal size</span><span class="ro-val" id="journal-size">--</span></div>
+                <div class="ro-row"><span data-i18n="lbl_journal_mode">Storage</span><span class="ro-val" id="journal-mode">--</span></div>
+                <div style="display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-top: 8px;">
+                    <span data-i18n="lbl_journal_fs">Write to flash</span>
+                    <button class="gear-btn" id="journal-fs-btn" onclick="toggleJournalFs()" style="min-width: 90px; padding: 6px 10px; font-size: 0.9em;">--</button>
+                </div>
+                <div data-i18n="journal_fs_hint" style="margin-top: 4px; font-size: 0.8em; color: var(--muted-foreground);">Off: the journal lives only in RAM (and the RTC ring) and is lost at power-off.</div>
+                <div id="journal-unavail" data-i18n="journal_unavailable" style="display: none; margin-top: 8px; font-size: 0.85em; color: var(--danger);">Journal cannot be written to flash</div>
+                <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 12px 0 8px;">
+                    <select id="journal-filter" onchange="renderJournal()" aria-label="Source" style="flex: 1; min-width: 90px; padding: 6px; border-radius: 4px; border: 1px solid var(--border); background: var(--input); color: var(--foreground);">
+                        <option value="" data-i18n="journal_all">All</option>
+                        <option value="SYS">SYS</option><option value="SRC">SRC</option><option value="STEER">STEER</option>
+                        <option value="VESC">VESC</option><option value="CAN">CAN</option><option value="I2C">I2C</option>
+                        <option value="RELAY">RELAY</option><option value="SNAP">SNAP</option><option value="RTC">RTC</option>
+                    </select>
+                    <button class="gear-btn" onclick="loadJournal()" data-i18n="journal_refresh" style="flex: 1; padding: 8px 6px; font-size: 0.9em;">Refresh</button>
+                    <button class="gear-btn" onclick="downloadJournal()" data-i18n="journal_download" style="flex: 1; padding: 8px 6px; font-size: 0.9em;">Download</button>
+                    <button class="gear-btn" onclick="clearJournal(this)" data-i18n="journal_clear" style="flex: 1; padding: 8px 6px; font-size: 0.9em;">Clear</button>
+                </div>
+                <pre id="journal-lines" style="margin: 0; max-height: 320px; overflow: auto; padding: 6px 8px; border-radius: 4px; border: 1px solid var(--border); font-family: var(--font-mono, monospace); font-size: 0.72em; line-height: 1.45; white-space: pre; color: var(--foreground);">--</pre>
+                <div id="journal-status" style="margin-top: 6px; font-size: 0.8em; min-height: 1.2em; color: var(--muted-foreground);"></div>
             </div>
             </div>
             </section>
@@ -1343,12 +1478,14 @@
                 gear_codes_live: 'code %s → %s',
                 gear_codes_entry_default: 'default',
                 gear_codes_confirm_reset: 'Restore the default gear codes?',
+                gear_codes_confirm_btn: 'Confirm reset',
                 gear_codes_saving: 'Saving current code as %s…',
                 card_gear_defaults: '⚙️ Gear Position Defaults',
-                gear_defaults_help: 'Transmission servo position for each gear (0.0–100.0 %). Press <b>Start</b>, drag the slider until the lever sits in the wanted gear, then press <b>Save as &lt;gear&gt;</b>. Saving does not move the servo, so it also works without Start. The <b>▶</b> buttons move the servo to a saved position for checking; <b>Done</b> locks the slider again.',
+                gear_defaults_help: 'Transmission servo position for each gear (0.0–100.0 %). Press <b>Start</b>, drag the slider until the lever sits in the wanted gear, then press <b>Save as &lt;gear&gt;</b>. Saving does not move the servo, so it also works without Start. The <b>▶</b> buttons move the servo to a saved position for checking; <b>Done</b> locks the slider again. <b>Gear-change RPM boost</b> turns the RPM blip on gear changes on or off; with it off the throttle is still held at idle while the gear shifts, and the manual RPM boost test is not affected.',
                 btn_save: 'Save',
                 btn_cancel: 'Cancel',
                 lbl_boost_rpm_target: 'RPM Boost Target',
+                lbl_gear_boost_enabled: 'Gear-change RPM boost',
                 invalid_position: 'Invalid position (0.0–100.0)',
                 moving_to: 'Moving to %s%...',
                 invalid_value: 'Invalid value (0.0–100.0)',
@@ -1366,11 +1503,20 @@
                 btn_nudge_left: '◂ Nudge',
                 btn_nudge_right: 'Nudge ▸',
                 lbl_jog_speed: 'Jog speed',
+                lbl_steer_target_angle: 'Target angle, °',
+                btn_steer_angle_go: 'Go',
+                btn_steer_angle_zero: '0°',
+                btn_steer_angle_flip: '±',
+                steer_angle_hint: 'Steering drives to the target angle within about 0.3°; negative = left; one Nudge ≈ 0.4°',
+                steer_angle_need_web: 'Target angle needs web control (Take Control in Manual Control).',
+                invalid_steer_angle: 'Enter an angle in degrees',
                 btn_set_left: 'Set Left',
                 btn_set_right: 'Set Right',
                 btn_steer_zero: 'Set sensor zero',
-                steer_zero_confirm: 'Set the sensor zero HERE?\n\nThe current wheel position becomes the steering center, and the stored Left and Right limits will be erased — capture them again afterwards.\n\nOnly do this with the wheels straight ahead, after restarting the vehicle.',
+                steer_zero_confirm: 'This position becomes the center. The limits will be erased.',
+                steer_zero_confirm_btn: 'Confirm zero',
                 steer_zero_sending: 'Setting sensor zero…',
+                steer_no_connection: 'No connection to the board',
                 lbl_steer_angle: 'Angle:',
                 lbl_lws_fps: 'fps',
                 lbl_lws_crc: 'checksum',
@@ -1418,6 +1564,37 @@
                 relay_fn_q_3: 'light',
                 relay_fn_q_4: 'wheel lock',
                 relay_test_blocked: 'Available only with ignition OFF, light off, wheel lock released.',
+
+                // Steering park correction card
+                card_steer_park: '🎯 Steering park correction',
+                steer_park_help: 'After a turn the firmware finishes centring the wheel with short pulses (duty × ms; rung 1 first, the next rung only when the wheel did not move): <b>lower the first rung if a pulse overshoots</b>, <b>raise the rungs if the correction gives up</b>.',
+                lbl_steer_park_enabled: 'Park correction',
+                lbl_steer_park_rung: 'Rung',
+                lbl_steer_park_rung_units: '(duty × ms)',
+                lbl_steer_park_tol: 'Done tolerance (°)',
+                lbl_steer_park_max: 'Max pulses per parking',
+                steer_park_last_done: 'Last parking: %s %s, residual %s°, last %s×%s',
+                steer_park_last_gave_up: 'Gave up at %s° after %s %s',
+                steer_park_last_cancelled: 'Cancelled by stick movement',
+                steer_park_last_none: 'Last parking: none yet',
+                invalid_steer_park_rung: 'Rung must be duty 40-150 and 40-200 ms (whole numbers)',
+                invalid_steer_park_ladder: 'The ladder must not decrease (rung %s): save the higher rung first',
+                invalid_steer_park_tol: 'Done tolerance must be 0.1-0.5°',
+                invalid_steer_park_max: 'Max pulses must be a whole number 1-10',
+                steer_park_saving: 'Saving the park correction setting...',
+
+                // Brake tuning card
+                card_brake: '🛑 Brake',
+                brake_help: 'The brake position is estimated by time (there is no position sensor). <b>Full travel time</b>: set it so that the panel\'s brake percentage reaches 100 % just as the actuator reaches its end. <b>Hold drive</b>: the push that keeps a held brake from creeping back; 0 = none, higher values heat the actuator and the driver.',
+                lbl_brake_travel: 'Full travel time',
+                brake_travel_val: '%s ms',
+                lbl_brake_hold: 'Hold drive (PWM 0-100)',
+                brake_hold_hint: '0 = no hold push',
+                brake_endstop_released: 'Endstop: released',
+                brake_endstop_no: 'Endstop: no',
+                invalid_brake_travel: 'Travel time must be 1000-3000 ms',
+                invalid_brake_hold: 'Hold drive must be a whole number 0-100',
+                brake_saving: 'Saving the brake setting...',
 
                 // Throttle calibration card
                 card_throttle_cal: '🎚️ Throttle Calibration',
@@ -1517,6 +1694,16 @@
                 speed_limit_floor_hint: 'Limiter floor: the lowest throttle the speed limiter may leave at and above the limit. 0 % means idle and holds the limit most tightly; a higher floor (up to 20 %) softens engine braking at the cost of a limit that may not hold. The "Limiter at floor, speed above limit" badge (kept for 10 s after it clears) means the floor is too high or the vehicle is going downhill — the limiter does not brake.',
                 lbl_speed_limit_floor: 'Limiter floor (%)',
                 invalid_speed_limit_floor: 'Limiter floor must be 0-20 %',
+                lbl_speed_limit_slew: 'Limiter throttle rate (%/s)',
+                speed_limit_slew_note: 'Lower = gentler closing and return of the throttle; 80 = previous behaviour',
+                speed_limit_slew_help: 'Limiter throttle rate: how fast the limiter may close and give back the throttle, 10–200 %/s (default 80); lower is gentler but lets the speed overshoot the limit a little more.',
+                invalid_speed_limit_slew: 'Limiter throttle rate must be 10-200 %/s',
+                lbl_throttle_open_slew: 'Throttle opening rate (%/s)',
+                throttle_open_slew_time: '0 → 100 % in %s s; closing is always instant',
+                throttle_open_slew_off: '0 = off (throttle opens instantly, as before)',
+                throttle_open_slew_range: '0 = off, or 30–100 %/s',
+                throttle_open_slew_help: 'Throttle opening rate: how fast the throttle may open, so the engine is not stalled by a snap from idle; closing is always instant. 0 = off, 30–100 %/s (default 60 = idle to full in 1.7 s).',
+                invalid_throttle_open_slew: 'Throttle opening rate must be 0 or 30-100 %/s',
                 speed_limit_at_floor: 'at floor',
                 speed_limit_sat: 'Limiter at floor, speed above limit',
                 speed_limit_sat_held: 'Limiter was at floor, speed above limit',
@@ -1610,7 +1797,8 @@
                 btn_upload_firmware: 'Upload Firmware',
                 fw_update_warning: '⚠️ Vehicle will enter safe state during update and reboot automatically.',
                 fw_select_first: 'Please select a firmware file first',
-                fw_confirm_upload: 'Upload firmware? Vehicle will enter safe state and reboot.',
+                fw_confirm_upload: 'The vehicle will enter safe state and reboot.',
+                fw_confirm_btn: 'Confirm upload',
                 fw_upload_success: 'Firmware uploaded successfully! Device will reboot.',
                 fw_upload_failed: 'Upload failed: %s',
                 fw_upload_error: 'Upload error occurred',
@@ -1673,6 +1861,31 @@
                 lbl_ssid: 'SSID',
                 lbl_ip: 'IP address',
                 network_later: 'Network settings will be added later.',
+                // Event journal card (System)
+                card_journal: '📜 Event journal',
+                lbl_journal_counters: 'Recoveries VESC / CAN',
+                lbl_journal_size: 'Journal size',
+                journal_unavailable: 'The journal cannot be written to flash — only the latest lines in memory are shown',
+                lbl_journal_mode: 'Storage',
+                lbl_journal_fs: 'Write to flash',
+                journal_fs_hint: 'Off (default): the journal lives only in RAM (the last ≈ 4 KB, plus the RTC ring across a reset) and is lost at power-off. On: written to flash about once a second.',
+                journal_mode_ram: 'RAM only',
+                journal_mode_flash: 'flash',
+                journal_ram_lines: '%s lines in RAM',
+                journal_fs_failed: 'Could not change the flash-write setting',
+                journal_fs_help: '<b>Write to flash is OFF by default.</b> While it is off nothing is written to flash (no flash-erase stalls in the control loop): the journal keeps only the newest ≈ 4 KB of lines in RAM, a reset keeps the last 16 lines (RTC memory), a power-off loses everything. Lines written earlier while it was on are still shown and downloaded first, marked “flash”, followed by the RAM lines. Switching on writes <b>journal_fs on=1</b> and saves the RAM lines to flash at once; switching off writes <b>journal_fs on=0</b>, saves once more, then stops. The setting survives a reboot.',
+                journal_all: 'All',
+                journal_refresh: 'Refresh',
+                journal_download: 'Download',
+                journal_clear: 'Clear',
+                journal_confirm_clear: 'The journal will be deleted; the boot counter is kept.',
+                journal_confirm_btn: 'Confirm delete',
+                journal_cleared: 'Journal cleared',
+                journal_load_failed: 'Could not load the journal',
+                journal_empty: '(no lines)',
+                journal_help: 'A persistent record of what the controller saw: boots and resets, fail-safe and control-source changes, steering mode changes and stall stops, steering-angle sensor health, steering VESC link loss / recovery, CAN faults and their automatic recoveries, main-loop overruns, low memory, and a snapshot every minute. It survives a firmware update and most resets; lines from the last second before a power cut may be missing. The header shows how many times the VESC link and the CAN controller recovered themselves since boot.',
+                journal_format_help: 'Line format: <b>boot uptime_s SOURCE LEVEL event key=value …</b> — boot = boot counter, uptime in seconds since that boot, LEVEL I = info, W = warning, E = error. <b>sup=N</b> means N identical events were suppressed. Lines after <b>RTC replay</b> were recovered from memory after a crash or reset. Download saves both journal files (≈ 1–2 days) as one text file.',
+                journal_erase_help: '<b>Uploading the filesystem image (pio run -t uploadfs, or a LittleFS update from this page) erases the journal</b> — download it first. A normal firmware update keeps it.',
 
                 // Gear position defaults / gear codes
                 gd_start: 'Start',
@@ -1744,12 +1957,14 @@
                 gear_codes_live: 'код %s → %s',
                 gear_codes_entry_default: 'типовий',
                 gear_codes_confirm_reset: 'Відновити типові коди передач?',
+                gear_codes_confirm_btn: 'Підтвердити скидання',
                 gear_codes_saving: 'Збереження поточного коду як %s…',
                 card_gear_defaults: '⚙️ Типові положення передач',
-                gear_defaults_help: 'Положення серво трансмісії для кожної передачі (0.0–100.0 %). Натисніть <b>Почати</b>, повзунком доведіть важіль у потрібну передачу, потім натисніть <b>Зберегти як &lt;передача&gt;</b>. Збереження не рухає серво, тому працює і без «Почати». Кнопки <b>▶</b> переводять серво в збережене положення для перевірки; <b>Готово</b> знову блокує повзунок.',
+                gear_defaults_help: 'Положення серво трансмісії для кожної передачі (0.0–100.0 %). Натисніть <b>Почати</b>, повзунком доведіть важіль у потрібну передачу, потім натисніть <b>Зберегти як &lt;передача&gt;</b>. Збереження не рухає серво, тому працює і без «Почати». Кнопки <b>▶</b> переводять серво в збережене положення для перевірки; <b>Готово</b> знову блокує повзунок. <b>Перегазовка при перемиканні</b> вмикає або вимикає підгазовку під час перемикання передач; коли її вимкнено, газ однаково тримається на холостому ходу, поки передача перемикається, а ручний тест буста обертів працює як раніше.',
                 btn_save: 'Зберегти',
                 btn_cancel: 'Скасувати',
                 lbl_boost_rpm_target: 'Цільові оберти буста',
+                lbl_gear_boost_enabled: 'Перегазовка при перемиканні',
                 invalid_position: 'Неприпустиме положення (0.0–100.0)',
                 moving_to: 'Переміщення до %s%...',
                 invalid_value: 'Неприпустиме значення (0.0–100.0)',
@@ -1767,11 +1982,20 @@
                 btn_nudge_left: '◂ Підштовхнути',
                 btn_nudge_right: 'Підштовхнути ▸',
                 lbl_jog_speed: 'Швидкість провороту',
+                lbl_steer_target_angle: 'Кут, °',
+                btn_steer_angle_go: 'Перейти',
+                btn_steer_angle_zero: '0°',
+                btn_steer_angle_flip: '±',
+                steer_angle_hint: 'Кермо доїжджає до заданого кута з точністю близько 0,3°; від\'ємний = ліворуч; один Nudge ≈ 0,4°',
+                steer_angle_need_web: 'Для заданого кута потрібне веб-керування («Взяти керування» в Ручному керуванні).',
+                invalid_steer_angle: 'Введіть кут у градусах',
                 btn_set_left: 'Задати ліво',
                 btn_set_right: 'Задати право',
                 btn_steer_zero: 'Задати нуль датчика',
-                steer_zero_confirm: 'Задати нуль датчика ТУТ?\n\nПоточне положення коліс стане центром керма, а збережені межі «ліво» та «право» буде стерто — після цього зафіксуйте їх знову.\n\nРобіть це лише з колесами, виставленими прямо, після перезапуску машини.',
+                steer_zero_confirm: 'Це положення стане центром. Межі буде стерто.',
+                steer_zero_confirm_btn: 'Підтвердити нуль',
                 steer_zero_sending: 'Встановлення нуля датчика…',
+                steer_no_connection: 'Немає з\'єднання з платою',
                 lbl_steer_angle: 'Кут:',
                 lbl_lws_fps: 'кадр/с',
                 lbl_lws_crc: 'контр. сума',
@@ -1810,6 +2034,24 @@
                 driver_fault: 'НЕСПРАВНІСТЬ',
                 driver_down: 'НЕДОСТУПНИЙ',
 
+                // Steering park correction card
+                card_steer_park: '🎯 Доводка центру керма',
+                steer_park_help: 'Після повороту прошивка доводить кермо в ціль короткими імпульсами (потужність × мс; спершу ступінь 1, наступний — лише якщо колесо не зрушило): <b>якщо імпульс перескакує ціль, зменште перший ступінь</b>, <b>якщо доводка здається — збільште ступені</b>.',
+                lbl_steer_park_enabled: 'Доводка центру',
+                lbl_steer_park_rung: 'Ступінь',
+                lbl_steer_park_rung_units: '(потужність × мс)',
+                lbl_steer_park_tol: 'Точність доводки (°)',
+                lbl_steer_park_max: 'Макс. імпульсів за паркування',
+                steer_park_last_done: 'Останнє паркування: %s %s, залишок %s°, останній %s×%s',
+                steer_park_last_gave_up: 'Здалось на %s° після %s %s',
+                steer_park_last_cancelled: 'Скасовано рухом стіка',
+                steer_park_last_none: 'Останнє паркування: ще не було',
+                invalid_steer_park_rung: 'Ступінь: потужність 40-150 і 40-200 мс (цілі числа)',
+                invalid_steer_park_ladder: 'Ступені не можуть спадати (ступінь %s): спершу збережіть вищий ступінь',
+                invalid_steer_park_tol: 'Точність доводки має бути 0.1-0.5°',
+                invalid_steer_park_max: 'Макс. імпульсів — ціле число 1-10',
+                steer_park_saving: 'Збереження налаштування доводки...',
+
                 // Throttle calibration card
                 card_relay_test: '🧪 Перевірка реле',
                 relay_test_help: 'Перевірка проводки: вмикайте по одному реле. <b>Запалювання має бути ВИМК</b>, світло вимкнене, блокування колеса відпущене. Кожне реле вимикається само через 30 с (стартер: 2 с); будь-яка команда запалювання / світла / блокування колеса вимикає всі тестові реле.',
@@ -1819,6 +2061,19 @@
                 relay_fn_q_3: 'світло',
                 relay_fn_q_4: 'блокування колеса',
                 relay_test_blocked: 'Доступно лише при ВИМК запалюванні, вимкненому світлі, відпущеному блокуванні колеса.',
+
+                // Brake tuning card
+                card_brake: '🛑 Гальмо',
+                brake_help: 'Положення гальма оцінюється за часом (датчика положення немає). <b>Час повного ходу</b>: підберіть так, щоб відсоток гальма на панелі досягав 100 % саме тоді, коли актуатор доходить до краю. <b>Утримання</b>: підтиск, що не дає утримуваному гальму відпускатися; 0 = без утримання, більші значення гріють актуатор і драйвер.',
+                lbl_brake_travel: 'Час повного ходу',
+                brake_travel_val: '%s мс',
+                lbl_brake_hold: 'Утримання (ШІМ 0-100)',
+                brake_hold_hint: '0 = без утримання',
+                brake_endstop_released: 'Кінцевик: відпущено',
+                brake_endstop_no: 'Кінцевик: ні',
+                invalid_brake_travel: 'Час ходу має бути 1000-3000 мс',
+                invalid_brake_hold: 'Утримання має бути цілим числом 0-100',
+                brake_saving: 'Збереження налаштування гальма...',
 
                 card_throttle_cal: '🎚️ Калібрування дроселя',
                 throttle_cal_help: 'Крайні точки серво дроселя (µs). <b>Двигун має бути вимкнено.</b> Натисніть <b>Почати</b>, потягніть повзунок — серво рухається наживо — потім <b>Зберегти</b>. Повний газ може бути меншим за холостий (дзеркальне серво).',
@@ -1917,6 +2172,16 @@
                 speed_limit_floor_hint: 'Мінімальний газ обмежувача: найменший газ, який обмежувач швидкості може залишити на ліміті й вище нього. 0 % — це холостий хід, і ліміт утримується найточніше; вищий мінімум (до 20 %) пом\'якшує гальмування двигуном, але ліміт може не втриматися. Позначка «Обмежувач на мінімумі, швидкість вища за ліміт» (лишається ще 10 с після зникнення умови) означає, що мінімум зависокий або машина їде з гори — обмежувач не гальмує.',
                 lbl_speed_limit_floor: 'Мінімальний газ обмежувача (%)',
                 invalid_speed_limit_floor: 'Мінімальний газ обмежувача має бути 0-20 %',
+                lbl_speed_limit_slew: 'Плавність обмежувача (%/с)',
+                speed_limit_slew_note: 'Менше = плавніше прибирає й повертає газ; 80 = як раніше',
+                speed_limit_slew_help: 'Плавність обмежувача: як швидко обмежувач може прибирати й повертати газ, 10–200 %/с (типово 80); менше — м\'якше, але швидкість трохи більше перевищує ліміт.',
+                invalid_speed_limit_slew: 'Плавність обмежувача має бути 10-200 %/с',
+                lbl_throttle_open_slew: 'Плавність газу (%/с)',
+                throttle_open_slew_time: '0 → 100 % за %s с; скидання газу завжди миттєве',
+                throttle_open_slew_off: '0 = вимкнено (газ відкривається миттєво, як раніше)',
+                throttle_open_slew_range: '0 = вимкнено, або 30–100 %/с',
+                throttle_open_slew_help: 'Плавність газу: як швидко може відкриватися газ, щоб різкий газ з холостих не глушив двигун; скидання газу завжди миттєве. 0 = вимкнено, 30–100 %/с (типово 60 = від холостих до повного за 1,7 с).',
+                invalid_throttle_open_slew: 'Плавність газу має бути 0 або 30-100 %/с',
                 speed_limit_at_floor: 'на мінімумі',
                 speed_limit_sat: 'Обмежувач на мінімумі, швидкість вища за ліміт',
                 speed_limit_sat_held: 'Обмежувач був на мінімумі, швидкість була вища за ліміт',
@@ -2010,7 +2275,8 @@
                 btn_upload_firmware: 'Завантажити прошивку',
                 fw_update_warning: '⚠️ Під час оновлення авто перейде в безпечний стан і автоматично перезавантажиться.',
                 fw_select_first: 'Спершу оберіть файл прошивки',
-                fw_confirm_upload: 'Завантажити прошивку? Авто перейде в безпечний стан і перезавантажиться.',
+                fw_confirm_upload: 'Авто перейде в безпечний стан і перезавантажиться.',
+                fw_confirm_btn: 'Підтвердити завантаження',
                 fw_upload_success: 'Прошивку успішно завантажено! Пристрій перезавантажиться.',
                 fw_upload_failed: 'Помилка завантаження: %s',
                 fw_upload_error: 'Сталася помилка завантаження',
@@ -2072,7 +2338,31 @@
                 card_network: '🌐 Мережа',
                 lbl_ssid: 'SSID',
                 lbl_ip: 'IP-адреса',
-                network_later: 'Налаштування мережі з’являться пізніше.',
+                // Event journal card (System)
+                card_journal: '📜 Журнал подій',
+                lbl_journal_counters: 'Самовідновлення VESC / CAN',
+                lbl_journal_size: 'Розмір журналу',
+                journal_unavailable: 'Журнал не вдається записати у флеш — показано лише останні рядки з пам’яті',
+                lbl_journal_mode: 'Зберігання',
+                lbl_journal_fs: 'Запис у flash',
+                journal_fs_hint: 'Вимкнено (типово): журнал живе лише в RAM (останні ≈ 4 КБ, плюс RTC-кільце через перезапуск) і зникає після вимкнення живлення. Увімкнено: запис у flash приблизно раз на секунду.',
+                journal_mode_ram: 'лише RAM',
+                journal_mode_flash: 'flash',
+                journal_ram_lines: 'рядків у RAM: %s',
+                journal_fs_failed: 'Не вдалося змінити запис у flash',
+                journal_fs_help: '<b>Запис у flash типово ВИМКНЕНО.</b> Поки він вимкнений, у флеш нічого не пишеться (жодних пауз головного циклу через стирання флешу): журнал тримає в RAM лише найновіші ≈ 4 КБ рядків, перезапуск зберігає останні 16 рядків (RTC-пам’ять), вимкнення живлення втрачає все. Рядки, записані раніше, коли запис був увімкнений, і далі показуються й завантажуються першими з позначкою «flash», а за ними — рядки з RAM. Увімкнення пише <b>journal_fs on=1</b> і одразу зберігає рядки з RAM у флеш; вимкнення пише <b>journal_fs on=0</b>, зберігає ще раз і зупиняється. Налаштування зберігається після перезапуску.',
+                journal_all: 'Усі',
+                journal_refresh: 'Оновити',
+                journal_download: 'Завантажити',
+                journal_clear: 'Очистити',
+                journal_confirm_clear: 'Журнал буде видалено, лічильник запусків лишиться.',
+                journal_confirm_btn: 'Підтвердити видалення',
+                journal_cleared: 'Журнал очищено',
+                journal_load_failed: 'Не вдалося завантажити журнал',
+                journal_empty: '(рядків немає)',
+                journal_help: 'Постійний запис того, що бачив контролер: запуски й перезапуски, аварійний режим (failsafe) і зміна джерела керування, зміна режиму керма та зупинки через заклинювання, стан датчика кута керма, втрата й відновлення зв’язку з VESC керма, збої CAN та їх автоматичне відновлення, перевищення часу головного циклу, нестача пам’яті та знімок стану щохвилини. Журнал переживає оновлення прошивки й більшість перезапусків; рядки за останню секунду перед зникненням живлення можуть бути втрачені. У заголовку — скільки разів зв’язок із VESC і контролер CAN відновилися самі з моменту запуску.',
+                journal_format_help: 'Формат рядка: <b>запуск час_с ДЖЕРЕЛО РІВЕНЬ подія ключ=значення …</b> — запуск = номер запуску, час у секундах від цього запуску, РІВЕНЬ I = інформація, W = попередження, E = помилка. <b>sup=N</b> — N однакових подій пропущено. Рядки після <b>RTC replay</b> відновлено з пам’яті після збою або перезапуску. «Завантажити» зберігає обидва файли журналу (≈ 1–2 доби) одним текстовим файлом.',
+                journal_erase_help: '<b>Заливання образу файлової системи (pio run -t uploadfs або оновлення LittleFS з цієї сторінки) стирає журнал</b> — спершу завантажте його. Звичайне оновлення прошивки журнал зберігає.',
 
                 // Gear position defaults / gear codes
                 gd_start: 'Почати',
@@ -2122,6 +2412,8 @@
             updateLightButton(lightState);
             updateWheelLockButton(wheelLockState);
             renderRelayTest();
+            updateGearBoostButton(gearBoostState);
+            updateSteerParkButton(steerParkState);
             const boostStatus = document.getElementById('boost-test-status');
             if (boostStatus) boostStatus.textContent = boostTestActive ? t('on') : t('off');
             const dbgBtn = document.getElementById('debug-toggle-btn');
@@ -2131,6 +2423,52 @@
             if (lastTelemetry) updateTelemetry(lastTelemetry);
             if (changelogOpen) renderChangelog();
             pprMeasRender();
+            renderJournal();
+            updateJournalFsUi();
+            confirmRefreshLang();
+        }
+
+        // ---- Two-press confirmation (replaces the native confirm dialog: captive-portal webviews and
+        // Chrome's "prevent additional dialogs" make it return false silently) ----
+        // First press arms the button: the label becomes the confirm label and the card's
+        // status line shows the warning; nothing is sent. A second press within
+        // CONFIRM_ARM_MS returns true and the caller runs the action. The label is swapped
+        // through data-i18n, so applyStaticTranslations() renders it in the new language.
+        const CONFIRM_ARM_MS = 5000;
+        const confirmArmed = new Map();   // button -> { origKey, warnKey, statusId, shown, timer }
+        function confirmTwice(btn, btnKey, warnKey, statusId) {
+            if (!btn) return false;
+            if (confirmArmed.has(btn)) { confirmDisarm(btn); return true; }
+            const a = { origKey: btn.getAttribute('data-i18n'), warnKey: warnKey, statusId: statusId, shown: t(warnKey) };
+            btn.setAttribute('data-i18n', btnKey);
+            btn.textContent = t(btnKey);
+            btn.classList.add('confirm-armed');
+            const st = document.getElementById(statusId);
+            if (st) { st.textContent = a.shown; st.style.color = 'var(--warning)'; }
+            a.timer = setTimeout(() => confirmDisarm(btn), CONFIRM_ARM_MS);
+            confirmArmed.set(btn, a);
+            return false;
+        }
+        // Restore the label; clear the warning only if the status line still shows it.
+        function confirmDisarm(btn) {
+            const a = confirmArmed.get(btn);
+            if (!a) return;
+            clearTimeout(a.timer);
+            confirmArmed.delete(btn);
+            btn.setAttribute('data-i18n', a.origKey);
+            btn.textContent = t(a.origKey);
+            btn.classList.remove('confirm-armed');
+            const st = document.getElementById(a.statusId);
+            if (st && st.textContent === a.shown) { st.textContent = ''; st.style.color = 'var(--muted-foreground)'; }
+        }
+        // Language switch while armed: re-render a warning that is still on screen.
+        function confirmRefreshLang() {
+            confirmArmed.forEach(a => {
+                const st = document.getElementById(a.statusId);
+                const next = t(a.warnKey);
+                if (st && st.textContent === a.shown) st.textContent = next;
+                a.shown = next;
+            });
         }
 
         function updateLangToggle() {
@@ -2260,7 +2598,8 @@
                 showCalibrationStatus(data.success, data.message);
                 // Also show in gear defaults status if relevant
                 const statusEl = document.getElementById('gear-default-status');
-                if (statusEl && data.message && data.message.includes('Default for')) {
+                if (statusEl && data.message && (data.message.includes('Default for') ||
+                    data.message.toLowerCase().includes('gear boost'))) {
                     statusEl.textContent = data.success ? data.message : t('error_prefix') + data.message;
                     statusEl.style.color = data.success ? 'var(--success)' : 'var(--danger)';
                 }
@@ -2273,9 +2612,25 @@
                 // Steering calibration status
                 if (data.message && (data.message.includes('Steering left limit') ||
                     data.message.includes('Steering right limit') || data.message.includes('Capture ') ||
-                    data.message.startsWith('Sensor zero') || data.message.startsWith('Jog'))) {
+                    data.message.startsWith('Sensor zero') || data.message.startsWith('Jog') ||
+                    (Date.now() < steerAngleReplyUntil && (data.message.startsWith('Steering') ||
+                     data.message.startsWith('Invalid steering') || data.message.startsWith('MAVLink control'))))) {
+                    if (data.message.startsWith('Steering') || data.message.startsWith('Invalid steering') ||
+                        data.message.startsWith('MAVLink control')) steerAngleReplyUntil = 0;
                     steerCenterStatus(data.success ? data.message : t('error_prefix') + data.message,
                                       data.success ? 'var(--success)' : 'var(--danger)');
+                }
+                // Steering park correction card
+                if (data.message && (data.message.startsWith('Park ') || data.message.startsWith('Invalid park') ||
+                    data.message === 'Failed to save the park correction setting')) {
+                    steerParkStatus(data.success ? data.message : t('error_prefix') + data.message,
+                                    data.success ? 'var(--success)' : 'var(--danger)');
+                }
+                // Brake tuning card
+                if (data.message && (data.message.startsWith('Brake travel') || data.message.startsWith('Brake hold') ||
+                    data.message.startsWith('Failed to save the brake'))) {
+                    brakeStatus(data.success ? data.message : t('error_prefix') + data.message,
+                                data.success ? 'var(--success)' : 'var(--danger)');
                 }
                 // Gear code calibration status
                 if (data.message && (data.message.startsWith('Gear code') || data.message.startsWith('Gear codes'))) {
@@ -2294,8 +2649,9 @@
                 // Speed sensor calibration / limiter status
                 if (data.message && (data.message.includes('Pulses/rev') ||
                     data.message.includes('Wheel circumference') || data.message.includes('Speed limit') ||
-                    data.message.includes('Speed limiter') ||
-                    data.message.startsWith('Steering scale base') || data.message.startsWith('Test speed'))) {
+                    data.message.includes('Speed limiter') || data.message.toLowerCase().includes('speed-limiter') ||
+                    data.message.startsWith('Steering scale base') || data.message.startsWith('Test speed') ||
+                    data.message.startsWith('Throttle open rate'))) {
                     speedStatusMsg(data.success ? data.message : t('error_prefix') + data.message,
                                    data.success ? 'var(--success)' : 'var(--danger)');
                 }
@@ -2508,6 +2864,12 @@
                     el.value = data.boost_target_rpm;
                 }
             }
+            if (data.boost_enabled !== undefined) {
+                gearBoostState = data.boost_enabled;
+                updateGearBoostButton(data.boost_enabled);
+            }
+            updateSteerParkCard(data);
+            updateBrakeCard(data);
 
             // Update gear button active state
             updateGearButtons(data.gear);
@@ -2656,6 +3018,7 @@
             }
 
             updateNetworkCard(data);
+            updateJournalCard(data);
             updateAttention(data);
             updateGearDefUI(data);
 
@@ -2772,6 +3135,26 @@
             document.getElementById('steer-test-left').disabled = !steerEnabled;
             document.getElementById('steer-test-center').disabled = !steerEnabled;
             document.getElementById('steer-test-right').disabled = !steerEnabled;
+            // Exact target angle (Calibration card): same conditions as the percent slider
+            ['steer-angle-input', 'steer-angle-neg', 'steer-angle-go', 'steer-angle-zero'].forEach((id) => {
+                const el = document.getElementById(id);
+                if (el) el.disabled = !steerEnabled;
+            });
+            {
+                const lim = steerAngleLimits();
+                const inp = document.getElementById('steer-angle-input');
+                if (inp) {
+                    if (lim.left !== null) inp.min = lim.left; else inp.removeAttribute('min');
+                    if (lim.right !== null) inp.max = lim.right; else inp.removeAttribute('max');
+                }
+            }
+            const angleLockHint = document.getElementById('steer-angle-lock-hint');
+            if (angleLockHint) {
+                const msg = steerLocked ? t(lastSteerMode === 'rate' ? 'steer_lock_rate' : 'steer_lock_blocked')
+                          : (!controlsEnabled ? t('steer_angle_need_web') : '');
+                angleLockHint.textContent = msg;
+                angleLockHint.style.display = msg ? 'block' : 'none';
+            }
             const lockHint = document.getElementById('steer-lock-hint');
             if (lockHint) {
                 lockHint.textContent = steerLocked ? t(lastSteerMode === 'rate' ? 'steer_lock_rate' : 'steer_lock_blocked') : '';
@@ -3080,6 +3463,69 @@
             });
         })();
 
+        // ---- Brake tuning card ----
+        // Travel time: a slider, label live on `input`, ONE set_brake_travel_ms on `change`
+        // (every command is an NVS write, so nothing is streamed while dragging); brakeDragging
+        // keeps telemetry from moving the thumb while the operator holds it (as gdDragging).
+        let brakeDragging = false;
+        function brakeStatus(text, color) {
+            const el = document.getElementById('brake-status-msg');
+            if (!el) return;
+            el.textContent = text;
+            el.style.color = color;
+        }
+        function brakeTravelLabel(ms) {
+            const el = document.getElementById('brake-travel-val');
+            if (el) el.textContent = t('brake_travel_val', ms);
+        }
+        function updateBrakeCard(data) {
+            if (data.brake_travel_ms === undefined) return;   // older firmware: card stays at its defaults
+            const sl = document.getElementById('brake-travel-slider');
+            if (sl && !brakeDragging && Number.isFinite(data.brake_travel_ms)) {
+                sl.value = data.brake_travel_ms;
+                brakeTravelLabel(data.brake_travel_ms);
+            }
+            syncSpeedInput('brake-hold-input', data.brake_hold_pwm);
+            const es = document.getElementById('brake-endstop');
+            if (es) {
+                const rel = data.brake_released === true;
+                es.textContent = t(rel ? 'brake_endstop_released' : 'brake_endstop_no');
+                es.style.color = rel ? 'var(--success)' : 'var(--muted-foreground)';
+            }
+        }
+        function saveBrakeTravelMs(val) {
+            if (!Number.isInteger(val) || val < 1000 || val > 3000) {
+                brakeStatus(t('invalid_brake_travel'), 'var(--danger)');
+                return;
+            }
+            sendCommand('set_brake_travel_ms', val);
+            brakeStatus(t('brake_saving'), 'var(--muted-foreground)');
+        }
+        function saveBrakeHoldPwm() {
+            const raw = document.getElementById('brake-hold-input').value;
+            const val = Number(raw);
+            if (raw === '' || !Number.isInteger(val) || val < 0 || val > 100) {
+                brakeStatus(t('invalid_brake_hold'), 'var(--danger)');
+                return;
+            }
+            sendCommand('set_brake_hold_pwm', val);
+            brakeStatus(t('brake_saving'), 'var(--muted-foreground)');
+        }
+        (function initBrakeTravelSlider() {
+            const sl = document.getElementById('brake-travel-slider');
+            if (!sl) return;
+            sl.addEventListener('pointerdown', () => { brakeDragging = true; });
+            sl.addEventListener('pointercancel', () => { brakeDragging = false; });
+            sl.addEventListener('input', () => {
+                brakeDragging = true;   // keyboard drags too
+                brakeTravelLabel(sl.value);   // label only, nothing is sent while dragging
+            });
+            sl.addEventListener('change', () => {
+                saveBrakeTravelMs(Math.round(Number(sl.value)));   // one send on release
+                brakeDragging = false;
+            });
+        })();
+
         // ---- Gear sensor code calibration ----
         // Live bits come from telemetry `gear_code` (raw snapshot, no retry cache);
         // the stored table from `gear_codes` + `gear_codes_custom` (bit0 R, bit1 N, bit2 H, bit3 L).
@@ -3145,8 +3591,8 @@
             }
         }
 
-        function resetGearCodes() {
-            if (!confirm(t('gear_codes_confirm_reset'))) return;
+        function resetGearCodes(btn) {
+            if (!confirmTwice(btn, 'gear_codes_confirm_btn', 'gear_codes_confirm_reset', 'gear-codes-status')) return;
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ cmd: 'reset_gear_codes' }));
             }
@@ -3221,6 +3667,142 @@
             }
         }
 
+        // ---- Gear-change RPM boost switch (persisted per vehicle, NVS boost/enabled) ----
+        // No optimistic update: telemetry (`boost_enabled`) is the source of truth; null = unknown.
+        let gearBoostState = null;
+        function toggleGearBoost() {
+            if (gearBoostState === null) return;
+            sendCommand('set_boost_enabled', !gearBoostState);
+        }
+        function updateGearBoostButton(on) {
+            const btn = document.getElementById('gear-boost-btn');
+            const status = document.getElementById('gear-boost-status');
+            if (!btn || !status) return;
+            if (on === null) {
+                status.textContent = '--';
+                btn.style.background = 'var(--secondary)';
+                return;
+            }
+            status.textContent = on ? t('on') : t('off');
+            btn.style.background = on ? 'color-mix(in srgb, var(--success) 65%, black)' : 'var(--secondary)';
+        }
+
+        // ---- Steering park correction card (NVS "steering" park_*, telemetry steer_park_*) ----
+        // No optimistic update: telemetry (`steer_park_enabled`) is the source of truth; null = unknown.
+        let steerParkState = null;
+        let steerParkLadder = null;   // [[d1,t1],[d2,t2],[d3,t3]] as stored, from telemetry
+        function steerParkStatus(text, color) {
+            const el = document.getElementById('steer-park-status-msg');
+            if (!el) return;
+            el.textContent = text;
+            el.style.color = color;
+        }
+        function toggleSteerPark() {
+            if (steerParkState === null) return;
+            sendCommand('set_steer_park_enabled', !steerParkState);
+        }
+        function updateSteerParkButton(on) {
+            const btn = document.getElementById('steer-park-btn');
+            const status = document.getElementById('steer-park-status');
+            if (!btn || !status) return;
+            if (on === null) {
+                status.textContent = '--';
+                btn.style.background = 'var(--secondary)';
+                return;
+            }
+            status.textContent = on ? t('on') : t('off');
+            btn.style.background = on ? 'color-mix(in srgb, var(--success) 65%, black)' : 'var(--secondary)';
+        }
+        // "pulse(s)" with the language's plural form; genitive = after "після" (uk)
+        function steerParkPulsesWord(n, genitive) {
+            if (currentLang === 'uk') {
+                const m10 = n % 10, m100 = n % 100;
+                if (genitive) return (m10 === 1 && m100 !== 11) ? 'імпульсу' : 'імпульсів';
+                if (m10 === 1 && m100 !== 11) return 'імпульс';
+                if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return 'імпульси';
+                return 'імпульсів';
+            }
+            return n === 1 ? 'pulse' : 'pulses';
+        }
+        function steerParkLastText(last) {
+            if (!last || typeof last !== 'object') return '--';
+            const n = Number.isFinite(last.pulses) ? last.pulses : 0;
+            const res = Number.isFinite(last.residual) ? last.residual : null;
+            switch (last.outcome) {
+                case 'done':
+                    return t('steer_park_last_done', n, steerParkPulsesWord(n, false),
+                             res !== null ? res.toFixed(2) : '--', last.duty, last.ms);
+                case 'gave_up':
+                    return t('steer_park_last_gave_up', res !== null ? res.toFixed(1) : '--', n,
+                             steerParkPulsesWord(n, true));
+                case 'cancelled':
+                    return t('steer_park_last_cancelled');
+                case 'none':
+                    return t('steer_park_last_none');
+                default:
+                    return '--';
+            }
+        }
+        function updateSteerParkCard(data) {
+            if (data.steer_park_enabled === undefined) return;   // older firmware: card stays "--"
+            steerParkState = data.steer_park_enabled === true;
+            updateSteerParkButton(steerParkState);
+            steerParkLadder = [1, 2, 3].map(function (n) {
+                return [data['steer_park_d' + n], data['steer_park_t' + n]];
+            });
+            [1, 2, 3].forEach(function (n) {
+                syncSpeedInput('steer-park-d' + n, data['steer_park_d' + n]);
+                syncSpeedInput('steer-park-t' + n, data['steer_park_t' + n]);
+            });
+            syncSpeedInput('steer-park-tol',
+                Number.isFinite(data.steer_park_tol) ? data.steer_park_tol.toFixed(1) : undefined);
+            syncSpeedInput('steer-park-max', data.steer_park_max);
+            const lastEl = document.getElementById('steer-park-last');
+            if (lastEl) lastEl.textContent = steerParkLastText(data.steer_park_last);
+        }
+        function saveSteerParkRung(n) {
+            const dRaw = document.getElementById('steer-park-d' + n).value;
+            const tRaw = document.getElementById('steer-park-t' + n).value;
+            const d = Number(dRaw), ms = Number(tRaw);
+            if (dRaw === '' || tRaw === '' || !Number.isInteger(d) || !Number.isInteger(ms) ||
+                d < 40 || d > 150 || ms < 40 || ms > 200) {
+                steerParkStatus(t('invalid_steer_park_rung'), 'var(--danger)');
+                return;
+            }
+            // Non-decreasing ladder, checked against the stored neighbours (as the firmware does)
+            if (steerParkLadder) {
+                const prev = n > 1 ? steerParkLadder[n - 2] : null;
+                const next = n < 3 ? steerParkLadder[n] : null;
+                if ((prev && (d < prev[0] || ms < prev[1])) || (next && (d > next[0] || ms > next[1]))) {
+                    steerParkStatus(t('invalid_steer_park_ladder', n), 'var(--danger)');
+                    return;
+                }
+            }
+            if (!wsConnected) return;
+            ws.send(JSON.stringify({ cmd: 'set_steer_park_rung', value: n, strValue: d + ',' + ms }));
+            steerParkStatus(t('steer_park_saving'), 'var(--muted-foreground)');
+        }
+        function saveSteerParkTol() {
+            const raw = parseFloat(document.getElementById('steer-park-tol').value);
+            const val = Math.round(raw * 10) / 10;
+            if (!Number.isFinite(raw) || val < 0.1 || val > 0.5) {
+                steerParkStatus(t('invalid_steer_park_tol'), 'var(--danger)');
+                return;
+            }
+            sendCommand('set_steer_park_tol', val);
+            steerParkStatus(t('steer_park_saving'), 'var(--muted-foreground)');
+        }
+        function saveSteerParkMax() {
+            const raw = document.getElementById('steer-park-max').value;
+            const val = Number(raw);
+            if (raw === '' || !Number.isInteger(val) || val < 1 || val > 10) {
+                steerParkStatus(t('invalid_steer_park_max'), 'var(--danger)');
+                return;
+            }
+            sendCommand('set_steer_park_max', val);
+            steerParkStatus(t('steer_park_saving'), 'var(--muted-foreground)');
+        }
+
         // ── Speed sensor (hall pulse input, independent of CAN) ─────────────
         // Two cards share this helper: each save sets the target to its own card's status line
         // first, and the firmware reply goes to the card whose control was used last.
@@ -3274,6 +3856,11 @@
 
             syncSpeedInput('speed-limit-floor-input',
                 Number.isFinite(data.speed_limit_floor) ? data.speed_limit_floor.toFixed(1) : undefined);
+            syncSpeedInput('speed-limit-slew-input',
+                Number.isFinite(data.speed_limit_slew) ? data.speed_limit_slew.toFixed(0) : undefined);
+            syncSpeedInput('throttle-open-slew-input',
+                Number.isFinite(data.throttle_open_slew) ? data.throttle_open_slew.toFixed(0) : undefined);
+            updateThrottleOpenSlewHint();
             updateSpeedLimitRow(data);
 
             updateSteerScaleDisplay(data);
@@ -3328,6 +3915,47 @@
                 return;
             }
             sendCommand('set_speed_limit_floor', val);
+            speedStatusMsg(t('speed_saving'), 'var(--muted-foreground)');
+        }
+
+        function saveSpeedLimitSlew() {
+            speedStatusTarget = 'speed-limit-status-msg';
+            const val = parseFloat(document.getElementById('speed-limit-slew-input').value);
+            if (isNaN(val) || val < 10 || val > 200) {
+                speedStatusMsg(t('invalid_speed_limit_slew'), 'var(--danger)');
+                return;
+            }
+            sendCommand('set_speed_limit_slew', val);
+            speedStatusMsg(t('speed_saving'), 'var(--muted-foreground)');
+        }
+
+        function isValidThrottleOpenSlew(val) {
+            return !isNaN(val) && (val === 0 || (val >= 30 && val <= 100));
+        }
+
+        // Live hint under the opening-rate input: idle→full time for the value being typed.
+        function updateThrottleOpenSlewHint() {
+            const el = document.getElementById('throttle-open-slew-hint');
+            const input = document.getElementById('throttle-open-slew-input');
+            if (!el || !input) return;
+            const val = Math.round(parseFloat(input.value));
+            if (val === 0) {
+                el.textContent = t('throttle_open_slew_off');
+            } else if (isValidThrottleOpenSlew(val)) {
+                el.textContent = t('throttle_open_slew_time', (100 / val).toFixed(1));
+            } else {
+                el.textContent = t('throttle_open_slew_range');
+            }
+        }
+
+        function saveThrottleOpenSlew() {
+            speedStatusTarget = 'speed-limit-status-msg';
+            const val = Math.round(parseFloat(document.getElementById('throttle-open-slew-input').value));
+            if (!isValidThrottleOpenSlew(val)) {
+                speedStatusMsg(t('invalid_throttle_open_slew'), 'var(--danger)');
+                return;
+            }
+            sendCommand('set_throttle_open_slew', val);
             speedStatusMsg(t('speed_saving'), 'var(--muted-foreground)');
         }
 
@@ -3533,15 +4161,21 @@
             if (el) { el.textContent = msg; el.style.color = color || 'var(--muted-foreground)'; }
         }
         function steerCapture(cmd) {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ cmd: cmd }));
-                steerCenterStatus(t('capturing'), 'var(--muted-foreground)');
+            if (!(ws && ws.readyState === WebSocket.OPEN)) {
+                steerCenterStatus(t('steer_no_connection'), 'var(--danger)');
+                return;
             }
+            ws.send(JSON.stringify({ cmd: cmd }));
+            steerCenterStatus(t('capturing'), 'var(--muted-foreground)');
         }
-        function steerSensorZero() {
-            if (!(ws && ws.readyState === WebSocket.OPEN)) return;
+        function steerSensorZero(btn) {
+            // Disconnected: say so in the card and do not arm the two-press confirmation
+            if (!(ws && ws.readyState === WebSocket.OPEN)) {
+                steerCenterStatus(t('steer_no_connection'), 'var(--danger)');
+                return;
+            }
             // The current position becomes the center and the stored limits are erased
-            if (!confirm(t('steer_zero_confirm'))) return;
+            if (!confirmTwice(btn, 'steer_zero_confirm_btn', 'steer_zero_confirm', 'steer-center-status')) return;
             ws.send(JSON.stringify({ cmd: 'steer_lws_zero' }));
             steerCenterStatus(t('steer_zero_sending'), 'var(--muted-foreground)');
         }
@@ -3558,12 +4192,53 @@
         let steerJogTimer = null;
         function steerJogSpeed() {
             const el = document.getElementById('steer-jog-speed');
-            return el ? parseInt(el.value, 10) : 180;
+            return el ? parseInt(el.value, 10) : 120;
         }
         function steerJogSend(dir) {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ cmd: 'steer_jog', value: dir * steerJogSpeed() }));
             }
+        }
+        // Exact target angle: the firmware converts degrees to 0.1° and clamps to the captured
+        // limits (steer_angle). Replies arriving shortly after go to the calibration status line.
+        let steerAngleReplyUntil = 0;
+        function steerAngleLimits() {
+            const num = (id) => {
+                const el = document.querySelector('[data-bind="' + id + '"]');
+                const v = el ? parseFloat(el.textContent) : NaN;
+                return isFinite(v) ? v : null;
+            };
+            return { left: num('steer-left-cur'), right: num('steer-right-cur') };
+        }
+        function steerAngleSend(deg) {
+            if (!(ws && ws.readyState === WebSocket.OPEN)) return;
+            steerAngleReplyUntil = Date.now() + 2000;
+            ws.send(JSON.stringify({ cmd: 'steer_angle', value: deg }));
+        }
+        function steerAngleGo() {
+            const el = document.getElementById('steer-angle-input');
+            if (!el || el.disabled) return;
+            let deg = parseFloat(String(el.value).replace(',', '.'));
+            if (!isFinite(deg)) { steerCenterStatus(t('invalid_steer_angle'), 'var(--danger)'); return; }
+            const lim = steerAngleLimits();   // clamp in the UI too, so the field shows what is sent
+            if (lim.left !== null && deg < lim.left) deg = lim.left;
+            if (lim.right !== null && deg > lim.right) deg = lim.right;
+            deg = Math.round(deg * 10) / 10;
+            el.value = deg.toFixed(1);
+            steerAngleSend(deg);
+        }
+        // iPhone keypads may lack a minus key: flip the sign of the field value (does not send)
+        function steerAngleFlipSign() {
+            const el = document.getElementById('steer-angle-input');
+            if (!el || el.disabled) return;
+            const v = parseFloat(String(el.value).replace(',', '.'));
+            el.value = isFinite(v) ? (-v).toFixed(1) : '-1.0';
+        }
+        function steerAngleZero() {
+            const el = document.getElementById('steer-angle-input');
+            if (!el || el.disabled) return;
+            el.value = '0.0';
+            steerAngleSend(0);
         }
         function steerNudge(dir) {
             if (ws && ws.readyState === WebSocket.OPEN) {
@@ -3670,14 +4345,19 @@
             }
         }
 
-        function uploadFirmware() {
+        function fwStatus(msg, color) {
+            const el = document.getElementById('fw-status');
+            if (el) { el.textContent = msg; el.style.color = color || 'var(--muted-foreground)'; }
+        }
+
+        function uploadFirmware(btn) {
             const fileInput = document.getElementById('firmware-file');
             if (fileInput.files.length === 0) {
-                alert(t('fw_select_first'));
+                fwStatus(t('fw_select_first'), 'var(--danger)');
                 return;
             }
 
-            if (!confirm(t('fw_confirm_upload'))) {
+            if (!confirmTwice(btn, 'fw_confirm_btn', 'fw_confirm_upload', 'fw-status')) {
                 return;
             }
 
@@ -3696,16 +4376,16 @@
 
             xhr.addEventListener('load', function() {
                 if (xhr.status === 200) {
-                    alert(t('fw_upload_success'));
+                    fwStatus(t('fw_upload_success'), 'var(--success)');
                     updateProgress(100);
                 } else {
-                    alert(t('fw_upload_failed', xhr.statusText));
+                    fwStatus(t('fw_upload_failed', xhr.statusText), 'var(--danger)');
                     hideProgress();
                 }
             });
 
             xhr.addEventListener('error', function() {
-                alert(t('fw_upload_error'));
+                fwStatus(t('fw_upload_error'), 'var(--danger)');
                 hideProgress();
             });
 
@@ -3879,6 +4559,7 @@
             });
             try { localStorage.setItem('ui_section', id); } catch (e) { /* storage unavailable */ }
             updateSectionTitle();
+            journalSectionChanged();
             const sb = document.getElementById('sidebar');
             if (sb) sb.classList.remove('open');
             window.scrollTo(0, 0);
@@ -3920,6 +4601,124 @@
                 document.getElementById('net-ip').textContent = data.wifi_ip;
             }
         }
+
+        // ---- Event journal card (System): last 100 lines over HTTP, filtered in the browser ----
+        let journalLines = [];
+        let journalTimer = null;
+        let journalFs = null;          // flash-write switch (telemetry journal_fs), null = unknown
+        let journalRamLines = null;    // lines held in RAM (X-Journal-Ram-Lines of the last tail)
+        function updateJournalFsUi() {
+            const btn = document.getElementById('journal-fs-btn');
+            const mode = document.getElementById('journal-mode');
+            if (!btn || !mode) return;
+            if (journalFs === null) { btn.textContent = '--'; mode.textContent = '--'; return; }
+            btn.dataset.state = journalFs;
+            btn.textContent = journalFs ? t('on') : t('off');
+            btn.style.background = journalFs ? 'color-mix(in srgb, var(--success) 45%, black)' : '';
+            let txt = journalFs ? t('journal_mode_flash') : t('journal_mode_ram');
+            if (journalRamLines !== null) txt += ' · ' + t('journal_ram_lines', journalRamLines);
+            mode.textContent = txt;
+        }
+        function toggleJournalFs() {
+            if (journalFs === null) return;
+            fetch('/api/events/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ fs: !journalFs })
+            })
+                .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+                .then(data => {
+                    if (!data.success) throw new Error('fs');
+                    journalFs = data.fs;
+                    updateJournalFsUi();
+                    setTimeout(loadJournal, 600);   // the loop journals the switch (journal_fs on=…)
+                })
+                .catch(() => journalStatus(t('journal_fs_failed'), 'var(--danger)'));
+        }
+        function updateJournalCard(data) {
+            if (typeof data.journal_fs === 'boolean' && data.journal_fs !== journalFs) {
+                journalFs = data.journal_fs;
+                updateJournalFsUi();
+            }
+            if (typeof data.vesc_resync === 'number') {
+                document.getElementById('journal-counters').textContent =
+                    data.vesc_resync + ' / ' + data.can_reinit;
+            }
+            if (typeof data.journal_bytes === 'number') {
+                const unavailable = data.journal_bytes < 0;
+                document.getElementById('journal-size').textContent = unavailable ? '—'
+                    : (data.journal_bytes >= 1024 ? (data.journal_bytes / 1024).toFixed(1) + ' KB' : data.journal_bytes + ' B');
+                document.getElementById('journal-unavail').style.display = unavailable ? '' : 'none';
+            }
+        }
+        function journalStatus(msg, color) {
+            const el = document.getElementById('journal-status');
+            if (!el) return;
+            el.textContent = msg || '';
+            el.style.color = color || 'var(--muted-foreground)';
+        }
+        function renderJournal() {
+            const pre = document.getElementById('journal-lines');
+            if (!pre) return;
+            const src = document.getElementById('journal-filter').value;
+            // Columns: boot uptime SRC LVL ... ; "#" header lines belong to SYS.
+            const shown = journalLines.filter(l => {
+                if (!src) return true;
+                if (l.startsWith('#')) return src === 'SYS';
+                return l.split(' ')[2] === src;
+            });
+            const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 8;
+            pre.textContent = shown.length ? shown.join('\n') : t('journal_empty');
+            if (atBottom) pre.scrollTop = pre.scrollHeight;   // newest line at the bottom
+        }
+        function loadJournal() {
+            fetch('/api/events?tail=100', { cache: 'no-store' })
+                .then(r => {
+                    if (!r.ok) throw new Error(r.status);
+                    const ramLines = parseInt(r.headers.get('X-Journal-Ram-Lines'), 10);
+                    journalRamLines = isNaN(ramLines) ? null : ramLines;
+                    const fsHdr = r.headers.get('X-Journal-Fs');
+                    if (fsHdr === '0' || fsHdr === '1') journalFs = fsHdr === '1';
+                    updateJournalFsUi();
+                    return r.text();
+                })
+                .then(txt => {
+                    journalLines = txt.split('\n').filter(l => l.length > 0);
+                    renderJournal();
+                    journalStatus('');
+                })
+                .catch(() => journalStatus(t('journal_load_failed'), 'var(--danger)'));
+        }
+        function downloadJournal() {
+            const a = document.createElement('a');
+            a.href = '/api/events/download';
+            a.download = '';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+        }
+        function clearJournal(btn) {
+            if (!confirmTwice(btn, 'journal_confirm_btn', 'journal_confirm_clear', 'journal-status')) return;
+            fetch('/api/events/clear', { method: 'POST' })
+                .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+                .then(() => {
+                    journalStatus(t('journal_cleared'), 'var(--success, inherit)');
+                    setTimeout(loadJournal, 600);   // the loop executes the clear
+                })
+                .catch(() => journalStatus(t('journal_load_failed'), 'var(--danger)'));
+        }
+        // Refresh on open and every 5 s while the System section is visible; stop when hidden.
+        function journalSectionChanged() {
+            const visible = currentSection === 'system' && !document.hidden;
+            if (visible && !journalTimer) {
+                loadJournal();
+                journalTimer = setInterval(loadJournal, 5000);
+            } else if (!visible && journalTimer) {
+                clearInterval(journalTimer);
+                journalTimer = null;
+            }
+        }
+        document.addEventListener('visibilitychange', journalSectionChanged);
 
         // ---- Shared help modal: body comes from the existing i18n help keys (comma-separated) ----
         let helpState = null;   // { keys, titleKey } while open
