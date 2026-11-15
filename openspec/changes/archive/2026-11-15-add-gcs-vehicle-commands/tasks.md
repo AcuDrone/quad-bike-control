@@ -54,6 +54,7 @@
 - [x] 5.5 `openspec validate add-gcs-vehicle-commands --strict` passes.
 
 ## 6. Bench — quad (`master` 1.5.30)
+Archived 2026-11-15 at the user's request before bench verification (tasks 7–8 ticked on archive after checking `aztec`: merge f225785, handbrake dd2d54a); bugs found later come back as new changes.
 - [ ] 6.1 RC only, GCS sends nothing: gear, ignition (incl. auto-crank), light and lock behave as on 1.5.28; pull the RC stream → fail-safe; restore → state re-applied, re-crank if RC is ON.
 - [ ] 6.1a Web control: switch the ignition off and the light on from the web with RC CH4 in ON and CH6 OFF, then release web control → the light goes off and the auto-crank starts (D-H); the same when the RC stream returns while a browser is connected.
 - [ ] 6.2 USER_2 to comp 0 → no ACK; unknown `param1` → UNSUPPORTED; `MAV_CMD_USER_1` trip reset unchanged.
@@ -63,18 +64,19 @@
 - [ ] 6.6 Headlight / diff lock from the GCS hold against a constant RC channel; lock in web control → reason 3.
 
 ## 7. Merge into `aztec`
-- [ ] 7.1 Merge `master` into `aztec`; resolve `Constants.h` (version 1.5.30, `VEHICLE_TYPE_CODE` 2, `RELAY_WHEEL_LOCK_FITTED` 1), `Changelog.h` (1.5.30 above the aztec 1.5.29 entry), `processMavlinkCommands()` (keep `applyOperatorThrottle()`), `platformio.ini` (`test_filter` keeps `test_park_brake_law`).
-- [ ] 7.2 `pio test -e native` and `pio run -e esp32-s3-devkitc-1` on `aztec`.
+- [x] 7.1 Merge `master` into `aztec`; resolve `Constants.h` (version 1.5.30, `VEHICLE_TYPE_CODE` 2, `RELAY_WHEEL_LOCK_FITTED` 1), `Changelog.h` (1.5.30 above the aztec 1.5.29 entry), `processMavlinkCommands()` (keep `applyOperatorThrottle()`), `platformio.ini` (`test_filter` keeps `test_park_brake_law`).
+- [x] 7.2 `pio test -e native` and `pio run -e esp32-s3-devkitc-1` on `aztec`.
 
 ## 8. Handbrake — `aztec` only
-- [ ] 8.1 `include/VehicleCommandLaw.h` (aztec): `vehicleCmdParkBrakeAck(ParkBrakeResult)` — STARTED / STARTED_SPEED_UNKNOWN / REVERSING / ALREADY_RUNNING → ACCEPTED; REFUSED_MOVING → TEMPORARILY_REJECTED reason 4; REFUSED_DRIVER / REFUSED_NVS → FAILED.
-- [ ] 8.2 `VehicleController::executeVehicleCommand()` function 5 → `commandParkBrake(value == 1 ? APPLY : RELEASE, ParkBrakeSource::GCS)`; no source / ignition / fail-safe check (never reason 3).
-- [ ] 8.3 Capability bit5 = `parkBrake_.isDriverOk()` at boot (mask 0x3F, or 0x1F without the X6 driver); `EFI_STATUS` bits 2 / 3, drive-away release and throttle hold unchanged.
-- [ ] 8.4 Native tests (aztec cases in `test_vehicle_cmd_law`): every `ParkBrakeResult` → ACK; function 5 with bit5 clear → UNSUPPORTED; QB_CAPS 16777279.
-- [ ] 8.5 Changelog 1.5.30 (aztec): add the handbrake-from-GCS line (uk + en, "багі").
-- [ ] 8.6 `pio test -e native`, `pio run -e esp32-s3-devkitc-1`, `openspec validate add-gcs-vehicle-commands --strict` on `aztec`.
+- [x] 8.1 `include/VehicleCommandLaw.h` (aztec): `vehicleCmdParkBrakeAck(ParkBrakeResult)` — STARTED / STARTED_SPEED_UNKNOWN / REVERSING / ALREADY_RUNNING → ACCEPTED; REFUSED_MOVING → TEMPORARILY_REJECTED reason 4; REFUSED_DRIVER / REFUSED_NVS → FAILED.
+- [x] 8.2 `VehicleController::executeVehicleCommand()` function 5 → `commandParkBrake(value == 1 ? APPLY : RELEASE, ParkBrakeSource::GCS)`; no source / ignition / fail-safe check (never reason 3).
+- [x] 8.3 Capability bit5 = `parkBrake_.isDriverOk()` at boot (mask 0x3F, or 0x1F without the X6 driver); `EFI_STATUS` bits 2 / 3, drive-away release and throttle hold unchanged.
+- [x] 8.4 Native tests (aztec cases in `test_vehicle_cmd_law`): every `ParkBrakeResult` → ACK; function 5 with bit5 clear → UNSUPPORTED; QB_CAPS 16777279.
+- [x] 8.5 Changelog 1.5.30 (aztec): add the handbrake-from-GCS line (uk + en, "багі").
+- [x] 8.6 `pio test -e native`, `pio run -e esp32-s3-devkitc-1`, `openspec validate add-gcs-vehicle-commands --strict` on `aztec`.
 
 ## 9. Bench — buggy (`aztec` 1.5.30)
+Archived 2026-11-15 at the user's request before bench verification; bugs found later come back as new changes.
 - [ ] 9.1 Repeat 6.1–6.6 on the buggy; caps 63 (0x3F) with the X6 driver, `QB_CAPS` 16777279; hardware 0x000X0200; diff lock = Relay_4 + Relay_5 + Relay_6.
 - [ ] 9.2 Gear H from the GCS reaches H (the RC cannot select it) — confirms bit1 on the buggy.
 - [ ] 9.3 Handbrake from the GCS: apply at standstill → ACCEPTED, `[PBRAKE] Apply accepted (gcs)`, `pt_compensation` bit3 then bit2; apply above 3 km/h → reason 4; release → ACCEPTED in fail-safe and with the ignition off; drive-away release and throttle hold behave as with a web apply.
