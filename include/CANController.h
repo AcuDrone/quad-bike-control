@@ -151,6 +151,19 @@ public:
     VehicleData getVehicleData() const { return vehicleData_; }
 
     /**
+     * @brief Clear the stored engine RPM to 0 (VehicleController calls it when the applied
+     * relay ignition state goes into OFF — change add-precrank-dwell-setting, design D4).
+     *
+     * With the ECU unpowered the engine cannot be running, so 0 is the true value; the next
+     * PID 0x0C reply overwrites it. Only engineRPM is touched: dataValid stays as it is
+     * (clearing it would turn coolant, MAP, voltage and EFI_STATUS NaN five seconds early)
+     * and lastUpdateTime stays (the OBD silence watchdog depends on it). Without this the
+     * last RPM before OFF stays "valid" for up to CAN_DATA_STALE_TIMEOUT and suppresses the
+     * next auto-crank ("engine already running").
+     */
+    void clearEngineRpm() { vehicleData_.engineRPM = 0; }
+
+    /**
      * @brief Set RPM PID poll interval at runtime
      * @param ms Poll interval in milliseconds (e.g. CAN_POLL_INTERVAL_RPM_BOOST during gear change)
      */

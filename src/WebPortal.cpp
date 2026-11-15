@@ -678,6 +678,8 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // worst case ≈ 8.29 KB, still ≈ 0.9 KB of headroom at 9216 (size unchanged).
     // (master's relay_board* fields, 1.5.24, and i2c_unlock do not exist on the DevKitC-1 build:
     // no I2C relay board / bus — the size stays master's 9216 with that much more headroom.)
+    // Pre-crank delay since 1.5.33: crank_dwell_ms, 1 scalar slot (key by pointer, ≈ 16 B of
+    // memory, ≈ 22 B of JSON) — worst case ≈ 8.39 KB, ≈ 0.83 KB under 9216 (size unchanged).
     // Static (single caller: the main-loop broadcast) so the larger document is off the stack.
     static StaticJsonDocument<9216> doc;
     doc.clear();
@@ -832,6 +834,7 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // Ignition and lighting state
     doc["ignition_state"] = telemetry.ignition_state;
     doc["is_cranking"] = telemetry.is_cranking;
+    doc["crank_dwell_ms"] = telemetry.crank_dwell_ms;   // pre-crank dwell in use, ms
     doc["front_light_on"] = telemetry.front_light_on;
     doc["wheel_lock_on"] = telemetry.wheel_lock_on;
     doc["wheel_lock_fitted"] = telemetry.wheel_lock_fitted;   // false on aztec → UI shows "not fitted"

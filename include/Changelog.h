@@ -14,6 +14,13 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.33","date":"2026-11-15","uk":[
+"Затримка стартера: скільки секунд запалювання (ЕБУ і паливний насос) увімкнене перед тим, як закрутиться стартер, тепер задається в картці «Запалювання та освітлення», рядок «Затримка стартера, с» (1–8 с, крок 0,5). Типово 3 с (було 2 с). Діє на автостарт із перемикача пульта і з наземної станції; кнопка ПУСК на веб-сторінці крутить стартер одразу, як і раніше. Значення зберігається окремо для кожної машини (квадроцикл, багі). Якщо двигун не заводиться з перемикача — спершу збільште затримку",
+"Автостарт більше не пропускається одразу після вимкнення двигуна на високих обертах: при вимкненні запалювання оберти двигуна скидаються в 0, тож швидке OFF → ON знову крутить стартер, а наземна станція й кнопка ПУСК не відповідають «двигун уже працює». Потрібно залити оновлений образ LittleFS"
+],"en":[
+"Pre-crank delay: how many seconds the ignition (ECU and fuel pump) is on before the starter turns is now set in the Vehicle Ignition & Lighting card, row “Pre-crank delay, s” (1–8 s, step 0.5). Default 3 s (was 2 s). It applies to the auto-start from the RC switch and from the ground station; the web START button still cranks at once. The value is stored per vehicle (quad, buggy). If the engine does not start from the switch, try a longer delay first",
+"The auto-start is no longer skipped right after switching the engine off at high RPM: the engine RPM is reset to 0 when the ignition goes off, so a quick OFF → ON cranks again, and the ground station and the START button no longer answer “engine already running”. Upload the updated LittleFS image"
+]},
 {"version":"1.5.31","date":"2026-11-13","uk":[
 "Плавне відкриття газу тепер типово ВИМКНЕНО (0): газ відкривається миттєво, як до 1.5.16 — глухнення квадроцикла спричинив перегрів двигуна, а не різкий газ. Якщо на платі вже збережено швидкість (наприклад 60), вона лишається після оновлення; щоб вимкнути, задайте 0 у картці «Обмеження швидкості та кермо» й збережіть. Обмеження й далі доступне (30–100 %/с) для м’якшого відкриття газу. Потрібно залити оновлений образ LittleFS"
 ],"en":[

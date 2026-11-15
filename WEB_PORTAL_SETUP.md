@@ -123,8 +123,10 @@ it. Cards are shown in one column.
 **Тести / Tests** (bench checks):
 - **Manual control**: Take / Release control, gear buttons, steering, throttle and brake sliders.
   Disabled while MAVLink control is active.
-- **Ignition & lighting**: ignition OFF / ACC / START, front light, wheel lock, and their
-  telemetry.
+- **Ignition & lighting**: ignition OFF / ACC / START, the pre-crank delay row ("Pre-crank delay,
+  s", 1–8 s, step 0.5, default 3 s, since 1.5.33: how long the ignition is on before the starter on
+  an RC or GCS auto-start; the START button has no delay; `set_crank_dwell_ms`, saved to NVS),
+  front light, wheel lock, and their telemetry.
 - **Relay test**: four buttons "Relay 1…4" with the relay function (1 ignition, 2 starter,
   3 light, 4 wheel lock — the DevKitC-1 drives its four relays straight from GPIO36-39); an
   energised relay is highlighted. Switching a relay on needs ignition OFF, light off and the

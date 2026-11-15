@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include "Constants.h"
 #include "RelayBoardLaw.h"   // RelayBoardKind only (getBoardKind() is always NONE here)
+#include "CrankLaw.h"
 
 /**
  * @brief Relay controller for ignition, starter, lighting and the front-wheel lock.
@@ -70,11 +71,23 @@ public:
      *
      * Call once on a FRESH operator selection of IGNITION. Brings up the ignition/ECU
      * line (ACC) if it was off, then arms a dwell-gated crank: update() engages the
-     * starter only once the ignition line has been powered for ACC_PRECRANK_DWELL_MS (immediately if
-     * it already has), and suppresses the crank if the engine is already running.
+     * starter only once the ignition line has been powered for the configured pre-crank dwell
+     * (setPrecrankDwellMs(), default ACC_PRECRANK_DWELL_MS; immediately if it already has), and suppresses the crank if the engine is already running.
      * While waiting, the reported state is ACC. Does not re-crank while held.
      */
     void requestCrank();
+
+    /**
+     * @brief Set the pre-crank dwell used by update() for an armed crank (RAM only).
+     * @param ms dwell in ms; a value outside CRANK_DWELL_MS_MIN..MAX is replaced by
+     *           ACC_PRECRANK_DWELL_MS (crankDwellMsOrDefault()). The owner
+     *           (VehicleController) persists it in NVS "crank"/"dwell_ms". A new value
+     *           applies from the next update(), without restarting the dwell clock.
+     */
+    void setPrecrankDwellMs(uint16_t ms) { precrankDwellMs_ = crankDwellMsOrDefault(ms); }
+
+    /** @brief Pre-crank dwell in use, ms */
+    uint16_t getPrecrankDwellMs() const { return precrankDwellMs_; }
 
     /**
      * @brief Set front light state
@@ -126,11 +139,13 @@ public:
      * @brief Update cranking state based on engine RPM
      *
      * Call this method periodically (every loop iteration) to monitor cranking.
-     * Automatically stops cranking if:
+     * Engages an armed crank once the ignition line has been powered for the configured
+     * pre-crank dwell (crankArmedDecide(), CrankLaw.h), or suppresses it if the engine is
+     * already running. Automatically stops cranking if:
      * - Engine RPM exceeds threshold (engine started)
      * - CRANKING_TIMEOUT elapsed without engine start
      *
-     * @param engineRpm Current engine RPM from CAN bus
+     * @param engineRpm Validated engine RPM (0 when no valid source — crankRpm())
      */
     void update(uint16_t engineRpm);
 
@@ -193,6 +208,7 @@ private:
     // Pre-crank dwell tracking
     uint32_t ignitionHighSince_;   // millis() when the ignition/ECU line went LOW->HIGH; 0 while OFF
     bool crankArmed_;              // True if a dwell-gated crank is pending
+    uint16_t precrankDwellMs_;     // configured pre-crank dwell, ms (setPrecrankDwellMs())
 
     /** @brief Recompute the shadow byte from the tracked state and write the GPIOs */
     void updateRelays();

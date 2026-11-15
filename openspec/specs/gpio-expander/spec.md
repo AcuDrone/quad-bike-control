@@ -45,9 +45,11 @@ function masks SHALL be disjoint and together cover the four relays, checked at 
 
 #### Scenario: Public API matches master
 - **WHEN** callers use `setIgnitionState()`, `requestCrank()`, `setFrontLight()`, `setWheelLock()`,
-  `setRelayTest()`, `getRelayTestBits()`, `update()`, `allOff()` or the state getters
-- **THEN** the `ACC_PRECRANK_DWELL_MS` pre-crank dwell, `CRANKING_TIMEOUT`, RPM-based crank exit and
-  the wheel lock holding its state through `allOff()` SHALL behave as on master
+  `setRelayTest()`, `getRelayTestBits()`, `setPrecrankDwellMs()`, `getPrecrankDwellMs()`, `update()`,
+  `allOff()` or the state getters
+- **THEN** the configured pre-crank dwell (`setPrecrankDwellMs()`, default `ACC_PRECRANK_DWELL_MS`;
+  the armed-crank decision through `crankArmedDecide()`), `CRANKING_TIMEOUT`, RPM-based crank exit
+  and the wheel lock holding its state through `allOff()` SHALL behave as on master
 
 ### Requirement: Direct GPIO Sensor Inputs
 The system SHALL read the gear selector switches and the brake limit sensor directly from ESP32 GPIO

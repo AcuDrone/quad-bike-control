@@ -231,7 +231,7 @@ documented exception, and the reason they are one is set out in their own sectio
 | # | Field | MAVLink meaning / unit | What we send | Validity | Source |
 |---|-------|------------------------|--------------|----------|--------|
 | 1 | `ecu_index` | ECU index | `0.0` | always | literal |
-| 2 | `rpm` | RPM | **Engine RPM** (PID `0x0C`) | NaN if `!canValid` | `state.engineRpm` |
+| 2 | `rpm` | RPM | **Engine RPM** (PID `0x0C`); since 1.5.33 it reads `0` right after the ignition goes OFF (the stored value is cleared, the next ECU reply replaces it) instead of keeping the last value for up to 5 s | NaN if `!canValid` | `state.engineRpm` |
 | 3 | ⚑ `fuel_consumed` | [cm³] Fuel consumed | **ASSUMED (commanded) gear** — repurposed: fuel PID `0x2F` absent from this ECU | **always valid**, never NaN | `gearVal` |
 | 4 | ⚑ `fuel_flow` | [cm³/min] Fuel flow | **PHYSICAL (switch-sensed) gear** — same absent-PID justification | **NaN when the gear reads UNKNOWN** — sensor-driven, *not* CAN-driven | `physGearVal` |
 | 5 | `engine_load` | [%] Engine load | **ECU calculated load** (PID `0x04`) | NaN if `!canValid` | `state.engineLoad` |
@@ -766,7 +766,7 @@ integer; `NaN` never matches.
 |---|---|---|---|
 | 0 | Query | 0 caps, 1 firmware version, 2 hardware version | — |
 | 1 | Gear | R −1, N 0, H 1, L 2 | bit0 R/N/L, bit1 H |
-| 2 | Ignition | OFF 0, ACC 1, ON 2 (ON = auto-crank: 2 s pre-crank, starter ≤ 5 s) | bit2 |
+| 2 | Ignition | OFF 0, ACC 1, ON 2 (ON = auto-crank: pre-crank delay set in the web, 1–8 s, default 3 s since 1.5.33 — 2 s fixed before; starter ≤ 5 s) | bit2 |
 | 3 | Headlight | OFF 0, ON 1 | bit3 |
 | 4 | Diff lock | OFF 0, ON 1 | bit4 |
 | 5 | Handbrake | OFF 0 (release), ON 1 (apply) — **buggy (`aztec`) only** | bit5 |
@@ -824,7 +824,7 @@ the engine runs; a later accepted GCS gear cancels it.
 | Name | Rate | Value |
 |---|---|---|
 | `QB_CAPS` | every 10 s, first on the first report | capability bitmask (bits 0–15) \| protocol version << 24 — quad 16777247, buggy 16777279 |
-| `IGN_STATE` | 1 Hz and immediately on change | applied relay state: 0 OFF, 1 ACC, 2 ON, 3 CRANKING (pre-crank dwell + starter) |
+| `IGN_STATE` | 1 Hz and immediately on change | applied relay state: 0 OFF, 1 ACC, 2 ON, 3 CRANKING (pre-crank dwell + starter; the dwell is the pre-crank delay set in the web, 1–8 s, default 3 s since 1.5.33) |
 
 A firmware without this feature answers `MAV_CMD_USER_2` with `UNSUPPORTED` and sends no `QB_CAPS`;
 clients then show nothing new.
