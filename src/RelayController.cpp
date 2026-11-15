@@ -99,7 +99,8 @@ RelayController::RelayController(TwoWire& bus)
       testMask_(0),
       testOnSince_{},
       ignitionHighSince_(0),
-      crankArmed_(false) {
+      crankArmed_(false),
+      precrankDwellMs_(ACC_PRECRANK_DWELL_MS) {
 }
 
 RelayBoardSetting RelayController::loadBoardSetting() {
@@ -475,19 +476,22 @@ void RelayController::update(uint16_t engineRpm) {
 
     // Fire a pending (armed) crank once the ignition-line pre-crank dwell is satisfied.
     if (crankArmed_ && !isCranking_) {
-        if (engineRpm >= ENGINE_RUNNING_RPM_THRESHOLD) {
+        CrankArmedAction action = crankArmedDecide(engineRpm, ENGINE_RUNNING_RPM_THRESHOLD,
+                                                   ignitionHighSince_, millis(), precrankDwellMs_);
+        if (action == CrankArmedAction::SUPPRESS) {
             // Engine already running — suppress the crank, settle into IGNITION.
             crankArmed_ = false;
             Debug::printfFeature(DebugFeature::RELAY, "[RELAY] Crank suppressed - engine already running (RPM: %d)\n", engineRpm);
             setIgnitionState(IgnitionState::IGNITION);
             return;
         }
-        if (ignitionHighSince_ != 0 && (millis() - ignitionHighSince_) >= ACC_PRECRANK_DWELL_MS) {
+        if (action == CrankArmedAction::ENGAGE) {
             crankArmed_ = false;
-            Debug::printlnFeature(DebugFeature::RELAY, "[RELAY] Pre-crank dwell satisfied - engaging starter");
+            Debug::printfFeature(DebugFeature::RELAY, "[RELAY] Pre-crank dwell satisfied (%u ms) - engaging starter\n",
+                                 (unsigned)precrankDwellMs_);
             setIgnitionState(IgnitionState::CRANKING);  // sets isCranking_ / crankingStartTime_
         }
-        // else: keep holding ACC (ignition mask high, starter mask low) until the dwell elapses
+        // else (WAIT): keep holding ACC (ignition mask high, starter mask low) until the dwell elapses
     }
 
     // Only monitor if currently cranking

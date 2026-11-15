@@ -319,7 +319,15 @@ static_assert(GEAR_CODE_LOW != 0b000 && GEAR_CODE_HIGH != 0b000 && GEAR_CODE_NEU
 
 // Cranking Parameters
 #define CRANKING_TIMEOUT           5000  // ms - maximum cranking duration per start attempt; the starter is released earlier as soon as engineRpm ≥ ENGINE_RUNNING_RPM_THRESHOLD (2026-11-06: 2 s was too short)
-#define ACC_PRECRANK_DWELL_MS      2000  // ms - ignition/ECU line (Relay_1+Relay_2) must be powered this long before the starter (Relay_3) engages
+#define ACC_PRECRANK_DWELL_MS      3000  // ms - ignition/ECU line (Relay_1+Relay_2) must be powered this long before the starter (Relay_3) engages; default; per vehicle from the web (NVS crank/dwell_ms)
+// Pre-crank dwell range accepted from the web / NVS (change add-precrank-dwell-setting).
+// 1 s keeps a minimum ECU wake-up; 8 s is well beyond any fuel-pump prime we know of and
+// keeps a mistyped value from turning the RC switch into "nothing happens".
+// The literals MUST match include/CrankLaw.h.
+#define CRANK_DWELL_MS_MIN         1000  // ms
+#define CRANK_DWELL_MS_MAX         8000  // ms
+#define CRANK_NVS_NAMESPACE        "crank"     // owned by VehicleController
+#define CRANK_DWELL_NVS_KEY        "dwell_ms"  // uint16, ms
 // 800 on aztec (change add-tacho-rpm-input): above the starter's cranking speed (≈250–400 RPM)
 // and safely BELOW the ≈1500 RPM warm idle, so an idling engine always counts as running
 // (MAVLink gear gate, crank interlock, starter cut-off). The quad (master) keeps 1500.
@@ -1154,7 +1162,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.32"
+#define FIRMWARE_VERSION "1.5.33"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

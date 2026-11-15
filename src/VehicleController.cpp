@@ -64,6 +64,8 @@ VehicleController::VehicleController(SteeringController& steering,
       brakeIsMoving_(false),
       brakeTravelMs_(BRAKE_FULL_TRAVEL_TIME),
       brakeHoldPwm_(BRAKE_HOLD_SPEED),
+      crankDwellMs_(ACC_PRECRANK_DWELL_MS),
+      prevIgnitionOn_(false),
       boostTargetRpm_(TRANS_GEAR_BOOST_TARGET_RPM),
       boostGearEnabled_(BOOST_ENABLED_DEFAULT),
       gearBoostActive_(false),
@@ -395,6 +397,23 @@ bool VehicleController::initCAN() {
     Debug::printfFeature(DebugFeature::VEHICLE, "[BRAKE] Travel time: %u ms, hold drive: %u\n",
                          (unsigned)brakeTravelMs_, (unsigned)brakeHoldPwm_);
 
+    // Pre-crank dwell, NVS "crank" (VehicleController owns it; RelayController gets it RAM-only).
+    // A missing key reads as the default; an out-of-range stored value is logged and ignored
+    // (default used, never rewritten).
+    if (prefs.begin(CRANK_NVS_NAMESPACE, true)) {
+        uint32_t dwell = prefs.getUShort(CRANK_DWELL_NVS_KEY, ACC_PRECRANK_DWELL_MS);
+        prefs.end();
+        if (!crankDwellMsValid(dwell)) {
+            Debug::printfFeature(DebugFeature::VEHICLE,
+                "[VEHICLE] Stored pre-crank delay %lu ms out of range (%d-%d ms) — ignored\n",
+                (unsigned long)dwell, CRANK_DWELL_MS_MIN, CRANK_DWELL_MS_MAX);
+        }
+        crankDwellMs_ = crankDwellMsOrDefault(dwell);
+    }
+    relayController_.setPrecrankDwellMs(crankDwellMs_);
+    Debug::printfFeature(DebugFeature::VEHICLE, "[VEHICLE] Pre-crank delay: %u ms\n",
+                         (unsigned)crankDwellMs_);
+
     bool result = canController_.begin();
     canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM);
     // The Bosch LWS steering-angle sensor shares this bus: every 0x305 frame goes to the
@@ -424,6 +443,18 @@ void VehicleController::update() {
         const RelayController::IgnitionState ign = relayController_.getIgnitionState();
         canController_.setLwsPowered(ign == RelayController::IgnitionState::ACC ||
                                      ign == RelayController::IgnitionState::IGNITION);
+
+        // Applied ignition state into OFF, by any path (RC, GCS, web, fail-safe allOff(),
+        // starter escalation): the ECU is unpowered, so the engine cannot be running — clear
+        // the stored CAN engine RPM. Otherwise the last RPM before OFF stays "valid" for up to
+        // CAN_DATA_STALE_TIMEOUT and the next auto-crank is suppressed as "engine already
+        // running" (change add-precrank-dwell-setting, design D4). Only the RPM is cleared.
+        const bool ignOn = (ign != RelayController::IgnitionState::OFF);
+        if (ignitionWentOff(prevIgnitionOn_, ignOn)) {
+            canController_.clearEngineRpm();
+            Debug::printlnFeature(DebugFeature::VEHICLE, "[VEHICLE] Ignition OFF - engine RPM cleared");
+        }
+        prevIgnitionOn_ = ignOn;
     }
 
     // Update CAN controller (read vehicle data from ECU)
@@ -467,7 +498,8 @@ void VehicleController::update() {
     engineHours_.update(effRpm_.valid && effRpm_.rpm >= ENGINE_HOURS_MIN_RPM, millis());
 
     // Update relay controller with the effective engine RPM (automatic cranking stop and the
-    // armed-crank suppression); 0 when no source is valid.
+    // armed-crank suppression); 0 when no source is valid. The CAN part is cleared at ignition
+    // OFF above, so a stale CAN value never suppresses or cuts a crank (add-precrank-dwell-setting D7).
     relayController_.update(getEngineRpm());
 
     // Expire the bench test-speed override. The fuse is the whole point: an override left on
@@ -776,6 +808,9 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
     } else if (cmd.cmd == "set_brake_hold_pwm") {
         processSetBrakeHoldPwmCommand(cmd.floatValue, webPortal);
         return;
+    } else if (cmd.cmd == "set_crank_dwell_ms") {
+        processSetCrankDwellCommand(cmd.floatValue, webPortal);
+        return;
     } else if (cmd.cmd == "set_test_speed") {
         processSetTestSpeedCommand(cmd.floatValue, webPortal);
         return;
@@ -995,7 +1030,8 @@ void VehicleController::processMavlinkCommands() {
 
     // Ignition, on an RC change only. Cranking is sequenced inside RelayController, which
     // enforces a pre-crank dwell: the starter (R2) does not engage until the ignition/ECU line
-    // (R1) has been powered for ACC_PRECRANK_DWELL_MS (immediately if R1 was already up that long).
+    // (R1) has been powered for the configured pre-crank dwell (NVS "crank"/dwell_ms, set from the
+    // web, default ACC_PRECRANK_DWELL_MS; immediately if R1 was already up that long).
     const int8_t rcIgn = vcmdRcIgnition(mavlink_.getChannel(ServoChannelConfig::IGNITION));
     if (rc_.ignition.step(rcIgn)) {
         if (rcIgn == VCMD_IGN_OFF) {
@@ -1005,7 +1041,8 @@ void VehicleController::processMavlinkCommands() {
         } else {
             // A fresh RC ON (an edge, or the first frame after a re-sync) arms the dwell-gated
             // auto-crank; RelayController::update() suppresses it while the engine runs.
-            Debug::printlnFeature(DebugFeature::VEHICLE, "[VEHICLE] IGNITION selected - arming pre-crank dwell");
+            Debug::printfFeature(DebugFeature::VEHICLE, "[VEHICLE] IGNITION selected - arming pre-crank dwell (%u ms)\n",
+                                 (unsigned)crankDwellMs_);
             relayController_.requestCrank();
         }
     }
@@ -1089,7 +1126,8 @@ VehicleCmdOutcome VehicleController::executeVehicleCommand(VehicleCmdFunction fn
                     }
                     break;
                 case VcmdIgnAction::CRANK:
-                    Debug::printlnFeature(DebugFeature::VEHICLE, "[GCS] IGNITION ON - arming pre-crank dwell");
+                    Debug::printfFeature(DebugFeature::VEHICLE, "[GCS] IGNITION ON - arming pre-crank dwell (%u ms)\n",
+                                         (unsigned)crankDwellMs_);
                     relayController_.requestCrank();
                     break;
                 case VcmdIgnAction::NONE:
@@ -1904,6 +1942,38 @@ void VehicleController::processSetBrakeHoldPwmCommand(float value, WebPortal& we
     } else {
         webPortal.sendResponse(true, "Brake hold set to " + String(pwm));
     }
+}
+
+bool VehicleController::setCrankDwellMs(uint16_t ms) {
+    if (!crankDwellMsValid(ms)) return false;
+    // Persist first: RAM only changes once NVS holds the new value. Own namespace, one key.
+    Preferences prefs;
+    bool ok = false;
+    if (prefs.begin(CRANK_NVS_NAMESPACE, false)) {
+        ok = prefs.putUShort(CRANK_DWELL_NVS_KEY, ms) == sizeof(uint16_t);
+        prefs.end();
+    }
+    if (!ok) return false;
+    crankDwellMs_ = ms;
+    relayController_.setPrecrankDwellMs(ms);   // an armed crank uses it from the next update()
+    Debug::printfFeature(DebugFeature::VEHICLE, "[VEHICLE] Pre-crank delay set to %u ms\n", (unsigned)ms);
+    return true;
+}
+
+void VehicleController::processSetCrankDwellCommand(float value, WebPortal& webPortal) {
+    if (!isnan(value)) value = roundf(value);   // whole ms
+    if (isnan(value) || value < (float)CRANK_DWELL_MS_MIN || value > (float)CRANK_DWELL_MS_MAX) {
+        webPortal.sendResponse(false, "Pre-crank delay out of range (" +
+                                      String(CRANK_DWELL_MS_MIN) + "-" +
+                                      String(CRANK_DWELL_MS_MAX) + " ms)");
+        return;
+    }
+    const uint16_t ms = (uint16_t)value;
+    if (!setCrankDwellMs(ms)) {
+        webPortal.sendResponse(false, "Failed to save the pre-crank delay");
+        return;
+    }
+    webPortal.sendResponse(true, "Pre-crank delay set to " + String(ms) + " ms");
 }
 
 void VehicleController::processSetSteerScaBaseCommand(float value, WebPortal& webPortal) {

@@ -14,6 +14,13 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.33","date":"2026-11-15","uk":[
+"Затримка стартера: скільки секунд запалювання (ЕБУ і паливний насос) увімкнене перед тим, як закрутиться стартер, тепер задається в картці «Запалювання та освітлення», рядок «Затримка стартера, с» (1–8 с, крок 0,5). Типово 3 с (було 2 с). Діє на автостарт із перемикача пульта і з наземної станції; кнопка ПУСК на веб-сторінці крутить стартер одразу, як і раніше. Значення зберігається окремо для кожної машини (квадроцикл, багі). Якщо двигун не заводиться з перемикача — спершу збільште затримку",
+"Автостарт більше не пропускається одразу після вимкнення двигуна на високих обертах: при вимкненні запалювання оберти двигуна скидаються в 0, тож швидке OFF → ON знову крутить стартер, а наземна станція й кнопка ПУСК не відповідають «двигун уже працює». Потрібно залити оновлений образ LittleFS"
+],"en":[
+"Pre-crank delay: how many seconds the ignition (ECU and fuel pump) is on before the starter turns is now set in the Vehicle Ignition & Lighting card, row “Pre-crank delay, s” (1–8 s, step 0.5). Default 3 s (was 2 s). It applies to the auto-start from the RC switch and from the ground station; the web START button still cranks at once. The value is stored per vehicle (quad, buggy). If the engine does not start from the switch, try a longer delay first",
+"The auto-start is no longer skipped right after switching the engine off at high RPM: the engine RPM is reset to 0 when the ignition goes off, so a quick OFF → ON cranks again, and the ground station and the START button no longer answer “engine already running”. Upload the updated LittleFS image"
+]},
 {"version":"1.5.32","date":"2026-11-13","uk":[
 "Багі: фіксована максимальна швидкість для кожної передачі — L 45 км/год, H 75 км/год, R 20 км/год (у N обмеження немає). Діє завжди, навіть коли SPEED_MAX = 0, не отриманий або зв’язку з автопілотом немає; вимкнути її не можна. Менший SPEED_MAX і далі має перевагу, більший не підніме ліміт понад стелю передачі. У веб-панелі після ліміту видно «· передача L» (H, R), коли діє стеля передачі",
 "Без достовірних показань датчика швидкості коліс стеля передачі не діє (як і обмеження SPEED_MAX). Попередження «speed reading is invalid» тепер з’являється лише тоді, коли ліміт задає SPEED_MAX. Потрібно залити оновлений образ LittleFS"

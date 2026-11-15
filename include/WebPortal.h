@@ -182,6 +182,7 @@ public:
         // Ignition and lighting state
         String ignition_state;    // Ignition state: "OFF", "ACC", "IGNITION", "CRANKING"
         bool is_cranking;         // True if starter motor is cranking
+        uint16_t crank_dwell_ms;  // Pre-crank dwell in use (ms, 1000-8000; NVS "crank"/dwell_ms)
         bool front_light_on;      // True if front light is on
         bool wheel_lock_on;       // True if the lock is engaged (aztec: Relay_4+5+6; always false when not fitted)
         bool wheel_lock_fitted;   // True on aztec (RELAY_WHEEL_LOCK_FITTED); false = no relay behind the function

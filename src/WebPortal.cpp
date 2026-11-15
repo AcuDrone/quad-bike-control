@@ -691,6 +691,8 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // ≈ 8.82 KB, ≈ 0.4 KB under 9216 (size unchanged).
     // Gear speed ceiling since 1.5.32: speed_limit_src, 1 slot (key and static token by pointer,
     // nothing copied; 16 B of memory, ≤ 30 B of JSON) — aztec worst case ≈ 8.84 KB (size unchanged).
+    // Pre-crank delay since 1.5.33: crank_dwell_ms, 1 scalar slot (key by pointer, ≈ 16 B of
+    // memory, ≈ 22 B of JSON) — aztec worst case ≈ 8.86 KB, ≈ 0.35 KB under 9216 (size unchanged).
     // Static (single caller: the main-loop broadcast) so the larger document is off the stack.
     static StaticJsonDocument<9216> doc;
     doc.clear();
@@ -874,6 +876,7 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // Ignition and lighting state
     doc["ignition_state"] = telemetry.ignition_state;
     doc["is_cranking"] = telemetry.is_cranking;
+    doc["crank_dwell_ms"] = telemetry.crank_dwell_ms;   // pre-crank dwell in use, ms
     doc["front_light_on"] = telemetry.front_light_on;
     doc["wheel_lock_on"] = telemetry.wheel_lock_on;
     doc["wheel_lock_fitted"] = telemetry.wheel_lock_fitted;   // true on aztec (Relay_4+5+6); false → UI shows "not fitted"
