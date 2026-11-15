@@ -39,8 +39,8 @@ same raw `relayController_.update(canData.engineRPM)` (`VehicleController.cpp:22
 ## Decisions
 - **D1. Units and resolution: whole milliseconds, UI in seconds with step 0.5.** Every timed
   setting on the web is stored and commanded in whole ms (`brake travel_ms`, the park ladder
-  `park_t1..t3`), so the wire and NVS value is ms (uint16), validated 1000–8000. The ignition card
-  input is in seconds (min 1, max 8, step 0.5) because that is how the operator thinks of a wait
+  `park_t1..t3`), so the wire and NVS value is ms (uint16), validated 1000–8000. The delay
+  slider is in seconds (min 1, max 8, step 0.5) because that is how the operator thinks of a wait
   of a few seconds; the page sends `round(seconds × 1000)` and shows `crank_dwell_ms / 1000` with
   one decimal. The firmware accepts any whole ms in range, so a finer value can still be sent.
   Range: 1 s keeps a minimum ECU wake-up; 8 s is well beyond any fuel-pump prime we know of and
@@ -106,10 +106,20 @@ same raw `relayController_.update(canData.engineRPM)` (`VehicleController.cpp:22
   the GPIO version, so its armed-crank branch (`:183-197`) and the new setter are edited by hand in
   the merge; the relay update at `VehicleController.cpp:229` gets `crankRpm(...)` as on `master`.
 - **D9. Telemetry and the web row.** `crank_dwell_ms` (int) — one scalar key, ≈16 B, within the
-  `StaticJsonDocument<9216>` headroom; the capacity comment is updated. The row sits in the
-  "Vehicle Ignition & Lighting" card right under the OFF / ACC / START buttons: that is where the
-  operator works with ignition, and the card is shown on every board. A number field with Save
-  (like the brake hold drive): the value is set once per vehicle.
+  `StaticJsonDocument<9216>` headroom; the capacity comment is updated. Control: a slider (1–8 s,
+  step 0.5, value on the right) at the owner's request, 2026-11-15 — it replaced the first number
+  field with Save. It follows the brake travel slider: the label tracks the thumb while dragging,
+  one command on release (each is an NVS write), and telemetry does not move the thumb while it is
+  held. A stored value off the 0.5 s grid (another client, a direct command) puts the thumb on the
+  nearest step, while the label and the hint show the real value; local validation is gone (the
+  slider cannot leave 1–8 s), the firmware range check stays. Placement: the row first sat in
+  the "Vehicle Ignition & Lighting" card (Tests section) right under the OFF / ACC / START buttons;
+  on 2026-11-15, before 1.5.33 was flashed anywhere, the owner moved it to its own card
+  "🚀 Запуск двигуна" / "🚀 Engine start" in the Calibration section, right after Throttle
+  Calibration, because it is a persisted setting, not a test control — Calibration is where every
+  other stored setting lives. Element ids, function names and the reply routing are unchanged; the
+  hint names the START button's section ("Тести" / "Tests") so the "no delay" note stays clear. The
+  card is shown on every board.
 
 ## Rejected alternatives
 - **Poll RPM at `CAN_POLL_INTERVAL_RPM_BOOST` (50 ms) while a crank is pending or running.**
