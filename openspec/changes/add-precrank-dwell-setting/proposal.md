@@ -59,13 +59,14 @@ not always start the engine, for two reasons:
 - **Web.** Command `set_crank_dwell_ms` (value ms, rounded to a whole ms, validated 1000–8000,
   persisted first, then applied), accepted from any input source. Replies: "Pre-crank delay set to
   N ms", "Pre-crank delay out of range (1000-8000 ms)", "Failed to save the pre-crank delay".
-  Telemetry key `crank_dwell_ms` (int). In the "🔑 Запалювання та освітлення" / "🔑 Vehicle
-  Ignition & Lighting" card, right under the OFF / ACC / START buttons: a row "Затримка стартера,
-  с" / "Pre-crank delay, s" (number input in seconds 1–8, step 0.5, Save → `saveCrankDwell()`,
-  sends `value × 1000`), local validation, a hint, its own reply line and a help sentence; uk + en.
+  Telemetry key `crank_dwell_ms` (int). In a new card "🚀 Запуск двигуна" / "🚀 Engine start" in
+  the Calibration section (after Throttle Calibration; moved there from the ignition card in Tests
+  on 2026-11-15, design D9): a slider "Затримка стартера" / "Pre-crank delay" (seconds 1–8, step 0.5, value shown on the right,
+  as the brake travel slider; one `set_crank_dwell_ms` = `round(value × 1000)` on release, no Save
+  button), a hint, its own reply line and a help sentence; uk + en.
 - **Docs.** `MAVLINK_SETUP.md` ignition row ("2 s pre-crank" → the configurable delay, default 3 s)
-  and the API compatibility page (`../../API/README.md`, version note); `WEB_PORTAL_SETUP.md` if it
-  lists the ignition card settings.
+  and the API compatibility page (`../../API/README.md`, version note); `WEB_PORTAL_SETUP.md` (Calibration →
+  Engine start).
 - **Version.** Firmware **1.5.33** on all three branches (`master` and `old-board` skip 1.5.32,
   which is the aztec-only gear speed ceiling); changelog entry uk + en ("багі" in Ukrainian).
 
