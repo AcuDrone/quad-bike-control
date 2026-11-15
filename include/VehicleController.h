@@ -17,6 +17,7 @@
 #include "EngineHourMeter.h"
 #include "SpeedLimiterLaw.h"
 #include "VehicleCommandLaw.h"
+#include "CrankLaw.h"
 
 /**
  * @brief Vehicle control coordination layer
@@ -190,6 +191,18 @@ public:
      */
     bool setBrakeTravelMs(uint16_t ms);
     bool setBrakeHoldPwm(uint8_t pwm);
+
+    /** @brief Pre-crank dwell in use, ms (NVS "crank"/dwell_ms, default ACC_PRECRANK_DWELL_MS) */
+    uint16_t getCrankDwellMs() const { return crankDwellMs_; }
+
+    /**
+     * @brief Set the pre-crank dwell (time the ignition / ECU line is powered before the starter
+     * engages on an auto-crank). Validated (CrankLaw.h, 1000–8000 ms), persisted to NVS "crank"
+     * FIRST, then handed to RelayController::setPrecrankDwellMs(); false (value in use
+     * unchanged) on an invalid value or a failed NVS write. Applies to an armed crank from the
+     * next loop, without restarting the dwell clock.
+     */
+    bool setCrankDwellMs(uint16_t ms);
 
     /** @brief Latest averaged 24V rail voltage (V) */
     float getRail24V() const { return rail24V_; }
@@ -494,6 +507,10 @@ private:
     bool brakeIsMoving_;
     uint16_t brakeTravelMs_;            // full travel time in use, ms (NVS "brake"/travel_ms)
     uint8_t brakeHoldPwm_;              // hold drive in use, 0–100 PWM, 0 = coast (NVS "brake"/hold_pwm)
+
+    // Pre-crank dwell and the ignition-OFF engine RPM clear (change add-precrank-dwell-setting)
+    uint16_t crankDwellMs_;             // pre-crank dwell in use, ms (NVS "crank"/dwell_ms)
+    bool prevIgnitionOn_;               // applied relay ignition state was non-OFF on the previous update()
 
     // Gear boost configuration (NVS-backed, runtime-editable)
     int32_t boostTargetRpm_;            // RPM target for gear boost PID (default TRANS_GEAR_BOOST_TARGET_RPM)
@@ -810,6 +827,13 @@ private:
      */
     void processSetBrakeTravelMsCommand(float value, WebPortal& webPortal);
     void processSetBrakeHoldPwmCommand(float value, WebPortal& webPortal);
+
+    /**
+     * @brief Pre-crank dwell (`set_crank_dwell_ms` ms). Rounded to a whole ms, validated
+     * 1000–8000 (NaN refused), persisted to NVS "crank" first, then applied. Accepted from any
+     * input source (a setting, not an ignition command).
+     */
+    void processSetCrankDwellCommand(float value, WebPortal& webPortal);
 
     /**
      * @brief Speed-scale the AUTOPILOT steering command. ArduPilot's own formula,

@@ -1267,13 +1267,23 @@
             </div>
             <!-- Ignition & Lighting Control -->
             <div class="card">
-                <h2 class="card-title"><span data-i18n="card_ignition">🔑 Vehicle Ignition & Lighting</span><button type="button" class="help-btn" onclick="openHelp('boost_rail_hint', 'card_ignition')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <h2 class="card-title"><span data-i18n="card_ignition">🔑 Vehicle Ignition & Lighting</span><button type="button" class="help-btn" onclick="openHelp('crank_dwell_help,boost_rail_hint', 'card_ignition')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
 
                 <h3 data-i18n="h_ignition_control" style="margin-top: 0; margin-bottom: 10px;">Ignition Control</h3>
                 <div class="gear-buttons" style="margin-bottom: 20px;">
                     <button class="gear-btn" id="ignition-off" onclick="setIgnition('OFF')" data-i18n="ign_OFF">OFF</button>
                     <button class="gear-btn" id="ignition-acc" onclick="setIgnition('ACC')" data-i18n="ign_ACC">ACC</button>
                     <button class="gear-btn" id="ignition-start" onclick="setIgnition('START')" data-i18n="ign_START">START</button>
+                </div>
+                <!-- Pre-crank delay (RC / GCS auto-crank; the START button has no delay) -->
+                <div style="margin-top: -10px; margin-bottom: 20px;">
+                    <label data-i18n="lbl_crank_dwell" for="crank-dwell-input" style="font-size: 0.8em; color: var(--muted-foreground);">Pre-crank delay, s</label>
+                    <div style="display: flex; gap: 6px; margin-top: 4px;">
+                        <input type="number" id="crank-dwell-input" min="1" max="8" step="0.5" inputmode="decimal" style="flex:1; min-width:0; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
+                        <button onclick="saveCrankDwell()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                    </div>
+                    <div id="crank-dwell-hint" style="margin-top: 4px; font-size: 0.75em; color: var(--muted-foreground);"></div>
+                    <div id="crank-dwell-status" style="margin-top: 4px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
                 </div>
 
                 <h3 data-i18n="h_front_light" style="margin-bottom: 10px;">Front Light</h3>
@@ -1668,6 +1678,10 @@
                 ign_ACC: 'ACC',
                 ign_START: 'START',
                 ign_CRANKING: 'CRANKING',
+                lbl_crank_dwell: 'Pre-crank delay, s',
+                crank_dwell_hint: 'Ignition on for %s s before the starter (RC and GCS; the START button has no delay)',
+                crank_dwell_help: '<b>Pre-crank delay</b>: how long the ignition (ECU and fuel pump) is powered before the starter turns when the engine is started from the RC switch or the GCS. The delay lets the ECU and the fuel pump get ready; if the engine does not start from the switch, a longer delay is the first thing to try. The <b>START</b> button cranks at once, without the delay. 1-8 s, default 3 s.',
+                invalid_crank_dwell: 'Delay must be 1-8 s',
                 h_front_light: 'Front Light',
                 lbl_light: 'Light:',
                 h_wheel_lock: 'Front Wheel Lock',
@@ -2182,6 +2196,10 @@
                 ign_ACC: 'ACC',
                 ign_START: 'ПУСК',
                 ign_CRANKING: 'ПРОКРУТКА',
+                lbl_crank_dwell: 'Затримка стартера, с',
+                crank_dwell_hint: 'Запалювання ввімкнене %s с перед стартером (RC і GCS; кнопка ПУСК — без затримки)',
+                crank_dwell_help: '<b>Затримка стартера</b>: скільки часу запалювання (ЕБУ і паливний насос) увімкнене, перш ніж закрутиться стартер, коли двигун запускається перемикачем пульта або з GCS. За цей час ЕБУ і паливний насос встигають підготуватися; якщо двигун не заводиться з перемикача, спершу спробуйте більшу затримку. Кнопка <b>ПУСК</b> крутить стартер одразу, без затримки. 1-8 с, типово 3 с.',
+                invalid_crank_dwell: 'Затримка має бути 1-8 с',
                 h_front_light: 'Переднє світло',
                 lbl_light: 'Світло:',
                 h_wheel_lock: 'Блокування переднього колеса',
@@ -2517,6 +2535,7 @@
             updateBoostRailButton(boostRailState);
             updateGearBoostButton(gearBoostState);
             updateSteerParkButton(steerParkState);
+            renderCrankDwellHint();
             const boostStatus = document.getElementById('boost-test-status');
             if (boostStatus) boostStatus.textContent = boostTestActive ? t('on') : t('off');
             const dbgBtn = document.getElementById('debug-toggle-btn');
@@ -2728,6 +2747,12 @@
                     data.message === 'Failed to save the park correction setting')) {
                     steerParkStatus(data.success ? data.message : t('error_prefix') + data.message,
                                     data.success ? 'var(--success)' : 'var(--danger)');
+                }
+                // Pre-crank delay row (ignition card)
+                if (data.message && (data.message.startsWith('Pre-crank delay') ||
+                    data.message.startsWith('Failed to save the pre-crank delay'))) {
+                    crankDwellStatus(data.success ? data.message : t('error_prefix') + data.message,
+                                     data.success ? 'var(--success)' : 'var(--danger)');
                 }
                 // Brake tuning card
                 if (data.message && (data.message.startsWith('Brake travel') || data.message.startsWith('Brake hold') ||
@@ -2979,6 +3004,7 @@
             }
             updateSteerParkCard(data);
             updateBrakeCard(data);
+            updateCrankDwell(data);
 
             // Update gear button active state
             updateGearButtons(data.gear);
@@ -4196,6 +4222,38 @@
 
         function setIgnition(state) {
             sendCommand('set_ignition', state);
+        }
+
+        // ---- Pre-crank delay (ignition card): firmware works in whole ms (set_crank_dwell_ms,
+        // 1000-8000), the row in seconds (1-8, step 0.5). Telemetry `crank_dwell_ms`. ----
+        let crankDwellMs = 3000;   // last value from telemetry (firmware default until the first frame)
+        function crankDwellStatus(text, color) {
+            const el = document.getElementById('crank-dwell-status');
+            if (!el) return;
+            el.textContent = text;
+            el.style.color = color;
+        }
+        function renderCrankDwellHint() {
+            const el = document.getElementById('crank-dwell-hint');
+            if (!el) return;
+            let s = (crankDwellMs / 1000).toFixed(1);
+            if (currentLang === 'uk') s = s.replace('.', ',');
+            el.textContent = t('crank_dwell_hint', s);
+        }
+        function updateCrankDwell(data) {
+            if (!Number.isFinite(data.crank_dwell_ms)) return;   // older firmware: row keeps its default
+            crankDwellMs = data.crank_dwell_ms;
+            syncSpeedInput('crank-dwell-input', (crankDwellMs / 1000).toFixed(1));
+            renderCrankDwellHint();
+        }
+        function saveCrankDwell() {
+            const raw = document.getElementById('crank-dwell-input').value;
+            const val = Number(raw);
+            if (raw === '' || !Number.isFinite(val) || val < 1 || val > 8) {
+                crankDwellStatus(t('invalid_crank_dwell'), 'var(--danger)');
+                return;
+            }
+            sendCommand('set_crank_dwell_ms', Math.round(val * 1000));
         }
 
         let lightState = false;
