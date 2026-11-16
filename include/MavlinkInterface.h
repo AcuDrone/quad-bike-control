@@ -207,7 +207,6 @@ public:
     float getBrake() const;                           // 0..100 (0 = released)
     IgnitionState getIgnitionState() const;           // OFF/ACC/IGNITION
     bool getFrontLight() const;                       // true = ON
-    bool getWheelLock() const;                        // true = front wheels LOCKED
 
     // ---- Link monitoring ----------------------------------------------------
 

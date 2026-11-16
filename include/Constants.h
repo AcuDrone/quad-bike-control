@@ -215,7 +215,8 @@
 #define RELAY_TEST_STARTER_MAX_MS  2000UL   // ms cap for a starter-relay (Relay_3) test
 
 // The front-wheel lock is fitted on the quad bike (RELAY_SET_WHEEL_LOCK above);
-// RelayController drives it from MAVLink channel 7 and the web `set_wheel_lock`.
+// RelayController drives it from the web `set_wheel_lock` and the GCS lock command
+// (MAV_CMD_USER_2); no RC channel drives it since 1.5.34.
 #define RELAY_WHEEL_LOCK_FITTED 1           // 1 = relays behind the wheel-lock function
 
 // Expander timing / fault policy
@@ -293,13 +294,14 @@
 // Servo-output channel assignments (SERVO_OUTPUT_RAW servoN_raw indices, 1-16).
 // Mirrors the function map previously used for S-bus. ArduPilot SERVOn_FUNCTION
 // outputs must align with these indices.
+// Channels 5, 7 and 8 are intentionally unused: their raw values are decoded and shown on the
+// web page but drive nothing (7: the lock moved off RC in 1.5.34; it was the front-wheel lock).
 struct ServoChannelConfig {
     static constexpr uint8_t STEERING = 1;      // Steering (-100% to +100%)
     static constexpr uint8_t THROTTLE = 2;      // Throttle/Brake combined (above center=throttle, below=brake)
     static constexpr uint8_t TRANSMISSION = 3;  // Gear selector (3 positions: R/N/L)
     static constexpr uint8_t IGNITION = 4;      // Ignition state (OFF/ACC/IGNITION)
     static constexpr uint8_t FRONT_LIGHT = 6;   // Front light (on/off)
-    static constexpr uint8_t WHEEL_LOCK  = 7;   // Front-wheel lock (on/off)
 };
 
 // MAVLink transport / link parameters
@@ -410,7 +412,6 @@ struct ServoChannelConfig {
 
 // Front Light Threshold (in microseconds)
 #define RC_FRONT_LIGHT_THRESHOLD 1520  // >1520 = ON, <=1520 = OFF
-#define RC_WHEEL_LOCK_THRESHOLD  1520  // >1520 = LOCKED, <=1520 = UNLOCKED
 
 // Digital output states reported back to the GCS as a bitmask carried in
 // EFI_STATUS.pt_compensation (float). MUST stay in sync with the MP plugin decode.
@@ -1002,7 +1003,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.33"
+#define FIRMWARE_VERSION "1.5.34"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

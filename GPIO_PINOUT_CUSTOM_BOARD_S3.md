@@ -358,9 +358,9 @@ are split across two relay contacts that always energize together:
 | Front-wheel lock | `RELAY_SET_WHEEL_LOCK` | `0b00001100` | `0b00110000` | Relay_5 (IO3 / P0.4) + Relay_6 (IO2 / P0.5) |
 | Spare | `RELAY_SET_RESERVED` | `0b00000011` | `0b11000000` | Relay_7 (IO0 / P0.6) + Relay_8 (IO1 / P0.7) — 0 except in the web relay test |
 
-The front-wheel lock is **fitted** (`RELAY_WHEEL_LOCK_FITTED = 1`): MAVLink servo channel 7, the web
-`set_wheel_lock` command and telemetry bit0 drive and report it. The fail-safe all-off leaves the
-lock in its last state.
+The front-wheel lock is **fitted** (`RELAY_WHEEL_LOCK_FITTED = 1`): the web `set_wheel_lock` command
+and the GCS lock command drive it (MAVLink servo channel 7 until 1.5.33), telemetry bit0 reports
+it. The fail-safe all-off leaves the lock in its last state.
 
 **Harness wiring note.** The ignition/ECU load is wired to **X4 + X5**, the front-wheel lock to
 **X8 + X9**, the starter solenoid to **X6**, and the front light to **X7**. Nothing is landed on X10
