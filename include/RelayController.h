@@ -10,7 +10,8 @@
  * @brief Relay controller for ignition, starter, lighting and the front-wheel lock.
  *
  * Manages relay outputs for vehicle ignition states (OFF/ACC/IGNITION/CRANKING),
- * the front light and the front-wheel lock. On the hand-wired DevKitC-1 the four
+ * the front light and the front-wheel lock (driven by the web `set_wheel_lock` command and
+ * the GCS lock command only — no RC channel since 1.5.34). On the hand-wired DevKitC-1 the four
  * relays are driven straight from ESP32 GPIO (active HIGH), no port expander:
  *     Relay 1 (PIN_RELAY1,     GPIO36) = ignition/ECU line (RELAY_MASK_IGNITION)
  *     Relay 2 (PIN_RELAY2,     GPIO37) = starter           (RELAY_MASK_STARTER)
@@ -98,6 +99,9 @@ public:
     /**
      * @brief Front-wheel lock request (drives RELAY_MASK_WHEEL_LOCK, Relay 4).
      * @param locked requested lock state
+     *
+     * Called only for the web `set_wheel_lock` command and the GCS lock command
+     * (MAV_CMD_USER_2); no RC / MAVLink servo channel drives the lock (since 1.5.34).
      *
      * A LOCK request first releases every web test relay. Independent of the
      * ignition relays and deliberately NOT cleared by allOff(), so the lock holds

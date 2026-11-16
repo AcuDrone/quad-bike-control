@@ -149,12 +149,13 @@ outputs must align with these indices (see `ServoChannelConfig` in `include/Cons
 | `servo3_raw` | Transmission | R <1200, N 1201–1520, L >1520 |
 | `servo4_raw` | Ignition | OFF <1200, ACC 1201–1520, IGNITION >1520 |
 | `servo6_raw` | Front light | >1520 = ON |
-| `servo7_raw` | Front-wheel lock — fitted on the quad (master); **not fitted on aztec**: decoded but ignored | >1520 = LOCKED (rejected on aztec) |
+| `servo7_raw` | Unused since 1.5.34 (was the front-wheel lock until 1.5.33) | decoded and shown on the web page, drives nothing |
 
-(Channel 5 is intentionally unused.)
+(Channels 5, 7 and 8 are intentionally unused: decoded and reported, they drive nothing. Since
+1.5.34 the lock is set only by the web `set_wheel_lock` command and the GCS diff-lock command.)
 
-Channels as listed since firmware 1.1.0. Since 1.5.30 channels 3, 4, 6 and 7 are applied only when
-their value changes (see "RC and GCS: last change wins").
+Channels as listed since firmware 1.1.0. Since 1.5.30 channels 3, 4 and 6 (and 7 until 1.5.33)
+are applied only when their value changes (see "RC and GCS: last change wins").
 
 ## Vehicle state reported back to the autopilot
 
@@ -794,22 +795,26 @@ web control latched while RC is valid) or the `SERVO_OUTPUT_RAW` stream is stale
   ACC / ON: reason 3 when not under MAVLink control. ON while the engine runs → no re-crank; ON
   otherwise → auto-crank, as a fresh RC ON.
 - **Headlight**: always accepted.
-- **Diff lock**: reason 3 when not under MAVLink control; else the same relays as RC channel 7
-  (quad: Relay_5 + Relay_6; buggy: Relay_4 + Relay_5 + Relay_6), reported in `pt_compensation` bit0.
+- **Diff lock**: reason 3 when not under MAVLink control; else the same relays as the web
+  `set_wheel_lock` command (quad: Relay_5 + Relay_6; buggy: Relay_4 + Relay_5 + Relay_6), reported
+  in `pt_compensation` bit0. Since 1.5.34 no RC channel drives the lock, so an accepted diff-lock
+  command holds until the next web or GCS lock command.
 - **Handbrake** (buggy): the existing parking-brake controller (`ParkBrakeSource::GCS`), no
   extra interlock, accepted in every source / ignition state / fail-safe; apply above 3 km/h →
   reason 4; `pt_compensation` bits 2 / 3 report it.
 
 ### RC and GCS: last change wins
 
-RC channels 3 (gear), 4 (ignition), 6 (light) and 7 (lock) are applied only when their decoded
-value **changes**. A value outside 880–2160 µs (including 0) is "absent" and is **not** a change: the
-last state is kept (before 1.5.30 an out-of-band channel forced N / OFF / light off / unlock). So a
-GCS command holds until the RC switch is moved. Every time RC comes back in control — at boot, after a
-fail-safe, and on the return from the web portal (web control released, or RC back while a browser
-is connected) — the first valid frame applies all four channels again, including the auto-crank
-when the ignition switch is in ON. An RC gear requested with the engine stopped stays pending until
-the engine runs; a later accepted GCS gear cancels it.
+RC channels 3 (gear), 4 (ignition) and 6 (light) are applied only when their decoded value
+**changes** (channel 7, the lock, too until 1.5.33; since 1.5.34 it is not read at all). A value
+outside 880–2160 µs (including 0) is "absent" and is **not** a change: the last state is kept
+(before 1.5.30 an out-of-band channel forced N / OFF / light off / unlock). So a GCS command holds
+until the RC switch is moved. Every time RC comes back in control — at boot, after a fail-safe, and
+on the return from the web portal (web control released, or RC back while a browser is connected)
+— the first valid frame applies all three channels again, including the auto-crank when the
+ignition switch is in ON; the lock is not touched (it keeps the state the web or the GCS left it
+in, and a GCS lock command holds until the next web or GCS lock command). An RC gear requested with
+the engine stopped stays pending until the engine runs; a later accepted GCS gear cancels it.
 
 ### Queries (`param1` = 0)
 

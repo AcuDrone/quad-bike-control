@@ -194,13 +194,13 @@ static void test_command_holds_against_constant_rc() {
 }
 
 static void test_rc_edge_wins() {
-    RcEdge lock;
+    RcEdge light;   // CH6 headlight (the lock is not an RC function since 1.5.34)
     bool state = false;
-    TEST_ASSERT_TRUE(lock.step(vcmdRcSwitch(1100)));
-    state = true;   // GCS lock ON
-    if (lock.step(vcmdRcSwitch(1900))) state = true;
+    TEST_ASSERT_TRUE(light.step(vcmdRcSwitch(1100)));
+    state = true;   // GCS headlight ON
+    if (light.step(vcmdRcSwitch(1900))) state = true;
     TEST_ASSERT_TRUE(state);
-    if (lock.step(vcmdRcSwitch(1100))) state = false;
+    if (light.step(vcmdRcSwitch(1100))) state = false;
     TEST_ASSERT_FALSE(state);
 }
 
@@ -219,8 +219,9 @@ static void test_rc_absent_is_not_a_change() {
 }
 
 // Boot, fail-safe exit and WEB → MAVLINK (web control released, or RC back with a browser
-// connected) are the same re-sync: every RC value set before is applied again, overwriting a
-// GCS / web command given meanwhile (owner decisions D-A, D-H).
+// connected) are the same re-sync: every RC value set before (gear, ignition, light) is applied
+// again, overwriting a GCS / web command given meanwhile (owner decisions D-A, D-H). The lock is
+// not an RC function (since 1.5.34) and is not re-synced.
 static void test_resync_every_cause() {
     const char* causes[] = {"boot", "failsafe exit", "web released", "rc back with browser"};
     for (int c = 0; c < 4; c++) {
@@ -231,7 +232,6 @@ static void test_resync_every_cause() {
             rc.gearDone();
             rc.ignition.step(vcmdRcIgnition(1700));
             rc.light.step(vcmdRcSwitch(1100));
-            rc.lock.step(vcmdRcSwitch(1100));
             // Same values again → no change while in control
             TEST_ASSERT_FALSE_MESSAGE(rc.ignition.step(vcmdRcIgnition(1700)), causes[c]);
             // Not in control for a while (fail-safe or web portal): resync every such loop
@@ -244,7 +244,6 @@ static void test_resync_every_cause() {
         TEST_ASSERT_EQUAL_MESSAGE(VCMD_GEAR_L, rc.pendingGear, causes[c]);
         TEST_ASSERT_TRUE_MESSAGE(rc.ignition.step(vcmdRcIgnition(1700)), causes[c]);   // → requestCrank()
         TEST_ASSERT_TRUE_MESSAGE(rc.light.step(vcmdRcSwitch(1100)), causes[c]);        // light off again
-        TEST_ASSERT_TRUE_MESSAGE(rc.lock.step(vcmdRcSwitch(1100)), causes[c]);
         // ...and then edge-only again
         TEST_ASSERT_FALSE_MESSAGE(rc.light.step(vcmdRcSwitch(1100)), causes[c]);
     }

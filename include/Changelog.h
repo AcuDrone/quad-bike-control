@@ -14,6 +14,11 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.34","date":"2026-11-16","uk":[
+"Блокування більше не вмикається перемикачем на пульті (канал 7): його можна випадково зачепити, і машина їхала з увімкненим блокуванням. Тепер блокування вмикається й вимикається лише з веб-сторінки (розділ «Тести» → «Блокування переднього колеса») або з наземної станції — на квадроциклі й на багі. Канал 7 тепер не використовується; на веб-сторінці рядок підписано просто «Кан7». Увімкнене блокування лишається ввімкненим, доки його не вимкнуть з веба чи наземної станції (також після failsafe); після перезавантаження плати блокування вимкнене. Потрібно залити оновлений образ LittleFS"
+],"en":[
+"The lock no longer follows the RC transmitter switch (channel 7): the switch could be knocked on by accident and the vehicle then drove with the lock engaged. The lock is now switched on and off only from the web page (Tests → Front Wheel Lock) or the ground station — on the quad and on the buggy. Channel 7 is now unused; the web page labels its row just “Ch7”. An engaged lock stays engaged until it is released from the web or the ground station (also through a fail-safe); after a board reboot the lock is released. Upload the updated LittleFS image"
+]},
 {"version":"1.5.33","date":"2026-11-15","uk":[
 "Затримка стартера: скільки секунд запалювання (ЕБУ і паливний насос) увімкнене перед тим, як закрутиться стартер, тепер задається в розділі «Калібрування → Запуск двигуна», повзунок «Затримка стартера» (1–8 с, крок 0,5). Типово 3 с (було 2 с). Діє на автостарт із перемикача пульта і з наземної станції; кнопка ПУСК на веб-сторінці (розділ «Тести») крутить стартер одразу, як і раніше. Значення зберігається окремо для кожної машини (квадроцикл, багі). Якщо двигун не заводиться з перемикача — спершу збільште затримку",
 "Автостарт більше не пропускається одразу після вимкнення двигуна на високих обертах: при вимкненні запалювання оберти двигуна скидаються в 0, тож швидке OFF → ON знову крутить стартер, а наземна станція й кнопка ПУСК не відповідають «двигун уже працює». Потрібно залити оновлений образ LittleFS"

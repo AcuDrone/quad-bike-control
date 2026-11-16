@@ -93,7 +93,8 @@ it. Cards are shown in one column.
   one line of raw LWS status bits and error counters.
 - **Vehicle Data (CAN)**: engine data from the ECU, engine hours and trip hours, CAN status, and
   "Probe ECU" with its results.
-- **MAVLink Command Channels**: link rate/age and channels 1–8.
+- **MAVLink Command Channels**: link rate/age and channels 1–8. Ch5, Ch7 and Ch8 show their raw
+  value without a function (Ch7 was the wheel lock until 1.5.33).
 - **Швидкість / Speed**: speed and sensor state, speed limit and limiting, steering authority and
   scaling base, the bench test-speed state, odometer and trip.
 
@@ -128,7 +129,9 @@ it. Cards are shown in one column.
 - **Manual control**: Take / Release control, gear buttons, steering, throttle and brake sliders.
   Disabled while MAVLink control is active.
 - **Ignition & lighting**: ignition OFF / ACC / START, front light, wheel lock, and their
-  telemetry.
+  telemetry. Since 1.5.34 the wheel lock is set only here or from the ground station, not from
+  the RC transmitter; it stays as set until changed here or from the GCS and is released after a
+  reboot.
 - **Relay test**: four buttons "Relay 1…4" with the relay function (1 ignition, 2 starter,
   3 light, 4 wheel lock — the DevKitC-1 drives its four relays straight from GPIO36-39); an
   energised relay is highlighted. Switching a relay on needs ignition OFF, light off and the
