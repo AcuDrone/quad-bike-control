@@ -1007,10 +1007,12 @@ void VehicleController::processMavlinkCommands() {
         applyOperatorThrottle(throttlePct);   // park-brake drive-away / hold, then the limiter + slew
     }
 
-    // Gear / ignition / light / lock: "last change wins" with the GCS commands (MAV_CMD_USER_2).
+    // Gear / ignition / light: "last change wins" with the GCS commands (MAV_CMD_USER_2).
     // Each RC channel is applied only when its in-band decoded value CHANGES (or on the first
     // valid frame after a re-sync); an absent / out-of-band channel is not a change, so a GCS
     // command is never overwritten by an unchanged switch (design D6).
+    // The front-wheel / diff lock is not an RC function (since 1.5.34): channel 7 is not read,
+    // and the lock is set only by the web set_wheel_lock command and the GCS lock command.
 
     // Gear: an RC edge becomes the pending RC gear, retried until the engine runs and setGear()
     // accepts (today's retry). An accepted GCS gear cancels it.
@@ -1051,12 +1053,6 @@ void VehicleController::processMavlinkCommands() {
     const int8_t rcLight = vcmdRcSwitch(mavlink_.getChannel(ServoChannelConfig::FRONT_LIGHT));
     if (rc_.light.step(rcLight)) {
         relayController_.setFrontLight(rcLight == 1);
-    }
-
-    // Front-wheel / diff lock (channel 7), on an RC change only
-    const int8_t rcLock = vcmdRcSwitch(mavlink_.getChannel(ServoChannelConfig::WHEEL_LOCK));
-    if (rc_.lock.step(rcLock)) {
-        relayController_.setWheelLock(rcLock == 1);
     }
 }
 

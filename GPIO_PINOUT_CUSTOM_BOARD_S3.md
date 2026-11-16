@@ -383,12 +383,13 @@ through the detected board's table (on aztec only the lock is a group — three 
 
 **Lock (fw 1.5.25, `RELAY_WHEEL_LOCK_FITTED = 1`).** The firmware's existing "wheel lock" function
 drives the buggy's lock: Relay_4, Relay_5 and Relay_6 are energized and released **together** in one
-verified whole-port write. Commands: the web *Lock* button (`set_wheel_lock`) or MAVLink
-`servo7_raw` > 1520 µs = LOCKED (`RC_WHEEL_LOCK_THRESHOLD`); state in telemetry `wheel_lock_on` and
-MAVLink `EFI_STATUS` digital-output bit0. A LOCK switches every web test relay off; a relay test ON is
-refused while the lock is engaged. The fail-safe all-off (`RelayController::allOff()`) **holds** the
-lock in its last commanded state, the same as the quad bike's front-wheel lock. No
-ignition interlock: the lock works with the ignition in any state, as on the quad bike.
+verified whole-port write. Commands: the web *Lock* button (`set_wheel_lock`) or the GCS lock command
+(`MAV_CMD_USER_2`); MAVLink `servo7_raw` drove it from 1.5.25 until 1.5.33 and is unused since 1.5.34.
+State in telemetry `wheel_lock_on` and MAVLink `EFI_STATUS` digital-output bit0. A LOCK switches every
+web test relay off; a relay test ON is refused while the lock is engaged. The fail-safe all-off
+(`RelayController::allOff()`) **holds** the lock in its last commanded state, the same as the quad
+bike's front-wheel lock. No ignition interlock: the lock works with the ignition in any state, as on
+the quad bike.
 
 **Harness wiring note (aztec).** The ignition/ECU line is wired to **X4**, the starter solenoid to
 **X5**, and the front light to **X6**. **X7, X8 and X9** carry the three lock relays, switched

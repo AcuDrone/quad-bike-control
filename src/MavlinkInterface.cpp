@@ -56,7 +56,7 @@ static_assert(VCMD_RC_VALID_MIN_US == RC_CHANNEL_VALID_MIN_US && VCMD_RC_VALID_M
               RC_GEAR_LOW_MAX == 1306 && RC_GEAR_NEUTRAL_MAX == 1733 &&
               RC_IGNITION_OFF_MIN == RC_CHANNEL_VALID_MIN_US && RC_IGNITION_ON_MAX == RC_CHANNEL_VALID_MAX_US &&
               RC_IGNITION_OFF_MAX == 1200 && RC_IGNITION_ACC_MAX == 1520 &&
-              RC_FRONT_LIGHT_THRESHOLD == 1520 && RC_WHEEL_LOCK_THRESHOLD == 1520,
+              RC_FRONT_LIGHT_THRESHOLD == 1520,
               "VehicleCommandLaw.h RC bands mirror");
 static_assert(firmwareVersionCode(FIRMWARE_VERSION) > 0, "FIRMWARE_VERSION must be major.minor.patch");
 
@@ -1245,11 +1245,6 @@ MavlinkInterface::IgnitionState MavlinkInterface::getIgnitionState() const {
 bool MavlinkInterface::getFrontLight() const {
     uint16_t valueUs = getChannel(ServoChannelConfig::FRONT_LIGHT);
     return (valueUs > RC_FRONT_LIGHT_THRESHOLD);
-}
-
-bool MavlinkInterface::getWheelLock() const {
-    uint16_t valueUs = getChannel(ServoChannelConfig::WHEEL_LOCK);
-    return (valueUs > RC_WHEEL_LOCK_THRESHOLD);
 }
 
 // ============================================================================

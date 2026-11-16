@@ -7,7 +7,7 @@
 // executes; this file is only the decisions. The literals below MUST match include/Constants.h:
 //   MAVLINK_CMD_PARAM_EPSILON 0.01f, VCMD_PROTOCOL_VERSION 1, VCMD_CAP_* bits,
 //   RC_GEAR_LOW_MIN 880 .. RC_GEAR_REVERSE_MAX 2160, RC_IGNITION_* bands,
-//   RC_FRONT_LIGHT_THRESHOLD / RC_WHEEL_LOCK_THRESHOLD 1520.
+//   RC_FRONT_LIGHT_THRESHOLD 1520.
 #pragma once
 
 #include <stdint.h>
@@ -187,7 +187,7 @@ inline int8_t vcmdRcIgnition(uint16_t us) {
   return (int8_t)VCMD_IGN_ON;
 }
 
-// On/off switch (light, lock): > 1520 = 1; else 0; out of band = ABSENT.
+// On/off switch (light): > 1520 = 1; else 0; out of band = ABSENT.
 inline int8_t vcmdRcSwitch(uint16_t us) {
   if (!vcmdRcInBand(us)) return VCMD_RC_ABSENT;
   return (us > 1520) ? 1 : 0;
@@ -209,9 +209,11 @@ struct RcEdge {
   void reset() { has = false; }
 };
 
-// The four RC functions plus the pending RC gear (design D6, owner decisions D-A, D-E, D-H).
+// The three RC functions plus the pending RC gear (design D6, owner decisions D-A, D-E, D-H).
+// The diff lock is not an RC function since 1.5.34 (channel 7 unused): it is set only by the web
+// and the GCS, and a re-sync never touches it.
 struct VcmdRcState {
-  RcEdge gear, ignition, light, lock;
+  RcEdge gear, ignition, light;
   bool gearPending = false;
   int8_t pendingGear = 0;
 
@@ -220,7 +222,6 @@ struct VcmdRcState {
     gear.reset();
     ignition.reset();
     light.reset();
-    lock.reset();
     gearPending = false;
   }
   // RC gear: an edge becomes (or replaces) the pending RC gear. Returns true on an edge.

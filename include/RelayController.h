@@ -15,7 +15,8 @@
  * front-wheel lock.
  *
  * Manages relay outputs for vehicle ignition states (OFF/ACC/IGNITION/CRANKING),
- * the front light and, when RELAY_WHEEL_LOCK_FITTED is 1, the front-wheel lock. The
+ * the front light and, when RELAY_WHEEL_LOCK_FITTED is 1, the front-wheel lock (driven by the
+ * web `set_wheel_lock` command and the GCS lock command only — no RC channel since 1.5.34). The
  * relays live on an external relay board on I2C, not on ESP32 GPIO. The bus is chosen
  * by the owner at construction: the board sits on its intended home X15 → I2C2
  * (`Wire1`), bench-verified. X14 → I2C1 (`Wire`) works too and is the contingency if
@@ -63,7 +64,7 @@
  * Lock ("wheel lock" in the API): fitted on both vehicles (RELAY_WHEEL_LOCK_FITTED = 1) —
  * aztec Relay_4 + Relay_5 + Relay_6, quad bike Relay_5 + Relay_6. allOff() deliberately
  * leaves it in its last state on both. With RELAY_WHEEL_LOCK_FITTED = 0 setWheelLock() is
- * kept so the MAVLink/web plumbing compiles, but it rejects a LOCK request (logged once),
+ * kept so the web / GCS plumbing compiles, but it rejects a LOCK request (logged once),
  * and getWheelLock() always reports released.
  *
  * The whole 8-bit port is written from a single shadow byte and verified by reading
@@ -164,6 +165,9 @@ public:
     /**
      * @brief Front-wheel lock request.
      * @param locked requested lock state
+     *
+     * Called only for the web `set_wheel_lock` command and the GCS lock command
+     * (MAV_CMD_USER_2); no RC / MAVLink servo channel drives the lock (since 1.5.34).
      *
      * Fitted (RELAY_WHEEL_LOCK_FITTED = 1; aztec: Relay_4+5+6, quad: Relay_5+6): drives the
      * whole wheel-lock mask (RELAY_SET_WHEEL_LOCK) with a verified whole-port write.

@@ -96,7 +96,8 @@ it. Cards are shown in one column.
   "Probe ECU" with its results. The **Engine RPM** tile shows the EFFECTIVE RPM (`engine_rpm`,
   tacho when fitted, CAN otherwise) whether or not CAN is connected, with a small **TACHO** / **CAN**
   badge (`rpm_source`); "—" when no source is valid.
-- **MAVLink Command Channels**: link rate/age and channels 1–8.
+- **MAVLink Command Channels**: link rate/age and channels 1–8. Ch5, Ch7 and Ch8 show their raw
+  value without a function (Ch7 was the lock until 1.5.33).
 - **Швидкість / Speed**: speed and sensor state, speed limit and limiting, steering authority and
   scaling base, the bench test-speed state, odometer and trip.
 
@@ -135,7 +136,8 @@ it. Cards are shown in one column.
 - **Ignition & lighting**: ignition OFF / ACC / START, front light, wheel lock (if fitted), the
   **12 V battery** tile and its calibration, and their telemetry. (aztec has no boost board: the
   24 V rail button and reading are gone; `set_boost` is still accepted but only replies "Boost rail
-  not fitted".)
+  not fitted".) Since 1.5.34 the lock is set only here or from the ground station, not from the RC
+  transmitter; it stays as set until changed here or from the GCS and is released after a reboot.
 - **Relay test**: eight buttons "Relay 1…8" with the relay function (quad bike labels when the
   wheel lock is fitted, aztec labels otherwise); an energised relay is highlighted. Switching a
   relay on needs ignition OFF, light off, the wheel lock released (if fitted) and a healthy relay

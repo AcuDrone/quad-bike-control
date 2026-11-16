@@ -403,8 +403,8 @@ bool RelayController::setWheelLock(bool locked) {
     // Not fitted (RELAY_WHEEL_LOCK_FITTED = 0): no relay behind the wheel-lock function.
     // Reject rather than "succeed" silently; the port is never touched, so no reserved
     // relay can be energized through this path.
-    // Release requests arrive every control loop from the MAVLink servo channel and
-    // are trivially satisfied (the lock is never engaged).
+    // Release requests (web `set_wheel_lock` false, GCS lock OFF) are trivially
+    // satisfied (the lock is never engaged).
     if (!locked) {
         return true;
     }
