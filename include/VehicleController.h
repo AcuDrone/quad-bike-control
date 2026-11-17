@@ -223,6 +223,18 @@ public:
      */
     bool setCrankDwellMs(uint16_t ms);
 
+    /** @brief Starter time limit in use, ms (NVS "crank"/max_ms, default CRANKING_TIMEOUT) */
+    uint16_t getCrankMaxMs() const { return crankMaxMs_; }
+
+    /**
+     * @brief Set the starter time limit per start attempt. Validated (CrankLaw.h,
+     * 2000–10000 ms), persisted to NVS "crank" FIRST, then handed to
+     * RelayController::setCrankMaxMs(); false (value in use unchanged) on an invalid value
+     * or a failed NVS write. A running attempt keeps the limit it latched; the next attempt
+     * uses the new value.
+     */
+    bool setCrankMaxMs(uint16_t ms);
+
     // ---- Aztec parking brake on X6 (change add-aztec-parking-brake) ----
 
     /** @brief commandParkBrake() outcome: result code, the trusted speed for REFUSED_MOVING, save flag */
@@ -618,6 +630,7 @@ private:
 
     // Pre-crank dwell and the ignition-OFF engine RPM clear (change add-precrank-dwell-setting)
     uint16_t crankDwellMs_;             // pre-crank dwell in use, ms (NVS "crank"/dwell_ms)
+    uint16_t crankMaxMs_;               // starter time limit in use, ms (NVS "crank"/max_ms; add-crank-time-limit-setting)
     bool prevIgnitionOn_;               // applied relay ignition state was non-OFF on the previous update()
 
     // Gear boost configuration (NVS-backed, runtime-editable)
@@ -1028,6 +1041,13 @@ private:
      * input source (a setting, not an ignition command).
      */
     void processSetCrankDwellCommand(float value, WebPortal& webPortal);
+
+    /**
+     * @brief Starter time limit (`set_crank_max_ms` ms). Rounded to a whole ms, validated
+     * 2000–10000 (NaN refused), persisted to NVS "crank" first, then applied from the next
+     * start attempt. Accepted from any input source (a setting, not an ignition command).
+     */
+    void processSetCrankMaxCommand(float value, WebPortal& webPortal);
 
     /**
      * @brief Speed-scale the AUTOPILOT steering command. ArduPilot's own formula,

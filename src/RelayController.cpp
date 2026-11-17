@@ -100,7 +100,9 @@ RelayController::RelayController(TwoWire& bus)
       testOnSince_{},
       ignitionHighSince_(0),
       crankArmed_(false),
-      precrankDwellMs_(ACC_PRECRANK_DWELL_MS) {
+      precrankDwellMs_(ACC_PRECRANK_DWELL_MS),
+      crankMaxMs_(CRANKING_TIMEOUT),
+      crankLimitMs_(CRANKING_TIMEOUT) {
 }
 
 RelayBoardSetting RelayController::loadBoardSetting() {
@@ -326,8 +328,10 @@ void RelayController::setIgnitionState(IgnitionState state) {
         // If entering CRANKING state, start timer
         if (state == IgnitionState::CRANKING) {
             crankingStartTime_ = millis();
+            crankLimitMs_ = crankMaxMs_;   // latched: a change mid-crank applies from the next attempt
             isCranking_ = true;
-            Debug::printlnFeature(DebugFeature::RELAY, "[RELAY] Cranking started - monitoring RPM and timeout");
+            Debug::printfFeature(DebugFeature::RELAY, "[RELAY] Cranking started - monitoring RPM and timeout (limit %u ms)\n",
+                                 (unsigned)crankLimitMs_);
         } else if (currentIgnitionState_ == IgnitionState::CRANKING) {
             // Exiting CRANKING state
             isCranking_ = false;
@@ -499,7 +503,8 @@ void RelayController::update(uint16_t engineRpm) {
         return;
     }
 
-    uint32_t crankingDuration = millis() - crankingStartTime_;
+    uint32_t now = millis();
+    uint32_t crankingDuration = now - crankingStartTime_;
 
     // Check if engine has started (RPM above threshold)
     if (engineRpm >= ENGINE_RUNNING_RPM_THRESHOLD) {
@@ -509,8 +514,9 @@ void RelayController::update(uint16_t engineRpm) {
     }
 
     // Check if cranking timeout exceeded
-    if (crankingDuration >= CRANKING_TIMEOUT) {
-        Debug::printfFeature(DebugFeature::RELAY, "[RELAY] Cranking timeout (%lu ms) - stopping cranking\n", crankingDuration);
+    if (crankTimedOut(crankingStartTime_, now, crankLimitMs_)) {
+        Debug::printfFeature(DebugFeature::RELAY, "[RELAY] Cranking timeout (%lu ms, limit %u ms) - stopping cranking\n",
+                             (unsigned long)crankingDuration, (unsigned)crankLimitMs_);
         Debug::printlnFeature(DebugFeature::RELAY, "[RELAY] WARNING: Engine did not start");
         setIgnitionState(IgnitionState::IGNITION);
         return;

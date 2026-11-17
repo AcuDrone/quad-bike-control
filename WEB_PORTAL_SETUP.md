@@ -113,7 +113,12 @@ it. Cards are shown in one column.
 - **Engine start** ("Запуск двигуна", since 1.5.33): the pre-crank delay slider ("Pre-crank
   delay", 1–8 s, step 0.5, value on the right, default 3 s; saved on release, no Save button) —
   how long the ignition is on before the starter on an RC or GCS auto-start; the START button in
-  Tests → Ignition & lighting has no delay; `set_crank_dwell_ms`, saved to NVS.
+  Tests → Ignition & lighting has no delay; `set_crank_dwell_ms`, saved to NVS. Under it, since
+  1.5.36, the max starter time slider ("Max starter time" / «Макс. час роботи стартера», 2–10 s,
+  step 0.5, value on the right, default 5 s; saved on release, no Save button) — the longest the
+  starter turns in one start attempt from the RC switch, the GCS or the START button (it stops
+  earlier once the engine RPM shows it running); `set_crank_max_ms`, saved to NVS, applies from
+  the next attempt; telemetry `crank_max_ms`. No caution line; the ⓘ explains the risk.
 - **Gear position defaults**: one servo slider (0–100 %). Press **Start** to unlock it; dragging
   moves the transmission servo (at most 10 commands per second). **Save as R/N/H/L** stores the
   slider value for that gear (always available, it does not move the servo); the button of the

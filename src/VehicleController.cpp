@@ -71,6 +71,7 @@ VehicleController::VehicleController(SteeringController& steering,
       brakeTravelMs_(BRAKE_FULL_TRAVEL_TIME),
       brakeHoldPwm_(BRAKE_HOLD_SPEED),
       crankDwellMs_(ACC_PRECRANK_DWELL_MS),
+      crankMaxMs_(CRANKING_TIMEOUT),
       prevIgnitionOn_(false),
       boostTargetRpm_(TRANS_GEAR_BOOST_TARGET_RPM),
       boostGearEnabled_(BOOST_ENABLED_DEFAULT),
@@ -448,22 +449,30 @@ bool VehicleController::initCAN() {
     Debug::printfFeature(DebugFeature::VEHICLE, "[BRAKE] Travel time: %u ms, hold drive: %u\n",
                          (unsigned)brakeTravelMs_, (unsigned)brakeHoldPwm_);
 
-    // Pre-crank dwell, NVS "crank" (VehicleController owns it; RelayController gets it RAM-only).
-    // A missing key reads as the default; an out-of-range stored value is logged and ignored
-    // (default used, never rewritten).
+    // Pre-crank dwell and starter time limit, NVS "crank" (VehicleController owns them;
+    // RelayController gets them RAM-only). A missing key reads as the default; an
+    // out-of-range stored value is logged and ignored (default used, never rewritten).
     if (prefs.begin(CRANK_NVS_NAMESPACE, true)) {
         uint32_t dwell = prefs.getUShort(CRANK_DWELL_NVS_KEY, ACC_PRECRANK_DWELL_MS);
+        uint32_t maxMs = prefs.getUShort(CRANK_MAX_NVS_KEY, CRANKING_TIMEOUT);
         prefs.end();
         if (!crankDwellMsValid(dwell)) {
             Debug::printfFeature(DebugFeature::VEHICLE,
                 "[VEHICLE] Stored pre-crank delay %lu ms out of range (%d-%d ms) — ignored\n",
                 (unsigned long)dwell, CRANK_DWELL_MS_MIN, CRANK_DWELL_MS_MAX);
         }
+        if (!crankMaxMsValid(maxMs)) {
+            Debug::printfFeature(DebugFeature::VEHICLE,
+                "[VEHICLE] Stored starter time limit %lu ms out of range (%d-%d ms) — ignored\n",
+                (unsigned long)maxMs, CRANK_MAX_MS_MIN, CRANK_MAX_MS_MAX);
+        }
         crankDwellMs_ = crankDwellMsOrDefault(dwell);
+        crankMaxMs_ = crankMaxMsOrDefault(maxMs);
     }
     relayController_.setPrecrankDwellMs(crankDwellMs_);
-    Debug::printfFeature(DebugFeature::VEHICLE, "[VEHICLE] Pre-crank delay: %u ms\n",
-                         (unsigned)crankDwellMs_);
+    relayController_.setCrankMaxMs(crankMaxMs_);
+    Debug::printfFeature(DebugFeature::VEHICLE, "[VEHICLE] Pre-crank delay: %u ms, starter time limit: %u ms\n",
+                         (unsigned)crankDwellMs_, (unsigned)crankMaxMs_);
 
     bool result = canController_.begin();
     canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM);
@@ -889,6 +898,9 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
         return;
     } else if (cmd.cmd == "set_crank_dwell_ms") {
         processSetCrankDwellCommand(cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_crank_max_ms") {
+        processSetCrankMaxCommand(cmd.floatValue, webPortal);
         return;
     } else if (cmd.cmd == "set_test_speed") {
         processSetTestSpeedCommand(cmd.floatValue, webPortal);
@@ -2292,6 +2304,39 @@ void VehicleController::processSetCrankDwellCommand(float value, WebPortal& webP
         return;
     }
     webPortal.sendResponse(true, "Pre-crank delay set to " + String(ms) + " ms");
+}
+
+bool VehicleController::setCrankMaxMs(uint16_t ms) {
+    if (!crankMaxMsValid(ms)) return false;
+    // Persist first: RAM only changes once NVS holds the new value.
+    Preferences prefs;
+    bool ok = false;
+    if (prefs.begin(CRANK_NVS_NAMESPACE, false)) {
+        ok = prefs.putUShort(CRANK_MAX_NVS_KEY, ms) == sizeof(uint16_t);
+        prefs.end();
+    }
+    if (!ok) return false;
+    crankMaxMs_ = ms;
+    relayController_.setCrankMaxMs(ms);   // latched on entering CRANKING → the next attempt
+    Debug::printfFeature(DebugFeature::VEHICLE,
+                         "[VEHICLE] Starter time limit set to %u ms (from the next attempt)\n", (unsigned)ms);
+    return true;
+}
+
+void VehicleController::processSetCrankMaxCommand(float value, WebPortal& webPortal) {
+    if (!isnan(value)) value = roundf(value);   // whole ms
+    if (isnan(value) || value < (float)CRANK_MAX_MS_MIN || value > (float)CRANK_MAX_MS_MAX) {
+        webPortal.sendResponse(false, "Starter time limit out of range (" +
+                                      String(CRANK_MAX_MS_MIN) + "-" +
+                                      String(CRANK_MAX_MS_MAX) + " ms)");
+        return;
+    }
+    const uint16_t ms = (uint16_t)value;
+    if (!setCrankMaxMs(ms)) {
+        webPortal.sendResponse(false, "Failed to save the starter time limit");
+        return;
+    }
+    webPortal.sendResponse(true, "Starter time limit set to " + String(ms) + " ms");
 }
 
 void VehicleController::processSetSteerScaBaseCommand(float value, WebPortal& webPortal) {
