@@ -171,7 +171,7 @@ the autopilot. Scheduling is internal to `MavlinkInterface::report()`, called ev
 | `NAMED_VALUE_FLOAT` | 251 | 5 Hz (same tick) ×3 + 1 Hz (`MAVLINK_STEER_SLOW_TX_MS` = 1000 ms) ×3 | The six steering values: `STEER_POS`, `STEER_A`, `VESC_V`, `VESC_TEMP`, `VESC_OK`, `STEER_SCA` | none — values go NaN instead (`VESC_OK` and `STEER_SCA` never do) | 1.1.0 |
 | `NAMED_VALUE_INT` | 252 | 1 Hz (`MAVLINK_STEER_SLOW_TX_MS`) + once immediately on every change | `STEER_MODE`: steering control mode, `0` = position, `1` = rate (no sensor), `2` = blocked | none — always sent, never any other value | 1.5.0 (`QB_CAPS`, `IGN_STATE`: 1.5.30) |
 | `VISION_POSITION_DELTA` | 11011 | ≤ 5 Hz (same tick) | Wheel odometry as an EKF3-fusable body-frame delta | **heavily gated** — silence over zeros | 1.1.0 |
-| `STATUSTEXT` | 253 | on change, ≥ 250 ms apart | Gear / ignition / fail-safe transitions; steering mode changes | only on an actual change | 1.1.0 (steering mode texts: 1.5.0) |
+| `STATUSTEXT` | 253 | on change, ≥ 250 ms apart | Gear / ignition / fail-safe transitions; steering mode changes; speed-governor no-speed warning / recovery | only on an actual change (governor warning: repeated every 10 s while it holds) | 1.1.0 (steering mode texts: 1.5.0; governor texts: 1.5.35) |
 | `COMMAND_ACK` | 77 | reactive | Answer to a `COMMAND_LONG` addressed exactly to 1/25 | broadcasts get **no** ACK | 1.1.0 |
 | `REQUEST_DATA_STREAM` | 66 | ≤ 1 per 3 s | Ask for `SERVO_OUTPUT_RAW` | while the command rate is below 10 Hz | 1.1.0 |
 | `COMMAND_LONG` (`SET_MESSAGE_INTERVAL`) | 76 | ≤ 1 per 3 s | Same request, modern form | same gate, sent together | 1.1.0 |
@@ -714,6 +714,17 @@ The first `report()` after boot only takes the baseline (no text). A change held
 stays pending and is announced with the then-current mode on the next call past the window; the
 change is visible at once through `STEER_MODE` either way.
 
+**Speed governor** (since firmware 1.5.35, see [Speed governor](#speed-governor)) — two texts through
+the **same** 250 ms limiter, a held-back one stays pending and is sent on the next call past the window:
+
+| When | `text` | `severity` |
+|------|--------|------------|
+| The governor should govern but cannot: switch on, an effective limit, speed reading invalid, throttle input above the 5 % dead-band continuously for 2 s (`GOV_NOSPEED_WARN_DELAY_MS`). Sent on the rising edge and every 10 s (`GOV_NOSPEED_WARN_REPEAT_MS`) while it holds | `Gov: NO SPEED - direct throttle` | `MAV_SEVERITY_WARNING` (4) |
+| That condition ended because the governor became active again (speed back) — once | `Gov: speed OK - governing` | `MAV_SEVERITY_INFO` (6) |
+
+Nothing is sent when the condition ends for another reason (stick released, switch off, limit gone),
+and nothing while the stick stays in the dead-band. No other message, parameter or field changes.
+
 **Trigger:** the first `report()` after boot, or any change of gear string, ignition string or the
 fail-safe flag. **Rate limit:** `MAVLINK_STATUSTEXT_MIN_MS` = 250 ms; the "last sent" strings are
 updated only when a message actually goes out, so a suppressed change is sent on the next call past
@@ -918,6 +929,36 @@ The 1 Hz `[MAV]` debug line reports `spdmax:<m/s> age:<ms> valid:<Y|N>`, separat
 (`nan`), "answered and fresh" (a 0 → 5000 ms age sawtooth) and "stale/link down" (`valid:N`). The
 vehicle layer logs `[SPEED] Speed limit: … m/s (… km/h) from SPEED_MAX` on each change, and
 `[SPEED] Speed limit: none …` when it stops limiting.
+
+### Speed governor
+
+Since firmware **1.5.35** the ESP32 can also act as a **speed governor** (web switch in Calibration →
+"Speed governor", **default OFF**, persisted per vehicle). With the switch OFF everything above is
+unchanged, bit for bit. With it ON and an effective limit `L` (the limiter's: the usable `SPEED_MAX`;
+on the buggy also the gear ceiling):
+
+- The throttle input — RC channel 2 above centre as decoded from `SERVO_OUTPUT_RAW`, or the web
+  throttle slider — is a **speed setpoint**: ≤ 5 % = stop (idle at once), then
+  `vMin + (s − 5)/95 × (L − vMin)` with `vMin = min(1.4 m/s, L/2)`, i.e. full stick = `L`. A PI loop
+  on the wheel-speed error (setpoint ramp, anti-windup, a start throttle limit while the wheels do
+  not turn) sets the throttle. Speeds above the limit cannot be commanded.
+- **The ceiling limiter stands down** while the governor is active (no double limiting); it is the
+  protection in every other state, exactly as described above.
+- **Fail-open:** an invalid speed reading — also from boot until the first wheel pulse — makes the
+  stick a direct throttle again (blended at the limiter's throttle rate, `thr_slew`, default
+  80 %/s): **full stick = full throttle**. The web page shows a banner and the GCS gets the
+  `Gov: NO SPEED - direct throttle` `STATUSTEXT` (see the `STATUSTEXT` (253) section).
+- **Never brakes.** RC brake (channel 2 below centre) means throttle 0 = stop. In N / UNKNOWN gear,
+  during a gear change, the gear-change boost / idle hold, throttle calibration and fail-safe the
+  governor is bypassed and today's code owns the throttle.
+- **Autopilot modes are not consulted.** In Auto / Guided / RTL ArduPilot's throttle output is
+  already a speed-controller output; the governor would read it as a setpoint request and cascade a
+  second loop. Use it in MANUAL.
+- **ArduPilot sees the governed servo output** the same way it sees today's limited throttle
+  (`EFI_STATUS.throttle_out`, `VFR_HUD.throttle` are the commanded throttle). No new message,
+  parameter or `NAMED_VALUE_*` — only the two `STATUSTEXT` texts.
+
+The gains and ramps are web settings (`WEB_PORTAL_SETUP.md`, Calibration → Speed governor).
 
 ## Steering without the angle sensor (rate mode)
 

@@ -680,6 +680,56 @@ static_assert(STEER_PWM_MIN_DUTY >= STEER_PWM_TRACK_MIN_DUTY, "break-away floor 
 #define SPEED_LIMIT_LOG_MIN_MS         1000   // ms hold-off between "speed limit" logs
 #define SPEED_LIMIT_LOG_EPSILON_MS     0.015f // m/s (≈0.05 km/h) - smaller ceiling moves are not worth a log
 
+// Speed governor (change add-speed-governor, opt-in, default OFF). With the switch ON and an
+// effective speed limit L (the limiter's: SPEED_MAX here) the throttle input — RC channel 2 above
+// centre or the web throttle — is a SPEED SETPOINT: stick 5..100 % → vMin..L (stick ≤ 5 % = stop,
+// idle at once). A PI loop on the wheel-speed error computes the throttle; pure law in
+// include/SpeedGovernorLaw.h (host-tested by test/test_speed_governor). Units: m/s, m/s², % per m/s
+// (Kp), %/s per m/s (Ki), throttle 0–100 % (0 = calibrated idle). The governor never brakes, and
+// while it is active the ceiling limiter stands down (no double limiting). Switch OFF, or no
+// limit, = the throttle path exactly as before.
+//  FAIL-OPEN RISK: an invalid speed reading (also from boot until the first wheel pulse) makes the
+//  stick a direct throttle again — full stick = FULL THROTTLE, reached at thr_slew (≤ 1.25 s), with
+//  a web banner and a GCS STATUSTEXT warning only. Accepted by the owner (decision 4, A10 variant A).
+// Defaults (design D13): the quad bike's plant is assumed K ≈ 0.46 m/s per % at 10 km/h (≤ ≈ 0.7
+// from "today's limiter almost worked"), θ ≈ 0.6 s dead time, τ ≈ 3 s → ultimate gain Ku ≈ 18 %
+// per m/s; Kp 3.0 / Ki 1.0 keep a gain margin ≈ 5.7 on that plant and ≥ 2.0 in the worst corner.
+// The same values at every limit (no scheduling, D14). The buggy's values and why they are lower
+// live on the aztec branch. A default applies only while its NVS key is absent; a stored value is
+// never replaced.
+#define GOV_DEFAULTS_VEHICLE         1      // the GOV_*_DEFAULT values below are the quad bike's; aztec overrides Kp / Ki / launch and sets 2
+#define GOV_ENABLED_DEFAULT          false  // absent key → governor off (today's throttle path)
+#define GOV_KP_DEFAULT               3.0f   // % per m/s (quad bike)
+#define GOV_KP_MIN                   0.2f
+#define GOV_KP_MAX                   10.0f
+#define GOV_KI_DEFAULT               1.0f   // %/s per m/s (quad bike; τI = Kp / Ki = 3 s)
+#define GOV_KI_MIN                   0.0f
+#define GOV_KI_MAX                   5.0f
+#define GOV_ACC_DEFAULT_MS2          1.0f   // m/s² setpoint acceleration (3.6 km/h per s), both vehicles
+#define GOV_ACC_MIN_MS2              0.3f
+#define GOV_ACC_MAX_MS2              3.0f
+#define GOV_DEC_DEFAULT_MS2          2.5f   // m/s² setpoint deceleration (9 km/h per s), both vehicles
+#define GOV_DEC_MIN_MS2              0.5f
+#define GOV_DEC_MAX_MS2              5.0f
+#define GOV_LAUNCH_DEFAULT_PCT       10.0f  // % start throttle limit (quad bike): uMax while the wheels do not turn,
+                                            // and the cap on the integrator inherited at a take-over
+#define GOV_LAUNCH_MIN_PCT           1.0f
+#define GOV_LAUNCH_MAX_PCT           40.0f
+#define GOV_STICK_DEADBAND_PCT       5.0f   // % stick at or below = stop (above the RC 2 % dead-band)
+#define GOV_MIN_SETPOINT_MS          1.4f   // m/s (≈5 km/h) lowest setpoint above the dead-band, ≤ 0.5 × L
+#define GOV_STANDSTILL_MS            0.05f  // m/s reading below = wheels not turning → start throttle limit
+#define GOV_MAX_GAP_MS               300    // ms without an evaluation → the next one re-primes (bumpless)
+#define GOV_NOSPEED_WARN_DELAY_MS    2000   // ms stick above the dead-band in NOSPEED before the GCS warning
+#define GOV_NOSPEED_WARN_REPEAT_MS   10000  // ms between repeats of the GCS no-speed warning
+// NVS namespace "speed" (shared with SpeedSensor and the limiter — never clear()), owned by
+// VehicleController.
+#define GOV_ENABLED_NVS_KEY          "gov_en"      // bool
+#define GOV_KP_NVS_KEY               "gov_kp"      // float, % per m/s
+#define GOV_KI_NVS_KEY               "gov_ki"      // float, %/s per m/s
+#define GOV_ACC_NVS_KEY              "gov_acc"     // float, m/s²
+#define GOV_DEC_NVS_KEY              "gov_dec"     // float, m/s²
+#define GOV_LAUNCH_NVS_KEY           "gov_launch"  // float, %
+
 // Steering speed scaling. ArduPilot's own formula, scale = min(1, base / speed), moved to the
 // ESP32 because the autopilot's speed silently falls back to raw GPS ground speed whenever EKF3
 // has no velocity estimate — which on this vehicle is exactly when the ESP32's hall sensor has
@@ -884,7 +934,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.34"
+#define FIRMWARE_VERSION "1.5.35"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry
@@ -898,5 +948,12 @@ enum class InputSource {
 // direct GPIO, there is no I2C relay board.
 #define BOARD_REVISION_CODE 1
 #define VEHICLE_TYPE_CODE   1
+
+// The speed-governor defaults above must be this vehicle's (design D12): the governor block is new,
+// so a plain master → aztec merge would carry the quad bike's numbers onto the buggy silently. The
+// merge must set the buggy's GOV_*_DEFAULT values and GOV_DEFAULTS_VEHICLE 2 — never change
+// VEHICLE_TYPE_CODE or delete this check to make it pass.
+static_assert(GOV_DEFAULTS_VEHICLE == VEHICLE_TYPE_CODE,
+              "speed governor defaults belong to another vehicle: set this branch's GOV_*_DEFAULT values");
 
 #endif // CONSTANTS_H

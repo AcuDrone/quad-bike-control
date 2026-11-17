@@ -100,6 +100,10 @@ MavlinkInterface::MavlinkInterface()
       tripResetPending_(false),
       lastSteerModeTx_(0xFF),
       lastSteerModeAnnounced_(0xFF),
+      govWarnPrev_(false),
+      govWarnPending_(false),
+      govInfoPending_(false),
+      govWarnLastTx_(0),
       vcmdSink_(nullptr),
       vcmdCaps_(0),
       vcmdHwVersion_(0),
@@ -965,6 +969,39 @@ void MavlinkInterface::report(const StateReport& state) {
                 sendStatusText(MAV_SEVERITY_WARNING, "Steer: blocked (no sensor)");
             } else {
                 sendStatusText(MAV_SEVERITY_INFO, "Steer: position mode");
+            }
+        }
+    }
+
+    // Speed governor STATUSTEXT (change add-speed-governor, design D11). WARNING on the rising
+    // edge of the vehicle layer's no-speed flag and every GOV_NOSPEED_WARN_REPEAT_MS while it
+    // holds; INFO once when it falls because the governor became ACTIVE (not when the stick was
+    // released, the switch turned off or the limit went away). Both through the shared
+    // MAVLINK_STATUSTEXT_MIN_MS limiter: a message held back stays pending, never lost.
+    {
+        const bool warn = state.govNoSpeed;
+        if (warn && !govWarnPrev_) {
+            govWarnPending_ = true;
+            govInfoPending_ = false;
+        } else if (warn && govWarnLastTx_ != 0 && (now - govWarnLastTx_) >= GOV_NOSPEED_WARN_REPEAT_MS) {
+            govWarnPending_ = true;
+        } else if (!warn && govWarnPrev_) {
+            const bool wasAnnounced = (govWarnLastTx_ != 0);
+            govWarnPending_ = false;
+            govWarnLastTx_ = 0;
+            govInfoPending_ = wasAnnounced && state.govActive;
+        }
+        govWarnPrev_ = warn;
+        if ((govWarnPending_ || govInfoPending_) &&
+            (now - lastStatustextTx_ >= MAVLINK_STATUSTEXT_MIN_MS)) {
+            lastStatustextTx_ = now;
+            if (govWarnPending_) {
+                govWarnPending_ = false;
+                govWarnLastTx_ = now ? now : 1;
+                sendStatusText(MAV_SEVERITY_WARNING, "Gov: NO SPEED - direct throttle");
+            } else {
+                govInfoPending_ = false;
+                sendStatusText(MAV_SEVERITY_INFO, "Gov: speed OK - governing");
             }
         }
     }

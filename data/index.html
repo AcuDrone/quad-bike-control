@@ -350,6 +350,91 @@
             cursor: not-allowed;
         }
 
+        /* Speed governor settings: label + value, then [−] slider [+] with the range ends under the
+           slider. The step buttons give the 0.1 / 0.5 resolution a thumb cannot hit on a phone. */
+        .gov-row-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 8px;
+        }
+        .gov-row-head label {
+            font-size: 0.8em;
+            color: var(--muted-foreground);
+        }
+        /* Per-setting help: the label and its small "i" stay together on the left; the icon keeps the
+           card-title look but its tap area is widened to ≈ 44 px without moving the row. */
+        .gov-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            min-width: 0;
+        }
+        .gov-switch-line {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-top: 10px;
+        }
+        .gov-switch-line .upload-btn { flex: 1; min-width: 0; }
+        .help-btn.gov-help-btn {
+            margin-left: 0;
+            position: relative;
+            width: 18px;
+            height: 18px;
+            font-size: 11px;
+        }
+        .help-btn.gov-help-btn::after {
+            content: '';
+            position: absolute;
+            inset: -11px -14px;
+        }
+        .gov-val {
+            color: var(--foreground);
+            white-space: nowrap;
+            font-variant-numeric: tabular-nums;
+        }
+        .gov-slider-line {
+            display: grid;
+            grid-template-columns: 44px minmax(0, 1fr) 44px;
+            column-gap: 8px;
+            align-items: center;
+            margin-top: 4px;
+        }
+        .gov-slider-line input[type=range] {
+            width: 100%;
+            min-width: 0;
+            height: 28px;
+            margin: 0;
+        }
+        .gov-step {
+            height: 36px;
+            padding: 0;
+            border-radius: 6px;
+            border: none;
+            background: var(--accent);
+            color: var(--foreground);
+            font-size: 1.2em;
+            cursor: pointer;
+            touch-action: manipulation;
+        }
+        .gov-step:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .gov-marks {
+            grid-column: 2;
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.7em;
+            color: var(--muted-foreground);
+        }
+        .gov-hint {
+            margin-top: 4px;
+            font-size: 0.75em;
+            color: var(--muted-foreground);
+        }
+
         .ota-section {
             margin-top: 20px;
         }
@@ -863,6 +948,13 @@
                         <span data-bind="speed-limit-ceil-label">Limiting</span>
                         <span data-bind="speed-limit-ceil">--</span>
                     </div>
+                    <!-- Speed governor state (read-only, change add-speed-governor) -->
+                    <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 4px; font-size: 0.85em;">
+                        <span data-i18n="lbl_gov" style="color: var(--muted-foreground);">Governor</span>
+                        <span data-bind="gov-value">--</span>
+                    </div>
+                    <div data-bind="gov-sat" style="display: none; margin-top: 4px; font-size: 0.85em; font-weight: bold; color: var(--warning); background: color-mix(in srgb, var(--warning) 12%, var(--card)); border: 1px solid var(--warning); border-radius: 8px; padding: 6px 10px;"></div>
+                    <div data-bind="gov-nospeed" style="display: none; margin-top: 6px; font-size: 0.85em; font-weight: bold; color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, var(--card)); border: 1px solid var(--danger); border-radius: 8px; padding: 6px 10px;"></div>
                 </div>
                 <div style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px;">
                     <div style="display: flex; justify-content: space-between; align-items: baseline; font-size: 0.85em;">
@@ -1162,12 +1254,12 @@
                     </div>
                 </div>
                 <div style="margin-top: 10px;">
-                    <label data-i18n="lbl_speed_limit_slew" style="font-size: 0.8em; color: var(--muted-foreground);">Limiter throttle rate (%/s)</label>
+                    <label data-i18n="lbl_speed_limit_slew" style="font-size: 0.8em; color: var(--muted-foreground);">Throttle rate (limiter and governor)</label>
                     <div style="display: flex; gap: 6px; margin-top: 4px;">
                         <input type="number" id="speed-limit-slew-input" min="10" max="200" step="5" style="flex:1; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
                         <button onclick="saveSpeedLimitSlew()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
                     </div>
-                    <div data-i18n="speed_limit_slew_note" style="margin-top: 4px; font-size: 0.75em; color: var(--muted-foreground);">Lower = gentler closing and return of the throttle; 80 = previous behaviour</div>
+                    <div data-i18n="speed_limit_slew_note" style="margin-top: 4px; font-size: 0.75em; color: var(--muted-foreground);">%/s. Lower = gentler: the limiter closes and returns the throttle, and the governor moves it, more slowly; 80 = previous behaviour</div>
                 </div>
                 <div style="margin-top: 10px;">
                     <label data-i18n="lbl_throttle_open_slew" style="font-size: 0.8em; color: var(--muted-foreground);">Throttle opening rate (%/s)</label>
@@ -1186,6 +1278,13 @@
                         <span data-bind="speed-limit-ceil-label">Limiting</span>
                         <span data-bind="speed-limit-ceil">--</span>
                     </div>
+                    <!-- Speed governor state (read-only, change add-speed-governor) -->
+                    <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 4px; font-size: 0.85em;">
+                        <span data-i18n="lbl_gov" style="color: var(--muted-foreground);">Governor</span>
+                        <span data-bind="gov-value">--</span>
+                    </div>
+                    <div data-bind="gov-sat" style="display: none; margin-top: 4px; font-size: 0.85em; font-weight: bold; color: var(--warning); background: color-mix(in srgb, var(--warning) 12%, var(--card)); border: 1px solid var(--warning); border-radius: 8px; padding: 6px 10px;"></div>
+                    <div data-bind="gov-nospeed" style="display: none; margin-top: 6px; font-size: 0.85em; font-weight: bold; color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, var(--card)); border: 1px solid var(--danger); border-radius: 8px; padding: 6px 10px;"></div>
                 </div>
                 <div style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px;">
                     <div style="display: flex; justify-content: space-between; align-items: baseline; font-size: 0.85em;">
@@ -1218,6 +1317,84 @@
                     </div>
                 </div>
                 <div id="speed-limit-status-msg" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
+            </div>
+            <!-- Speed governor (change add-speed-governor): the throttle input becomes a speed setpoint.
+                 Persisted per vehicle (NVS "speed"/gov_*). No default number is written here: the
+                 page is shared by both vehicles and their defaults differ — the sliders show the
+                 values in use from telemetry (disabled, "--", until the first frame carries them). -->
+            <div class="card" id="gov-card">
+                <h2 class="card-title"><span data-i18n="card_gov">🎯 Speed governor</span><button type="button" class="help-btn" onclick="openHelp('gov_help,gov_tuning_help', 'card_gov')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <div data-i18n="gov_intro" style="font-size: 0.8em; color: var(--muted-foreground);">With the governor on and a speed limit set, the throttle input is a speed from 0 to the speed limit. The governor never brakes. Without a speed signal the throttle is direct: full stick = full throttle.</div>
+                <div class="gov-switch-line">
+                    <button class="upload-btn" id="gov-btn" onclick="toggleGov()" style="background: var(--secondary); width: 100%;">
+                        <span data-i18n="lbl_gov_enabled">Speed governor</span>: <span id="gov-status">--</span>
+                    </button>
+                    <button type="button" class="help-btn gov-help-btn" onclick="openHelp('gov_en_help', 'lbl_gov_enabled')" aria-label="Help" data-i18n-title="help_label">i</button>
+                </div>
+                <div class="gov-row" style="margin-top: 14px;">
+                    <div class="gov-row-head">
+                        <span class="gov-label"><label data-i18n="lbl_gov_kp" for="gov-kp-input">Kp (% per m/s)</label><button type="button" class="help-btn gov-help-btn" onclick="openHelp('gov_kp_help', 'lbl_gov_kp')" aria-label="Help" data-i18n-title="help_label">i</button></span>
+                        <span id="gov-kp-val" class="gov-val">--</span>
+                    </div>
+                    <div class="gov-slider-line">
+                        <button type="button" class="gov-step" onclick="govStepBy('kp', -1)" aria-label="-" disabled>&minus;</button>
+                        <input type="range" id="gov-kp-input" min="0.2" max="10" step="0.1" disabled>
+                        <button type="button" class="gov-step" onclick="govStepBy('kp', 1)" aria-label="+" disabled>+</button>
+                        <span class="gov-marks"><span id="gov-kp-min"></span><span id="gov-kp-max"></span></span>
+                    </div>
+                </div>
+                <div class="gov-row" style="margin-top: 10px;">
+                    <div class="gov-row-head">
+                        <span class="gov-label"><label data-i18n="lbl_gov_ki" for="gov-ki-input">Ki (%/s per m/s)</label><button type="button" class="help-btn gov-help-btn" onclick="openHelp('gov_ki_help', 'lbl_gov_ki')" aria-label="Help" data-i18n-title="help_label">i</button></span>
+                        <span id="gov-ki-val" class="gov-val">--</span>
+                    </div>
+                    <div class="gov-slider-line">
+                        <button type="button" class="gov-step" onclick="govStepBy('ki', -1)" aria-label="-" disabled>&minus;</button>
+                        <input type="range" id="gov-ki-input" min="0" max="5" step="0.1" disabled>
+                        <button type="button" class="gov-step" onclick="govStepBy('ki', 1)" aria-label="+" disabled>+</button>
+                        <span class="gov-marks"><span id="gov-ki-min"></span><span id="gov-ki-max"></span></span>
+                    </div>
+                </div>
+                <div class="gov-row" style="margin-top: 10px;">
+                    <div class="gov-row-head">
+                        <span class="gov-label"><label data-i18n="lbl_gov_acc" for="gov-acc-input">Setpoint acceleration (m/s²)</label><button type="button" class="help-btn gov-help-btn" onclick="openHelp('gov_acc_help', 'lbl_gov_acc')" aria-label="Help" data-i18n-title="help_label">i</button></span>
+                        <span id="gov-acc-val" class="gov-val">--</span>
+                    </div>
+                    <div class="gov-slider-line">
+                        <button type="button" class="gov-step" onclick="govStepBy('acc', -1)" aria-label="-" disabled>&minus;</button>
+                        <input type="range" id="gov-acc-input" min="0.3" max="3" step="0.1" disabled>
+                        <button type="button" class="gov-step" onclick="govStepBy('acc', 1)" aria-label="+" disabled>+</button>
+                        <span class="gov-marks"><span id="gov-acc-min"></span><span id="gov-acc-max"></span></span>
+                    </div>
+                    <div id="gov-acc-hint" class="gov-hint"></div>
+                </div>
+                <div class="gov-row" style="margin-top: 10px;">
+                    <div class="gov-row-head">
+                        <span class="gov-label"><label data-i18n="lbl_gov_dec" for="gov-dec-input">Setpoint deceleration (m/s²)</label><button type="button" class="help-btn gov-help-btn" onclick="openHelp('gov_dec_help', 'lbl_gov_dec')" aria-label="Help" data-i18n-title="help_label">i</button></span>
+                        <span id="gov-dec-val" class="gov-val">--</span>
+                    </div>
+                    <div class="gov-slider-line">
+                        <button type="button" class="gov-step" onclick="govStepBy('dec', -1)" aria-label="-" disabled>&minus;</button>
+                        <input type="range" id="gov-dec-input" min="0.5" max="5" step="0.1" disabled>
+                        <button type="button" class="gov-step" onclick="govStepBy('dec', 1)" aria-label="+" disabled>+</button>
+                        <span class="gov-marks"><span id="gov-dec-min"></span><span id="gov-dec-max"></span></span>
+                    </div>
+                    <div id="gov-dec-hint" class="gov-hint"></div>
+                </div>
+                <div class="gov-row" style="margin-top: 10px;">
+                    <div class="gov-row-head">
+                        <span class="gov-label"><label data-i18n="lbl_gov_launch" for="gov-launch-input">Start throttle limit (%)</label><button type="button" class="help-btn gov-help-btn" onclick="openHelp('gov_launch_help', 'lbl_gov_launch')" aria-label="Help" data-i18n-title="help_label">i</button></span>
+                        <span id="gov-launch-val" class="gov-val">--</span>
+                    </div>
+                    <div class="gov-slider-line">
+                        <button type="button" class="gov-step" onclick="govStepBy('launch', -1)" aria-label="-" disabled>&minus;</button>
+                        <input type="range" id="gov-launch-input" min="1" max="40" step="0.5" disabled>
+                        <button type="button" class="gov-step" onclick="govStepBy('launch', 1)" aria-label="+" disabled>+</button>
+                        <span class="gov-marks"><span id="gov-launch-min"></span><span id="gov-launch-max"></span></span>
+                    </div>
+                </div>
+                <div data-i18n="gov_advice" style="margin-top: 10px; font-size: 0.75em; color: var(--muted-foreground);">Tune at the 10 km/h limit first, then check 20 and 30 km/h. On the buggy drive the 10 and 20 km/h limits in L.</div>
+                <div id="gov-status-msg" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
             </div>
             </div>
             </section>
@@ -1265,7 +1442,7 @@
                 <div class="slider-container">
                     <div class="slider-label">
                         <span data-i18n="lbl_throttle">Throttle</span>
-                        <span id="throttle-value">0%</span>
+                        <span><span id="throttle-value">0%</span><span id="throttle-gov-sp" style="color: var(--info);"></span></span>
                     </div>
                     <input type="range" min="0" max="100" value="0" class="slider" id="throttle-slider">
                 </div>
@@ -1712,10 +1889,10 @@
                 speed_limit_floor_hint: 'Limiter floor: the lowest throttle the speed limiter may leave at and above the limit. 0 % means idle and holds the limit most tightly; a higher floor (up to 20 %) softens engine braking at the cost of a limit that may not hold. The "Limiter at floor, speed above limit" badge (kept for 10 s after it clears) means the floor is too high or the vehicle is going downhill — the limiter does not brake.',
                 lbl_speed_limit_floor: 'Limiter floor (%)',
                 invalid_speed_limit_floor: 'Limiter floor must be 0-20 %',
-                lbl_speed_limit_slew: 'Limiter throttle rate (%/s)',
-                speed_limit_slew_note: 'Lower = gentler closing and return of the throttle; 80 = previous behaviour',
-                speed_limit_slew_help: 'Limiter throttle rate: how fast the limiter may close and give back the throttle, 10–200 %/s (default 80); lower is gentler but lets the speed overshoot the limit a little more.',
-                invalid_speed_limit_slew: 'Limiter throttle rate must be 10-200 %/s',
+                lbl_speed_limit_slew: 'Throttle rate (limiter and governor)',
+                speed_limit_slew_note: '%/s. Lower = gentler: the limiter closes and returns the throttle, and the governor moves it, more slowly; 80 = previous behaviour',
+                speed_limit_slew_help: 'Throttle rate (limiter and governor): how fast the limiter may close and give back the throttle, 10–200 %/s (default 80); lower is gentler but lets the speed overshoot the limit a little more. The speed governor uses the same rate for its own output and for the hand-over to direct throttle when it stops governing.',
+                invalid_speed_limit_slew: 'Throttle rate must be 10-200 %/s',
                 lbl_throttle_open_slew: 'Throttle opening rate (%/s)',
                 throttle_open_slew_time: '0 → 100 % in %s s; closing is always instant',
                 throttle_open_slew_off: '0 = off (throttle opens instantly)',
@@ -1726,6 +1903,36 @@
                 speed_limit_sat: 'Limiter at floor, speed above limit',
                 speed_limit_sat_held: 'Limiter was at floor, speed above limit',
                 speed_saving: 'Saving speed settings...',
+                card_gov: '🎯 Speed governor',
+                gov_intro: 'With the governor on and a speed limit set, the throttle input is a speed from 0 to the speed limit. The governor never brakes. Without a speed signal the throttle is direct: full stick = full throttle.',
+                lbl_gov_enabled: 'Speed governor',
+                lbl_gov_kp: 'Kp (% per m/s)',
+                lbl_gov_ki: 'Ki (%/s per m/s)',
+                lbl_gov_acc: 'Setpoint acceleration (m/s²)',
+                lbl_gov_dec: 'Setpoint deceleration (m/s²)',
+                lbl_gov_launch: 'Start throttle limit (%)',
+                gov_rate_hint: '≈ %s km/h per second',
+                gov_advice: 'Tune at the 10 km/h limit first, then check 20 and 30 km/h. On the buggy drive the 10 and 20 km/h limits in L.',
+                gov_unit_ms2: 'm/s²',
+                gov_unit_pct: '%',
+                gov_not_sent: 'Not sent: no connection to the vehicle',
+                gov_saving: 'Saving governor setting...',
+                lbl_gov: 'Governor',
+                gov_state_off: 'off',
+                gov_state_nolimit: 'no limit — direct throttle',
+                gov_state_bypass: 'bypassed (N / shift)',
+                gov_state_nospeed: 'no speed — direct throttle',
+                gov_state_active: 'active: %s km/h, throttle %s %',
+                gov_sat: 'Governor at idle, speed above setpoint — brake',
+                gov_nospeed_banner: 'Governor not acting: no speed signal — direct throttle (full stick = full throttle)',
+                gov_help: '<b>Speed governor</b>: with the switch on and a speed limit in force (the autopilot\'s SPEED_MAX; on the buggy also the gear ceiling), the throttle input — RC stick above centre or the web throttle slider — means a <b>speed</b>: up to 5 % = stop (idle at once), then from about 5 km/h (at most half the limit) up to the limit at 100 %. A closed loop on the wheel-speed sensor sets the throttle; the speed limiter stands down meanwhile. It never brakes: downhill it closes to idle and shows "Governor at idle, speed above setpoint — brake". Without a valid speed signal (also from boot until the wheels have turned) it does not govern: the throttle is direct and <b>full stick means full throttle</b> — a red banner here and a warning on the ground station. In N, during a gear change and during throttle calibration the governor is bypassed. RC brake, and a web brake of 5 % or more, closes the throttle at once. It does not look at the autopilot mode: in Auto / Guided / RTL the autopilot\'s throttle would be read as a speed request too.<br><b>Kp</b> (0.2–10 % per m/s): throttle per m/s of speed error. <b>Ki</b> (0–5 %/s per m/s): how fast the remaining error is worked off. <b>Setpoint acceleration</b> (0.3–3.0 m/s²) and <b>deceleration</b> (0.5–5.0 m/s²): how fast the commanded speed follows the stick. <b>Start throttle limit</b> (1–40 %): the most throttle the governor gives while the wheels do not turn, and the most it inherits when it takes over from a higher throttle — it must be enough to move off on the steepest slope you start on; every % above that is a possible lurch. A default applies only until a value is saved; the sliders show the values in use on this vehicle — release a slider, or tap − / +, to save that one value.',
+                gov_tuning_help: '<b>Field tuning</b> (one value at a time, at the 10 km/h limit first, then check 20 and 30 km/h): <b>hunts</b> — the speed swings by ±1 km/h or more every 2–4 s and the throttle swings with it: lower Kp by about 20 % and set Ki = Kp / 3. <b>Sluggish</b> — no swing, but a 1 km/h gap takes more than 8 s to close or a small slope costs more than 5 km/h: raise Kp by about 20 % with Ki = Kp / 3; at the first sign of hunting go back one step. <b>Does not move off</b> on a slope within about 2 s: raise the start throttle limit by 1 %; <b>lurches</b> when the clutch takes up: lower it by 1 %. Overshoot on stick steps: lower the acceleration. <b>Slow swing</b> (period 5 s or more, throttle moving in single steps): the limit of the throttle servo resolution, not a gain problem — lowering Ki slows it, a linkage using more servo travel removes it. On the buggy drive the low limits in L.',
+                gov_en_help: '<b>What it is:</b> turns the speed governor on. When it is on and a speed limit is in force, the throttle stick sets a speed from 0 to the limit, and the governor finds the throttle itself.<br><b>On →</b> the vehicle holds the speed you ask for, on the flat and uphill. It never brakes: downhill it closes to idle — you brake. With no speed signal the throttle is direct: full stick = full throttle.<br><b>Off →</b> the throttle works exactly as without the governor (direct throttle, the speed limiter as before).<br><b>When to switch:</b> turn it off to drive on direct throttle, e.g. while the speed sensor is not trusted or calibrated.',
+                gov_kp_help: '<b>What it is:</b> how hard the throttle answers a gap between the set speed and the real speed. The number is % of throttle for every 1 m/s (3.6 km/h) of gap.<br><b>More →</b> the throttle reacts harder, the speed is held tighter. Too much: the speed swings up and down every 2–4 s, the throttle with it.<br><b>Less →</b> the throttle reacts softer. Too little: sluggish — slow to reach the speed, drops a lot on a slope.<br><b>When to change:</b> the speed swings by ±1 km/h or more every 2–4 s — lower Kp by about 20 %. No swing, but a 1 km/h gap takes more than 8 s to close, or a small slope costs more than 5 km/h — raise Kp by about 20 %; at the first sign of swinging go back one step.<br><b>With Ki:</b> after every Kp change set Ki = Kp / 3. One value at a time, at the 10 km/h limit first.',
+                gov_ki_help: '<b>What it is:</b> how fast the governor adds (or takes away) throttle while the speed stays below (or above) the set speed for a while — for example uphill. The number is how many % per second the throttle grows for every 1 m/s of gap.<br><b>More →</b> a lasting gap closes faster. Too much: slow swings, and the speed overshoots after a hill.<br><b>Less →</b> calmer. Too little: the vehicle stays below the set speed for a long time on a slope. At 0 a gap can stay for good.<br><b>When to change:</b> normally together with Kp: Ki = Kp / 3. Slow swing (period 5 s or more, the throttle moving in single small steps): lower Ki by 0.1 — that only slows it; it comes from the throttle servo resolution, and a linkage using more servo travel removes it.',
+                gov_acc_help: '<b>What it is:</b> how fast the set speed rises when you push the stick. The line under the slider shows the same in km/h per second.<br><b>More →</b> the vehicle picks up speed sooner, the throttle opens harder. Too much: it overshoots the set speed.<br><b>Less →</b> smoother, slower pick-up.<br><b>When to change:</b> on a quick stick push the speed overshoots by more than about 1.5 km/h — lower it by 0.2 m/s². Pick-up feels too slow — raise it by 0.2 m/s².',
+                gov_dec_help: '<b>What it is:</b> how fast the set speed falls when you ease the stick back (not to zero), or when the limit drops.<br><b>More →</b> the throttle closes sooner and more abruptly. The governor does not brake: the vehicle only coasts, so it does not slow down faster than coasting.<br><b>Less →</b> the throttle closes more gently; the vehicle keeps some throttle longer and slows down later.<br><b>When to change:</b> the throttle closes too abruptly when you ease the stick — lower it by 0.5 m/s². Stick at 5 % or below, RC brake, or a web brake of 5 % or more close the throttle at once, whatever this slider says.',
+                gov_launch_help: '<b>What it is:</b> the most throttle the governor gives while the wheels are not turning yet. It also caps what the governor keeps from the direct throttle when it takes over while moving.<br><b>More →</b> moves off a slope more surely. Too much: a lurch when the clutch takes up, or the speed overshoots right after the take-over.<br><b>Less →</b> a softer start. Too little: will not move off on a slope.<br><b>When to change:</b> stick to 100 % from rest and on a slope it does not move within about 2 s — raise it by 1 %. It lurches when the clutch takes up — lower it by 1 %. On the flat it hardly matters. Keep just enough to move off the steepest slope you start on.',
                 invalid_speed_ppr: 'Pulses/rev must be 1-1000',
                 invalid_speed_circ: 'Circumference must be 100-10000 mm',
 
@@ -2195,10 +2402,10 @@
                 speed_limit_floor_hint: 'Мінімальний газ обмежувача: найменший газ, який обмежувач швидкості може залишити на ліміті й вище нього. 0 % — це холостий хід, і ліміт утримується найточніше; вищий мінімум (до 20 %) пом\'якшує гальмування двигуном, але ліміт може не втриматися. Позначка «Обмежувач на мінімумі, швидкість вища за ліміт» (лишається ще 10 с після зникнення умови) означає, що мінімум зависокий або машина їде з гори — обмежувач не гальмує.',
                 lbl_speed_limit_floor: 'Мінімальний газ обмежувача (%)',
                 invalid_speed_limit_floor: 'Мінімальний газ обмежувача має бути 0-20 %',
-                lbl_speed_limit_slew: 'Плавність обмежувача (%/с)',
-                speed_limit_slew_note: 'Менше = плавніше прибирає й повертає газ; 80 = як раніше',
-                speed_limit_slew_help: 'Плавність обмежувача: як швидко обмежувач може прибирати й повертати газ, 10–200 %/с (типово 80); менше — м\'якше, але швидкість трохи більше перевищує ліміт.',
-                invalid_speed_limit_slew: 'Плавність обмежувача має бути 10-200 %/с',
+                lbl_speed_limit_slew: 'Плавність газу (обмежувач і регулятор)',
+                speed_limit_slew_note: '%/с. Менше = плавніше: обмежувач повільніше прибирає й повертає газ, а регулятор повільніше рухає газ; 80 = як раніше',
+                speed_limit_slew_help: 'Плавність газу (обмежувач і регулятор): як швидко обмежувач може прибирати й повертати газ, 10–200 %/с (типово 80); менше — м\'якше, але швидкість трохи більше перевищує ліміт. Регулятор швидкості використовує ту саму швидкість для свого виходу і для передачі керування прямому газу, коли перестає регулювати.',
+                invalid_speed_limit_slew: 'Плавність газу має бути 10-200 %/с',
                 lbl_throttle_open_slew: 'Плавність газу (%/с)',
                 throttle_open_slew_time: '0 → 100 % за %s с; скидання газу завжди миттєве',
                 throttle_open_slew_off: '0 = вимкнено (газ відкривається миттєво)',
@@ -2209,6 +2416,36 @@
                 speed_limit_sat: 'Обмежувач на мінімумі, швидкість вища за ліміт',
                 speed_limit_sat_held: 'Обмежувач був на мінімумі, швидкість була вища за ліміт',
                 speed_saving: 'Збереження налаштувань швидкості...',
+                card_gov: '🎯 Регулятор швидкості',
+                gov_intro: 'Коли регулятор увімкнено і задано обмеження швидкості, газ задає швидкість від 0 до обмеження. Регулятор ніколи не гальмує. Без сигналу швидкості газ прямий: повний газ = повний газ.',
+                lbl_gov_enabled: 'Регулятор швидкості',
+                lbl_gov_kp: 'Kp (% на м/с)',
+                lbl_gov_ki: 'Ki (%/с на м/с)',
+                lbl_gov_acc: 'Розгін заданої швидкості (м/с²)',
+                lbl_gov_dec: 'Спад заданої швидкості (м/с²)',
+                lbl_gov_launch: 'Стартовий газ, макс. (%)',
+                gov_rate_hint: '≈ %s км/год за с',
+                gov_advice: 'Спершу налаштовуйте на обмеженні 10 км/год, потім перевірте 20 і 30 км/год. На багі обмеження 10 і 20 км/год їздіть на L.',
+                gov_unit_ms2: 'м/с²',
+                gov_unit_pct: '%',
+                gov_not_sent: 'Не надіслано: немає зв’язку з машиною',
+                gov_saving: 'Збереження налаштування регулятора...',
+                lbl_gov: 'Регулятор',
+                gov_state_off: 'вимкнено',
+                gov_state_nolimit: 'немає ліміту — газ напряму',
+                gov_state_bypass: 'обхід (N / перемикання)',
+                gov_state_nospeed: 'немає швидкості — газ напряму',
+                gov_state_active: 'активний: %s км/год, газ %s %',
+                gov_sat: 'Регулятор на холостому, швидкість вища за задану — гальмуйте',
+                gov_nospeed_banner: 'Регулятор не діє: немає сигналу швидкості — газ напряму (повний газ = повний газ)',
+                gov_help: '<b>Регулятор швидкості</b>: коли перемикач увімкнено і діє обмеження швидкості (SPEED_MAX автопілота; на багі також стеля передачі), газ — стік пульта вище центру або повзунок газу на сторінці — задає <b>швидкість</b>: до 5 % = стоп (одразу холостий хід), далі приблизно від 5 км/год (не більше половини обмеження) до обмеження при 100 %. Газ задає замкнений контур за датчиком швидкості колеса; обмежувач швидкості на цей час відступає. Регулятор ніколи не гальмує: з гори він закриває газ до холостого і показує «Регулятор на холостому, швидкість вища за задану — гальмуйте». Без достовірного сигналу швидкості (також від увімкнення до першого оберту коліс) він не регулює: газ прямий, і <b>повний газ означає повний газ</b> — тут червоне попередження, а на наземній станції — повідомлення. На N, під час перемикання передачі і калібрування газу регулятор обходиться. Гальмо з пульта, а також гальмо зі сторінки від 5 %, одразу закриває газ. Режим автопілота не враховується: в Auto / Guided / RTL газ автопілота теж читався б як задана швидкість.<br><b>Kp</b> (0,2–10 % на м/с): газ на 1 м/с похибки швидкості. <b>Ki</b> (0–5 %/с на м/с): як швидко відпрацьовується залишкова похибка. <b>Розгін</b> (0,3–3,0 м/с²) і <b>спад</b> (0,5–5,0 м/с²) заданої швидкості: як швидко задана швидкість іде за стіком. <b>Стартовий газ, макс.</b> (1–40 %): найбільший газ, який регулятор дає, поки колеса не крутяться, і найбільший, який він успадковує, перебираючи керування з більшого газу — має вистачати, щоб рушити на найкрутішому схилі, з якого ви рушаєте; кожен % понад це — можливий ривок. Типове значення діє лише доки не збережено своє; повзунки показують значення, що діють на цій машині — відпустіть повзунок або натисніть − / +, щоб зберегти це значення.',
+                gov_tuning_help: '<b>Налаштування в полі</b> (одне значення за раз, спершу на обмеженні 10 км/год, потім перевірити 20 і 30 км/год): <b>розгойдується</b> — швидкість гуляє на ±1 км/год і більше кожні 2–4 с, і газ разом з нею: зменшіть Kp приблизно на 20 % і встановіть Ki = Kp / 3. <b>Млявий</b> — без розгойдування, але різниця 1 км/год закривається довше 8 с або невеликий схил забирає більше 5 км/год: збільшіть Kp приблизно на 20 % з Ki = Kp / 3; при перших ознаках розгойдування поверніться на крок назад. <b>Не рушає</b> на схилі за ≈ 2 с: збільште стартовий газ на 1 %; <b>смикає</b>, коли схоплює зчеплення: зменшіть на 1 %. Перевищення при кроках стіка: зменшіть розгін. <b>Повільне гойдання</b> (період 5 с і більше, газ рухається поодинокими кроками): межа роздільності сервоприводу газу, а не коефіцієнтів — менший Ki уповільнює його, тяга з більшим ходом серво усуває. На багі низькі обмеження їздіть на L.',
+                gov_en_help: '<b>Що це:</b> вмикає регулятор швидкості. Коли він увімкнений і діє обмеження швидкості, стік газу задає швидкість від 0 до обмеження, а газ регулятор підбирає сам.<br><b>Увімкнено →</b> машина тримає задану швидкість на рівному і на підйомі. Вона не гальмує: з гори закриває газ до холостого — гальмуєте ви. Без сигналу швидкості газ прямий: повний газ = повний газ.<br><b>Вимкнено →</b> газ працює точно як без регулятора (прямий газ, обмежувач швидкості як раніше).<br><b>Коли міняти:</b> вимикайте, щоб їхати на прямому газі, наприклад поки датчик швидкості не відкалібрований або йому немає довіри.',
+                gov_kp_help: '<b>Що це:</b> наскільки сильно газ відповідає на різницю між заданою і справжньою швидкістю. Число — % газу на кожен 1 м/с (3,6 км/год) різниці.<br><b>Більше →</b> газ реагує різкіше, швидкість тримається щільніше. Занадто багато: швидкість гойдається туди-сюди кожні 2–4 с, і газ разом з нею.<br><b>Менше →</b> газ реагує м’якше. Занадто мало: машина млява — довго добирає швидкість, на схилі сильно просідає.<br><b>Коли міняти:</b> швидкість гуляє на ±1 км/год і більше кожні 2–4 с — зменшіть Kp приблизно на 20 %. Гойдання немає, але різниця 1 км/год закривається довше 8 с або невеликий схил забирає більше 5 км/год — збільште Kp приблизно на 20 %; при перших ознаках гойдання поверніться на крок назад.<br><b>Разом з Ki:</b> після кожної зміни Kp ставте Ki = Kp / 3. Одне значення за раз, спершу на обмеженні 10 км/год.',
+                gov_ki_help: '<b>Що це:</b> як швидко регулятор додає (або забирає) газ, коли швидкість довго тримається нижче (або вище) заданої — наприклад, на підйомі. Число — на скільки % за секунду росте газ на кожен 1 м/с різниці.<br><b>Більше →</b> тривала різниця закривається швидше. Занадто багато: повільні гойдання, і після підйому швидкість проскакує задану.<br><b>Менше →</b> спокійніше. Занадто мало: на схилі машина довго їде нижче заданої швидкості. При 0 різниця може лишитися назавжди.<br><b>Коли міняти:</b> зазвичай разом з Kp: Ki = Kp / 3. Повільне гойдання (період 5 с і більше, газ рухається поодинокими малими кроками): зменшіть Ki на 0,1 — це лише уповільнить його; причина — роздільність сервоприводу газу, усуває його тяга з більшим ходом серво.',
+                gov_acc_help: '<b>Що це:</b> як швидко росте задана швидкість, коли ви додаєте стік. Рядок під повзунком показує те саме в км/год за секунду.<br><b>Більше →</b> машина швидше набирає швидкість, газ відкривається різкіше. Занадто багато: проскакує задану швидкість.<br><b>Менше →</b> плавніший, повільніший розгін.<br><b>Коли міняти:</b> при різкому додаванні стіка швидкість проскакує задану більше ніж на ≈ 1,5 км/год — зменшіть на 0,2 м/с². Розгін занадто повільний — збільште на 0,2 м/с².',
+                gov_dec_help: '<b>Що це:</b> як швидко падає задана швидкість, коли ви попускаєте стік (не до нуля) або коли обмеження зменшується.<br><b>Більше →</b> газ закривається раніше і різкіше. Регулятор не гальмує: машина лише котиться накатом, тож швидше за накат вона не сповільниться.<br><b>Менше →</b> газ закривається м’якше; машина довше тримає трохи газу і сповільнюється пізніше.<br><b>Коли міняти:</b> газ закривається занадто різко, коли попускаєте стік — зменшіть на 0,5 м/с². Стік на 5 % і нижче, гальмо з пульта або гальмо зі сторінки від 5 % закривають газ одразу, незалежно від цього повзунка.',
+                gov_launch_help: '<b>Що це:</b> найбільший газ, який регулятор дає, поки колеса ще не крутяться. Також межа того, скільки газу регулятор залишає собі, коли перебирає керування з прямого газу на ходу.<br><b>Більше →</b> впевненіше рушає на схилі. Занадто багато: ривок, коли схоплює зчеплення, або швидкість проскакує задану одразу після перебирання керування.<br><b>Менше →</b> м’якший старт. Занадто мало: не рушає на схилі.<br><b>Коли міняти:</b> стік на 100 % з місця, а машина на схилі за ≈ 2 с не рушає — збільште на 1 %. Смикає, коли схоплює зчеплення — зменшіть на 1 %. На рівному це значення майже не важить. Ставте рівно стільки, щоб рушити з найкрутішого схилу, з якого ви рушаєте.',
                 invalid_speed_ppr: 'Імпульсів на оберт має бути 1-1000',
                 invalid_speed_circ: 'Довжина кола має бути 100-10000 мм',
 
@@ -2567,6 +2804,7 @@
                 gdSetActive(false);  // gear-defaults slider / ▶ row lock until Start is pressed again
                 pprMeas.lastTotal = null;   // a reboot restarts the total: wait for a fresh frame
                 pprMeasReset();      // a disconnect (or reboot) drops a running ppr measurement
+                govRevertAll();      // a governor value sent but not yet confirmed is not in use
                 // Reconnect after 3 seconds
                 setTimeout(connectWebSocket, 3000);
             };
@@ -2675,6 +2913,14 @@
                 if (data.message && data.message.startsWith('Relay test')) {
                     relayTestStatus(data.success ? data.message : t('error_prefix') + data.message,
                                     data.success ? 'var(--success)' : 'var(--danger)');
+                }
+                // Speed governor card
+                if (data.message && (data.message.startsWith('Speed governor') ||
+                    data.message.startsWith('Governor') ||
+                    data.message.startsWith('Failed to save the governor'))) {
+                    govStatusMsg(data.success ? data.message : t('error_prefix') + data.message,
+                                 data.success ? 'var(--success)' : 'var(--danger)');
+                    if (!data.success) govRevertAll();   // refused: sliders back on the values in use
                 }
                 // Speed sensor calibration / limiter status
                 if (data.message && (data.message.includes('Pulses/rev') ||
@@ -3893,6 +4139,7 @@
                 Number.isFinite(data.throttle_open_slew) ? data.throttle_open_slew.toFixed(0) : undefined);
             updateThrottleOpenSlewHint();
             updateSpeedLimitRow(data);
+            updateGovDisplay(data);
 
             updateSteerScaleDisplay(data);
 
@@ -3920,7 +4167,8 @@
             const floor = Number.isFinite(data.speed_limit_floor) ? data.speed_limit_floor : null;
             const sat = data.speed_limit_sat === true;
             const held = data.speed_limit_sat_held === true;
-            const show = (ceil < 100) || held;
+            // While the speed governor is active the limiter stands down: hide its row.
+            const show = ((ceil < 100) || held) && data.gov_state !== 'active';
             setBound('speed-limit-ceil-row', null, { display: show ? 'flex' : 'none' });
             if (!show) return;
             const atFloor = (lim > 0) && (floor !== null) && (ceil <= floor + 0.5);
@@ -3938,6 +4186,187 @@
             });
         }
 
+        // ── Speed governor (change add-speed-governor) ─────────────────────
+        // One render path for the governor row / banner / badge in the Diagnostics "Speed" card
+        // and the Calibration speed-limit card (data-bind copies), the Calibration "Speed governor"
+        // card sliders and the web throttle slider's commanded speed. No optimistic update: the
+        // switch shows telemetry (`gov_en`) only; null = unknown.
+        let govState = null;
+        function toggleGov() {
+            if (govState === null) return;
+            govStatusMsg(t('gov_saving'), 'var(--muted-foreground)');
+            sendCommand('set_gov_enabled', !govState);
+        }
+        function govStatusMsg(text, color) {
+            const el = document.getElementById('gov-status-msg');
+            if (!el) return;
+            el.textContent = text;
+            el.style.color = color;
+        }
+        function govFmt(v, d) {
+            let s = v.toFixed(d);
+            if (currentLang === 'uk') s = s.replace('.', ',');
+            return s;
+        }
+        // ---- Settings sliders: the range (min / max / step) lives on the <input type="range">;
+        // the firmware checks it again. Same pattern as the pre-crank delay and brake travel
+        // sliders: the value label follows the thumb on `input`, ONE set_gov_* on `change`
+        // (each command is an NVS write), and telemetry does not move a slider that is held.
+        // The −/+ buttons move one step and send one command per tap (the 0.1 grid is too fine
+        // for a thumb on a phone). After a send the slider waits for telemetry to report the new
+        // value (or 3 s); a refusal, or no connection, puts it back on the value in use at once —
+        // no optimistic value is left behind. A stored value off the grid (e.g. Ki 0.35) puts the
+        // thumb on the nearest step, but the label and the hints show the real stored value. ----
+        const GOV_FIELDS = {
+            kp:     { cmd: 'set_gov_kp',     key: 'gov_kp',     unit: '' },
+            ki:     { cmd: 'set_gov_ki',     key: 'gov_ki',     unit: '' },
+            acc:    { cmd: 'set_gov_acc',    key: 'gov_acc',    unit: 'gov_unit_ms2' },
+            dec:    { cmd: 'set_gov_dec',    key: 'gov_dec',    unit: 'gov_unit_ms2' },
+            launch: { cmd: 'set_gov_launch', key: 'gov_launch', unit: 'gov_unit_pct' }
+        };
+        const GOV_PENDING_MS = 3000;
+        const govInUse = {};      // field -> last value from telemetry
+        const govDragging = {};   // field -> thumb held / keyboard-dragged
+        const govPending = {};    // field -> { value, until } after a send, until telemetry agrees
+        function govSlider(k) { return document.getElementById('gov-' + k + '-input'); }
+        function govNum(v) {
+            // Kp / Ki come with two decimals; show the second one only when it is not zero.
+            const r = Math.round(v * 100) / 100;
+            return govFmt(r, (Math.abs(r * 10 - Math.round(r * 10)) > 1e-6) ? 2 : 1);
+        }
+        function govMark(v) { return Number.isInteger(v) ? String(v) : govFmt(v, 1); }
+        function govShown(k) {
+            // What the row shows: the thumb while it is held or a send is pending, else the value in use.
+            const sl = govSlider(k);
+            if (sl && (govDragging[k] || govPending[k])) return Number(sl.value);
+            return Number.isFinite(govInUse[k]) ? govInUse[k] : null;
+        }
+        function renderGovRow(k) {
+            const f = GOV_FIELDS[k];
+            const sl = govSlider(k);
+            const v = govShown(k);
+            const val = document.getElementById('gov-' + k + '-val');
+            if (val) val.textContent = (v === null) ? '--' : govNum(v) + (f.unit ? ' ' + t(f.unit) : '');
+            const hint = document.getElementById('gov-' + k + '-hint');
+            if (hint) hint.textContent = (v === null) ? '' : t('gov_rate_hint', govFmt(v * 3.6, 1));
+            if (sl) {
+                const lo = document.getElementById('gov-' + k + '-min');
+                const hi = document.getElementById('gov-' + k + '-max');
+                if (lo) lo.textContent = govMark(Number(sl.min));
+                if (hi) hi.textContent = govMark(Number(sl.max));
+            }
+        }
+        function govSetEnabled(k, on) {
+            const sl = govSlider(k);
+            if (!sl) return;
+            sl.disabled = !on;
+            sl.parentElement.querySelectorAll('.gov-step').forEach(function (b) { b.disabled = !on; });
+        }
+        function govRevert(k) {
+            // Back to the value in use (telemetry), dropping any pending / dragged value.
+            delete govPending[k];
+            govDragging[k] = false;
+            const sl = govSlider(k);
+            if (sl && Number.isFinite(govInUse[k])) sl.value = govInUse[k];
+            renderGovRow(k);
+        }
+        function govRevertAll() { Object.keys(GOV_FIELDS).forEach(govRevert); }
+        function govSend(k, value) {
+            const f = GOV_FIELDS[k];
+            if (!wsConnected) {
+                govStatusMsg(t('gov_not_sent'), 'var(--danger)');
+                govRevert(k);
+                return;
+            }
+            govPending[k] = { value: value, until: Date.now() + GOV_PENDING_MS };
+            sendCommand(f.cmd, value);
+            govStatusMsg(t('gov_saving'), 'var(--muted-foreground)');
+            renderGovRow(k);
+        }
+        function govStepBy(k, dir) {
+            const sl = govSlider(k);
+            if (!sl || sl.disabled) return;
+            const min = Number(sl.min), max = Number(sl.max), step = Number(sl.step);
+            // From the shown value (which may be off the grid) to the next grid point that way.
+            const cur = govShown(k);
+            const base = (cur === null) ? Number(sl.value) : cur;
+            const n = (base - min) / step;
+            const idx = (dir > 0) ? Math.floor(n + 1e-6) + 1 : Math.ceil(n - 1e-6) - 1;
+            let next = Math.min(max, Math.max(min, min + idx * step));
+            next = Math.round(next * 100) / 100;
+            if (Math.abs(next - base) < 1e-6) return;   // already at the end of the range
+            sl.value = next;
+            govSend(k, next);
+        }
+        (function initGovSliders() {
+            Object.keys(GOV_FIELDS).forEach(function (k) {
+                const sl = govSlider(k);
+                if (!sl) return;
+                sl.addEventListener('pointerdown', () => { govDragging[k] = true; });
+                sl.addEventListener('pointercancel', () => { govDragging[k] = false; });
+                // A press-and-release without moving fires no `change`: release the guard anyway.
+                sl.addEventListener('pointerup', () => { setTimeout(() => { govDragging[k] = false; renderGovRow(k); }, 0); });
+                sl.addEventListener('input', () => {
+                    govDragging[k] = true;   // keyboard drags too
+                    renderGovRow(k);         // label and hint only, nothing is sent while dragging
+                });
+                sl.addEventListener('change', () => {
+                    govDragging[k] = false;
+                    govSend(k, Math.round(Number(sl.value) * 100) / 100);   // one send on release
+                });
+                renderGovRow(k);
+            });
+        })();
+        function updateGovDisplay(data) {
+            // Switch button (Calibration card)
+            if (typeof data.gov_en === 'boolean') govState = data.gov_en;
+            const btn = document.getElementById('gov-btn');
+            const status = document.getElementById('gov-status');
+            if (btn && status) {
+                status.textContent = (govState === null) ? '--' : (govState ? t('on') : t('off'));
+                btn.style.background = govState ? 'color-mix(in srgb, var(--success) 65%, black)' : 'var(--secondary)';
+            }
+            // Sliders follow the values in use unless held or waiting for a sent value
+            const now = Date.now();
+            Object.keys(GOV_FIELDS).forEach(function (k) {
+                const v = Number(data[GOV_FIELDS[k].key]);
+                if (data[GOV_FIELDS[k].key] === undefined || !Number.isFinite(v)) return;   // older firmware
+                govInUse[k] = v;
+                govSetEnabled(k, true);
+                const p = govPending[k];
+                if (p && (Math.abs(v - p.value) < 0.005 || now > p.until)) delete govPending[k];
+                const sl = govSlider(k);
+                if (sl && !govDragging[k] && !govPending[k]) sl.value = v;   // browser snaps to the grid
+                renderGovRow(k);
+            });
+
+            // State row, shared by both speed cards
+            const st = data.gov_state;
+            const sp = Number.isFinite(data.gov_sp) ? data.gov_sp : null;
+            const out = Number.isFinite(data.gov_out) ? data.gov_out : null;
+            let text = '--';
+            let color = 'var(--muted-foreground)';
+            if (st === 'off') text = t('gov_state_off');
+            else if (st === 'nolimit') text = t('gov_state_nolimit');
+            else if (st === 'bypass') { text = t('gov_state_bypass'); color = 'var(--foreground)'; }
+            else if (st === 'nospeed') { text = t('gov_state_nospeed'); color = 'var(--danger)'; }
+            else if (st === 'active') {
+                text = t('gov_state_active', sp !== null ? govFmt(sp, 1) : '--', out !== null ? out.toFixed(0) : '--');
+                color = 'var(--success)';
+            }
+            setBound('gov-value', text, { color: color });
+            const sat = data.gov_sat === true;
+            setBound('gov-sat', sat ? t('gov_sat') : '', { display: sat ? 'block' : 'none' });
+            const noSpeed = (data.gov_en === true) && (st === 'nospeed');
+            setBound('gov-nospeed', noSpeed ? t('gov_nospeed_banner') : '', { display: noSpeed ? 'block' : 'none' });
+
+            // Web throttle slider: what the slider means while governing
+            const thrSp = document.getElementById('throttle-gov-sp');
+            if (thrSp) {
+                thrSp.textContent = (st === 'active' && sp !== null)
+                    ? ' → ' + sp.toFixed(0) + ' ' + t('unit_kmh') : '';
+            }
+        }
         function saveSpeedLimitFloor() {
             speedStatusTarget = 'speed-limit-status-msg';
             const val = parseFloat(document.getElementById('speed-limit-floor-input').value);

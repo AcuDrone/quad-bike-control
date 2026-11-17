@@ -95,8 +95,9 @@ it. Cards are shown in one column.
   "Probe ECU" with its results.
 - **MAVLink Command Channels**: link rate/age and channels 1–8. Ch5, Ch7 and Ch8 show their raw
   value without a function (Ch7 was the wheel lock until 1.5.33).
-- **Швидкість / Speed**: speed and sensor state, speed limit and limiting, steering authority and
-  scaling base, the bench test-speed state, odometer and trip.
+- **Швидкість / Speed**: speed and sensor state, speed limit and limiting, the speed-governor row
+  (with the no-speed banner and the at-idle badge), steering authority and scaling base, the bench
+  test-speed state, odometer and trip.
 
 **Калібрування / Calibration**:
 - **Steering calibration**: jog / nudge / jog speed, Set Left, Set Right, Set sensor zero, the
@@ -122,8 +123,13 @@ it. Cards are shown in one column.
   "not set"); "Reset to defaults".
 - **Speed sensor**: pulses per revolution (with the measurement block, see below) and wheel
   circumference.
-- **Speed limit and steering**: speed-limiter floor, speed-limit readout, steering authority,
-  steering scaling base and bench test speed.
+- **Speed limit and steering**: speed-limiter floor, the throttle rate ("Плавність газу (обмежувач і
+  регулятор)" / "Throttle rate (limiter and governor)", `thr_slew`, relabelled in 1.5.35 — it is
+  also the speed governor's output and hand-over rate; command and key unchanged), the throttle
+  opening rate, speed-limit readout with the limiter and governor rows, steering authority, steering
+  scaling base and bench test speed.
+- **Speed governor** ("🎯 Регулятор швидкості", since 1.5.35, right after "Speed limit and
+  steering"): the governor ON/OFF button and its five settings — see "Speed governor" below.
 
 **Тести / Tests** (bench checks):
 - **Manual control**: Take / Release control, gear buttons, steering, throttle and brake sliders.
@@ -182,6 +188,89 @@ floor, speed above limit"** when the ceiling has been at the floor for 2 s while
 above the limit (`speed_limit_sat`), and reads "Limiter was at floor…" for 10 s after it clears
 (`speed_limit_sat_held`, held by the firmware so every client shows it). It means the floor is too
 high or the vehicle is going downhill — the limiter does not brake.
+
+**Speed governor (Calibration → "🎯 Регулятор швидкості" / "Speed governor", since 1.5.35):** with
+the switch **ON** and an effective speed limit (`SPEED_MAX` from the autopilot; on the buggy also the
+gear ceiling L 45 / H 75 / R 20 km/h) the throttle input — RC channel 2 above centre or the web
+throttle slider in Tests → Manual control — is a **speed setpoint**: ≤ 5 % = stop (idle at once),
+then from ≈ 5 km/h (at most half the limit) up to the limit at 100 %. A closed loop on the wheel
+speed sets the throttle; the ceiling limiter stands down meanwhile. With the switch **OFF**
+(default), or ON without a limit, the throttle path is exactly as before.
+
+- **It never brakes.** Downhill it closes to idle; the governor row then shows the badge
+  **"Регулятор на холостому, швидкість вища за задану — гальмуйте" / "Governor at idle, speed above
+  setpoint — brake"** (after 2 s, kept 10 s after it clears; web only).
+- **No speed signal = direct throttle (fail-open).** With an invalid speed reading — also from boot
+  until the wheels have turned once — the governor does not act and the throttle moves at the
+  throttle rate to the direct value: **full stick = full throttle**. Both speed cards show the red
+  banner **"Регулятор не діє: немає сигналу швидкості — газ напряму (повний газ = повний газ)" /
+  "Governor not acting: no speed signal — direct throttle (full stick = full throttle)"**, and the
+  ground station gets `STATUSTEXT` "Gov: NO SPEED - direct throttle" (after 2 s with the stick
+  above 5 %, then every 10 s), and "Gov: speed OK - governing" when it governs again.
+- **Bypass:** in N / unknown gear, during a gear change (boost or idle hold), during throttle
+  calibration and in fail-safe the governor is bypassed; RC brake and a web brake ≥ 5 % close the
+  throttle at once while it governs. The autopilot mode is not consulted (use it in MANUAL).
+- **Governor row** (Diagnostics "Speed" and Calibration "Speed limit and steering"): "вимкнено" /
+  "off", "немає ліміту — газ напряму" / "no limit — direct throttle", "обхід (N / перемикання)" /
+  "bypassed (N / shift)", "немає швидкості — газ напряму" / "no speed — direct throttle", or
+  "активний: NN км/год, газ NN %" / "active: NN km/h, throttle NN %". While it is active the
+  limiter's "Limiting" row is hidden, and the web throttle slider shows "→ NN км/год" (the setpoint).
+
+Settings (NVS `"speed"`, per vehicle, saved first and applied after a successful write; a
+compiled default applies **only until a value is saved** — a stored value is never replaced, also
+not by a later firmware with other defaults):
+
+| Setting | Command | NVS key / telemetry | Range | Default, buggy (`aztec`) | Default, quad bike (`master`, `old-board`) |
+|---|---|---|---|---|---|
+| governor on/off | `set_gov_enabled` (bool) | `gov_en` | — | off | off |
+| Kp, % per m/s | `set_gov_kp` | `gov_kp` | 0.2–10 (step 0.1) | 1.0 | 3.0 |
+| Ki, %/s per m/s | `set_gov_ki` | `gov_ki` | 0–5 (step 0.1) | 0.35 | 1.0 |
+| setpoint acceleration, m/s² | `set_gov_acc` | `gov_acc` | 0.3–3.0 (step 0.1) | 1.0 | 1.0 |
+| setpoint deceleration, m/s² | `set_gov_dec` | `gov_dec` | 0.5–5.0 (step 0.1) | 2.5 | 2.5 |
+| start throttle limit ("Стартовий газ, макс."), % | `set_gov_launch` | `gov_launch` | 1–40 (step 0.5) | 4 | 10 |
+
+Each setting is a slider: the label with the value in use on the right, then "−", the slider and
+"+", with the range ends written under the slider. Releasing the slider sends ONE command (nothing
+is sent while dragging); each "−" / "+" tap moves one step and sends one command — use them for the
+0.1 steps, which are too fine for a thumb on a phone. Telemetry does not move a slider while it is
+held or until it confirms the sent value (≤ 3 s); a refusal, no connection or a disconnect puts the
+slider back on the value in use. The sliders stay disabled ("--") until telemetry carries the
+values. The page names no default number (it is shared by both vehicles; the sliders show the values
+in use). The switch and each setting have their own small ⓘ icon beside the label: it opens a short
+help for that one setting — what it is, what "more" and "less" do, and which symptom calls for
+changing it, by how much.
+Replies: "Speed governor ON/OFF", "Governor Kp set to 1.50", "Governor Kp out of range (0.2-10)",
+"Failed to save the governor setting" (same shape for Ki, acceleration, deceleration, start throttle
+limit). Accepted from any input source. Telemetry: `gov_en`, `gov_state` (`off` / `nolimit` /
+`bypass` / `nospeed` / `active`), `gov_sp` (setpoint, km/h, 0 unless active), `gov_out` (%, 0 unless
+active), `gov_sat` and the five settings.
+
+**Field tuning** (web page only; start from this vehicle's defaults — buggy Kp 1.0 / Ki 0.35 / start
+4 %, quad bike Kp 3.0 / Ki 1.0 / start 10 %, acc 1.0 / dec 2.5 on both; check on the card that these
+are the values in use). Tune at the **10 km/h** limit first, then only check 20 and 30 km/h; one
+value at a time, at most five runs per value:
+1. *Preparation (governor OFF)*: flat ground, speed sensor calibrated; on the buggy use L. Note the
+   throttle % at which the vehicle creeps, the steady throttle at 10 / 20 / 30 km/h, the response to
+   a +1 % step at 10 km/h, and the stored throttle calibration (idle / full µs).
+2. *Launch*: `SPEED_MAX` 2.78 m/s (10 km/h), governor ON, stick to 100 % from rest. Does not move
+   within ≈ 2 s on a slope → raise the start throttle limit by 1 %; lurches when the clutch takes up
+   → lower it by 1 %.
+3. *Hold 30 s*: **hunts** (±1 km/h or more, period ≈ 2–4 s, throttle swinging with it) → lower Kp by
+   ≈ 20 % and set Ki = Kp / 3 (buggy 1.0 / 0.35 → 0.8 / 0.27 → 0.65 / 0.22; quad 3.0 / 1.0 → 2.4 /
+   0.8 → 1.9 / 0.65); never raise the throttle rate to cure it. A throttle flicker of ± 0.5 % with a
+   calm speed is normal on the quad. **Slow swing** (period ≥ 5 s, throttle in single ≈ 0.3 % steps)
+   → the throttle servo resolution limit: lower Ki by 0.1 and note it (a linkage using more servo
+   travel is the fix). **Sluggish** (a 1 km/h gap takes > 8 s, a small slope costs > 5 km/h) → raise
+   Kp by ≈ 20 % with Ki = Kp / 3; at the first sign of hunting go back one step.
+4. *Steps* 30 → 100 → 30 % at 10 km/h: overshoot > 1.5 km/h → acceleration −0.2 m/s²; closing too
+   abruptly → deceleration −0.5 m/s².
+5. *Hill*: up — a dip of a few km/h recovering within ≈ 10 s is expected; down — the at-idle badge,
+   brake.
+6. *20 and 30 km/h* with the 10 km/h values; if they hunt while 10 km/h does not, lower Kp until all
+   three are calm. The 10 km/h tune wins.
+7. *Buggy only*: repeat in L, once in H at 10 km/h (rougher around the clutch take-up — expected) and
+   in R (R ceiling 20 km/h).
+Record the final values; a default changes in code only for that vehicle's branch.
 
 **Relay board:** the DevKitC-1 drives its four relays straight from GPIO36–39 — there is no I2C
 relay board, so master's relay-board selector (`set_relay_board`), the `relay_board*` telemetry and
