@@ -1,5 +1,6 @@
 // Native unit tests for the pre-crank dwell / armed-crank decision / validated crank RPM
-// law (include/CrankLaw.h, change add-precrank-dwell-setting).
+// law (include/CrankLaw.h, change add-precrank-dwell-setting) and the starter time limit
+// per attempt (change add-crank-time-limit-setting).
 // Run: pio test -e native
 #include <unity.h>
 #include "CrankLaw.h"
@@ -107,6 +108,36 @@ static void test_ignition_went_off_edge() {
     TEST_ASSERT_FALSE(ignitionWentOff(true, true));
 }
 
+static void test_max_valid_bounds() {
+    TEST_ASSERT_FALSE(crankMaxMsValid(1999));
+    TEST_ASSERT_FALSE(crankMaxMsValid(10001));
+    TEST_ASSERT_FALSE(crankMaxMsValid(0));
+    TEST_ASSERT_TRUE(crankMaxMsValid(2000));
+    TEST_ASSERT_TRUE(crankMaxMsValid(5000));
+    TEST_ASSERT_TRUE(crankMaxMsValid(10000));
+}
+
+static void test_max_or_default() {
+    TEST_ASSERT_EQUAL_UINT16(5000, crankMaxMsOrDefault(0));
+    TEST_ASSERT_EQUAL_UINT16(5000, crankMaxMsOrDefault(1999));
+    TEST_ASSERT_EQUAL_UINT16(5000, crankMaxMsOrDefault(10001));
+    TEST_ASSERT_EQUAL_UINT16(5000, crankMaxMsOrDefault(65535));
+    TEST_ASSERT_EQUAL_UINT16(7500, crankMaxMsOrDefault(7500));
+}
+
+static void test_timed_out_boundary() {
+    TEST_ASSERT_FALSE(crankTimedOut(1000, 1000 + 4999, 5000));
+    TEST_ASSERT_TRUE(crankTimedOut(1000, 1000 + 5000, 5000));
+    TEST_ASSERT_FALSE(crankTimedOut(1000, 1000 + 9999, 10000));
+    TEST_ASSERT_TRUE(crankTimedOut(1000, 1000 + 10000, 10000));
+}
+
+static void test_timed_out_wraparound() {
+    // millis() wraps between the CRANKING stamp and now: 0xFFFFF000 → 0x00000400 = 5120 ms.
+    TEST_ASSERT_TRUE(crankTimedOut(0xFFFFF000u, 0x00000400u, 5000));
+    TEST_ASSERT_FALSE(crankTimedOut(0xFFFFF000u, 0x00000400u, 10000));
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_dwell_valid_bounds);
@@ -119,5 +150,9 @@ int main(int, char**) {
     RUN_TEST(test_crank_rpm_validated);
     RUN_TEST(test_stale_rpm_after_off);
     RUN_TEST(test_ignition_went_off_edge);
+    RUN_TEST(test_max_valid_bounds);
+    RUN_TEST(test_max_or_default);
+    RUN_TEST(test_timed_out_boundary);
+    RUN_TEST(test_timed_out_wraparound);
     return UNITY_END();
 }
