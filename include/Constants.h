@@ -128,7 +128,7 @@
 #define RELAY_WHEEL_LOCK_FITTED 1           // 1 = relay behind the wheel-lock function
 
 // Cranking Parameters
-#define CRANKING_TIMEOUT           5000  // ms - maximum cranking duration per start attempt; the starter is released earlier as soon as engineRpm ≥ ENGINE_RUNNING_RPM_THRESHOLD (2026-11-06: 2 s was too short)
+#define CRANKING_TIMEOUT           5000  // ms - maximum cranking duration per start attempt; the starter is released earlier as soon as engineRpm ≥ ENGINE_RUNNING_RPM_THRESHOLD (2026-11-06: 2 s was too short); default; per vehicle from the web (NVS crank/max_ms)
 #define ACC_PRECRANK_DWELL_MS      3000  // ms - ignition/ECU line (R1) must be powered this long before the starter (R2) engages; default; per vehicle from the web (NVS crank/dwell_ms)
 // Pre-crank dwell range accepted from the web / NVS (change add-precrank-dwell-setting).
 // 1 s keeps a minimum ECU wake-up; 8 s is well beyond any fuel-pump prime we know of and
@@ -138,6 +138,13 @@
 #define CRANK_DWELL_MS_MAX         8000  // ms
 #define CRANK_NVS_NAMESPACE        "crank"     // owned by VehicleController
 #define CRANK_DWELL_NVS_KEY        "dwell_ms"  // uint16, ms
+// Starter time limit range accepted from the web / NVS (change add-crank-time-limit-setting).
+// 2 s was the old fixed cap and too short for a cold start (raised to 5 s in 1.5.22);
+// 10 s is the owner's ceiling (starter heat, battery, a running engine cranked to the
+// limit when the RPM reads low). The literals MUST match include/CrankLaw.h.
+#define CRANK_MAX_MS_MIN           2000  // ms
+#define CRANK_MAX_MS_MAX           10000 // ms
+#define CRANK_MAX_NVS_KEY          "max_ms"    // uint16, ms
 #define ENGINE_RUNNING_RPM_THRESHOLD 1500  // RPM - engine considered running above this
 
 // ----------------------------------------------------------------------------
@@ -934,7 +941,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.35"
+#define FIRMWARE_VERSION "1.5.36"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

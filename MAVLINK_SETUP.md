@@ -778,7 +778,7 @@ integer; `NaN` never matches.
 |---|---|---|---|
 | 0 | Query | 0 caps, 1 firmware version, 2 hardware version | — |
 | 1 | Gear | R −1, N 0, H 1, L 2 | bit0 R/N/L, bit1 H |
-| 2 | Ignition | OFF 0, ACC 1, ON 2 (ON = auto-crank: pre-crank delay set in the web, 1–8 s, default 3 s since 1.5.33 — 2 s fixed before; starter ≤ 5 s) | bit2 |
+| 2 | Ignition | OFF 0, ACC 1, ON 2 (ON = auto-crank: pre-crank delay set in the web, 1–8 s, default 3 s since 1.5.33 — 2 s fixed before; starter ≤ the max starter time set in the web, 2–10 s, default 5 s since 1.5.36 — 5 s fixed before) | bit2 |
 | 3 | Headlight | OFF 0, ON 1 | bit3 |
 | 4 | Diff lock | OFF 0, ON 1 | bit4 |
 | 5 | Handbrake | OFF 0 (release), ON 1 (apply) — **buggy (`aztec`) only** | bit5 |
@@ -840,7 +840,7 @@ the engine stopped stays pending until the engine runs; a later accepted GCS gea
 | Name | Rate | Value |
 |---|---|---|
 | `QB_CAPS` | every 10 s, first on the first report | capability bitmask (bits 0–15) \| protocol version << 24 — quad 16777247, buggy 16777279 |
-| `IGN_STATE` | 1 Hz and immediately on change | applied relay state: 0 OFF, 1 ACC, 2 ON, 3 CRANKING (pre-crank dwell + starter; the dwell is the pre-crank delay set in the web, 1–8 s, default 3 s since 1.5.33) |
+| `IGN_STATE` | 1 Hz and immediately on change | applied relay state: 0 OFF, 1 ACC, 2 ON, 3 CRANKING (pre-crank dwell + starter; the dwell is the pre-crank delay set in the web, 1–8 s, default 3 s since 1.5.33; the starter phase lasts at most the max starter time set in the web, 2–10 s, default 5 s since 1.5.36) |
 
 A firmware without this feature answers `MAV_CMD_USER_2` with `UNSUPPORTED` and sends no `QB_CAPS`;
 clients then show nothing new.

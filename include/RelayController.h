@@ -47,7 +47,7 @@ public:
         OFF,        // All power off (ignition relay LOW, starter relay LOW)
         ACC,        // Ignition/ECU line powered (ignition relay HIGH, starter relay LOW)
         IGNITION,   // Ignition/ECU line powered, starter off (ignition relay HIGH, starter relay LOW)
-        CRANKING    // Starter engaged (ignition relay HIGH, starter relay HIGH); auto-stops on RPM or CRANKING_TIMEOUT
+        CRANKING    // Starter engaged (ignition relay HIGH, starter relay HIGH); auto-stops on RPM or the starter time limit latched on entry (setCrankMaxMs(), default CRANKING_TIMEOUT)
     };
 
     RelayController();
@@ -89,6 +89,19 @@ public:
 
     /** @brief Pre-crank dwell in use, ms */
     uint16_t getPrecrankDwellMs() const { return precrankDwellMs_; }
+
+    /**
+     * @brief Set the starter time limit per start attempt (RAM only).
+     * @param ms limit in ms; a value outside CRANK_MAX_MS_MIN..MAX is replaced by
+     *           CRANKING_TIMEOUT (crankMaxMsOrDefault()). The owner (VehicleController)
+     *           persists it in NVS "crank"/"max_ms". setIgnitionState(CRANKING) latches
+     *           it, so a new value applies from the NEXT attempt; a running attempt keeps
+     *           the limit it started with.
+     */
+    void setCrankMaxMs(uint16_t ms) { crankMaxMs_ = crankMaxMsOrDefault(ms); }
+
+    /** @brief Starter time limit in use for the next attempt, ms */
+    uint16_t getCrankMaxMs() const { return crankMaxMs_; }
 
     /**
      * @brief Set front light state
@@ -147,7 +160,8 @@ public:
      * pre-crank dwell (crankArmedDecide(), CrankLaw.h), or suppresses it if the engine is
      * already running. Automatically stops cranking if:
      * - Engine RPM exceeds threshold (engine started)
-     * - CRANKING_TIMEOUT elapsed without engine start
+     * - the starter time limit latched when the attempt entered CRANKING elapsed without
+     *   engine start (crankTimedOut(), CrankLaw.h; setCrankMaxMs(), default CRANKING_TIMEOUT)
      *
      * @param engineRpm Validated engine RPM (0 when no valid source — crankRpm())
      */
@@ -213,6 +227,10 @@ private:
     uint32_t ignitionHighSince_;   // millis() when the ignition/ECU line went LOW->HIGH; 0 while OFF
     bool crankArmed_;              // True if a dwell-gated crank is pending
     uint16_t precrankDwellMs_;     // configured pre-crank dwell, ms (setPrecrankDwellMs())
+
+    // Starter time limit (change add-crank-time-limit-setting)
+    uint16_t crankMaxMs_;          // configured limit for the next attempt, ms (setCrankMaxMs())
+    uint16_t crankLimitMs_;        // limit latched by the running attempt on entering CRANKING
 
     /** @brief Recompute the shadow byte from the tracked state and write the GPIOs */
     void updateRelays();

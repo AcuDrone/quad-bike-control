@@ -684,6 +684,9 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // gov_ki / gov_acc / gov_dec / gov_launch, 10 scalar slots (keys by pointer, gov_state a
     // static token by pointer; 6 copied number strings ≈ 28 B) ≈ 10 × 16 + 28 ≈ 0.19 KB of memory,
     // ≈ 170 B of JSON — worst case ≈ 8.39 + 0.19 ≈ 8.58 KB, ≈ 0.64 KB under 9216 (size unchanged).
+    // Starter time limit since 1.5.36: crank_max_ms, 1 scalar slot (key by pointer, ≈ 16 B of
+    // memory, ≈ 22 B of JSON) — worst case ≈ 8.58 + 0.02 ≈ 8.60 KB, ≈ 0.62 KB under 9216 (size
+    // unchanged).
     // Static (single caller: the main-loop broadcast) so the larger document is off the stack.
     static StaticJsonDocument<9216> doc;
     doc.clear();
@@ -851,6 +854,7 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["ignition_state"] = telemetry.ignition_state;
     doc["is_cranking"] = telemetry.is_cranking;
     doc["crank_dwell_ms"] = telemetry.crank_dwell_ms;   // pre-crank dwell in use, ms
+    doc["crank_max_ms"] = telemetry.crank_max_ms;       // starter time limit in use, ms
     doc["front_light_on"] = telemetry.front_light_on;
     doc["wheel_lock_on"] = telemetry.wheel_lock_on;
     doc["wheel_lock_fitted"] = telemetry.wheel_lock_fitted;   // false on aztec → UI shows "not fitted"

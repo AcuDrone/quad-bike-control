@@ -1115,9 +1115,10 @@
                 </div>
                 <div id="throttle-cal-status" style="margin-top: 10px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
             </div>
-            <!-- Engine start: pre-crank delay (RC / GCS auto-crank; the START button in Tests has no delay) -->
+            <!-- Engine start: pre-crank delay (RC / GCS auto-crank; the START button in Tests has no delay)
+                 and the max starter time per attempt (every crank path: RC, GCS, START button) -->
             <div class="card" id="engine-start-card">
-                <h2 class="card-title"><span data-i18n="card_engine_start">🚀 Engine start</span><button type="button" class="help-btn" onclick="openHelp('crank_dwell_help', 'card_engine_start')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <h2 class="card-title"><span data-i18n="card_engine_start">🚀 Engine start</span><button type="button" class="help-btn" onclick="openHelp('crank_dwell_help,crank_max_help', 'card_engine_start')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
                 <div>
                     <label data-i18n="lbl_crank_dwell" for="crank-dwell-input" style="font-size: 0.8em; color: var(--muted-foreground);">Pre-crank delay</label>
                     <div style="display: flex; gap: 8px; align-items: center; margin-top: 4px;">
@@ -1127,6 +1128,15 @@
                     <div id="crank-dwell-hint" style="margin-top: 4px; font-size: 0.75em; color: var(--muted-foreground);"></div>
                 </div>
                 <div id="crank-dwell-status" style="margin-top: 8px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
+                <div style="margin-top: 8px;">
+                    <label data-i18n="lbl_crank_max" for="crank-max-input" style="font-size: 0.8em; color: var(--muted-foreground);">Max starter time</label>
+                    <div style="display: flex; gap: 8px; align-items: center; margin-top: 4px;">
+                        <input type="range" min="2" max="10" step="0.5" value="5" id="crank-max-input" style="flex:1; min-width:0; height: 28px;">
+                        <span id="crank-max-val" style="color:var(--foreground); min-width:4.5em; text-align:right;">5.0 s</span>
+                    </div>
+                    <div id="crank-max-hint" style="margin-top: 4px; font-size: 0.75em; color: var(--muted-foreground);"></div>
+                </div>
+                <div id="crank-max-status" style="margin-top: 8px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
             </div>
             <!-- Brake tuning (travel time + hold drive, endstop state) -->
             <div class="card" id="brake-card">
@@ -1806,6 +1816,10 @@
                 crank_dwell_val: '%s s',
                 crank_dwell_hint: 'Ignition on for %s s before the starter (RC transmitter and ground station; the START button in the Tests section has no delay)',
                 crank_dwell_help: '<b>Pre-crank delay</b>: how long the ignition (ECU and fuel pump) is powered before the starter turns when the engine is started from the RC switch or the GCS. The delay lets the ECU and the fuel pump get ready; if the engine does not start from the switch, a longer delay is the first thing to try. The <b>START</b> button (Tests section, ignition card) cranks at once, without the delay. 1-8 s, default 3 s.',
+                lbl_crank_max: 'Max starter time',
+                crank_max_val: '%s s',
+                crank_max_hint: 'The starter runs at most %s s per attempt and stops earlier once the engine runs (RPM). A change applies from the next attempt',
+                crank_max_help: '<b>Max starter time</b>: the longest the starter turns in one start attempt. It applies to every start: the RC switch, the ground station and the <b>START</b> button. The starter stops earlier as soon as the engine RPM shows the engine is running; otherwise it stops at this limit and the ignition stays on. Each attempt is started by a new command, there is no automatic retry. A change applies from the next attempt; an attempt already running keeps its limit. Do not set it longer than needed: a long crank heats the starter and drains the battery, and if the engine RPM reads low (sensor or wiring), a running engine is cranked for the whole limit. 2-10 s, default 5 s.',
                 h_front_light: 'Front Light',
                 lbl_light: 'Light:',
                 h_wheel_lock: 'Front Wheel Lock',
@@ -2319,6 +2333,10 @@
                 crank_dwell_val: '%s с',
                 crank_dwell_hint: 'Запалювання ввімкнене %s с перед стартером (пульт і наземна станція; кнопка ПУСК у розділі «Тести» — без затримки)',
                 crank_dwell_help: '<b>Затримка стартера</b>: скільки часу запалювання (ЕБУ і паливний насос) увімкнене, перш ніж закрутиться стартер, коли двигун запускається перемикачем пульта або з GCS. За цей час ЕБУ і паливний насос встигають підготуватися; якщо двигун не заводиться з перемикача, спершу спробуйте більшу затримку. Кнопка <b>ПУСК</b> (розділ «Тести», картка запалювання) крутить стартер одразу, без затримки. 1-8 с, типово 3 с.',
+                lbl_crank_max: 'Макс. час роботи стартера',
+                crank_max_val: '%s с',
+                crank_max_hint: 'Стартер крутить щонайбільше %s с за спробу; раніше вимикається, щойно двигун завівся (обороти). Зміна діє з наступної спроби',
+                crank_max_help: '<b>Макс. час роботи стартера</b>: найдовше, скільки стартер крутить за одну спробу запуску. Діє для кожного запуску: перемикач пульта, наземна станція і кнопка <b>ПУСК</b>. Стартер вимикається раніше, щойно оберти показують, що двигун завівся; інакше — на цій межі, а запалювання лишається ввімкненим. Кожну спробу починає нова команда, автоматичного повтору немає. Зміна діє з наступної спроби; спроба, що вже йде, зберігає свою межу. Не ставте довше, ніж потрібно: довгий запуск гріє стартер і розряджає акумулятор, а якщо оберти читаються заниженими (датчик чи проводка), стартер крутитиме заведений двигун до кінця межі. 2-10 с, типово 5 с.',
                 h_front_light: 'Переднє світло',
                 lbl_light: 'Світло:',
                 h_wheel_lock: 'Блокування переднього колеса',
@@ -2675,6 +2693,7 @@
             updateGearBoostButton(gearBoostState);
             updateSteerParkButton(steerParkState);
             renderCrankDwellHint();
+            renderCrankMaxHint();
             const boostStatus = document.getElementById('boost-test-status');
             if (boostStatus) boostStatus.textContent = boostTestActive ? t('on') : t('off');
             const dbgBtn = document.getElementById('debug-toggle-btn');
@@ -2893,6 +2912,14 @@
                     data.message.startsWith('Failed to save the pre-crank delay'))) {
                     crankDwellStatus(data.success ? data.message : t('error_prefix') + data.message,
                                      data.success ? 'var(--success)' : 'var(--danger)');
+                }
+                // Max starter time row (Calibration → Engine start card); an error puts the
+                // thumb back on the value in use
+                if (data.message && (data.message.startsWith('Starter time limit') ||
+                    data.message.startsWith('Failed to save the starter time limit'))) {
+                    crankMaxStatus(data.success ? data.message : t('error_prefix') + data.message,
+                                   data.success ? 'var(--success)' : 'var(--danger)');
+                    if (!data.success) crankMaxRevert();
                 }
                 // Brake tuning card
                 if (data.message && (data.message.startsWith('Brake travel') || data.message.startsWith('Brake hold') ||
@@ -3147,6 +3174,7 @@
             updateSteerParkCard(data);
             updateBrakeCard(data);
             updateCrankDwell(data);
+            updateCrankMax(data);
 
             // Update gear button active state
             updateGearButtons(data.gear);
@@ -4522,7 +4550,8 @@
         // set_crank_dwell_ms on `change` (each command is an NVS write); crankDwellDragging keeps
         // telemetry from moving the thumb while the operator holds it. A stored value off the
         // 0.5 s grid (e.g. 1300 ms from another client) puts the thumb on the nearest step, but
-        // the value label and the hint show the real stored value. ----
+        // the value label and the hint show the real stored value. The max starter time slider
+        // of the same card (below) reuses this pattern and crankDwellSeconds(). ----
         let crankDwellMs = 3000;   // last value from telemetry (firmware default until the first frame)
         let crankDwellDragging = false;
         function crankDwellStatus(text, color) {
@@ -4567,6 +4596,60 @@
             sl.addEventListener('change', () => {
                 sendCommand('set_crank_dwell_ms', Math.round(Number(sl.value) * 1000));   // one send on release
                 crankDwellDragging = false;
+            });
+        })();
+
+        // ---- Max starter time per attempt (Calibration → Engine start card, under the
+        // pre-crank delay): firmware works in whole ms (set_crank_max_ms, 2000-10000), the slider
+        // in seconds (2-10, step 0.5). Telemetry `crank_max_ms`. Built exactly like the pre-crank
+        // delay slider above: label live on `input`, ONE set_crank_max_ms on `change` (NVS write),
+        // crankMaxDragging keeps telemetry from moving the thumb while held. No caution line
+        // (owner decision 2026-11-17); the risk is in the help text. ----
+        let crankMaxMs = 5000;   // last value from telemetry (firmware default until the first frame)
+        let crankMaxDragging = false;
+        function crankMaxStatus(text, color) {
+            const el = document.getElementById('crank-max-status');
+            if (!el) return;
+            el.textContent = text;
+            el.style.color = color;
+        }
+        function crankMaxLabel(ms) {
+            const el = document.getElementById('crank-max-val');
+            if (el) el.textContent = t('crank_max_val', crankDwellSeconds(ms));
+        }
+        function renderCrankMaxHint() {
+            const el = document.getElementById('crank-max-hint');
+            if (el) el.textContent = t('crank_max_hint', crankDwellSeconds(crankMaxMs));
+            const sl = document.getElementById('crank-max-input');
+            crankMaxLabel(crankMaxDragging && sl ? Number(sl.value) * 1000 : crankMaxMs);
+        }
+        function updateCrankMax(data) {
+            if (!Number.isFinite(data.crank_max_ms)) return;   // older firmware: slider keeps 5 s
+            crankMaxMs = data.crank_max_ms;
+            const sl = document.getElementById('crank-max-input');
+            if (sl && !crankMaxDragging) sl.value = crankMaxMs / 1000;   // browser snaps to the 0.5 s grid
+            renderCrankMaxHint();
+        }
+        // Refused / failed command: put the thumb and the label back on the value in use.
+        function crankMaxRevert() {
+            const sl = document.getElementById('crank-max-input');
+            if (sl && !crankMaxDragging) sl.value = crankMaxMs / 1000;
+            renderCrankMaxHint();
+        }
+        (function initCrankMaxSlider() {
+            const sl = document.getElementById('crank-max-input');
+            if (!sl) return;
+            sl.addEventListener('pointerdown', () => { crankMaxDragging = true; });
+            sl.addEventListener('pointercancel', () => { crankMaxDragging = false; });
+            // A press-and-release without moving fires no `change`: release the guard anyway.
+            sl.addEventListener('pointerup', () => { setTimeout(() => { crankMaxDragging = false; }, 0); });
+            sl.addEventListener('input', () => {
+                crankMaxDragging = true;   // keyboard drags too
+                crankMaxLabel(Number(sl.value) * 1000);   // label only, nothing is sent while dragging
+            });
+            sl.addEventListener('change', () => {
+                sendCommand('set_crank_max_ms', Math.round(Number(sl.value) * 1000));   // one send on release
+                crankMaxDragging = false;
             });
         })();
 

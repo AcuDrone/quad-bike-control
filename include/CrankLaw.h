@@ -1,12 +1,15 @@
 // CrankLaw.h — pre-crank dwell validation, the armed-crank decision and the validated
-// crank RPM (change add-precrank-dwell-setting).
+// crank RPM (change add-precrank-dwell-setting); the starter time limit per attempt
+// (change add-crank-time-limit-setting).
 //
 // NO Arduino / Constants.h dependency: this header is compiled by the native unit
 // tests (test/test_crank_law). VehicleController owns the per-vehicle dwell (NVS
-// "crank"/"dwell_ms") and the ignition-OFF RPM clear; RelayController calls
-// crankArmedDecide() from update(). This file is only the arithmetic and decisions.
+// "crank"/"dwell_ms"), the starter time limit (NVS "crank"/"max_ms") and the
+// ignition-OFF RPM clear; RelayController calls crankArmedDecide() and crankTimedOut()
+// from update(). This file is only the arithmetic and decisions.
 // The literals below MUST match include/Constants.h:
-//   CRANK_DWELL_MS_MIN 1000, CRANK_DWELL_MS_MAX 8000, ACC_PRECRANK_DWELL_MS 3000.
+//   CRANK_DWELL_MS_MIN 1000, CRANK_DWELL_MS_MAX 8000, ACC_PRECRANK_DWELL_MS 3000,
+//   CRANK_MAX_MS_MIN 2000, CRANK_MAX_MS_MAX 10000, CRANKING_TIMEOUT 5000.
 #pragma once
 
 #include <stdint.h>
@@ -31,6 +34,26 @@ inline uint16_t crankDwellMsOrDefault(uint32_t stored) {
 inline bool crankDwellElapsed(uint32_t ignitionHighSinceMs, uint32_t nowMs, uint32_t dwellMs) {
   if (ignitionHighSinceMs == 0) return false;
   return (uint32_t)(nowMs - ignitionHighSinceMs) >= dwellMs;
+}
+
+static const uint32_t CRANK_LAW_MAX_MS_MIN     = 2000;    // CRANK_MAX_MS_MIN
+static const uint32_t CRANK_LAW_MAX_MS_MAX     = 10000;   // CRANK_MAX_MS_MAX
+static const uint32_t CRANK_LAW_MAX_MS_DEFAULT = 5000;    // CRANKING_TIMEOUT
+
+inline bool crankMaxMsValid(uint32_t ms) {
+  return ms >= CRANK_LAW_MAX_MS_MIN && ms <= CRANK_LAW_MAX_MS_MAX;
+}
+
+// NVS load / setter helper for the starter time limit: a value outside the range is
+// replaced by the default (the caller logs it and never rewrites the stored value).
+inline uint16_t crankMaxMsOrDefault(uint32_t stored) {
+  return (uint16_t)(crankMaxMsValid(stored) ? stored : CRANK_LAW_MAX_MS_DEFAULT);
+}
+
+// True once the starter has run for at least limitMs since startMs (the stamp taken
+// on entering CRANKING). Unsigned subtraction, so a millis() wrap is harmless.
+inline bool crankTimedOut(uint32_t startMs, uint32_t nowMs, uint32_t limitMs) {
+  return (uint32_t)(nowMs - startMs) >= limitMs;
 }
 
 enum class CrankArmedAction : uint8_t {
