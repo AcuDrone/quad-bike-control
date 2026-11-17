@@ -168,6 +168,13 @@ public:
         // 0 OFF, 1 ACC, 2 ON, 3 CRANKING (incl. the pre-crank dwell) — ignStateCode() of the
         // relay state. Reporting only.
         uint8_t     ignState;
+
+        // --- Speed governor (change add-speed-governor, STATUSTEXT only) -----------------
+        // govNoSpeed: the governor should act but cannot — switch on, limit present, speed
+        // invalid, stick above the dead-band for GOV_NOSPEED_WARN_DELAY_MS (vehicle layer).
+        // govActive: the governor is ACTIVE this iteration (the recovery INFO needs it).
+        bool        govNoSpeed;
+        bool        govActive;
         // Note: oil temperature is not available from the ECU and is not reported.
         // Ground speed is NOT carried in EFI_STATUS — it comes from the hall speed
         // sensor and is reported separately via VFR_HUD.
@@ -384,6 +391,12 @@ private:
     // Steering control mode (STEER_MODE NAMED_VALUE_INT + mode STATUSTEXT)
     uint8_t  lastSteerModeTx_;         // value last sent as STEER_MODE (0xFF = none yet)
     uint8_t  lastSteerModeAnnounced_;  // mode last announced by STATUSTEXT (0xFF = baseline pending)
+
+    // Speed governor no-speed STATUSTEXT (change add-speed-governor, design D11)
+    bool     govWarnPrev_;             // govNoSpeed in the previous report
+    bool     govWarnPending_;          // WARNING due (rising edge or repeat), held by the limiter
+    bool     govInfoPending_;          // recovery INFO due, held by the limiter
+    uint32_t govWarnLastTx_;           // millis() of the last WARNING sent (0 = none this episode)
 
     // GCS vehicle commands (MAV_CMD_USER_2) + QB_CAPS / IGN_STATE broadcasts
     VehicleCommandSink* vcmdSink_;     // nullptr = not registered → USER_2 answered UNSUPPORTED

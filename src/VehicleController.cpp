@@ -10,6 +10,12 @@ static_assert(BRAKE_LAW_TRAVEL_MS_DEFAULT == BRAKE_FULL_TRAVEL_TIME, "BrakeLaw.h
 static_assert(BRAKE_LAW_HOLD_PWM_MIN == BRAKE_HOLD_PWM_MIN, "BrakeLaw.h hold min out of sync");
 static_assert(BRAKE_LAW_HOLD_PWM_MAX == BRAKE_HOLD_PWM_MAX, "BrakeLaw.h hold max out of sync");
 static_assert(BRAKE_LAW_HOLD_PWM_DEFAULT == BRAKE_HOLD_SPEED, "BrakeLaw.h hold default out of sync");
+// SpeedGovernorLaw.h cannot include Constants.h (native tests): keep its range literals in sync.
+static_assert(GOV_LAW_KP_MIN == GOV_KP_MIN && GOV_LAW_KP_MAX == GOV_KP_MAX, "SpeedGovernorLaw.h Kp range out of sync");
+static_assert(GOV_LAW_KI_MIN == GOV_KI_MIN && GOV_LAW_KI_MAX == GOV_KI_MAX, "SpeedGovernorLaw.h Ki range out of sync");
+static_assert(GOV_LAW_ACC_MIN == GOV_ACC_MIN_MS2 && GOV_LAW_ACC_MAX == GOV_ACC_MAX_MS2, "SpeedGovernorLaw.h acc range out of sync");
+static_assert(GOV_LAW_DEC_MIN == GOV_DEC_MIN_MS2 && GOV_LAW_DEC_MAX == GOV_DEC_MAX_MS2, "SpeedGovernorLaw.h dec range out of sync");
+static_assert(GOV_LAW_LAUNCH_MIN == GOV_LAUNCH_MIN_PCT && GOV_LAW_LAUNCH_MAX == GOV_LAUNCH_MAX_PCT, "SpeedGovernorLaw.h launch range out of sync");
 #include <Preferences.h>
 
 // Vehicle-command gear code (VehicleCommandLaw.h: R -1, N 0, H 1, L 2) → transmission gear.
@@ -88,6 +94,24 @@ VehicleController::VehicleController(SteeringController& steering,
       satSinceMs_(0),
       satActive_(false),
       satClearedMs_(0),
+      gov_(),
+      govMode_(GovMode::OFF),
+      govLastMs_(0),
+      govEvaluated_(false),
+      govBlendActive_(false),
+      govBlendPct_(0.0f),
+      govBlendLastMs_(0),
+      govEnabled_(GOV_ENABLED_DEFAULT),
+      govKp_(GOV_KP_DEFAULT),
+      govKi_(GOV_KI_DEFAULT),
+      govAccMs2_(GOV_ACC_DEFAULT_MS2),
+      govDecMs2_(GOV_DEC_DEFAULT_MS2),
+      govLaunchPct_(GOV_LAUNCH_DEFAULT_PCT),
+      govSatSinceMs_(0),
+      govSatActive_(false),
+      govSatClearedMs_(0),
+      govNoSpeedSinceMs_(0),
+      govNoSpeedWarn_(false),
       steerScaBaseMs_(0.0f),
       steerScaleApplied_(1.0f),
       steerScaleLastMs_(0),
@@ -374,6 +398,33 @@ bool VehicleController::initCAN() {
     Debug::printfFeature(DebugFeature::VEHICLE, "[SPEED] Limiter floor: %.1f %%, slew: %.1f %%/s\n",
                          limiterFloorPct_, limiterSlewPctS_);
 
+    // Speed governor settings, same namespace and rules (change add-speed-governor, design D5):
+    // an absent key reads as this build's GOV_*_DEFAULT; NaN or out of range is logged and ignored
+    // (default used, never rewritten); a valid stored value is always kept.
+    if (prefs.begin("speed", true)) {
+        govEnabled_ = prefs.getBool(GOV_ENABLED_NVS_KEY, GOV_ENABLED_DEFAULT);
+        struct { const char* key; float* dst; bool (*valid)(float); float def; } rows[] = {
+            {GOV_KP_NVS_KEY,     &govKp_,        govKpValid,     GOV_KP_DEFAULT},
+            {GOV_KI_NVS_KEY,     &govKi_,        govKiValid,     GOV_KI_DEFAULT},
+            {GOV_ACC_NVS_KEY,    &govAccMs2_,    govAccValid,    GOV_ACC_DEFAULT_MS2},
+            {GOV_DEC_NVS_KEY,    &govDecMs2_,    govDecValid,    GOV_DEC_DEFAULT_MS2},
+            {GOV_LAUNCH_NVS_KEY, &govLaunchPct_, govLaunchValid, GOV_LAUNCH_DEFAULT_PCT},
+        };
+        for (auto& r : rows) {
+            const float v = prefs.getFloat(r.key, r.def);
+            if (!r.valid(v)) {
+                Debug::printfFeature(DebugFeature::VEHICLE,
+                    "[GOV] Stored %s %.2f invalid or out of range — ignored, default %.2f\n",
+                    r.key, v, r.def);
+            }
+            *r.dst = govOrDefault(v, r.valid, r.def);
+        }
+        prefs.end();
+    }
+    Debug::printfFeature(DebugFeature::VEHICLE,
+        "[GOV] Speed governor %s, Kp %.2f, Ki %.2f, acc %.1f, dec %.1f, start limit %.1f %%\n",
+        govEnabled_ ? "ON" : "OFF", govKp_, govKi_, govAccMs2_, govDecMs2_, govLaunchPct_);
+
     // Brake full travel time and hold drive, NVS "brake" (VehicleController owns the brake
     // estimate). A missing key reads as the default; an out-of-range stored value is logged and
     // ignored (default used, never rewritten).
@@ -572,11 +623,21 @@ void VehicleController::update() {
     // hold keeps idle) — both stay clear.
     if (currentInputSource_ == InputSource::WEB && !isThrottleLockedForShift() && !throttle_.isCalibrating()) {
         float demandPct = webThrottleDemandPct_;
-        if (shouldClipThrottle()) {
+        const bool clip = shouldClipThrottle();
+        if (clip) {
             demandPct = min(TRANS_UNKNOWN_GEAR_THROTTLE_MAX, demandPct);
         }
-        applyOperatorThrottle(demandPct);   // park-brake drive-away / hold, then the limiter + slew
+        // park-brake drive-away / hold, then the governor or the limiter + slew
+        applyOperatorThrottle(demandPct, clip, currentBrakeTarget_ > 0.0f);
     }
+
+    // Speed governor: no throttle evaluation in this loop (fail-safe, gear-change lock,
+    // calibration, a MAVLink frame gap) — today's code owns the throttle; reset the governor so
+    // the next evaluation re-engages bumplessly (change add-speed-governor, D3 / D8).
+    if (!govEvaluated_) {
+        govNotEvaluated();
+    }
+    govEvaluated_ = false;
 
     // PID-controlled RPM boost during gear changes or manual test (overrides MAVLink/web throttle).
     // A gear change starts the PID only with the boost switch on and no idle hold in progress
@@ -783,6 +844,24 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
         return;
     } else if (cmd.cmd == "set_speed_limit_slew") {
         processSetSpeedLimitSlewCommand(cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_gov_enabled") {
+        processSetGovEnabledCommand(cmd.boolValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_gov_kp") {
+        processSetGovKpCommand(cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_gov_ki") {
+        processSetGovKiCommand(cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_gov_acc") {
+        processSetGovAccCommand(cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_gov_dec") {
+        processSetGovDecCommand(cmd.floatValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_gov_launch") {
+        processSetGovLaunchCommand(cmd.floatValue, webPortal);
         return;
     } else if (cmd.cmd == "set_throttle_open_slew") {
         processSetThrottleOpenSlewCommand(cmd.floatValue, webPortal);
@@ -1001,10 +1080,14 @@ void VehicleController::processMavlinkCommands() {
     // Apply throttle — skipped while the gear change owns it (boost PID or shift idle hold)
     if (!isThrottleLockedForShift()) {
         float throttlePct = mavlink_.getThrottle();
-        if (shouldClipThrottle()) {
+        const bool clip = shouldClipThrottle();
+        if (clip) {
             throttlePct = min(TRANS_UNKNOWN_GEAR_THROTTLE_MAX, throttlePct);
         }
-        applyOperatorThrottle(throttlePct);   // park-brake drive-away / hold, then the limiter + slew
+        // park-brake drive-away / hold, then the governor or the limiter + slew.
+        // The RC brake (channel 2 below centre) already makes getThrottle() 0 = governor stop;
+        // the brake target is passed for symmetry with the web path (design D9).
+        applyOperatorThrottle(throttlePct, clip, currentBrakeTarget_ > 0.0f);
     }
 
     // Gear / ignition / light: "last change wins" with the GCS commands (MAV_CMD_USER_2).
@@ -1261,12 +1344,13 @@ void VehicleController::processThrottleCommand(float value, WebPortal& webPortal
         webPortal.sendResponse(false, "Gear change active");
         return;
     }
-    if (shouldClipThrottle()) {
+    const bool clip = shouldClipThrottle();
+    if (clip) {
         value = min(TRANS_UNKNOWN_GEAR_THROTTLE_MAX, value);
     }
     // Record the operator's standing demand; update() re-limits it every loop from here on.
     webThrottleDemandPct_ = value;
-    if (applyOperatorThrottle(value)) {
+    if (applyOperatorThrottle(value, clip, currentBrakeTarget_ > 0.0f)) {
         // Still a success: the demand is stored and passes once the park brake lets it.
         if (getParkBrakeDaWait() == ParkBrakeDaWait::IGN_OFF) {
             webPortal.sendResponse(true, "Throttle set — held at idle: ignition off, the park brake stays applied");
@@ -1302,7 +1386,7 @@ ParkBrakeDaWait VehicleController::getParkBrakeDaWait() const {
     return parkBrakeDaWait(parkBrake_.getState(), parkBrakeGear(), ignOn, pbDemandPct_, pbArmed_);
 }
 
-bool VehicleController::applyOperatorThrottle(float demandPct) {
+bool VehicleController::applyOperatorThrottle(float demandPct, bool bypass, bool brakeCommanded) {
     pbDemandPct_ = demandPct;
 
     // Drive-away latch. "Ignition on" = the commanded ignition-relay state is not OFF (ACC,
@@ -1334,10 +1418,20 @@ bool VehicleController::applyOperatorThrottle(float demandPct) {
         pbBlockLogged_ = why;
     }
 
-    // The limiter keeps evaluating the demand under the hold, so its state never freezes.
-    const float limited = applySpeedLimit(demandPct);
+    // The limiter (or the speed governor) keeps evaluating the demand under the hold, so its state
+    // never freezes. Governor switch OFF: commandThrottlePct() is exactly applySpeedLimit(demand).
+    const float limited = commandThrottlePct(demandPct, bypass, brakeCommanded);
     if (isParkBrakeHoldingThrottle()) {
         throttle_.idle();   // bypasses the opening slew; the pass later ramps from idle
+        // The governor's output was not applied: re-prime it from the idle just written (D8) and
+        // restart a pending hand-over blend from idle, so the release does not step the throttle.
+        if (govMode_ == GovMode::ACTIVE) {
+            gov_.reset();
+            govLastMs_ = 0;
+        }
+        if (govBlendActive_) {
+            govBlendPct_ = 0.0f;
+        }
         return true;
     }
     throttle_.setThrottlePercent(limited);
@@ -1643,6 +1737,234 @@ float VehicleController::applySpeedLimit(float throttlePct) {
 
     return out;
 }
+
+// ============================================================================
+// SPEED GOVERNOR — the throttle input is a speed setpoint (change add-speed-governor)
+// ============================================================================
+
+float VehicleController::commandThrottlePct(float demandPct, bool bypass, bool brakeCommanded) {
+    govEvaluated_ = true;
+
+    // Switch OFF and no hand-over pending: exactly today's path, nothing else evaluated.
+    if (govPassThrough(govEnabled_, govMode_, govBlendActive_)) {
+        govNoSpeedSinceMs_ = 0;
+        govNoSpeedWarn_ = false;
+        return applySpeedLimit(demandPct);
+    }
+
+    const uint32_t now = millis();
+    // aztec: the effective limit min(SPEED_MAX, gear ceiling) — active in L / H / R without
+    // SPEED_MAX (A11); the source is only for the limiter's change log.
+    const SpeedLimitEffective govEff = speedLimitNow();
+    const float limitMs = govEff.limitMs;
+    const bool speedValid = speedSensor_.isValid();
+    const GovMode mode = govModeSelect(govEnabled_, limitMs, bypass, speedValid);
+    if (mode != govMode_) {
+        govSetMode(mode, now, /*allowBlend=*/mode != GovMode::BYPASS);
+    }
+
+    // GCS no-speed flag (design D11): should govern but cannot, stick above the dead-band for
+    // GOV_NOSPEED_WARN_DELAY_MS continuously (keeps the first launch after boot quiet).
+    if (mode == GovMode::NOSPEED && demandPct > GOV_STICK_DEADBAND_PCT) {
+        if (govNoSpeedSinceMs_ == 0) {
+            govNoSpeedSinceMs_ = now ? now : 1;
+        } else if ((now - govNoSpeedSinceMs_) >= GOV_NOSPEED_WARN_DELAY_MS) {
+            govNoSpeedWarn_ = true;
+        }
+    } else {
+        govNoSpeedSinceMs_ = 0;
+        govNoSpeedWarn_ = false;
+    }
+
+    if (mode == GovMode::ACTIVE) {
+        const float speedMs = speedSensor_.getSpeedMs();
+        float dt = 0.0f;
+        if (!gov_.primed || govLastMs_ == 0 || (now - govLastMs_) > GOV_MAX_GAP_MS) {
+            // Bumpless entry (D8): from the throttle last commanded, setpoint at the measured
+            // speed, integrator capped at the start throttle limit.
+            govPrime(gov_, throttle_.getLastCommandedPct(), speedMs, govLaunchPct_);
+        } else {
+            dt = (now - govLastMs_) / 1000.0f;
+        }
+        govLastMs_ = now ? now : 1;
+
+        SpeedGovernorParams p;
+        p.kpPctPerMs = govKp_;
+        p.kiPctSPerMs = govKi_;
+        p.accelMs2 = govAccMs2_;
+        p.decelMs2 = govDecMs2_;
+        p.startCapPct = govLaunchPct_;
+        p.stickDeadbandPct = GOV_STICK_DEADBAND_PCT;
+        p.minSetpointMs = GOV_MIN_SETPOINT_MS;
+        p.standstillMs = GOV_STANDSTILL_MS;
+        p.outSlewPctS = limiterSlewPctS_;   // thr_slew, A5
+        const float out = govStep(gov_, p, demandPct, brakeCommanded, speedMs, limitMs, dt);
+
+        // The ceiling limiter stands down (D7): reset every evaluation so it re-primes when it
+        // is needed again; its saturation indicator is cleared outright.
+        logSpeedLimitChange(limitMs, govEff.source);
+        limiter_.reset();
+        limiterLastMs_ = 0;
+        satSinceMs_ = 0;
+        satActive_ = false;
+        satClearedMs_ = 0;
+        lastSpeedLimitWarnMs_ = 0;
+
+        // At-idle badge (D6) only while a speed is commanded: with the stick released or a brake
+        // commanded the operator is already stopping, and every coast-down would raise it.
+        const bool stopping = brakeCommanded || !(demandPct > GOV_STICK_DEADBAND_PCT);
+        govUpdateSat(!stopping && govSatRaw(out, speedMs, gov_.spMs, SPEED_LIMIT_SAT_MARGIN_MS), now);
+        return out;
+    }
+
+    // OFF / NOLIMIT / BYPASS / NOSPEED: today's path, unchanged.
+    const float today = applySpeedLimit(demandPct);
+    if (!govBlendActive_) {
+        return today;
+    }
+
+    // Hand-over blend out of ACTIVE (D8): from the governor's last output toward today's value
+    // at thr_slew, either direction. A stick in the dead-band ends it at once (today's value is
+    // the stop value); a brake closes the throttle to idle at once and the blend continues from
+    // there, so releasing the brake does not step the throttle back up.
+    if (!(demandPct > GOV_STICK_DEADBAND_PCT)) {
+        govBlendActive_ = false;
+        return today;
+    }
+    float dt = (now - govBlendLastMs_) / 1000.0f;
+    govBlendLastMs_ = now;
+    if (brakeCommanded) {
+        govBlendPct_ = 0.0f;
+        return 0.0f;
+    }
+    govBlendPct_ = govBlendStep(govBlendPct_, today, limiterSlewPctS_, dt);
+    if (govBlendDone(govBlendPct_, today)) {
+        govBlendActive_ = false;
+        Debug::printlnFeature(DebugFeature::VEHICLE, "[GOV] hand-over blend done — direct throttle");
+        return today;
+    }
+    return govBlendPct_;
+}
+
+void VehicleController::govSetMode(GovMode mode, uint32_t now, bool allowBlend) {
+    if (mode == govMode_) return;
+    Debug::printfFeature(DebugFeature::VEHICLE, "[GOV] mode %s -> %s\n",
+                         govModeToken(govMode_), govModeToken(mode));
+    if (!allowBlend) {
+        // Into BYPASS (N / shift clip) or no evaluation at all (shift lock, calibration,
+        // fail-safe): no blend, also not one still pending — those closures apply at once.
+        govBlendActive_ = false;
+    } else if (govMode_ == GovMode::ACTIVE) {
+        // Leaving ACTIVE into OFF / NOLIMIT / NOSPEED: blend from the governor's last output.
+        govBlendActive_ = true;
+        govBlendPct_ = gov_.outPct;
+        govBlendLastMs_ = now;
+    }
+    if (mode == GovMode::ACTIVE) {
+        govBlendActive_ = false;   // the governor primes from the throttle the blend left
+    }
+    if (mode != GovMode::ACTIVE) {
+        govUpdateSat(false, now);
+    }
+    gov_.reset();       // every entry into ACTIVE primes; every other mode holds nothing
+    govLastMs_ = 0;
+    govMode_ = mode;
+}
+
+void VehicleController::govNotEvaluated() {
+    // Nobody asked for a throttle this loop: the throttle belongs to fail-safe, the gear-change
+    // boost PID / idle hold, a calibration session or a MAVLink frame gap. Report it (BYPASS
+    // when a limit exists, as D3 classes the shift lock and calibration) and drop any blend.
+    const uint32_t now = millis();
+    govBlendActive_ = false;
+    govNoSpeedSinceMs_ = 0;
+    govNoSpeedWarn_ = false;
+    GovMode mode;
+    if (!govEnabled_) {
+        mode = GovMode::OFF;
+    } else if (!(getSpeedLimitMs() > 0.0f)) {
+        mode = GovMode::NOLIMIT;
+    } else {
+        mode = GovMode::BYPASS;
+    }
+    govSetMode(mode, now, /*allowBlend=*/false);
+}
+
+void VehicleController::govUpdateSat(bool raw, uint32_t now) {
+    // Same shape and constants as the limiter's indicator (D6): entry after
+    // SPEED_LIMIT_SAT_HOLD_MS of the raw condition, cleared on the first evaluation without it,
+    // shown for SPEED_LIMIT_SAT_UI_HOLD_MS after that. Web only — no log line, no MAVLink.
+    if (raw) {
+        if (govSatSinceMs_ == 0) {
+            govSatSinceMs_ = now ? now : 1;
+        } else if (!govSatActive_ && (now - govSatSinceMs_) >= SPEED_LIMIT_SAT_HOLD_MS) {
+            govSatActive_ = true;
+        }
+    } else {
+        govSatSinceMs_ = 0;
+        if (govSatActive_) {
+            govSatActive_ = false;
+            govSatClearedMs_ = now ? now : 1;
+        }
+    }
+}
+
+bool VehicleController::govPersistFloat(const char* key, float value) {
+    // Persist first: RAM only changes once NVS holds the new value. One key in the shared
+    // "speed" namespace — never clear() it.
+    Preferences prefs;
+    bool ok = false;
+    if (prefs.begin("speed", false)) {
+        ok = prefs.putFloat(key, value) == sizeof(float);
+        prefs.end();
+    }
+    return ok;
+}
+
+void VehicleController::processSetGovEnabledCommand(bool on, WebPortal& webPortal) {
+    Preferences prefs;
+    bool ok = false;
+    if (prefs.begin("speed", false)) {
+        ok = prefs.putBool(GOV_ENABLED_NVS_KEY, on) == sizeof(uint8_t);
+        prefs.end();
+    }
+    if (!ok) {
+        webPortal.sendResponse(false, "Failed to save the governor setting");
+        return;
+    }
+    govEnabled_ = on;   // the next evaluation selects the mode (and blends out of ACTIVE)
+    webPortal.sendResponse(true, on ? "Speed governor ON" : "Speed governor OFF");
+    Debug::printfFeature(DebugFeature::VEHICLE, "[GOV] Speed governor %s\n", on ? "ON" : "OFF");
+}
+
+// One shape for the five tuning values: validate → persist → apply, reply with the stored value.
+#define GOV_SETTER(fn, validFn, key, member, label, rangeText, decimals)                         \
+void VehicleController::fn(float value, WebPortal& webPortal) {                                    \
+    if (!validFn(value)) {                                                                         \
+        webPortal.sendResponse(false, String("Governor ") + label + " out of range (" +            \
+                               rangeText + ")");                                                   \
+        return;                                                                                    \
+    }                                                                                              \
+    if (!govPersistFloat(key, value)) {                                                            \
+        webPortal.sendResponse(false, "Failed to save the governor setting");                      \
+        return;                                                                                    \
+    }                                                                                              \
+    member = value;                                                                                \
+    webPortal.sendResponse(true, String("Governor ") + label + " set to " +                        \
+                           String(value, decimals));                                               \
+    Debug::printfFeature(DebugFeature::VEHICLE, "[GOV] %s set to %.2f\n", label, value);         \
+}
+
+// Range texts mirror GOV_*_MIN / _MAX (Constants.h, static_asserted against the law above).
+GOV_SETTER(processSetGovKpCommand, govKpValid, GOV_KP_NVS_KEY, govKp_, "Kp", "0.2-10", 2)
+GOV_SETTER(processSetGovKiCommand, govKiValid, GOV_KI_NVS_KEY, govKi_, "Ki", "0-5", 2)
+GOV_SETTER(processSetGovAccCommand, govAccValid, GOV_ACC_NVS_KEY, govAccMs2_, "acceleration",
+           "0.3-3.0 m/s²", 1)
+GOV_SETTER(processSetGovDecCommand, govDecValid, GOV_DEC_NVS_KEY, govDecMs2_, "deceleration",
+           "0.5-5.0 m/s²", 1)
+GOV_SETTER(processSetGovLaunchCommand, govLaunchValid, GOV_LAUNCH_NVS_KEY, govLaunchPct_,
+           "start throttle limit", "1-40 %", 1)
+#undef GOV_SETTER
 
 void VehicleController::processSpeedCalPprCommand(float value, WebPortal& webPortal) {
     int32_t ppr = (int32_t)lroundf(value);

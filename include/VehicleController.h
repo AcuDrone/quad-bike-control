@@ -21,6 +21,7 @@
 #include "TachoSensor.h"
 #include "ParkBrakeController.h"
 #include "ParkBrakeLaw.h"
+#include "SpeedGovernorLaw.h"
 #include "VehicleCommandLaw.h"
 #include "CrankLaw.h"
 
@@ -404,6 +405,27 @@ public:
                (satClearedMs_ != 0 && (millis() - satClearedMs_) < SPEED_LIMIT_SAT_UI_HOLD_MS);
     }
 
+    // ---- Speed governor (change add-speed-governor) — read-only, for telemetry / GCS ----
+    bool  isGovEnabled() const { return govEnabled_; }
+    GovMode getGovMode() const { return govMode_; }
+    const char* getGovStateToken() const { return govModeToken(govMode_); }
+    /** @brief Ramped setpoint (m/s), 0 when not ACTIVE */
+    float getGovSetpointMs() const { return (govMode_ == GovMode::ACTIVE) ? gov_.spMs : 0.0f; }
+    /** @brief Governor output (%), 0 when not ACTIVE */
+    float getGovOutputPct() const { return (govMode_ == GovMode::ACTIVE) ? gov_.outPct : 0.0f; }
+    float getGovKp() const { return govKp_; }
+    float getGovKi() const { return govKi_; }
+    float getGovAccMs2() const { return govAccMs2_; }
+    float getGovDecMs2() const { return govDecMs2_; }
+    float getGovLaunchPct() const { return govLaunchPct_; }
+    /** @brief At-idle saturation display hold (design D6), the limiter's shape and constants */
+    bool isGovSatHeld() const {
+        return govSatActive_ ||
+               (govSatClearedMs_ != 0 && (millis() - govSatClearedMs_) < SPEED_LIMIT_SAT_UI_HOLD_MS);
+    }
+    /** @brief GCS no-speed flag (design D11): NOSPEED with the stick above the dead-band ≥ 2 s */
+    bool isGovNoSpeedWarn() const { return govNoSpeedWarn_; }
+
     /**
      * @brief Where the steering speed-scaling base in use came from.
      * Reported to the portal so "the steering feels weak" can be diagnosed without a console.
@@ -638,6 +660,28 @@ private:
     bool     satActive_;            // live flag: raw condition held for SPEED_LIMIT_SAT_HOLD_MS
     uint32_t satClearedMs_;         // millis() satActive_ last cleared (0 = never) — display hold
 
+    // Speed governor (change add-speed-governor; law include/SpeedGovernorLaw.h). Settings are
+    // persisted in NVS "speed" (gov_*), loaded in initCAN(); absent / invalid key = this build's
+    // GOV_*_DEFAULT (never rewritten).
+    SpeedGovernorState gov_;        // ramped setpoint, integrator, output, primed
+    GovMode  govMode_;              // mode selected in the latest evaluation (telemetry gov_state)
+    uint32_t govLastMs_;            // millis() of the last ACTIVE evaluation (0 = none → prime)
+    bool     govEvaluated_;         // commandThrottlePct() ran since update() last checked
+    bool     govBlendActive_;       // hand-over blend out of ACTIVE in progress (design D8)
+    float    govBlendPct_;          // blend output (%)
+    uint32_t govBlendLastMs_;       // millis() of the last blend step
+    bool     govEnabled_;           // gov_en
+    float    govKp_;                // gov_kp, % per m/s
+    float    govKi_;                // gov_ki, %/s per m/s
+    float    govAccMs2_;            // gov_acc, m/s²
+    float    govDecMs2_;            // gov_dec, m/s²
+    float    govLaunchPct_;         // gov_launch, % (start throttle limit)
+    uint32_t govSatSinceMs_;        // at-idle saturation: raw condition start (0 = not holding)
+    bool     govSatActive_;         // live flag
+    uint32_t govSatClearedMs_;      // display hold start (0 = never)
+    uint32_t govNoSpeedSinceMs_;    // NOSPEED with the stick above the dead-band since (0 = not)
+    bool     govNoSpeedWarn_;       // GCS no-speed flag (design D11)
+
     // Steering speed scaling. `steerScaBaseMs_` is the LOCAL (NVS-backed) base in m/s; 0 means
     // "not set", which falls through to the autopilot's MOT_SPD_SCA_BASE and then to no scaling
     // at all. The applied scale is what gets rate-limited, never the steering command.
@@ -693,12 +737,14 @@ private:
 
     /**
      * @brief The operator throttle path with the park brake in it. Steps the drive-away latch with
-     * the clipped demand (may start a drive-away RELEASE), evaluates applySpeedLimit(demand) so the
-     * limiter state never freezes, then either throttle_.idle() (park-brake hold) or
-     * setThrottlePercent(limited). Used by the MAVLink path, the web re-apply and set_throttle.
+     * the clipped demand (may start a drive-away RELEASE), evaluates commandThrottlePct(demand,
+     * bypass, brakeCommanded) so the limiter / governor state never freezes (governor switch OFF =
+     * exactly applySpeedLimit(demand), as before 1.5.35), then either throttle_.idle() (park-brake
+     * hold; the governor then re-primes from idle, bumpless on release) or
+     * setThrottlePercent(result). Used by the MAVLink path, the web re-apply and set_throttle.
      * @return true when the park brake held the throttle at idle
      */
-    bool applyOperatorThrottle(float demandPct);
+    bool applyOperatorThrottle(float demandPct, bool bypass, bool brakeCommanded);
 
     /** @brief Web park-brake commands (any input source, like set_wheel_lock) */
     void processParkBrakeCommand(const String& value, WebPortal& webPortal);
@@ -1069,6 +1115,37 @@ private:
 
     /** @brief End the live saturation (no-limit / fail-open paths); starts the display hold. */
     void clearSpeedLimitSaturation(uint32_t now);
+
+    /**
+     * @brief The one throttle function of the MAVLink and web paths (change add-speed-governor,
+     * design D1): selects the governor mode (D3); ACTIVE runs the governor (D2) and stands the
+     * ceiling limiter down (D7); every other mode runs applySpeedLimit() unchanged, passed through
+     * the hand-over blend while one is pending (D8). With the switch OFF and no blend pending
+     * this is exactly applySpeedLimit(demandPct).
+     * @param demandPct throttle input after the call site's N / shift clip
+     * @param bypass the call site's clip condition (shouldClipThrottle()) — BYPASS mode
+     * @param brakeCommanded a brake target ≥ 5 % is in force (stop while ACTIVE, D9)
+     * @return the throttle percentage to command
+     */
+    float commandThrottlePct(float demandPct, bool bypass, bool brakeCommanded);
+
+    /** @brief update(): no throttle evaluation this loop (shift lock, calibration, fail-safe…). */
+    void govNotEvaluated();
+    /**
+     * @brief Mode change bookkeeping: debug line, telemetry mode, governor reset; leaving ACTIVE
+     * starts the hand-over blend when allowBlend (not into BYPASS / no evaluation, D8).
+     */
+    void govSetMode(GovMode mode, uint32_t now, bool allowBlend);
+    /** @brief At-idle saturation timers (design D6). */
+    void govUpdateSat(bool raw, uint32_t now);
+    /** @brief Persist one float governor key to NVS "speed" (false on failure). */
+    bool govPersistFloat(const char* key, float value);
+    void processSetGovEnabledCommand(bool on, WebPortal& webPortal);
+    void processSetGovKpCommand(float value, WebPortal& webPortal);
+    void processSetGovKiCommand(float value, WebPortal& webPortal);
+    void processSetGovAccCommand(float value, WebPortal& webPortal);
+    void processSetGovDecCommand(float value, WebPortal& webPortal);
+    void processSetGovLaunchCommand(float value, WebPortal& webPortal);
 
     // Returns true when throttle should be clamped to TRANS_UNKNOWN_GEAR_THROTTLE_MAX:
     // while a gear change is active, the expected gear is NEUTRAL, or the transmission is

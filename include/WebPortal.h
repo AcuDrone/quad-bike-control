@@ -132,6 +132,17 @@ public:
         uint16_t throttle_open_slew; // Throttle opening rate limit in use (%/s, 0 = off)
         bool speed_limit_sat;     // Limiter saturated: ceiling at the floor, speed still above the limit
         bool speed_limit_sat_held; // speed_limit_sat, or within SPEED_LIMIT_SAT_UI_HOLD_MS after it cleared
+        // Speed governor (change add-speed-governor)
+        bool gov_en;              // governor switch (NVS "speed"/gov_en)
+        const char* gov_state;    // static token: off / nolimit / bypass / nospeed / active
+        float gov_sp_ms;          // ramped setpoint (m/s), 0 when not active — km/h in JSON
+        float gov_out;            // governor output (%), 0 when not active
+        bool gov_sat;             // at-idle saturation, with the display hold
+        float gov_kp;             // Kp in use, % per m/s
+        float gov_ki;             // Ki in use, %/s per m/s
+        float gov_acc;            // setpoint acceleration in use, m/s²
+        float gov_dec;            // setpoint deceleration in use, m/s²
+        float gov_launch;         // start throttle limit in use, %
         // Steering speed scaling — so "the steering feels weak" is diagnosable from the portal.
         float steer_scale;        // Applied scale after rate limiting, 0..1 (1 = not scaling)
         float steer_sca_base_ms;  // Base in use (m/s), 0 = none — serialised in m/s, not km/h

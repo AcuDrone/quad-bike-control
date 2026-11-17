@@ -462,6 +462,9 @@ void loop() {
     report.steerMode        = (uint8_t)vehicleController.getSteerMode();
     // Applied ignition state (IGN_STATE NAMED_VALUE_INT): 0 OFF, 1 ACC, 2 ON, 3 CRANKING.
     report.ignState         = vehicleController.getIgnStateCode();
+    // Speed governor no-speed warning / recovery (STATUSTEXT only, change add-speed-governor).
+    report.govNoSpeed       = vehicleController.isGovNoSpeedWarn();
+    report.govActive        = (vehicleController.getGovMode() == GovMode::ACTIVE);
     mavlinkInterface.report(report);
     loopTimer.mark(PH_REPORT);
 
