@@ -154,6 +154,9 @@ it. Cards are shown in one column.
   relay on needs ignition OFF, light off, the wheel lock released (if fitted) and a healthy relay
   board. The subtitle shows the active relay board ("Board: XL9535 @0x20 (auto)"); relay numbers
   mean the same relays on either board.
+- **🅿️ Стоянкове гальмо / Parking brake** (aztec only, shown when telemetry carries
+  `pbrake_state`): Apply / Release with a second-press confirmation, state, remaining time, travel
+  time, throttle release point and direction. See "Parking brake" below.
 
 **Система / System**:
 - **System maintenance**: debug output on/off, RPM boost test, firmware upload (OTA), "What's new".
@@ -299,6 +302,31 @@ value at a time, at most five runs per value:
 7. *Buggy only*: repeat in L, once in H at 10 km/h (rougher around the clutch take-up — expected) and
    in R (R ceiling 20 km/h).
 Record the final values; a default changes in code only for that vehicle's branch.
+
+**Parking brake (aztec, Tests → "🅿️ Стоянкове гальмо" / "Parking brake"):** the cable actuator on
+X6, driven by time. Applied only by an operator command (web card or GCS), never automatically;
+refused above 3 km/h. Released by the Release button / GCS, by the throttle drive-away (throttle
+> 10 % in L/H/R with the ignition on), and, **since 1.5.37, by a new service-brake press**:
+
+- **Service-brake release.** With the parking brake applied (or "Unknown"), pressing the service
+  brake — RC, GCS joystick or the web Brake slider — releases it. The run starts only when the
+  service-brake estimate has reached the pressed position (hand-over wait ≈ (brake % − 1) / 100 ×
+  brake `travel_ms`, e.g. ≈ 1.2 s for 80 % at 1500 ms), so the service brake takes the load first;
+  a press let go before that does nothing. It needs a **new** press: a brake already held when the
+  parking brake was applied does not release it — let go and press again. Any gear, any ignition
+  state. The release itself is the usual run (throttle held at idle in L/H/R up to the release
+  point; the run completes if the brake is let go). No new control or telemetry key; the card's ⓘ
+  explains it.
+- **RC-loss consequence (accepted by the owner, "no protection").** The automatic brake on RC
+  loss (BlueOS Copilot, ≈ 25 %, 15 s by default) is also a press: the parking brake releases, and
+  when the automatic brake ends **nothing holds the buggy** — on a slope or a trailer ramp it rolls.
+- **Trailer ramp procedure.** N, engine off (or idling in N), parking brake applied. Press and
+  **hold** the service brake firmly; wait until the card shows "Releasing…" and then "Released";
+  check the buggy stays put on the service brake alone; then ease the service brake off and roll
+  down under control, no throttle. If the parking brake lets go before the pads bite, lengthen the
+  service-brake "Full travel time" (NVS `brake`/`travel_ms`), which also lengthens the hand-over wait.
+- The firmware never moves or holds the service brake for this; after the release only the
+  service brake (and so the link) holds the buggy.
 
 **Relay board selection (System → Relay board card):** two relay boards are supported on header
 X15 / I2C2, one at a time: the custom **PCA9557** board at `0x1F` and the **XL9535-K8V5** at

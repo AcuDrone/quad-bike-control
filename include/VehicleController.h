@@ -724,6 +724,14 @@ private:
     float    pbDemandPct_;
     ParkBrakeDaWait pbBlockLogged_;   // reason already logged for the current blocked press (rate limit)
 
+    // Park-brake release by a service-brake press (ParkBrakeLaw.h parkBrakeSvcStep, change
+    // add-park-brake-release-by-service-brake): previous target, pending hand-over, previous source.
+    // Stepped every loop in update(), whatever the park-brake state.
+    ParkBrakeSvcRelease pbSvc_;
+
+    /** @brief One step of the service-brake release law (update(), after updateBrakeControl()) */
+    void updateParkBrakeServiceRelease();
+
     // Portal waiting for the final result of a "Set sensor zero" (steer_lws_zero): the
     // command is answered once when it starts and again when the zero-set ends.
     WebPortal* steerZeroResponsePortal_;

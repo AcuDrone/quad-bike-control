@@ -14,6 +14,13 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.37","date":"2026-11-17","uk":[
+"Багі: стоянкове гальмо відпускається натисканням робочого гальма (з пульта, джойстика або вебу), щойно робоче гальмо дотисне — щоб з'їхати з причепа на робочому гальмі, без газу. Діє, коли стоянкове гальмо затягнуте або стан «Невідомо», на будь-якій передачі й з будь-яким запалюванням; відпускання те саме, що й газом (газ на передачі тримається на холостому до точки пропуску). Потрібне нове натискання: гальмо, яке вже було натиснуте в момент затягування, стоянкове не відпускає — відпустіть і натисніть знову. Натискання робочого гальма ніколи не затягує стоянкове",
+"Увага: автоматичне гальмо при втраті зв'язку з пультом теж відпускає стоянкове гальмо. Коли автоматичне гальмо закінчиться (типово через 15 с), багі не триматиме нічого — на схилі чи на рампі причепа вона покотиться. Потрібно залити оновлений образ LittleFS"
+],"en":[
+"Buggy: the parking brake is released by pressing the service brake (RC, joystick or web) once the service brake has reached the pressed position — to come off a trailer on the service brake, with no throttle. It works while the parking brake is applied or its state is “Unknown”, in any gear and with any ignition state; the release is the same as the throttle release (the throttle in gear is held at idle up to the release point). It takes a new press: a brake already held when the parking brake was applied does not release it — let go and press again. A service-brake press never applies the parking brake",
+"Warning: the automatic brake on RC loss also releases the parking brake. When the automatic brake ends (15 s by default) nothing holds the buggy — on a slope or a trailer ramp it rolls. Upload the updated LittleFS image"
+]},
 {"version":"1.5.36","date":"2026-11-17","uk":[
 "Макс. час роботи стартера: найдовше, скільки стартер крутить за одну спробу запуску, тепер задається в розділі «Калібрування → Запуск двигуна», повзунок «Макс. час роботи стартера» під затримкою стартера (2–10 с, крок 0,5). Типово 5 с, як і раніше. Діє для перемикача пульта, наземної станції і кнопки ПУСК; стартер, як і раніше, вимикається раніше, щойно двигун завівся (обороти). Зміна діє з наступної спроби. Значення зберігається окремо для кожної машини (квадроцикл, багі). Не ставте довше, ніж потрібно: довгий запуск гріє стартер і розряджає акумулятор, а якщо оберти читаються заниженими, стартер крутитиме заведений двигун до кінця межі. Потрібно залити оновлений образ LittleFS"
 ],"en":[

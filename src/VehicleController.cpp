@@ -125,6 +125,7 @@ VehicleController::VehicleController(SteeringController& steering,
       pbArmed_(false),
       pbDemandPct_(0.0f),
       pbBlockLogged_(ParkBrakeDaWait::NONE),
+      pbSvc_(parkBrakeSvcInitial()),
       steerZeroResponsePortal_(nullptr) {
     effRpm_ = EffectiveRpm{0, false, RpmSource::NONE, 0};
 }
@@ -690,8 +691,38 @@ void VehicleController::update() {
     // Update brake actuator control
     updateBrakeControl();
 
-    // Aztec parking brake on X6: reverse dwell / run timer / settle. Independent of the X7 brake.
+    // Aztec parking brake: a new service-brake press releases it once the X7 estimate (this
+    // loop's, from updateBrakeControl() above) has reached the target. Before parkBrake_.update().
+    updateParkBrakeServiceRelease();
+
+    // Aztec parking brake on X6: reverse dwell / run timer / settle.
     parkBrake_.update();
+}
+
+void VehicleController::updateParkBrakeServiceRelease() {
+    // The firmware FAILSAFE source maps to NONE: the law only samples there (frozen target, F4).
+    // Any change of the mapped source re-seeds the sample and cancels a pending hand-over.
+    const ParkBrakeSvcSource src =
+        (currentInputSource_ == InputSource::MAVLINK) ? ParkBrakeSvcSource::MAVLINK :
+        (currentInputSource_ == InputSource::WEB)     ? ParkBrakeSvcSource::WEB :
+                                                        ParkBrakeSvcSource::NONE;
+    const ParkBrakeSvcStep st = parkBrakeSvcStep(pbSvc_, src, currentBrakeTarget_,
+                                                 currentBrakePosition_, parkBrake_.getState());
+    pbSvc_ = st.next;
+    if (!st.fire) return;
+
+    // Owner decision 2026-11-17 "no protection": any press counts, including an automatic brake.
+    // Same RELEASE request as the drive-away release; the existing RELEASING rules apply.
+    const ParkBrakeController::Outcome o = parkBrake_.request(ParkBrakeRequest::RELEASE, ParkBrakeSpeedCheck::OK);
+    if (o.result == ParkBrakeResult::STARTED || o.result == ParkBrakeResult::REVERSING) {
+        pbArmed_ = false;   // a release always needs a new rising edge for the next drive-away
+        Debug::printfFeature(DebugFeature::BRAKE,
+            "[PBRAKE] release by service brake (%s), target %.0f %%\n",
+            src == ParkBrakeSvcSource::WEB ? "web" : "mavlink", currentBrakeTarget_);
+    } else {
+        Debug::printfFeature(DebugFeature::BRAKE,
+            "[PBRAKE] release by service brake refused (result %u)\n", (unsigned)o.result);
+    }
 }
 
 void VehicleController::setInputSource(InputSource source) {

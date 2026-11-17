@@ -9,7 +9,8 @@
 //   PARK_BRAKE_TRAVEL_MS_MIN 1000, PARK_BRAKE_TRAVEL_MS_MAX 5000, PARK_BRAKE_TRAVEL_MS_DEFAULT 2000,
 //   PARK_BRAKE_TRAVEL_MARGIN_MS 500, PARK_BRAKE_REVERSE_DWELL_MS 200,
 //   PARK_BRAKE_THR_PASS_PCT_MIN 20, PARK_BRAKE_THR_PASS_PCT_MAX 100, PARK_BRAKE_THR_PASS_PCT_DEFAULT 50,
-//   PARK_BRAKE_APPLY_MAX_SPEED_MS 0.833, PARK_BRAKE_DRIVE_AWAY_THROTTLE_PCT 10.
+//   PARK_BRAKE_APPLY_MAX_SPEED_MS 0.833, PARK_BRAKE_DRIVE_AWAY_THROTTLE_PCT 10,
+//   BRAKE_TOLERANCE 1 (service-brake release hand-over, change add-park-brake-release-by-service-brake).
 #pragma once
 
 #include <stdint.h>
@@ -24,6 +25,7 @@ static const int32_t PB_LAW_THR_PASS_PCT_MAX    = 100;
 static const int32_t PB_LAW_THR_PASS_PCT_DEFAULT = 50;
 static constexpr float PB_LAW_APPLY_MAX_SPEED_MS = 0.833f;   // 3 km/h
 static constexpr float PB_LAW_DRIVE_AWAY_PCT     = 10.0f;
+static constexpr float PB_LAW_SVC_TOL_PCT        = 1.0f;    // service-brake "at target" (BRAKE_TOLERANCE)
 
 // State; the numeric values are the NVS "pbrake"/state codes.
 enum class ParkBrakeState : uint8_t {
@@ -223,4 +225,54 @@ inline ParkBrakeDaWait parkBrakeDaWait(ParkBrakeState state, ParkBrakeGear gear,
   if (!ignitionOn) return ParkBrakeDaWait::IGN_OFF;
   if (demandPct > PB_LAW_DRIVE_AWAY_PCT && !armed) return ParkBrakeDaWait::REARM;
   return ParkBrakeDaWait::NONE;
+}
+
+// ---- Release by a service-brake press (change add-park-brake-release-by-service-brake) ----
+// Owner decision 2026-11-17 "no protection": ANY new service-brake press releases an APPLIED or
+// UNKNOWN parking brake — including an automatic brake on channel 2 (BlueOS Copilot on RC loss).
+//
+// Input: the commanded service-brake target as applyBrake() sets it (0, or 5..100 %), the
+// open-loop service-brake position estimate, the input source and the park-brake state, sampled
+// on EVERY control loop in every park-brake state (design D1–D3):
+//  - press = target 0 → > 0 under MAVLINK or WEB; non-zero → other non-zero is not a press;
+//  - source NONE (the firmware FAILSAFE) never detects a press but keeps the sample current, so a
+//    frozen target is never a press, also when a live source returns with the same value;
+//  - any source change re-seeds the sample and cancels a pending hand-over (no edge by itself);
+//  - hand-over (assumption A1): the release fires on the first step whose estimate is at or above
+//    target − PB_LAW_SVC_TOL_PCT. Target back to 0, a source change or a state other than
+//    APPLIED/UNKNOWN cancels the wait; a new press is then needed.
+// The step has NO apply output: a service-brake press can only ever request a RELEASE.
+enum class ParkBrakeSvcSource : uint8_t { NONE, MAVLINK, WEB };   // NONE = firmware FAILSAFE
+
+struct ParkBrakeSvcRelease {
+  float prevTargetPct;            // target seen on the previous step
+  bool pending;                   // a press is waiting for the hand-over
+  ParkBrakeSvcSource prevSource;  // source seen on the previous step
+};
+
+struct ParkBrakeSvcStep {
+  ParkBrakeSvcRelease next;       // law state after this step
+  bool fire;                      // request a RELEASE run now
+};
+
+inline ParkBrakeSvcRelease parkBrakeSvcInitial() {
+  return {0.0f, false, ParkBrakeSvcSource::NONE};
+}
+
+inline ParkBrakeSvcStep parkBrakeSvcStep(const ParkBrakeSvcRelease& s, ParkBrakeSvcSource src,
+                                         float targetPct, float estPct, ParkBrakeState st) {
+  ParkBrakeSvcStep r{{targetPct, false, src}, false};
+  if (src != s.prevSource) return r;               // re-seed, cancel, no fire
+  if (src == ParkBrakeSvcSource::NONE) return r;   // FAILSAFE: sample only
+  if (!parkBrakeMaybeApplied(st)) return r;        // RELEASED / APPLYING / RELEASING: cancel
+
+  bool pending = s.pending;
+  if (s.prevTargetPct <= 0.0f && targetPct > 0.0f) pending = true;   // rising edge
+  if (targetPct <= 0.0f) pending = false;                              // dropped before hand-over
+  if (pending && estPct >= targetPct - PB_LAW_SVC_TOL_PCT) {
+    r.fire = true;
+    pending = false;
+  }
+  r.next.pending = pending;
+  return r;
 }

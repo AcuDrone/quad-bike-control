@@ -845,6 +845,35 @@ web control latched while RC is valid) or the `SERVO_OUTPUT_RAW` stream is stale
   extra interlock, accepted in every source / ignition state / fail-safe; apply above 3 km/h →
   reason 4; `pt_compensation` bits 2 / 3 report it.
 
+### Buggy: the service brake releases the parking brake (since 1.5.37)
+
+On the buggy (`aztec` only) a **new service-brake press** releases an applied parking brake
+(`APPLIED`, or `UNKNOWN` treated as applied) — there is no MAV_CMD for it, it comes from the brake
+itself:
+
+- **What counts.** Servo channel 2 below centre in `SERVO_OUTPUT_RAW` (brake % = (1500 − µs) / 4,
+  below 5 % = 0) from **any** sender: the RC handset, the GCS joystick, and any
+  `RC_CHANNELS_OVERRIDE` sender — including the BlueOS Copilot's automatic GCS-loss brake
+  (ADR-0004, `brake_pwm` default 1400 µs = 25 %). The web Brake counts too. The ESP32 cannot tell
+  these apart and, by owner decision (2026-11-17, "no protection"), does not try.
+- **Press** = the brake command goes from 0 to above 0 while the input source is MAVLink or web. A
+  brake already held when the parking brake becomes applied is not a press (let go, press again);
+  a change from one non-zero value to another is not a press; nothing counts under the firmware's
+  own fail-safe (no `SERVO_OUTPUT_RAW` for 500 ms, no browser), and the frozen value is not a
+  press when the link returns; an input-source change is never a press by itself.
+- **Hand-over.** The release run starts when the service-brake position estimate has reached the
+  commanded value (within 1 %): about (brake % − 1) / 100 × brake `travel_ms` after the press
+  (≈ 0.36 s for 25 %, ≈ 1.5 s for 100 % at the default 1500 ms). A command back to 0 first → no
+  release. No gear, ignition, flight-mode or heartbeat condition.
+- **Release** = the same run as the throttle drive-away release (throttle held at idle in L/H/R up
+  to the release point; the run completes even if the brake is let go; nothing re-applies).
+  `pt_compensation` bits 2 / 3 show it; no STATUSTEXT.
+- **RC-loss consequence (accepted).** RC lost while parked with the parking brake applied → the
+  autopilot zeroes channel 2 → the Copilot brakes (≈ 2.5–5 s after the loss) → that is a new press
+  → the parking brake releases → after the Copilot's `brake_hold_s` (default 15 s) the service
+  brake lets go and **nothing holds the buggy**; on a slope or a trailer ramp it rolls. Any other
+  automatic brake on channel 2 (an autopilot mode, a joystick glitch) does the same.
+
 ### RC and GCS: last change wins
 
 RC channels 3 (gear), 4 (ignition) and 6 (light) are applied only when their decoded value

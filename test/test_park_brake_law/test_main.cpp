@@ -252,6 +252,245 @@ static void test_direction_mapping() {
     TEST_ASSERT_EQUAL_INT8(1, parkBrakeDriveSign(Q::RELEASE, true));
 }
 
+// ---- release by a service-brake press (add-park-brake-release-by-service-brake) ----
+typedef ParkBrakeSvcSource SS;
+
+struct SvcSim {
+    ParkBrakeSvcRelease st = parkBrakeSvcInitial();
+    int fires = 0;
+    // One loop; returns true when this step fires. Every step is checked for "fire ⇒ RELEASE only":
+    // the step has no apply output at all (2.9) — the type carries only `fire`.
+    bool step(SS src, float target, float est, S state) {
+        ParkBrakeSvcStep r = parkBrakeSvcStep(st, src, target, est, state);
+        st = r.next;
+        if (r.fire) {
+            fires++;
+            TEST_ASSERT_FALSE(st.pending);   // firing always clears the wait
+        }
+        return r.fire;
+    }
+};
+
+// Seed the sim at source `src`, target 0, state `state` (two loops: the source change, then steady).
+static SvcSim svcSeeded(SS src, S state, float target = 0.0f, float est = 0.0f) {
+    SvcSim m;
+    m.step(src, target, est, state);
+    m.step(src, target, est, state);
+    TEST_ASSERT_EQUAL_INT(0, m.fires);
+    return m;
+}
+
+// 2.1 / spec "RC press releases after the hand-over"
+static void test_svc_rising_edge_applied() {
+    SvcSim m = svcSeeded(SS::MAVLINK, S::APPLIED);
+    TEST_ASSERT_FALSE(m.step(SS::MAVLINK, 50.0f, 0.0f, S::APPLIED));
+    TEST_ASSERT_TRUE(m.st.pending);
+    TEST_ASSERT_FALSE(m.step(SS::MAVLINK, 50.0f, 20.0f, S::APPLIED));
+    TEST_ASSERT_FALSE(m.step(SS::MAVLINK, 50.0f, 48.9f, S::APPLIED));
+    TEST_ASSERT_TRUE(m.step(SS::MAVLINK, 50.0f, 49.0f, S::APPLIED));
+    // Held: no second fire (the run is RELEASING, then RELEASED; the state would also block)
+    TEST_ASSERT_FALSE(m.step(SS::MAVLINK, 50.0f, 50.0f, S::APPLIED));
+    TEST_ASSERT_FALSE(m.step(SS::MAVLINK, 50.0f, 50.0f, S::RELEASING));
+    TEST_ASSERT_EQUAL_INT(1, m.fires);
+}
+
+// 2.2
+static void test_svc_from_unknown() {
+    SvcSim m = svcSeeded(SS::MAVLINK, S::UNKNOWN);
+    TEST_ASSERT_FALSE(m.step(SS::MAVLINK, 50.0f, 0.0f, S::UNKNOWN));
+    TEST_ASSERT_TRUE(m.step(SS::MAVLINK, 50.0f, 49.5f, S::UNKNOWN));
+    TEST_ASSERT_EQUAL_INT(1, m.fires);
+}
+
+// 2.3 / spec "Brake held when the parking brake is applied"
+static void test_svc_held_at_apply_time() {
+    SvcSim m = svcSeeded(SS::WEB, S::RELEASED);
+    m.step(SS::WEB, 60.0f, 10.0f, S::RELEASED);       // the press while RELEASED: nothing
+    m.step(SS::WEB, 60.0f, 60.0f, S::RELEASED);
+    m.step(SS::WEB, 60.0f, 60.0f, S::APPLYING);
+    m.step(SS::WEB, 60.0f, 60.0f, S::APPLYING);
+    for (int i = 0; i < 20; i++) m.step(SS::WEB, 60.0f, 60.0f, S::APPLIED);
+    TEST_ASSERT_EQUAL_INT(0, m.fires);
+    TEST_ASSERT_FALSE(m.st.pending);
+    // Let go, press again
+    m.step(SS::WEB, 0.0f, 30.0f, S::APPLIED);
+    m.step(SS::WEB, 0.0f, 0.0f, S::APPLIED);
+    TEST_ASSERT_FALSE(m.step(SS::WEB, 60.0f, 0.0f, S::APPLIED));
+    TEST_ASSERT_FALSE(m.step(SS::WEB, 60.0f, 40.0f, S::APPLIED));
+    TEST_ASSERT_TRUE(m.step(SS::WEB, 60.0f, 59.0f, S::APPLIED));
+    TEST_ASSERT_EQUAL_INT(1, m.fires);
+}
+
+// 2.4 / spec "Frozen target under the firmware fail-safe"
+static void test_svc_failsafe_frozen_target() {
+    SvcSim m = svcSeeded(SS::MAVLINK, S::APPLIED);
+    // FAILSAFE begins; the target freezes / is non-zero — never a press under NONE
+    m.step(SS::NONE, 25.0f, 25.0f, S::APPLIED);
+    m.step(SS::NONE, 25.0f, 25.0f, S::APPLIED);
+    // Even a 0 → 25 change seen under NONE is not a press
+    m.step(SS::NONE, 0.0f, 0.0f, S::APPLIED);
+    m.step(SS::NONE, 25.0f, 25.0f, S::APPLIED);
+    TEST_ASSERT_FALSE(m.st.pending);
+    // MAVLink returns with the same 25 %
+    TEST_ASSERT_FALSE(m.step(SS::MAVLINK, 25.0f, 25.0f, S::APPLIED));
+    TEST_ASSERT_FALSE(m.step(SS::MAVLINK, 25.0f, 25.0f, S::APPLIED));
+    // 25 → 40: non-zero → non-zero, no press
+    TEST_ASSERT_FALSE(m.step(SS::MAVLINK, 40.0f, 30.0f, S::APPLIED));
+    TEST_ASSERT_FALSE(m.step(SS::MAVLINK, 40.0f, 40.0f, S::APPLIED));
+    TEST_ASSERT_EQUAL_INT(0, m.fires);
+    // A pending wait is cancelled by FAILSAFE
+    m.step(SS::MAVLINK, 0.0f, 0.0f, S::APPLIED);
+    m.step(SS::MAVLINK, 50.0f, 0.0f, S::APPLIED);
+    TEST_ASSERT_TRUE(m.st.pending);
+    TEST_ASSERT_FALSE(m.step(SS::NONE, 50.0f, 49.0f, S::APPLIED));
+    TEST_ASSERT_FALSE(m.st.pending);
+    TEST_ASSERT_FALSE(m.step(SS::MAVLINK, 50.0f, 50.0f, S::APPLIED));
+    TEST_ASSERT_FALSE(m.step(SS::MAVLINK, 50.0f, 50.0f, S::APPLIED));
+    TEST_ASSERT_EQUAL_INT(0, m.fires);
+}
+
+// 2.5 / spec "Takeover with an inherited target"
+static void test_svc_takeover_inherited() {
+    SvcSim m = svcSeeded(SS::MAVLINK, S::APPLIED, 80.0f, 80.0f);
+    TEST_ASSERT_FALSE(m.step(SS::WEB, 80.0f, 80.0f, S::APPLIED));   // takeover
+    TEST_ASSERT_FALSE(m.step(SS::WEB, 80.0f, 80.0f, S::APPLIED));   // web 80 unchanged
+    TEST_ASSERT_FALSE(m.step(SS::WEB, 0.0f, 79.0f, S::APPLIED));
+    TEST_ASSERT_FALSE(m.step(SS::WEB, 80.0f, 10.0f, S::APPLIED));   // web 0 → 80
+    TEST_ASSERT_TRUE(m.step(SS::WEB, 80.0f, 79.0f, S::APPLIED));
+    TEST_ASSERT_EQUAL_INT(1, m.fires);
+
+    // A pending wait across MAVLINK → WEB is cancelled; the source change itself is no edge
+    SvcSim n = svcSeeded(SS::MAVLINK, S::APPLIED);
+    n.step(SS::MAVLINK, 50.0f, 0.0f, S::APPLIED);
+    TEST_ASSERT_TRUE(n.st.pending);
+    TEST_ASSERT_FALSE(n.step(SS::WEB, 50.0f, 49.0f, S::APPLIED));
+    TEST_ASSERT_FALSE(n.st.pending);
+    TEST_ASSERT_FALSE(n.step(SS::WEB, 50.0f, 50.0f, S::APPLIED));
+    // A source change in the same loop as a 0 → x change is not a press either
+    SvcSim k = svcSeeded(SS::WEB, S::APPLIED);
+    TEST_ASSERT_FALSE(k.step(SS::MAVLINK, 50.0f, 0.0f, S::APPLIED));
+    TEST_ASSERT_FALSE(k.step(SS::MAVLINK, 50.0f, 50.0f, S::APPLIED));
+    TEST_ASSERT_EQUAL_INT(0, n.fires + k.fires);
+}
+
+// 2.6 / 2.7 / spec "Press dropped before the hand-over"
+static void test_svc_dropped_then_second_press() {
+    SvcSim m = svcSeeded(SS::MAVLINK, S::APPLIED);
+    m.step(SS::MAVLINK, 60.0f, 0.0f, S::APPLIED);
+    m.step(SS::MAVLINK, 60.0f, 30.0f, S::APPLIED);
+    TEST_ASSERT_TRUE(m.st.pending);
+    TEST_ASSERT_FALSE(m.step(SS::MAVLINK, 0.0f, 35.0f, S::APPLIED));
+    TEST_ASSERT_FALSE(m.st.pending);
+    // The estimate decays past the old target region: nothing
+    TEST_ASSERT_FALSE(m.step(SS::MAVLINK, 0.0f, 10.0f, S::APPLIED));
+    TEST_ASSERT_FALSE(m.step(SS::MAVLINK, 0.0f, 0.0f, S::APPLIED));
+    TEST_ASSERT_EQUAL_INT(0, m.fires);
+    // 2.7 second press
+    TEST_ASSERT_FALSE(m.step(SS::MAVLINK, 60.0f, 0.0f, S::APPLIED));
+    TEST_ASSERT_FALSE(m.step(SS::MAVLINK, 60.0f, 58.0f, S::APPLIED));
+    TEST_ASSERT_TRUE(m.step(SS::MAVLINK, 60.0f, 59.0f, S::APPLIED));
+    TEST_ASSERT_EQUAL_INT(1, m.fires);
+}
+
+// 2.8 / spec "No apply and no effect when not applied"
+static void test_svc_not_applied_states() {
+    const S states[] = {S::APPLYING, S::RELEASING, S::RELEASED};
+    for (S s : states) {
+        SvcSim m = svcSeeded(SS::MAVLINK, s);
+        TEST_ASSERT_FALSE(m.step(SS::MAVLINK, 50.0f, 0.0f, s));
+        TEST_ASSERT_FALSE(m.st.pending);
+        TEST_ASSERT_FALSE(m.step(SS::MAVLINK, 50.0f, 50.0f, s));
+        // The press happened in this state: becoming APPLIED with the brake held is no edge
+        TEST_ASSERT_FALSE(m.step(SS::MAVLINK, 50.0f, 50.0f, S::APPLIED));
+        TEST_ASSERT_EQUAL_INT(0, m.fires);
+    }
+    // A pending wait is cancelled when the state leaves APPLIED/UNKNOWN (e.g. a web Release / Apply)
+    const S leave[] = {S::RELEASING, S::APPLYING, S::RELEASED};
+    for (S s : leave) {
+        SvcSim m = svcSeeded(SS::WEB, S::APPLIED);
+        m.step(SS::WEB, 50.0f, 0.0f, S::APPLIED);
+        TEST_ASSERT_TRUE(m.st.pending);
+        TEST_ASSERT_FALSE(m.step(SS::WEB, 50.0f, 20.0f, s));
+        TEST_ASSERT_FALSE(m.st.pending);
+        TEST_ASSERT_FALSE(m.step(SS::WEB, 50.0f, 50.0f, S::APPLIED));
+        TEST_ASSERT_EQUAL_INT(0, m.fires);
+    }
+}
+
+// 2.9: the step has no apply output — a press can only fire a RELEASE, and never from a state that
+// is not APPLIED/UNKNOWN. Exhaustive sweep over sources, states and target/estimate pairs.
+static void test_svc_never_applies() {
+    const SS srcs[] = {SS::NONE, SS::MAVLINK, SS::WEB};
+    const S sts[] = {S::UNKNOWN, S::RELEASED, S::APPLIED, S::APPLYING, S::RELEASING};
+    const float vals[] = {0.0f, 5.0f, 25.0f, 50.0f, 100.0f};
+    for (SS ps : srcs) for (SS src : srcs) for (S st : sts)
+    for (float prev : vals) for (float tgt : vals) for (float est : vals)
+    for (int pend = 0; pend < 2; pend++) {
+        ParkBrakeSvcRelease s{prev, pend != 0, ps};
+        ParkBrakeSvcStep r = parkBrakeSvcStep(s, src, tgt, est, st);
+        TEST_ASSERT_EQUAL_FLOAT(tgt, r.next.prevTargetPct);            // always sampled
+        TEST_ASSERT_TRUE(r.next.prevSource == src);
+        if (r.fire) {
+            TEST_ASSERT_TRUE(parkBrakeMaybeApplied(st));
+            TEST_ASSERT_TRUE(src == ps && src != SS::NONE);
+            TEST_ASSERT_TRUE(tgt > 0.0f);
+            TEST_ASSERT_FALSE(r.next.pending);
+        }
+        if (src != ps || src == SS::NONE || !parkBrakeMaybeApplied(st)) {
+            TEST_ASSERT_FALSE(r.next.pending);
+            TEST_ASSERT_FALSE(r.fire);
+        }
+    }
+}
+
+// 2.10 / spec "Automatic fail-safe brake releases (accepted)": the Copilot's constant 25 % brake
+// (channel 2 at 1400 µs) after an RC loss is a new press — documents the accepted behaviour.
+static void test_svc_copilot_pattern_releases() {
+    SvcSim m = svcSeeded(SS::MAVLINK, S::APPLIED);
+    for (int i = 0; i < 50; i++) m.step(SS::MAVLINK, 0.0f, 0.0f, S::APPLIED);   // autopilot zeroes ch2
+    TEST_ASSERT_FALSE(m.step(SS::MAVLINK, 25.0f, 0.0f, S::APPLIED));
+    TEST_ASSERT_FALSE(m.step(SS::MAVLINK, 25.0f, 12.0f, S::APPLIED));
+    TEST_ASSERT_FALSE(m.step(SS::MAVLINK, 25.0f, 23.9f, S::APPLIED));
+    TEST_ASSERT_TRUE(m.step(SS::MAVLINK, 25.0f, 24.0f, S::APPLIED));
+    for (int i = 0; i < 50; i++) m.step(SS::MAVLINK, 25.0f, 25.0f, S::RELEASING);
+    for (int i = 0; i < 50; i++) m.step(SS::MAVLINK, 25.0f, 25.0f, S::RELEASED);
+    m.step(SS::MAVLINK, 0.0f, 25.0f, S::RELEASED);   // brake_hold_s expires
+    TEST_ASSERT_EQUAL_INT(1, m.fires);
+}
+
+// 2.11: a pending target change 30 → 80 waits for the new target
+static void test_svc_pending_target_change() {
+    SvcSim m = svcSeeded(SS::MAVLINK, S::APPLIED);
+    m.step(SS::MAVLINK, 30.0f, 0.0f, S::APPLIED);
+    TEST_ASSERT_FALSE(m.step(SS::MAVLINK, 80.0f, 25.0f, S::APPLIED));
+    TEST_ASSERT_FALSE(m.step(SS::MAVLINK, 80.0f, 30.0f, S::APPLIED));   // the old target reached
+    TEST_ASSERT_FALSE(m.step(SS::MAVLINK, 80.0f, 78.9f, S::APPLIED));
+    TEST_ASSERT_TRUE(m.st.pending);
+    TEST_ASSERT_TRUE(m.step(SS::MAVLINK, 80.0f, 79.0f, S::APPLIED));
+    TEST_ASSERT_EQUAL_INT(1, m.fires);
+}
+
+// Boot edge (design "Risks / open-loop estimate"): the estimate starts at 100 % and runs down to 0
+// over travel_ms until the released sensor syncs it. A press while the estimate is still at or above
+// target − 1 % hands over at once (accepted; bench task 8.3). The law follows the estimate as is.
+static void test_svc_boot_estimate_hands_over_at_once() {
+    SvcSim m;
+    m.step(SS::NONE, 0.0f, 100.0f, S::APPLIED);       // boot: FAILSAFE, estimate 100 %
+    m.step(SS::MAVLINK, 0.0f, 90.0f, S::APPLIED);     // link up: re-seed
+    m.step(SS::MAVLINK, 0.0f, 80.0f, S::APPLIED);
+    TEST_ASSERT_TRUE(m.step(SS::MAVLINK, 50.0f, 70.0f, S::APPLIED));   // press at estimate 70 %
+    TEST_ASSERT_EQUAL_INT(1, m.fires);
+}
+
+// Initial state
+static void test_svc_initial() {
+    ParkBrakeSvcRelease s = parkBrakeSvcInitial();
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, s.prevTargetPct);
+    TEST_ASSERT_FALSE(s.pending);
+    TEST_ASSERT_TRUE(s.prevSource == SS::NONE);
+    TEST_ASSERT_EQUAL_FLOAT(1.0f, PB_LAW_SVC_TOL_PCT);
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_decode_stored);
@@ -271,5 +510,17 @@ int main(int, char**) {
     RUN_TEST(test_latch_applied_with_throttle_up);
     RUN_TEST(test_da_wait_none_cases);
     RUN_TEST(test_direction_mapping);
+    RUN_TEST(test_svc_initial);
+    RUN_TEST(test_svc_rising_edge_applied);
+    RUN_TEST(test_svc_from_unknown);
+    RUN_TEST(test_svc_held_at_apply_time);
+    RUN_TEST(test_svc_failsafe_frozen_target);
+    RUN_TEST(test_svc_takeover_inherited);
+    RUN_TEST(test_svc_dropped_then_second_press);
+    RUN_TEST(test_svc_not_applied_states);
+    RUN_TEST(test_svc_never_applies);
+    RUN_TEST(test_svc_copilot_pattern_releases);
+    RUN_TEST(test_svc_pending_target_change);
+    RUN_TEST(test_svc_boot_estimate_hands_over_at_once);
     return UNITY_END();
 }
