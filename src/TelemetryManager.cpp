@@ -137,6 +137,18 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.throttle_open_slew = (uint16_t)lroundf(vehicleController_.getThrottleOpenSlewPctS());
     telemetry.speed_limit_sat = vehicleController_.isSpeedLimitSaturated();
     telemetry.speed_limit_sat_held = vehicleController_.isSpeedLimitSatHeld();
+    // Speed governor: switch, mode of the latest evaluation, setpoint / output (0 unless active),
+    // the at-idle badge (with its display hold) and the settings in use.
+    telemetry.gov_en = vehicleController_.isGovEnabled();
+    telemetry.gov_state = vehicleController_.getGovStateToken();
+    telemetry.gov_sp_ms = vehicleController_.getGovSetpointMs();
+    telemetry.gov_out = vehicleController_.getGovOutputPct();
+    telemetry.gov_sat = vehicleController_.isGovSatHeld();
+    telemetry.gov_kp = vehicleController_.getGovKp();
+    telemetry.gov_ki = vehicleController_.getGovKi();
+    telemetry.gov_acc = vehicleController_.getGovAccMs2();
+    telemetry.gov_dec = vehicleController_.getGovDecMs2();
+    telemetry.gov_launch = vehicleController_.getGovLaunchPct();
     // Steering speed scaling: the applied scale, the base actually in use, which source that
     // base came from, and any live bench override — the four facts that explain the scale.
     telemetry.steer_scale = vehicleController_.getSteerScale();

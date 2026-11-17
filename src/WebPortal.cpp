@@ -681,6 +681,10 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // memory, ≤ 130 B of JSON) — worst case ≈ 8.37 KB, ≈ 0.85 KB under 9216 (size unchanged).
     // Pre-crank delay since 1.5.33: crank_dwell_ms, 1 scalar slot (key by pointer, ≈ 16 B of
     // memory, ≈ 22 B of JSON) — worst case ≈ 8.39 KB, ≈ 0.83 KB under 9216 (size unchanged).
+    // Speed governor since 1.5.35: gov_en / gov_state / gov_sp / gov_out / gov_sat / gov_kp /
+    // gov_ki / gov_acc / gov_dec / gov_launch, 10 scalar slots (keys by pointer, gov_state a
+    // static token by pointer; 6 copied number strings ≈ 28 B) ≈ 10 × 16 + 28 ≈ 0.19 KB of memory,
+    // ≈ 170 B of JSON — worst case ≈ 8.39 + 0.19 ≈ 8.58 KB, ≈ 0.64 KB under 9216 (size unchanged).
     // Static (single caller: the main-loop broadcast) so the larger document is off the stack.
     static StaticJsonDocument<9216> doc;
     doc.clear();
@@ -783,6 +787,18 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["throttle_open_slew"] = telemetry.throttle_open_slew;   // %/s, 0 = opening limit off
     doc["speed_limit_sat"] = telemetry.speed_limit_sat;
     doc["speed_limit_sat_held"] = telemetry.speed_limit_sat_held;
+    // Speed governor (change add-speed-governor). gov_state is a static token stored by pointer;
+    // the setpoint is km/h at this presentation edge like every road speed.
+    doc["gov_en"] = telemetry.gov_en;
+    doc["gov_state"] = telemetry.gov_state ? telemetry.gov_state : "off";
+    doc["gov_sp"] = serialized(String(telemetry.gov_sp_ms * MS_TO_KMH, 1));
+    doc["gov_out"] = (int)lroundf(telemetry.gov_out);
+    doc["gov_sat"] = telemetry.gov_sat;
+    doc["gov_kp"] = serialized(String(telemetry.gov_kp, 2));
+    doc["gov_ki"] = serialized(String(telemetry.gov_ki, 2));
+    doc["gov_acc"] = serialized(String(telemetry.gov_acc, 1));
+    doc["gov_dec"] = serialized(String(telemetry.gov_dec, 1));
+    doc["gov_launch"] = serialized(String(telemetry.gov_launch, 1));
     // Steering speed scaling. These four stay in m/s, NOT km/h: the base is the same quantity
     // as the autopilot's MOT_SPD_SCA_BASE, which the operator sets in m/s in the ground station,
     // and a unit change here would make the two impossible to compare. 1.00 = not scaling.

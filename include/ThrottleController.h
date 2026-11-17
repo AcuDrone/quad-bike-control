@@ -56,6 +56,9 @@ public:
     bool isCalibrating() const { return calibrating_; }
     uint16_t percentToUs(float pct) const;
     uint8_t usToPercent(uint16_t us) const;   // inverse of percentToUs(), clamped 0..100
+    // Last commanded percent (after the opening rate limit); 0 after idle(). The speed governor
+    // starts from it at every engagement (bumpless, change add-speed-governor D8).
+    float getLastCommandedPct() const { return lastPct_; }
 
     // ---- Opening rate limit (0 = off, else THROTTLE_OPEN_SLEW_MIN..MAX_PCT_S) ----
     float getOpenSlewPctS() const { return openSlewPctS_; }
