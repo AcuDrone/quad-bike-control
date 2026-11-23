@@ -10,7 +10,7 @@ source at tag `Rover-4.7.2` (sparse clone, Oct 2026). **[doc]** = ardupilot.org 
    tunnelled in `uavcan.tunnel.Targetted`**, or **(B) native DroneCAN messages** (ArrayCommand, ICE Status…).
 2. **A keeps 100 % of today's MAVLink logic** (SERVO_OUTPUT_RAW, PARAM, mode, VISO, EFI_STATUS, plugin). Only the byte transport changes. ArduPilot does not care if the node has a real UART **[src]**.
 3. **B loses features**: there is no DroneCAN backend for VISO/wheel odometry, no flight mode, and no way to read autopilot params. EFI fields go through float16 and 3 repurposed fields are dropped.
-4. Put DroneCAN on the **ESP32-S3 TWAI** with its own transceiver: a dedicated Pixhawk↔ESP32 bus at 1 Mbit/s or 500 kbit/s. Keep the MCP2515 (8 MHz → **max 500 kbit/s**, 2 RX buffers, polled) for OBD-II, LWS and VESC.
+4. Put DroneCAN on the **ESP32-S3 TWAI** with its own transceiver: a dedicated Pixhawk↔ESP32 bus at 1 Mbit/s or 500 kbit/s. Keep the MCP2515 (8 MHz → **max 500 kbit/s**, 2 RX buffers; since fw 1.5.38 served by its own task woken by INT, 2 ms polling fallback) for OBD-II, LWS and VESC.
 5. Plan: **A first (≈4–6 days)**. Then optionally add native ArrayCommand for actuators (hybrid C). Do not use B alone.
 
 ## Options
@@ -109,8 +109,9 @@ MAVLink parser. **Throughput (my estimate)**: 120 B ≈ 19 extended frames ≈ 3
 - **MCP2515 at 8 MHz**: TQ = 2/Fosc = 250 ns. The 8 TQ minimum gives **500 kbit/s max in spec**. The
   `mcp_can` library's 8 MHz "1000 kbps" preset uses 4 TQ (PS2 = 1 TQ) — **out of datasheet spec**
   **[unverified vs datasheet text]**. The 500 k preset samples at 75 % (CNF 0x00/0xD1/0x81, computed),
-  while DroneCAN recommends 85–90 % at 500 k **[doc spec §8]**. The chip has 2 RX buffers and the
-  driver polls them: a 19-frame tunnel burst would overflow it. **Do not put DroneCAN on the MCP2515.**
+  while DroneCAN recommends 85–90 % at 500 k **[doc spec §8]**. The chip has 2 RX buffers; since fw 1.5.38 a
+  task woken by INT drains them (2 ms polling fallback), but a 19-frame tunnel burst at 500 kbit/s
+  (≈ 0.25 ms per frame) still risks an overflow. **Do not put DroneCAN on the MCP2515.**
 - **ID collisions on a shared bus**: DroneCAN message ID = prio(5) | type(16) | 0 | src(7) **[doc]**.
   - A VESC frame `cmd<<8 | id` looks to AP like message type `cmd` with priority 0 from node `id`. AP only
     accepts known types. `cmd=1` (SET_CURRENT) = **Allocation (ID 1)**, and AP processes it only when the

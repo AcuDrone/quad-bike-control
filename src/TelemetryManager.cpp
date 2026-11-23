@@ -274,6 +274,15 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     // Link recovery counters + event journal size
     telemetry.vesc_resync = vehicleController_.getSteering().getLinkStats().resync;
     telemetry.can_reinit = vehicleController_.getCanReinitCount();
+    {
+        const CANController::DriverStats cs = vehicleController_.getCanDriverStats();
+        telemetry.can_int = cs.taskRunning ? cs.intState : nullptr;
+        telemetry.can_rx_drop = cs.rxDrop;
+        telemetry.can_rx_ovr = cs.rxOvr;
+        telemetry.can_rx_hwm = cs.rxHwm;
+        telemetry.can_tx_fail = cs.txFail;
+        telemetry.can_busy_max_us = cs.busyMaxUs;
+    }
     telemetry.i2c_unlock = I2cBusRecovery::count();
     telemetry.journal_bytes = EventJournal::journalBytes();
     telemetry.journal_fs = EventJournal::flashWritesEnabled();

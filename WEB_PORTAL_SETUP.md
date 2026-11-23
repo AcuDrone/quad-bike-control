@@ -96,6 +96,14 @@ it. Cards are shown in one column.
   "Probe ECU" with its results. The **Engine RPM** tile shows the EFFECTIVE RPM (`engine_rpm`,
   tacho when fitted, CAN otherwise) whether or not CAN is connected, with a small **TACHO** / **CAN**
   badge (`rpm_source`); "—" when no source is valid.
+  Under the CAN status (fw 1.5.38) one muted line shows how the CAN
+  task receives — "RX: переривання" / "RX: interrupt" (normal), "RX: опитування (INT не працює)" /
+  "RX: polling (INT dead)" in yellow (the MCP2515 INT line does not fire; CAN runs on the 2 ms poll),
+  "RX: опитування (без INT)" / "RX: polling (no INT wire)" — plus "втрачено N" / "dropped N" and
+  "переповнення N" / "overflow N" when non-zero (telemetry `can_int`, `can_rx_drop`, `can_rx_ovr`;
+  also `can_rx_hwm`, `can_tx_fail`, `can_busy_max_us`). Not an attention item. The CAN sniffer's
+  summary adds "втрачено в черзі" / "queue drops" (frames dropped from the full receive queue), and a
+  sniff whose filters could not be opened ends at once with "Filters could not be opened".
 - **MAVLink Command Channels**: link rate/age and channels 1–8. Ch5, Ch7 and Ch8 show their raw
   value without a function (Ch7 was the lock until 1.5.33).
 - **Швидкість / Speed**: speed and sensor state, speed limit and limiting, the speed-governor row
@@ -432,7 +440,20 @@ as `sup=N` on the next line of that pair. Examples:
 47 2210.551 I2C W bus_stuck sda=0 scl=1 clocks=3 released=1 reinit=1 by=relay err=5 runs=1
 47 60.001 SNAP I heap=126840 min=118204 loop_max=4 jflush_max=38 vin=24.0 fet=40.1
 47 60.001 SNAP I lws_fps=100 vesc_good=198 drop=0 resync=0 can_reinit=0 i2c_unlock=0
+47 60.002 CAN I stats rx=6000 drop=0 hwm=3 ovr=0 int=5990 poll=10 tx=180 txf=0 bmax=310 miss=0
 ```
+
+`CAN I stats` (fw 1.5.38, every 60 s): per-window counts of the CAN task — `rx` frames read, `drop`
+receive-queue drops, `ovr` MCP2515 RX overflow flags, `int` INT wake-ups, `poll` frames found on a
+poll wake, `tx` / `txf` frames sent / failed, `miss` LWS frames missed by the decoder — and the
+window maxima `hwm` (receive-queue depth) and `bmax` (longest receive / transmit service pass of
+the task, µs; init, re-init and filter-change time is excluded and shown as `cmd_max_us` on the
+console `[CAN] task:` line). A chip left down by a failed re-init is retried by the task every 5 s:
+`CAN I reinit reason=task_retry result=ok attempt=N after_s=S` when it comes back. Also from the CAN
+task: `CAN I init result=ok attempt=1 after_s=0 stk=N` at boot (`stk` = free task stack, bytes),
+`CAN E init result=fail …` once if the controller is not ready at power-on and `CAN I init
+result=ok attempt=N after_s=S` when a 5 s retry succeeds, `CAN W int state=dead` / `CAN I int
+state=ok` when the INT line stops / starts waking the task.
 
 The VESC link lines (`link_lost`, `link_up`, `link_down_snap`) use compact keys to stay within the
 line limit: `st` parser state, `bsg` bytes since the last good packet, `good`, `crc` / `stop` dropped

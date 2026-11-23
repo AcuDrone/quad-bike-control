@@ -24,15 +24,20 @@ static const uint8_t kProbeCandidates[CANController::PROBE_CANDIDATE_COUNT] = {
 // Supported-PID bitmap group request PIDs (Mode 01)
 static const uint8_t kBitmapGroups[4] = {0x00, 0x20, 0x40, 0x60};
 
-// CANCTRL.ABAT (bit 4). mcp_can_dfs.h names the register (MCP_CANCTRL) but none of its
-// bits, so the abort-request bit is spelled out here.
-static constexpr uint8_t MCP_CANCTRL_ABAT = 0x10;
+// TXB0CTRL value written with every frame: TXP = 1 (TXREQ 0). The follow-up's periodic frames
+// get TXB1 / TXB2 at a higher TXP (design D5).
+static constexpr uint8_t CAN_TXB0_CTRL_TXP = 0x01;
+
+static uint8_t popCount8(uint8_t v) {
+    uint8_t n = 0;
+    for (; v; v &= (uint8_t)(v - 1)) n++;
+    return n;
+}
 
 CANController::CANController()
     : mcp_can_(nullptr),
       initialized_(false),
       csPin_(PIN_CAN_CS),
-      consecutiveSendFailures_(0),
       lastRxLogTime_(0),
       lastHealthLogTime_(0),
       lastOverflowLogTime_(0),
@@ -79,6 +84,53 @@ CANController::CANController()
       lwsZeroZeroSent_(false),
       lwsZeroSentMs_(0),
       lwsZeroAbort_(nullptr) {
+    // CAN task channels and counters (assigned here: the member list above stays in order)
+    task_ = nullptr;
+    portMUX_INITIALIZE(&rxMux_);
+    portMUX_INITIALIZE(&txMux_);
+    portMUX_INITIALIZE(&evMux_);
+    cmdSlot_ = 0;
+    cmdInFlight_ = CanCmd::NONE;
+    txSeq_ = 0;
+    hasIntPin_ = false;
+    isrCount_ = 0;
+    chipUp_ = false;
+    initAttempted_ = false;
+    initAttempts_ = 0;
+    firstInitMs_ = 0;
+    lastInitTryMs_ = 0;
+    lastEflgMs_ = 0;
+    lastIsrSeen_ = 0;
+    busOffLatched_ = false;
+    txBusy_ = false;
+    txAborting_ = false;
+    txReported_ = true;
+    txLoadMs_ = 0;
+    txAbortMs_ = 0;
+    txCur_ = {};
+    txCancelSeq_ = 0;
+    statsResetAck_ = 0;
+    cRx_ = 0; cRxDrop_ = 0; cRxHwm_ = 0; cWinHwm_ = 0; cOvr_ = 0; cOvrEflg_ = 0;
+    cIntWakes_ = 0; cPollFrames_ = 0; cCapHits_ = 0; cTx_ = 0; cTxFail_ = 0;
+    cBusyMaxUs_ = 0; cWinBusyMaxUs_ = 0; cCmdMaxUs_ = 0; cBusyUs_ = 0; cInitFails_ = 0; cEvDrops_ = 0; cHealth_ = 0;
+    txQueueFull_ = 0;
+    statsResetReq_ = 0;
+    lastStatsMs_ = 0;
+    stRx_ = stDrop_ = stOvr_ = stInt_ = stPoll_ = stTx_ = stTxf_ = stMiss_ = 0;
+    lastIntWinMs_ = 0;
+    iwInt_ = iwRx_ = 0;
+    intState_ = CanIoLaw::IntState::NONE;
+    ovrSeen_ = 0;
+    obdReplyLatched_ = false;
+    obdReply_ = {};
+    probeReplyLatched_ = false;
+    probeReply_ = {};
+    sniffPhase_ = SniffPhase::OPENING;
+    sniffOvrBase_ = 0;
+    sniffDropBase_ = 0;
+    lwsZeroTxSeq_ = 0;
+    lwsZeroTxResult_ = 0;
+
     // Initialize vehicle data to safe defaults
     vehicleData_.engineRPM = 0;
     vehicleData_.vehicleSpeed = 0;
@@ -131,65 +183,639 @@ bool CANController::begin(gpio_num_t csPin, gpio_num_t sckPin, gpio_num_t mosiPi
     SPI.begin(sckPin, misoPin, mosiPin, csPin);
     Debug::printfFeature(DebugFeature::CAN,"[CAN] SPI initialized: SCK=%d, MISO=%d, MOSI=%d, CS=%d\n", sckPin, misoPin, mosiPin, csPin);
 
-    // Remember CS for the raw register reads used by the diagnostics helpers
+    // Remember CS for the raw register access of the CAN task
     csPin_ = csPin;
 
-    // Create MCP_CAN object with CS pin
+    // Create MCP_CAN object with CS pin. From here on only the CAN task uses it.
     mcp_can_ = new MCP_CAN(csPin);
 
-    // Initialize MCP2515 at 500 kbps.
+    // The task exists before the first init and is never deleted (design D2, D7): it runs the
+    // init below and, if that fails, retries it every CAN_INIT_RETRY_MS for the whole power cycle.
+    if (xTaskCreatePinnedToCore(canIoTask, "can_io", CAN_TASK_STACK, this, CAN_TASK_PRIORITY,
+                                &task_, CAN_TASK_CORE) != pdPASS) {
+        task_ = nullptr;
+        Debug::printlnFeature(DebugFeature::CAN, "[CAN] ERROR: cannot create the CAN task (out of memory) - CAN stays down");
+        EventJournal::log(JSrc::CAN, JLvl::E, "init", "result=fail task=0");
+        return false;
+    }
+
+#if defined(PIN_CAN_INT) && !defined(CAN_TEST_NO_INT)
+    // MCP2515 INT (active low while RX0IF / RX1IF is set) wakes the task; it also polls every
+    // CAN_POLL_MS, so a dead or missing INT line only costs latency (design D2).
+    pinMode(PIN_CAN_INT, INPUT_PULLUP);
+    attachInterruptArg(PIN_CAN_INT, canIntIsr, this, FALLING);
+    hasIntPin_ = true;
+    intState_ = CanIoLaw::IntState::OK;   // unproven until frames arrive
+    Debug::printfFeature(DebugFeature::CAN, "[CAN] CAN task started (prio %d, core %d): INT GPIO%d + %d ms poll\n",
+                         CAN_TASK_PRIORITY, CAN_TASK_CORE, (int)PIN_CAN_INT, CAN_POLL_MS);
+#else
+    Debug::printfFeature(DebugFeature::CAN, "[CAN] CAN task started (prio %d, core %d): no INT line, %d ms poll\n",
+                         CAN_TASK_PRIORITY, CAN_TASK_CORE, CAN_POLL_MS);
+#endif
+
+    // Initialize MCP2515 at 500 kbps (in the task) and wait for the result here, in setup().
     // MCP_STDEXT (not MCP_ANY) leaves RXB0CTRL/RXB1CTRL RXM = 00 so the acceptance
     // masks/filters are actually applied; MCP_ANY sets RXM = 11 and disables them.
-    if (mcp_can_->begin(MCP_STDEXT, CAN_500KBPS, MCP_8MHZ) != CAN_OK) {
-        Debug::printlnFeature(DebugFeature::CAN,"[CAN] ERROR: MCP2515 initialization failed");
-        delete mcp_can_;
-        mcp_can_ = nullptr;
+    postCommand(CanCmd::INIT);
+    const uint32_t t0 = millis();
+    while (cmdInFlight_ != CanCmd::NONE && (millis() - t0) < CAN_BOOT_INIT_WAIT_MS) {
+        delay(1);                 // the task runs the init at the loop's priority meanwhile
+        serviceTaskEvents();      // the INIT result completes the init here (onInitResult())
+    }
+    if (cmdInFlight_ != CanCmd::NONE) {
+        Debug::printfFeature(DebugFeature::CAN,
+            "[CAN] No init result after %u ms - handled when it arrives\n", (unsigned)CAN_BOOT_INIT_WAIT_MS);
+    }
+    return initialized_;
+}
+
+// ============================================================================
+// CAN TASK `can_io` — the only code that touches the MCP2515 (design D1, D2)
+// ============================================================================
+
+void CANController::canIoTask(void* arg) {
+    static_cast<CANController*>(arg)->taskLoop();
+}
+
+// FALLING edge on PIN_CAN_INT: count and wake the task. No SPI, no library, no queue.
+void IRAM_ATTR CANController::canIntIsr(void* arg) {
+    CANController* self = static_cast<CANController*>(arg);
+    self->isrCount_ = self->isrCount_ + 1;
+    BaseType_t woken = pdFALSE;
+    if (self->task_ != nullptr) {
+        vTaskNotifyGiveFromISR(self->task_, &woken);
+    }
+    if (woken == pdTRUE) {
+        portYIELD_FROM_ISR();
+    }
+}
+
+void CANController::taskLoop() {
+    for (;;) {
+        // INT, a loop request (TX / command), or the CAN_POLL_MS poll. Every cycle ends here.
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(CAN_POLL_MS));
+        const uint32_t isr = isrCount_;
+        const bool intWake = (isr != lastIsrSeen_);
+        lastIsrSeen_ = isr;
+        if (statsResetReq_ != statsResetAck_) {      // the loop wrote a stats line: new window
+            statsResetAck_ = statsResetReq_;
+            cWinHwm_ = 0;
+            cWinBusyMaxUs_ = 0;
+        }
+
+        // Configuration work (command or init retry) is timed on its own: it runs at the loop's
+        // priority and takes milliseconds (two 5 ms resets); the service-pass maximum below is the
+        // per-cycle cost the brake follow-up's 10 ms budget relies on (design D2, D9).
+        const uint32_t tc = micros();
+        bool configured = false;
+        const uint8_t cmd = cmdSlot_;
+        if (cmd != 0) {
+            cmdSlot_ = 0;   // taken; the loop posts nothing until it has read the result
+            taskRunCommand(cmd);
+            configured = true;
+        } else if (CanIoLaw::initRetryDue(chipUp_, initAttempted_, false, millis(), lastInitTryMs_,
+                                          CAN_INIT_RETRY_MS)) {
+            taskInitRetry();
+            configured = true;
+        }
+        if (configured) {
+            const uint32_t cmdUs = micros() - tc;
+            if (cmdUs > cCmdMaxUs_) cCmdMaxUs_ = cmdUs;
+        }
+
+        const uint32_t t0 = micros();
+        uint16_t frames = 0;
+        if (!chipUp_) {
+            taskFailQueuedTx();
+        } else {
+            uint8_t st = 0;
+            frames = taskDrain(st);
+            taskServiceTx(st);
+            if ((millis() - lastEflgMs_) >= CAN_EFLG_POLL_MS) {
+                taskServiceErrors();
+            }
+        }
+
+        if (intWake) {
+            cIntWakes_ = cIntWakes_ + 1;
+        } else {
+            cPollFrames_ = cPollFrames_ + frames;
+        }
+        const uint32_t busy = micros() - t0;
+        cBusyUs_ = cBusyUs_ + busy;
+        if (busy > cBusyMaxUs_) cBusyMaxUs_ = busy;
+        if (busy > cWinBusyMaxUs_) cWinBusyMaxUs_ = busy;
+    }
+}
+
+void CANController::taskPostEvent(const CanEvent& ev) {
+    portENTER_CRITICAL(&evMux_);
+    const bool ok = evRing_.pushReject(ev);
+    portEXIT_CRITICAL(&evMux_);
+    if (!ok) {
+        cEvDrops_ = cEvDrops_ + 1;   // TX_DONE / BUS_OFF only; command results use their own slot
+    }
+}
+
+// One chip init attempt (design D6, steps 2-5). Called at CAN_TASK_CONFIG_PRIORITY.
+CANController::InitResult CANController::taskInitAttempt() {
+    InitResult r = {};
+    // Liveness gate: SPI RESET, then CANSTAT must show CONFIG and CANCTRL its reset value 0x87.
+    // No chip / floating MISO fails here in ~6 ms, without any library mode wait (audit a, g).
+    spiCommand(MCP_RESET);
+    delay(5);
+    r.canstat = readRegister(MCP_CANSTAT);
+    const uint8_t canctrl = readRegister(MCP_CANCTRL);
+    if (CanIoLaw::mcp2515AliveAfterReset(r.canstat, canctrl)) {
+        // Library init: resets again, 500 kbit/s, CANINTE = RX0IE | RX1IE, ends in LOOPBACK.
+        // Each failing library mode switch costs up to 200 ms; stop at the first failure.
+        r.begin = (mcp_can_->begin(MCP_STDEXT, CAN_500KBPS, MCP_8MHZ) == CAN_OK);
+        // Program the acceptance window BEFORE going NORMAL (library convention: init_Mask()/
+        // init_Filt() switch to CONFIG mode internally and restore the previously cached mode).
+        r.filt = r.begin && applyRxFilters();
+        if (r.filt) {
+            // setMode() returns MCP2515_FAIL if CANSTAT never reflects the requested mode —
+            // ignoring it would leave the chip in config/loopback mode, which looks like a healthy
+            // init but never touches the bus. One retry, as the boot path always had.
+            byte modeResult = mcp_can_->setMode(MCP_NORMAL);
+            if (modeResult != MCP2515_OK) {
+                modeResult = mcp_can_->setMode(MCP_NORMAL);
+            }
+            // Read back directly (the library exposes no getMode()): NORMAL mode and the CANINTE
+            // the library wrote (RX0IE | RX1IE, which the INT wake-up relies on).
+            r.canstat = readRegister(MCP_CANSTAT);
+            const uint8_t inte = readRegister(MCP_CANINTE);
+            r.mode = (modeResult == MCP2515_OK) && ((r.canstat & MODE_MASK) == MCP_NORMAL) &&
+                     (inte == (MCP_RX0IF | MCP_RX1IF));
+        } else {
+            r.canstat = readRegister(MCP_CANSTAT);
+        }
+    }
+    r.eflg = readRegister(MCP_EFLG);
+    uint8_t tr[2] = {0, 0};
+    readRegisters(MCP_TEC, tr, 2);
+    r.tec = tr[0];
+    r.rec = tr[1];
+    return r;
+}
+
+// Init / re-init / filter switch requested by the loop (design D6). Runs at the loop's priority
+// so the library's busy mode waits are time-sliced with the loop and never starve it.
+void CANController::taskRunCommand(uint8_t cmd) {
+    vTaskPrioritySet(nullptr, CAN_TASK_CONFIG_PRIORITY);
+
+    // A frame pending in TXB0 would hold any mode change until it leaves (the MCP2515 changes
+    // mode only after pending transmissions): abort it alone and report what became of it.
+    taskAbortTxb0();
+
+    CanEvent ev = {};
+    ev.type = CanEvType::CMD_DONE;
+    ev.cmd = cmd;
+    switch ((CanCmd)cmd) {
+        case CanCmd::INIT:
+        case CanCmd::REINIT: {
+            const bool wasUp = chipUp_;
+            chipUp_ = false;
+            const InitResult r = taskInitAttempt();
+            const bool ok = r.begin && r.filt && r.mode;
+            chipUp_ = ok;
+            busOffLatched_ = false;
+            // While the chip is down after this (boot or re-init), the task itself retries every
+            // CAN_INIT_RETRY_MS from the last attempt of any kind (design D7, extended).
+            initAttempted_ = true;
+            lastInitTryMs_ = millis();
+            if ((CanCmd)cmd == CanCmd::INIT) {
+                initAttempts_ = 1;
+                firstInitMs_ = lastInitTryMs_;
+            } else if (!ok && wasUp) {
+                initAttempts_ = 0;          // went down now: count the task's own retries
+                firstInitMs_ = lastInitTryMs_;
+            }
+            ev.flags = (ok ? EV_OK : 0) | (r.begin ? EV_BEGIN : 0) | (r.filt ? EV_FILT : 0) |
+                       (r.mode ? EV_MODE : 0);
+            ev.canstat = r.canstat;
+            ev.eflg = r.eflg;
+            ev.tec = r.tec;
+            ev.rec = r.rec;
+            ev.attempt = initAttempts_;
+            break;
+        }
+        case CanCmd::FILTERS_SNIFF: {
+            const bool open = applySniffFilters();
+            // Half-programmed filters: put the normal set back (the loop re-inits if that fails).
+            const bool restored = open ? true : applyRxFilters();
+            if (open) {
+                // Stale overflow flags from before the window must not be counted.
+                modifyRegister(MCP_EFLG, MCP_EFLG_RX0OVR | MCP_EFLG_RX1OVR, 0x00);
+            }
+            ev.flags = (open ? EV_OK : 0) | (restored ? EV_FILT : 0);
+            ev.canstat = readRegister(MCP_CANSTAT);
+            ev.eflg = readRegister(MCP_EFLG);
+            break;
+        }
+        case CanCmd::FILTERS_NORMAL: {
+            const bool ok = applyRxFilters();
+            ev.flags = ok ? (EV_OK | EV_FILT) : 0;
+            ev.canstat = readRegister(MCP_CANSTAT);
+            ev.eflg = readRegister(MCP_EFLG);
+            break;
+        }
+        case CanCmd::NONE:
+        default:
+            break;
+    }
+    lastEflgMs_ = millis();
+
+    vTaskPrioritySet(nullptr, CAN_TASK_PRIORITY);
+    xTaskNotifyGive(task_);   // frames latched during the command are read at once
+    // Own single-entry slot: a command result can never be lost to a full event ring
+    portENTER_CRITICAL(&evMux_);
+    cmdResult_.post(ev);
+    portEXIT_CRITICAL(&evMux_);
+}
+
+// Chip down (failed boot init, or a failed re-init sequence): one retry, gate first (~6 ms
+// without a chip). Failures are only counted; a success is reported once (design D7, extended).
+void CANController::taskInitRetry() {
+    vTaskPrioritySet(nullptr, CAN_TASK_CONFIG_PRIORITY);
+    initAttempts_++;
+    const InitResult r = taskInitAttempt();
+    lastInitTryMs_ = millis();
+    vTaskPrioritySet(nullptr, CAN_TASK_PRIORITY);
+    if (!(r.begin && r.filt && r.mode)) {
+        cInitFails_ = cInitFails_ + 1;
+        return;
+    }
+    chipUp_ = true;
+    busOffLatched_ = false;
+    lastEflgMs_ = millis();
+    CanEvent ev = {};
+    ev.type = CanEvType::INIT_OK;
+    ev.flags = EV_OK | EV_BEGIN | EV_FILT | EV_MODE;
+    ev.canstat = r.canstat;
+    ev.eflg = r.eflg;
+    ev.tec = r.tec;
+    ev.rec = r.rec;
+    ev.attempt = initAttempts_;
+    ev.afterMs = millis() - firstInitMs_;
+    xTaskNotifyGive(task_);
+    portENTER_CRITICAL(&evMux_);
+    recovered_.post(ev);
+    portEXIT_CRITICAL(&evMux_);
+}
+
+// Read frames while READ STATUS reports one, at most CAN_RX_DRAIN_CAP (design D2). READ STATUS,
+// not the INT pin, is the authority, so a dead INT line only costs latency.
+uint16_t CANController::taskDrain(uint8_t& st) {
+    st = readStatus();
+    uint16_t n = 0;
+    while (CanIoLaw::rxPending(st) && n < CAN_RX_DRAIN_CAP) {
+        CanFrame f = {};
+        INT32U id = 0;
+        INT8U len = 0;
+        // readMsgBuf() clears RXnIF (BIT MODIFY), which releases INT
+        if (mcp_can_->readMsgBuf(&id, &len, f.data) != CAN_OK) {
+            break;
+        }
+        f.id = (uint32_t)id;
+        f.len = len;
+        portENTER_CRITICAL(&rxMux_);
+        const bool dropped = rxRing_.pushDropOldest(f);   // full: the oldest goes (design D3)
+        const uint8_t cnt = rxRing_.count();
+        portEXIT_CRITICAL(&rxMux_);
+        if (dropped) cRxDrop_ = cRxDrop_ + 1;
+        if (cnt > cRxHwm_) cRxHwm_ = cnt;
+        if (cnt > cWinHwm_) cWinHwm_ = cnt;
+        n++;
+        st = readStatus();
+    }
+    if (n >= CAN_RX_DRAIN_CAP && CanIoLaw::rxPending(st)) {
+        cCapHits_ = cCapHits_ + 1;   // the next wake (<= CAN_POLL_MS) continues
+    }
+    cRx_ = cRx_ + n;
+    return n;
+}
+
+// TXB0 only, FIFO, one frame at a time; abort of this buffer only after CAN_TX_TIMEOUT_MS
+// (design D4). CANCTRL.ABAT is never used.
+void CANController::taskServiceTx(uint8_t st) {
+    if (txBusy_) {
+        if (!CanIoLaw::txPending(st, 0)) {
+            // TXREQ clear. Without our abort: sent. After our abort the chip still finishes an
+            // attempt that was on the wire, so ABTF tells aborted from sent (CanIoLaw::txOutcome).
+            const uint8_t ctrl = txAborting_ ? readRegister(MCP_TXB0CTRL) : 0;
+            if (!txReported_) {
+                taskFinishTx(CanIoLaw::txOutcome(ctrl, txAborting_) == CanIoLaw::TxOutcome::SENT);
+            }
+            txBusy_ = false;
+            txAborting_ = false;
+        } else if (!txAborting_ && CanIoLaw::txTimedOut(millis(), txLoadMs_, CAN_TX_TIMEOUT_MS)) {
+            // Typically no ACK (every other node unpowered): abort THIS buffer only. The result
+            // is reported once TXREQ reads clear (ABTF decides).
+            modifyRegister(MCP_TXB0CTRL, MCP_TXB_TXREQ_M, 0x00);
+            txAborting_ = true;
+            txAbortMs_ = millis();
+        } else if (txAborting_ && !txReported_ &&
+                   CanIoLaw::txTimedOut(millis(), txAbortMs_, CAN_TX_TIMEOUT_MS)) {
+            // TXREQ still set long after the abort (wedged controller): report the frame failed,
+            // keep the buffer blocked until it clears; bus-off / the watchdogs re-init the chip.
+            taskFinishTx(false);
+        }
+        if (txBusy_) {
+            return;
+        }
+    }
+    if (CanIoLaw::txPending(st, 0)) {
+        return;   // not ours (cannot happen) — never write a pending buffer
+    }
+    for (;;) {
+        CanTxItem it;
+        portENTER_CRITICAL(&txMux_);
+        const bool got = txRing_.pop(it);
+        portEXIT_CRITICAL(&txMux_);
+        if (!got) {
+            return;
+        }
+        if (CanIoLaw::txCancelled(it.wantResult, it.seq, txCancelSeq_)) {
+            txCur_ = it;          // its requester gave up: never sent late
+            txReported_ = false;
+            taskFinishTx(false);
+            continue;
+        }
+        loadTxb0(it.frame);
+        txCur_ = it;
+        txBusy_ = true;
+        txAborting_ = false;
+        txReported_ = false;
+        txLoadMs_ = millis();
+        return;
+    }
+}
+
+// Before a command: abort a frame pending in TXB0 and wait briefly (the attempt on the wire
+// ends within one frame time, ~0.25 ms) so ABTF can say whether it went out; the command's reset
+// would erase that evidence. Still pending after 2 ms: reported failed (wedged).
+void CANController::taskAbortTxb0() {
+    if (!txBusy_) {
+        return;
+    }
+    if (!txAborting_) {
+        modifyRegister(MCP_TXB0CTRL, MCP_TXB_TXREQ_M, 0x00);
+        txAborting_ = true;
+        txAbortMs_ = millis();
+    }
+    const uint32_t t0 = micros();
+    uint8_t ctrl = readRegister(MCP_TXB0CTRL);
+    while ((ctrl & MCP_TXB_TXREQ_M) && (micros() - t0) < 2000) {
+        ctrl = readRegister(MCP_TXB0CTRL);
+    }
+    const CanIoLaw::TxOutcome o = CanIoLaw::txOutcome(ctrl, true);
+    if (!txReported_) {
+        taskFinishTx(o == CanIoLaw::TxOutcome::SENT);
+    }
+    if (o != CanIoLaw::TxOutcome::PENDING) {
+        txBusy_ = false;
+        txAborting_ = false;
+    }
+}
+
+void CANController::taskFinishTx(bool ok) {
+    txReported_ = true;
+    if (ok) {
+        cTx_ = cTx_ + 1;
+    } else {
+        cTxFail_ = cTxFail_ + 1;
+    }
+    if (txCur_.wantResult) {
+        CanEvent ev = {};
+        ev.type = CanEvType::TX_DONE;
+        ev.cmd = txCur_.tag;
+        ev.seq = txCur_.seq;
+        ev.flags = ok ? EV_OK : 0;
+        taskPostEvent(ev);
+    }
+}
+
+// Chip down (boot init failed, or a failed re-init): nothing can be sent. Queued frames are
+// dropped as failures; a sender that asked for a result hears it at once (design D4).
+void CANController::taskFailQueuedTx() {
+    CanTxItem it;
+    for (;;) {
+        portENTER_CRITICAL(&txMux_);
+        const bool got = txRing_.pop(it);
+        portEXIT_CRITICAL(&txMux_);
+        if (!got) {
+            return;
+        }
+        txCur_ = it;
+        taskFinishTx(false);
+    }
+}
+
+// Every CAN_EFLG_POLL_MS in every mode (design D2): RXnOVR counted and cleared, TXBO reported
+// once per bus-off episode, TEC / REC / EFLG snapshot for the loop's health line.
+void CANController::taskServiceErrors() {
+    lastEflgMs_ = millis();
+    uint8_t tr[2] = {0, 0};
+    readRegisters(MCP_TEC, tr, 2);
+    const uint8_t eflg = readRegister(MCP_EFLG);
+    cHealth_ = (uint32_t)tr[0] | ((uint32_t)tr[1] << 8) | ((uint32_t)eflg << 16) | (1UL << 24);
+    const uint8_t ovr = eflg & (MCP_EFLG_RX0OVR | MCP_EFLG_RX1OVR);
+    if (ovr) {
+        // RXnOVR is sticky and must be cleared by software, otherwise the flags stay latched
+        // forever and mask any later overflow.
+        modifyRegister(MCP_EFLG, ovr, 0x00);
+        cOvrEflg_ = eflg;
+        cOvr_ = cOvr_ + popCount8(ovr);
+    }
+    if (eflg & MCP_EFLG_TXBO) {
+        if (!busOffLatched_) {
+            busOffLatched_ = true;
+            CanEvent ev = {};
+            ev.type = CanEvType::BUS_OFF;
+            ev.eflg = eflg;
+            ev.tec = tr[0];
+            ev.rec = tr[1];
+            taskPostEvent(ev);
+        }
+    } else {
+        busOffLatched_ = false;
+    }
+}
+
+// ============================================================================
+// LOOP SIDE OF THE CHANNELS
+// ============================================================================
+
+bool CANController::postCommand(CanCmd cmd) {
+    if (task_ == nullptr || cmdInFlight_ != CanCmd::NONE) {
+        return false;   // one command at a time
+    }
+    cmdInFlight_ = cmd;
+    cmdSlot_ = (uint8_t)cmd;
+    xTaskNotifyGive(task_);
+    return true;
+}
+
+bool CANController::queueTx(const CanFrame& f, CanTxTag tag, bool wantResult) {
+    if (task_ == nullptr) {
         return false;
     }
-
-    // Program the acceptance window BEFORE going NORMAL (library convention: init_Mask()/
-    // init_Filt() switch to CONFIG mode internally and restore the previously cached mode).
-    if (!applyRxFilters()) {
-        Debug::printlnFeature(DebugFeature::CAN,
-            "[CAN] ERROR: failed to program RX acceptance masks/filters");
-        delete mcp_can_;
-        mcp_can_ = nullptr;
+    CanTxItem it;
+    it.frame = f;
+    it.tag = (uint8_t)tag;
+    it.seq = CanIoLaw::nextTxSeq(txSeq_);
+    it.wantResult = wantResult;
+    portENTER_CRITICAL(&txMux_);
+    const bool ok = txRing_.pushReject(it);
+    portEXIT_CRITICAL(&txMux_);
+    if (!ok) {
+        txQueueFull_++;
         return false;
     }
+    txSeq_ = it.seq;
+    xTaskNotifyGive(task_);
+    return true;
+}
 
-    // Set to normal mode (not loopback). setMode() returns MCP2515_FAIL if CANSTAT
-    // never reflects the requested mode — silently ignoring it leaves the chip in
-    // config/loopback mode, which looks like a healthy init but never touches the bus.
-    byte modeResult = mcp_can_->setMode(MCP_NORMAL);
-    if (modeResult != MCP2515_OK) {
-        Debug::printlnFeature(DebugFeature::CAN, "[CAN] WARNING: setMode(NORMAL) failed, retrying once...");
-        modeResult = mcp_can_->setMode(MCP_NORMAL);
-    }
+CANController::DriverStats CANController::getDriverStats() const {
+    DriverStats d;
+    d.taskRunning = task_ != nullptr;
+    d.intState = CanIoLaw::intStateToken(intState_);
+    d.rxDrop = cRxDrop_;
+    d.rxOvr = cOvr_;
+    d.rxHwm = (uint8_t)cRxHwm_;
+    d.txFail = cTxFail_;
+    d.busyMaxUs = cBusyMaxUs_;
+    return d;
+}
 
-    // Read CANSTAT back directly (the library exposes no getMode()) so the actual
-    // operating mode is visible on the monitor regardless of what setMode() claimed.
-    uint8_t canstat = readRegister(MCP_CANSTAT);
-    uint8_t opmode = canstat & MODE_MASK;
-    const char* modeName = "UNKNOWN";
-    switch (opmode) {
-        case MCP_NORMAL:     modeName = "NORMAL";     break;
-        case MCP_SLEEP:      modeName = "SLEEP";      break;
-        case MCP_LOOPBACK:   modeName = "LOOPBACK";   break;
-        case MCP_LISTENONLY: modeName = "LISTENONLY"; break;
-        case MODE_CONFIG:    modeName = "CONFIG";     break;
-        default: break;
+// Results from the task: command results, TX results, bus-off (design D1). Loop only.
+void CANController::serviceTaskEvents() {
+    CanEvent ev;
+    // Single-entry slots first: the command result and the task's own init-retry success
+    portENTER_CRITICAL(&evMux_);
+    const bool gotCmd = cmdResult_.take(ev);
+    portEXIT_CRITICAL(&evMux_);
+    if (gotCmd) {
+        cmdInFlight_ = CanCmd::NONE;
+        switch ((CanCmd)ev.cmd) {
+            case CanCmd::INIT:           onInitResult(ev); break;
+            case CanCmd::REINIT:         onReinitResult(ev); break;
+            case CanCmd::FILTERS_SNIFF:  onSniffOpened(ev); break;
+            case CanCmd::FILTERS_NORMAL: finishSniff((ev.flags & EV_OK) != 0); break;
+            case CanCmd::NONE:
+            default: break;
+        }
     }
+    portENTER_CRITICAL(&evMux_);
+    const bool gotRec = recovered_.take(ev);
+    portEXIT_CRITICAL(&evMux_);
+    if (gotRec) {
+        onInitResult(ev);
+    }
+    for (;;) {
+        portENTER_CRITICAL(&evMux_);
+        const bool got = evRing_.pop(ev);
+        portEXIT_CRITICAL(&evMux_);
+        if (!got) {
+            return;
+        }
+        switch (ev.type) {
+            case CanEvType::CMD_DONE:     // carried by cmdResult_, never by the ring
+            case CanEvType::INIT_OK:      // carried by recovered_
+                break;
+            case CanEvType::TX_DONE:
+                if ((lwsZeroPhase_ == LwsZeroPhase::WAIT_RESET_TX || lwsZeroPhase_ == LwsZeroPhase::WAIT_ZERO_TX) &&
+                    ev.cmd == (uint8_t)CanTxTag::LWS_CFG && ev.seq == lwsZeroTxSeq_ && lwsZeroTxResult_ == 0) {
+                    lwsZeroTxResult_ = (ev.flags & EV_OK) ? 1 : 2;
+                }
+                break;
+            case CanEvType::BUS_OFF:
+                if (initialized_) {
+                    handleBusOff(ev.tec, ev.rec, ev.eflg);
+                }
+                break;
+        }
+    }
+}
+
+// Take every queued frame (at most CAN_RX_RING per call) through the router (design D3).
+void CANController::drainRxQueue() {
+    CanFrame f;
+    for (uint8_t i = 0; i < CAN_RX_RING; i++) {
+        portENTER_CRITICAL(&rxMux_);
+        const bool got = rxRing_.pop(f);
+        portEXIT_CRITICAL(&rxMux_);
+        if (!got) {
+            return;
+        }
+        routeFrame(f);
+    }
+}
+
+// One router for every received frame (design D3): LWS first, then the sniffer table, the
+// OBD-II / probe reply latch, else "unmatched" (rate-limited).
+void CANController::routeFrame(const CanFrame& f) {
+    const bool lws = dispatchSteeringFrame(f.id, f.len, f.data);
+    if (mode_ == Mode::SNIFFING) {
+        if (sniffPhase_ == SniffPhase::WINDOW) {
+            recordSniffFrame(f.id, f.len, f.data);   // 0x305 too, as before
+        }
+        return;
+    }
+    if (lws) {
+        return;   // steering angle frame: handed to the LWS decoder
+    }
+    // OBD-II responses are from 0x7E8 to 0x7EF (ECU response IDs; flag bits make an extended
+    // or remote frame compare larger)
+    const bool obdId = (f.id >= 0x7E8 && f.id <= 0x7EF);
+    if (obdId && mode_ == Mode::NORMAL && state_ == OBDState::WAITING_RESPONSE && !obdReplyLatched_) {
+        // Mode 01 positive response (0x41) for the PID in flight
+        const uint8_t expectedPid = pidTable_[activePIDIndex_].pid;
+        if (f.len >= 3 && f.data[1] == 0x41 && f.data[2] == expectedPid) {
+            obdReply_ = f;
+            obdReplyLatched_ = true;
+            return;
+        }
+    }
+    if (obdId && mode_ == Mode::PROBING && probeRequestInFlight_ && !probeReplyLatched_ && f.len >= 2) {
+        uint8_t expectedMode = 0;
+        uint8_t expectedPid = 0;
+        if (probeCurrentRequest(expectedMode, expectedPid)) {
+            bool match = false;
+            if (expectedMode == 0x01) {
+                // Mode 01 positive response (0x41) for the expected PID
+                match = (f.len >= 3 && f.data[1] == 0x41 && f.data[2] == expectedPid);
+            } else if (expectedMode == 0x03) {
+                // Mode 03 positive response (0x43)
+                match = (f.data[1] == 0x43);
+            }
+            if (match) {
+                probeReply_ = f;
+                probeReplyLatched_ = true;
+                return;
+            }
+        }
+    }
+    // Non-matching message — report it (rate-limited) so a wrong response ID or a negative
+    // response (0x7F) is visible instead of being silently dropped
+    logUnmatchedFrame(f.id, f.len, f.data);
+}
+
+void CANController::printFiltersLine(bool ok) const {
     Debug::printfFeature(DebugFeature::CAN,
-        "[CAN] CANSTAT=0x%02X -> mode %s (0x%02X)\n", canstat, modeName, opmode);
+        "[CAN] RX filters: RXB0 OBD 0x%03X-0x%03X (mask=0x%03X filt=0x%03X), "
+        "RXB1 LWS 0x%03X (mask=0x%03X filt=0x%03X), std IDs only%s\n",
+        (unsigned)CAN_RX_OBD_FILTER,
+        (unsigned)(CAN_RX_OBD_FILTER | (~CAN_RX_OBD_MASK & 0x7FF)),
+        (unsigned)CAN_RX_OBD_MASK, (unsigned)CAN_RX_OBD_FILTER,
+        (unsigned)STEER_LWS_CAN_ID, (unsigned)CAN_RX_LWS_MASK, (unsigned)STEER_LWS_CAN_ID,
+        ok ? "" : " [FAILED]");
+}
 
-    if (modeResult != MCP2515_OK || opmode != MCP_NORMAL) {
-        Debug::printlnFeature(DebugFeature::CAN, "[CAN] ERROR: failed to enter NORMAL mode (stuck in loopback?)");
-        initialized_ = false;
-        delete mcp_can_;
-        mcp_can_ = nullptr;
-        return false;
-    }
-
+// What a successful begin() always did; also on a later boot-retry success (design D7).
+void CANController::becomeInitialized() {
     initialized_ = true;
 
     // Stagger the two added slow PIDs (IAT, load). At power-on every entry is due at once and
@@ -203,28 +829,168 @@ bool CANController::begin(gpio_num_t csPin, gpio_num_t sckPin, gpio_num_t mosiPi
     lastReinitTime_ = staggerBase;
     pidTable_[4].nextPollTime = staggerBase + 150;
     pidTable_[5].nextPollTime = staggerBase + 300;
+}
 
+// Result of the boot INIT command, or of a later boot retry (INIT_OK).
+void CANController::onInitResult(const CanEvent& ev) {
+    const bool ok = (ev.flags & EV_OK) != 0;
+    if (ev.type == CanEvType::INIT_OK && initialized_) {
+        // The task's own retry healed a chip left down by a failed re-init sequence (design D7,
+        // extended): journaled once, counted as a verified re-init, first frames timed again.
+        printFiltersLine(true);
+        Debug::printfFeature(DebugFeature::CAN,
+            "[CAN] Controller back after %lu s (task retry %lu)\n",
+            (unsigned long)(ev.afterMs / 1000), (unsigned long)ev.attempt);
+        reinitCount_++;
+        lastReinitTime_ = millis();
+        EventJournal::log(JSrc::CAN, JLvl::I, "reinit", "reason=task_retry result=ok attempt=%lu after_s=%lu",
+                          (unsigned long)ev.attempt, (unsigned long)(ev.afterMs / 1000));
+        firstFrameWait_ = true;
+        reinitDoneMs_ = millis();
+        firstLwsMs_ = 0;
+        firstObdMs_ = 0;
+        return;
+    }
+    const uint8_t opmode = ev.canstat & MODE_MASK;
+    const char* modeName = "UNKNOWN";
+    switch (opmode) {
+        case MCP_NORMAL:     modeName = "NORMAL";     break;
+        case MCP_SLEEP:      modeName = "SLEEP";      break;
+        case MCP_LOOPBACK:   modeName = "LOOPBACK";   break;
+        case MCP_LISTENONLY: modeName = "LISTENONLY"; break;
+        case MODE_CONFIG:    modeName = "CONFIG";     break;
+        default: break;
+    }
+    Debug::printfFeature(DebugFeature::CAN,
+        "[CAN] CANSTAT=0x%02X -> mode %s (0x%02X)\n", ev.canstat, modeName, opmode);
+
+    if (!ok) {
+        if (!(ev.flags & EV_BEGIN)) {
+            Debug::printlnFeature(DebugFeature::CAN,"[CAN] ERROR: MCP2515 initialization failed");
+        } else if (!(ev.flags & EV_FILT)) {
+            Debug::printlnFeature(DebugFeature::CAN,
+                "[CAN] ERROR: failed to program RX acceptance masks/filters");
+        } else {
+            Debug::printlnFeature(DebugFeature::CAN, "[CAN] ERROR: failed to enter NORMAL mode (stuck in loopback?)");
+        }
+        Debug::printfFeature(DebugFeature::CAN, "[CAN] The CAN task retries the init every %u s\n",
+                             (unsigned)(CAN_INIT_RETRY_MS / 1000));
+        // Journaled once; later retries are counted, not journaled (design D7)
+        EventJournal::log(JSrc::CAN, JLvl::E, "init", "result=fail begin=%d filt=%d mode=%d",
+                          (ev.flags & EV_BEGIN) ? 1 : 0, (ev.flags & EV_FILT) ? 1 : 0,
+                          (ev.flags & EV_MODE) ? 1 : 0);
+        return;
+    }
+
+    printFiltersLine(true);
+    becomeInitialized();
     Debug::printlnFeature(DebugFeature::CAN,"[CAN] MCP2515 initialized at 500 kbps");
     Debug::printfFeature(DebugFeature::CAN,
-        "[CAN] health: TEC=%u REC=%u EFLG=0x%02X\n",
-        mcp_can_->errorCountTX(), mcp_can_->errorCountRX(), mcp_can_->getError());
+        "[CAN] health: TEC=%u REC=%u EFLG=0x%02X\n", ev.tec, ev.rec, ev.eflg);
     Debug::printlnFeature(DebugFeature::CAN,"[CAN] Ready to read vehicle data");
+    if (ev.type == CanEvType::INIT_OK) {
+        EventJournal::log(JSrc::CAN, JLvl::I, "init", "result=ok attempt=%lu after_s=%lu",
+                          (unsigned long)ev.attempt, (unsigned long)(ev.afterMs / 1000));
+    } else {
+        // Boot line with the task's stack high-water mark (bytes), so CAN_TASK_STACK can be cut
+        // later on evidence (design D2)
+        const unsigned stk = task_ ? (unsigned)uxTaskGetStackHighWaterMark(task_) : 0;
+        Debug::printfFeature(DebugFeature::CAN, "[CAN] CAN task stack free (high-water mark): %u B\n", stk);
+        EventJournal::log(JSrc::CAN, JLvl::I, "init", "result=ok attempt=%lu after_s=0 stk=%u",
+                          (unsigned long)ev.attempt, stk);
+    }
+}
 
-    return true;
+// Window counters every JOURNAL_SNAP_MS while the task exists (design D9)
+void CANController::serviceStats(uint32_t now) {
+    if ((now - lastStatsMs_) < JOURNAL_SNAP_MS) {
+        return;
+    }
+    lastStatsMs_ = now;
+    const uint32_t rx = cRx_, drop = cRxDrop_, ovr = cOvr_, in = cIntWakes_, poll = cPollFrames_;
+    const uint32_t tx = cTx_, txf = cTxFail_;
+    const uint32_t hwm = cWinHwm_, bmax = cWinBusyMaxUs_;
+    statsResetReq_ = statsResetReq_ + 1;   // the task restarts the window maxima
+    char miss[12];
+    if (lwsSink_ != nullptr) {
+        const uint32_t m = lwsSink_->missedFrames();
+        snprintf(miss, sizeof(miss), "%lu", (unsigned long)(m - stMiss_));
+        stMiss_ = m;
+    } else {
+        strcpy(miss, "-");
+    }
+    EventJournal::log(JSrc::CAN, JLvl::I, "stats",
+                      "rx=%lu drop=%lu hwm=%lu ovr=%lu int=%lu poll=%lu tx=%lu txf=%lu bmax=%lu miss=%s",
+                      (unsigned long)(rx - stRx_), (unsigned long)(drop - stDrop_), (unsigned long)hwm,
+                      (unsigned long)(ovr - stOvr_), (unsigned long)(in - stInt_),
+                      (unsigned long)(poll - stPoll_), (unsigned long)(tx - stTx_),
+                      (unsigned long)(txf - stTxf_), (unsigned long)bmax, miss);
+    // Console only (not in the journal line, whose fields the spec fixes): session counters that
+    // show a spinning task or a starved queue, and the task's live stack high-water mark (D2, D9)
+    Debug::printfFeature(DebugFeature::CAN,
+        "[CAN] task: cap_hits=%lu busy_ms=%lu cmd_max_us=%lu tx_qfull=%lu init_retry_fail=%lu ev_drop=%lu stk=%u B int=%s\n",
+        (unsigned long)cCapHits_, (unsigned long)(cBusyUs_ / 1000), (unsigned long)cCmdMaxUs_,
+        (unsigned long)txQueueFull_,
+        (unsigned long)cInitFails_, (unsigned long)cEvDrops_,
+        (unsigned)uxTaskGetStackHighWaterMark(task_), CanIoLaw::intStateToken(intState_));
+    stRx_ = rx;
+    stDrop_ = drop;
+    stOvr_ = ovr;
+    stInt_ = in;
+    stPoll_ = poll;
+    stTx_ = tx;
+    stTxf_ = txf;
+}
+
+// INT wake-up state per CAN_INT_WINDOW_MS (design D9); transitions journaled once
+void CANController::serviceIntState(uint32_t now) {
+    if ((now - lastIntWinMs_) < CAN_INT_WINDOW_MS) {
+        return;
+    }
+    lastIntWinMs_ = now;
+    const uint32_t in = cIntWakes_;
+    const uint32_t rx = cRx_;
+    const CanIoLaw::IntState next = CanIoLaw::canIntState(intState_, hasIntPin_, in - iwInt_, rx - iwRx_);
+    iwInt_ = in;
+    iwRx_ = rx;
+    if (next == intState_) {
+        return;
+    }
+    if (next == CanIoLaw::IntState::DEAD) {
+        EventJournal::log(JSrc::CAN, JLvl::W, "int", "state=dead");
+    } else if (intState_ == CanIoLaw::IntState::DEAD && next == CanIoLaw::IntState::OK) {
+        EventJournal::log(JSrc::CAN, JLvl::I, "int", "state=ok");
+    }
+    Debug::printfFeature(DebugFeature::CAN, "[CAN] RX wake-up: INT %s\n", CanIoLaw::intStateToken(next));
+    intState_ = next;
 }
 
 void CANController::update() {
+    if (task_ == nullptr) {
+        return;   // no task (out of memory at boot): CAN permanently down
+    }
+    // Task results first (command / TX results, bus-off), also before the first init succeeded
+    serviceTaskEvents();
+    const uint32_t nowDiag = millis();
+    serviceStats(nowDiag);
+    serviceIntState(nowDiag);
+
     if (!initialized_) {
         return;
     }
 
+    // Every queued frame, in every mode, before any state machine step (design D3)
+    drainRxQueue();
+    checkRxOverflow();
+    logHealth();
+
     // A failed re-init attempt is retried here, on a later call (never looped inside one call).
-    if (reinitPending_ && (millis() - reinitAttemptMs_) >= CAN_REINIT_RETRY_MS) {
+    if (reinitPending_ && !reinitInFlight() && (millis() - reinitAttemptMs_) >= CAN_REINIT_RETRY_MS) {
         attemptReinit();
     }
     serviceFirstFrame(millis());
 
-    // While sniffing, only the sniffer reads the bus (no OBD-II requests go out).
+    // While sniffing, only the sniffer runs (no OBD-II requests go out).
     if (mode_ == Mode::SNIFFING) {
         updateSniff();
         if (isDataStale()) {
@@ -248,12 +1014,6 @@ void CANController::update() {
 
     switch (state_) {
         case OBDState::IDLE: {
-            // Keep the MCP2515 RX buffers empty between polls: a frame left sitting in
-            // RXB0/RXB1 blocks the next reception and eventually raises RXnOVR.
-            drainRxBuffers();
-            checkRxOverflow();
-            logHealth();
-
             // LWS zero-set: OBD-II polling is paused (no new request) while it runs.
             // Reaching IDLE means any in-flight request has completed or timed out.
             if (lwsZeroPhase_ != LwsZeroPhase::IDLE) {
@@ -267,8 +1027,8 @@ void CANController::update() {
             }
 
             // Requests are going out but nothing is coming back: re-initialize the chip.
-            // Covers a wedged TX (latched ABAT, stuck TXB) that reports success on every
-            // send, and the boot case where the ECU was off and no response ever arrived —
+            // Covers a wedged TX that never leaves the chip, and the boot case where the ECU was
+            // off and no response ever arrived —
             // measured from begin()/the last re-init until the first response lands.
             // Rate-limited so a genuinely absent ECU costs one re-init per interval.
             // The ECU is powered from the ACC line like the LWS: the watchdog runs only while the
@@ -278,7 +1038,8 @@ void CANController::update() {
             // (change gate-obd-watchdog-and-pull-up-vesc-rx; CanWatchdogLaw.h).
             uint32_t now = millis();
             uint32_t noDataFor = 0;
-            if (CanWatchdogLaw::obdNoDataDue(lwsPowered_, now, vehicleData_.lastUpdateTime, lastReinitTime_,
+            if (!reinitInFlight() &&
+                CanWatchdogLaw::obdNoDataDue(lwsPowered_, now, vehicleData_.lastUpdateTime, lastReinitTime_,
                                              ignitionOnMs_, CAN_REINIT_NO_DATA_MS,
                                              CAN_REINIT_MIN_INTERVAL_MS, &noDataFor)) {
                 Debug::printfFeature(DebugFeature::CAN,
@@ -307,29 +1068,12 @@ void CANController::update() {
                 requestSentTime_ = millis();
                 state_ = OBDState::WAITING_RESPONSE;
             } else {
-                // Send failed (logged by sendOBDRequest) — surface why and try to recover
-                uint8_t eflg = mcp_can_->getError();
+                // Not queued (transmit ring full, logged by sendOBDRequest) — show the chip's
+                // error state from the task's snapshot. Bus-off arrives as a task event.
+                const uint32_t h = cHealth_;
                 Debug::printfFeature(DebugFeature::CAN,
                     "[CAN] Send failure: TEC=%u REC=%u EFLG=0x%02X\n",
-                    mcp_can_->errorCountTX(), mcp_can_->errorCountRX(), eflg);
-
-                if (eflg & MCP_EFLG_TXBO) {
-                    handleBusOff(eflg);
-                }
-
-                // A wedged TX buffer never clears itself: abort queued transmissions
-                // once the failures stack up, so the next poll starts from a clean slate.
-                if (++consecutiveSendFailures_ >= CAN_MAX_CONSEC_SEND_FAILURES) {
-                    mcp_can_->abortTX();
-                    // abortTX() only sets CANCTRL.ABAT and never clears it; left latched the
-                    // chip silently aborts every later transmission while sendMsgBuf() still
-                    // reports CAN_OK, so the latch must be released here.
-                    modifyRegister(MCP_CANCTRL, MCP_CANCTRL_ABAT, 0x00);
-                    Debug::printfFeature(DebugFeature::CAN,
-                        "[CAN] Aborted stuck TX buffers after %d consecutive send failures (ABAT cleared)\n",
-                        consecutiveSendFailures_);
-                    consecutiveSendFailures_ = 0;
-                }
+                    (unsigned)(h & 0xFF), (unsigned)((h >> 8) & 0xFF), (unsigned)((h >> 16) & 0xFF));
 
                 // Skip and reschedule
                 pidTable_[index].nextPollTime = millis() + pidTable_[index].interval;
@@ -362,14 +1106,10 @@ void CANController::update() {
                         vehicleData_.intakeTemp, vehicleData_.engineLoad);
                 }
             } else if (millis() - requestSentTime_ >= CAN_RESPONSE_TIMEOUT) {
-                // Abort pending TX and wait for bus-off recovery before next send
-                // mcp_can_->abortTX();
-                const uint8_t eflgTo = mcp_can_->getError();
-                if (eflgTo & MCP_EFLG_TXBO) {
-                    handleBusOff(eflgTo);
-                }
+                // A frame that never left was aborted by the CAN task after CAN_TX_TIMEOUT_MS;
+                // bus-off is reported by the task as an event (design D4).
                 pidTable_[activePIDIndex_].retryCount++;
-                // Add a short delay before the next send to let abortTX settle
+                // Add a short delay before the next send
                 pidTable_[activePIDIndex_].nextPollTime = millis() + 10 + pidTable_[activePIDIndex_].interval;
 
                 if (pidTable_[activePIDIndex_].retryCount >= CAN_RETRY_ATTEMPTS) {
@@ -408,79 +1148,60 @@ void CANController::setRPMPollInterval(uint32_t ms) {
 }
 
 bool CANController::sendOBDRequest(uint8_t pid) {
-    if (!initialized_ || mcp_can_ == nullptr) {
+    if (!initialized_) {
         return false;
     }
 
     // OBD-II request format: [length] [mode] [PID] [unused...]
-    // Mode 01 = Current Data
-    uint8_t requestData[8] = {0x02, 0x01, pid, 0x00, 0x00, 0x00, 0x00, 0x00};
+    // Mode 01 = Current Data, to the OBD-II standard ID (0x7DF = broadcast).
+    // Queued for the CAN task: "sent" means "queued"; a frame that never leaves the chip shows
+    // up as the 200 ms reply timeout (design D4).
+    CanFrame f = {};
+    f.id = 0x7DF;
+    f.len = 8;
+    f.data[0] = 0x02;
+    f.data[1] = 0x01;
+    f.data[2] = pid;
+    obdReplyLatched_ = false;     // a new request: any older reply is stale
+    probeReplyLatched_ = false;
 
-    // Send request to OBD-II standard ID (0x7DF = broadcast)
-    byte result = mcp_can_->sendMsgBuf(0x7DF, 0, 8, requestData);
-
-    if (result != CAN_OK) {
-        Debug::printfFeature(DebugFeature::CAN,"[CAN] ERROR: Failed to send request for PID 0x%02X\n", pid);
+    if (!queueTx(f, CanTxTag::OBD, false)) {
+        Debug::printfFeature(DebugFeature::CAN,"[CAN] ERROR: Failed to send request for PID 0x%02X (transmit queue full)\n", pid);
         return false;
     }
-
-    consecutiveSendFailures_ = 0;
     return true;
 }
 
+// The router latched the first matching reply (design D3); take it.
 bool CANController::tryReceiveResponse() {
-    if (mcp_can_ == nullptr) {
+    if (!obdReplyLatched_) {
         return false;
     }
+    obdReplyLatched_ = false;
 
-    uint8_t expectedPid = pidTable_[activePIDIndex_].pid;
-    unsigned long canId;
-    uint8_t len = 0;
-    uint8_t rxBuf[8];
-
-    // Drain up to 5 messages to prevent MCP2515 RX buffer overflow
-    for (uint8_t i = 0; i < 5; i++) {
-        if (mcp_can_->checkReceive() != CAN_MSGAVAIL) {
-            break;  // No more messages
-        }
-
-        mcp_can_->readMsgBuf(&canId, &len, rxBuf);
-        if (dispatchSteeringFrame(canId, len, rxBuf)) {
-            continue;  // steering angle frame: handed to the LWS decoder
-        }
-
-        // OBD-II responses are from 0x7E8 to 0x7EF (ECU response IDs)
-        if (canId >= 0x7E8 && canId <= 0x7EF) {
-            // Verify this is a Mode 01 response (0x41) for our PID
-            if (len >= 3 && rxBuf[1] == 0x41 && rxBuf[2] == expectedPid) {
-                // Copy data payload (skip length, mode, and PID bytes)
-                responseLen_ = len - 3;
-                for (uint8_t j = 0; j < responseLen_ && j < 5; j++) {
-                    responseData_[j] = rxBuf[3 + j];
-                }
-                // RPM diagnostics: raw reply frame, rate-limited to 1 line per second
-                if (expectedPid == PID_ENGINE_RPM) {
-                    static uint32_t lastRpmRawLog = 0;
-                    if (millis() - lastRpmRawLog >= 1000) {
-                        lastRpmRawLog = millis();
-                        uint8_t d[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-                        for (uint8_t j = 0; j < len && j < 8; j++) {
-                            d[j] = rxBuf[j];
-                        }
-                        Debug::printfFeature(DebugFeature::CAN,
-                            "[CAN] RPM raw: id=0x%03lX len=%d data=%02X %02X %02X %02X %02X %02X %02X %02X\n",
-                            canId, len, d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
-                    }
-                }
-                return true;
-            }
-        }
-        // Non-matching message — report it (rate-limited) so a wrong response ID or a
-        // negative response (0x7F) is visible instead of being silently dropped
-        logUnmatchedFrame(canId, len, rxBuf);
+    const uint8_t expectedPid = pidTable_[activePIDIndex_].pid;
+    const CanFrame& rx = obdReply_;
+    const uint8_t len = rx.len;
+    // Copy data payload (skip length, mode, and PID bytes)
+    responseLen_ = len - 3;
+    for (uint8_t j = 0; j < responseLen_ && j < 5; j++) {
+        responseData_[j] = rx.data[3 + j];
     }
-
-    return false;
+    // RPM diagnostics: raw reply frame, rate-limited to 1 line per second
+    if (expectedPid == PID_ENGINE_RPM) {
+        static uint32_t lastRpmRawLog = 0;
+        if (millis() - lastRpmRawLog >= 1000) {
+            lastRpmRawLog = millis();
+            uint8_t d[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+            for (uint8_t j = 0; j < len && j < 8; j++) {
+                d[j] = rx.data[j];
+            }
+            Debug::printfFeature(DebugFeature::CAN,
+                "[CAN] RPM raw: id=0x%03lX len=%d data=%02X %02X %02X %02X %02X %02X %02X %02X\n",
+                (unsigned long)rx.id, len, d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
+        }
+    }
+    return true;
 }
 
 int8_t CANController::selectNextPID() {
@@ -563,12 +1284,11 @@ bool CANController::isDataStale() const {
 // DIAGNOSTICS / RECOVERY
 // ============================================================================
 
-// The vendored coryjfowler MCP_CAN library keeps mcp2515_readRegister() and
-// mcp2515_modifyRegister() private and exposes no getMode()/clearRXnOVR(), so the
-// two registers the diagnostics need (CANSTAT for mode readback, EFLG for clearing
-// the RX overflow flags) are accessed here over the same SPI bus the library uses.
-// Same SPISettings as the library (10 MHz, MSBFIRST, SPI_MODE0) and the same CS pin,
-// so the transfers interleave safely with the library's own transactions.
+// Raw MCP2515 access — CAN TASK ONLY (design D1). The coryjfowler MCP_CAN library keeps
+// mcp2515_readRegister()/mcp2515_modifyRegister()/readStatus() private and has no getMode(),
+// raw TX load or single-buffer abort, so these are done here over the same SPI bus the library
+// uses: same SPISettings (10 MHz, MSBFIRST, SPI_MODE0) and the same CS pin. Only the task calls
+// the library or these helpers, so their transactions never interleave with another context's.
 uint8_t CANController::readRegister(uint8_t address) const {
     SPI.beginTransaction(SPISettings(10000000, MSBFIRST, SPI_MODE0));
     digitalWrite(csPin_, LOW);
@@ -580,6 +1300,18 @@ uint8_t CANController::readRegister(uint8_t address) const {
     return value;
 }
 
+void CANController::readRegisters(uint8_t address, uint8_t* out, uint8_t n) const {
+    SPI.beginTransaction(SPISettings(10000000, MSBFIRST, SPI_MODE0));
+    digitalWrite(csPin_, LOW);
+    SPI.transfer(MCP_READ);
+    SPI.transfer(address);
+    for (uint8_t i = 0; i < n; i++) {
+        out[i] = SPI.transfer(0x00);   // the MCP2515 auto-increments the address
+    }
+    digitalWrite(csPin_, HIGH);
+    SPI.endTransaction();
+}
+
 void CANController::modifyRegister(uint8_t address, uint8_t mask, uint8_t data) const {
     SPI.beginTransaction(SPISettings(10000000, MSBFIRST, SPI_MODE0));
     digitalWrite(csPin_, LOW);
@@ -589,6 +1321,46 @@ void CANController::modifyRegister(uint8_t address, uint8_t mask, uint8_t data) 
     SPI.transfer(data);
     digitalWrite(csPin_, HIGH);
     SPI.endTransaction();
+}
+
+// READ STATUS: RX0IF, RX1IF and the three TXREQ bits in one transaction
+uint8_t CANController::readStatus() const {
+    SPI.beginTransaction(SPISettings(10000000, MSBFIRST, SPI_MODE0));
+    digitalWrite(csPin_, LOW);
+    SPI.transfer(MCP_READ_STATUS);
+    uint8_t value = SPI.transfer(0x00);
+    digitalWrite(csPin_, HIGH);
+    SPI.endTransaction();
+    return value;
+}
+
+// One-byte instruction (RESET 0xC0, RTS TX0 0x81)
+void CANController::spiCommand(uint8_t instruction) const {
+    SPI.beginTransaction(SPISettings(10000000, MSBFIRST, SPI_MODE0));
+    digitalWrite(csPin_, LOW);
+    SPI.transfer(instruction);
+    digitalWrite(csPin_, HIGH);
+    SPI.endTransaction();
+}
+
+// Load TXB0 with one WRITE burst (TXB0CTRL with TXP = 1, SIDH, SIDL, EID8, EID0, DLC, data) and
+// request transmission with RTS TX0 (design D4). Only while TXREQ reads 0.
+void CANController::loadTxb0(const CanFrame& f) {
+    uint8_t buf[6 + 8];
+    buf[0] = CAN_TXB0_CTRL_TXP;
+    CanIoLaw::canTxHeader(f.id, (f.id & 0x80000000UL) != 0, f.len, &buf[1]);
+    const uint8_t dlc = buf[5];
+    memcpy(&buf[6], f.data, dlc);
+    SPI.beginTransaction(SPISettings(10000000, MSBFIRST, SPI_MODE0));
+    digitalWrite(csPin_, LOW);
+    SPI.transfer(MCP_WRITE);
+    SPI.transfer(MCP_TXB0CTRL);
+    for (uint8_t i = 0; i < 6 + dlc; i++) {
+        SPI.transfer(buf[i]);
+    }
+    digitalWrite(csPin_, HIGH);
+    SPI.endTransaction();
+    spiCommand(MCP_RTS_TX0);
 }
 
 // Two acceptance paths on the one shared bus (design D3):
@@ -613,38 +1385,31 @@ void CANController::modifyRegister(uint8_t address, uint8_t mask, uint8_t data) 
 // Mask 0 gates RXB0 (filters 0-1), mask 1 gates RXB1 (filters 2-5), so both masks and
 // all six filters must be set or an unfiltered buffer keeps letting broadcasts through.
 // ext = 0 on every mask and filter also clears EXIDE, so extended frames match nothing
-// and are rejected outright. Re-applied after every chip reset (recoverFromBusOff()).
+// and are rejected outright. Re-applied after every chip reset (task re-init).
+// CAN task only. Stops at the first failing call: each failing call waits up to 2 x 200 ms in
+// the library's mode switches (design D6). Never logs (the loop prints printFiltersLine()).
 bool CANController::applyRxFilters() {
     if (mcp_can_ == nullptr) {
         return false;
     }
-
-    bool ok = true;
     // RXB0: OBD-II response window
-    ok &= (mcp_can_->init_Mask(0, 0, CAN_RX_OBD_MASK_REG) == MCP2515_OK);
-    ok &= (mcp_can_->init_Filt(0, 0, CAN_RX_OBD_FILTER_REG) == MCP2515_OK);
-    ok &= (mcp_can_->init_Filt(1, 0, CAN_RX_OBD_FILTER_REG) == MCP2515_OK);
+    if (mcp_can_->init_Mask(0, 0, CAN_RX_OBD_MASK_REG) != MCP2515_OK) return false;
+    if (mcp_can_->init_Filt(0, 0, CAN_RX_OBD_FILTER_REG) != MCP2515_OK) return false;
+    if (mcp_can_->init_Filt(1, 0, CAN_RX_OBD_FILTER_REG) != MCP2515_OK) return false;
     // RXB1: steering-angle frame only
-    ok &= (mcp_can_->init_Mask(1, 0, CAN_RX_LWS_MASK_REG) == MCP2515_OK);
+    if (mcp_can_->init_Mask(1, 0, CAN_RX_LWS_MASK_REG) != MCP2515_OK) return false;
     for (uint8_t n = 2; n < 6; n++) {
-        ok &= (mcp_can_->init_Filt(n, 0, CAN_RX_LWS_FILTER_REG) == MCP2515_OK);
+        if (mcp_can_->init_Filt(n, 0, CAN_RX_LWS_FILTER_REG) != MCP2515_OK) return false;
     }
-
-    Debug::printfFeature(DebugFeature::CAN,
-        "[CAN] RX filters: RXB0 OBD 0x%03X-0x%03X (mask=0x%03X filt=0x%03X), "
-        "RXB1 LWS 0x%03X (mask=0x%03X filt=0x%03X), std IDs only%s\n",
-        (unsigned)CAN_RX_OBD_FILTER,
-        (unsigned)(CAN_RX_OBD_FILTER | (~CAN_RX_OBD_MASK & 0x7FF)),
-        (unsigned)CAN_RX_OBD_MASK, (unsigned)CAN_RX_OBD_FILTER,
-        (unsigned)STEER_LWS_CAN_ID, (unsigned)CAN_RX_LWS_MASK, (unsigned)STEER_LWS_CAN_ID,
-        ok ? "" : " [FAILED]");
-
-    return ok;
+    return true;
 }
 
 bool CANController::recoverFromBusOff(const char* reason, bool quiet) {
-    if (mcp_can_ == nullptr) {
+    if (task_ == nullptr) {
         return false;
+    }
+    if (reinitInFlight()) {
+        return true;   // the attempt in flight resets the chip and re-applies everything anyway
     }
     if (!reinitPending_) {
         // A new trigger starts a new sequence; a trigger arriving while a failed attempt waits
@@ -656,25 +1421,36 @@ bool CANController::recoverFromBusOff(const char* reason, bool quiet) {
     return attemptReinit();
 }
 
+// Post one attempt to the CAN task (design D6); onReinitResult() completes it on a later
+// update(). The loop never waits for the chip.
 bool CANController::attemptReinit() {
+    if (!postCommand(CanCmd::REINIT)) {
+        reinitPending_ = true;    // another command is in the task: posted on a later update()
+        return false;
+    }
+    reinitPending_ = false;
     reinitAttempt_++;
     reinitAttemptMs_ = millis();
-
     Debug::printlnFeature(DebugFeature::CAN, "[CAN] Bus-off detected, recovering...");
-    // begin() resets the chip, which wipes the masks/filters — reprogram them before
+    return true;
+}
+
+void CANController::onReinitResult(const CanEvent& ev) {
+    // begin() resets the chip, which wipes the masks/filters — the task reprograms them before
     // returning to NORMAL or the broadcast flood comes straight back.
-    const bool okBegin = (mcp_can_->begin(MCP_STDEXT, CAN_500KBPS, MCP_8MHZ) == CAN_OK);
-    const bool okFilt = applyRxFilters();
-    const bool okMode = (mcp_can_->setMode(MCP_NORMAL) == MCP2515_OK);
-    if (!okMode) {
+    const bool okBegin = (ev.flags & EV_BEGIN) != 0;
+    const bool okFilt = (ev.flags & EV_FILT) != 0;
+    const bool okMode = (ev.flags & EV_MODE) != 0;
+    if (okBegin) {
+        printFiltersLine(okFilt);
+    }
+    if (okFilt && !okMode) {
         Debug::printlnFeature(DebugFeature::CAN, "[CAN] ERROR: failed to enter NORMAL mode (stuck in loopback?)");
     }
     Debug::printfFeature(DebugFeature::CAN,
-        "[CAN] Recovery: CANSTAT=0x%02X EFLG=0x%02X\n",
-        readRegister(MCP_CANSTAT), mcp_can_->getError());
-    consecutiveSendFailures_ = 0;
+        "[CAN] Recovery: CANSTAT=0x%02X EFLG=0x%02X\n", ev.canstat, ev.eflg);
 
-    const bool ok = okBegin && okFilt && okMode;
+    const bool ok = (ev.flags & EV_OK) != 0;
     if (ok) {
         reinitPending_ = false;
         reinitCount_++;
@@ -697,12 +1473,11 @@ bool CANController::attemptReinit() {
             "[CAN] Re-init attempt %u failed (begin=%d filters=%d mode=%d) — retrying\n",
             (unsigned)reinitAttempt_, okBegin ? 1 : 0, okFilt ? 1 : 0, okMode ? 1 : 0);
     }
-    return ok;
 }
 
-void CANController::handleBusOff(uint8_t eflg) {
+void CANController::handleBusOff(uint8_t tec, uint8_t rec, uint8_t eflg) {
     EventJournal::log(JSrc::CAN, JLvl::E, "bus_off", "tec=%u rec=%u eflg=0x%02X",
-                      (unsigned)mcp_can_->errorCountTX(), (unsigned)mcp_can_->errorCountRX(), (unsigned)eflg);
+                      (unsigned)tec, (unsigned)rec, (unsigned)eflg);
     recoverFromBusOff("bus_off");
 }
 
@@ -739,7 +1514,7 @@ void CANController::serviceLwsWatchdog(uint32_t now) {
         return;
     }
     // Fixed spacing from the last re-init of any kind; no back-off (decision 1).
-    if ((now - lastReinitTime_) < CAN_LWS_REINIT_MIN_MS || reinitPending_) return;
+    if ((now - lastReinitTime_) < CAN_LWS_REINIT_MIN_MS || reinitPending_ || reinitInFlight()) return;
 
     Debug::printfFeature(DebugFeature::CAN,
         "[CAN] No LWS 0x305 frame for %lu ms while the ECU answers — re-initializing controller\n",
@@ -791,7 +1566,7 @@ void CANController::logUnmatchedFrame(unsigned long canId, uint8_t len, const ui
 }
 
 void CANController::logHealth() {
-    if (mcp_can_ == nullptr || vehicleData_.dataValid) {
+    if (vehicleData_.dataValid) {
         return;  // only interesting while no data is coming back
     }
 
@@ -801,62 +1576,38 @@ void CANController::logHealth() {
     }
     lastHealthLogTime_ = now;
 
+    const uint32_t h = cHealth_;   // the task's TEC / REC / EFLG snapshot (one 32-bit write)
+    if ((h >> 24) == 0) {
+        return;   // no snapshot yet
+    }
     Debug::printfFeature(DebugFeature::CAN,
         "[CAN] health: TEC=%u REC=%u EFLG=0x%02X\n",
-        mcp_can_->errorCountTX(), mcp_can_->errorCountRX(), mcp_can_->getError());
+        (unsigned)(h & 0xFF), (unsigned)((h >> 8) & 0xFF), (unsigned)((h >> 16) & 0xFF));
 }
 
 void CANController::checkRxOverflow() {
-    if (mcp_can_ == nullptr) {
+    // The task counts and clears RX0OVR / RX1OVR every CAN_EFLG_POLL_MS (design D2).
+    const uint32_t ovr = cOvr_;
+    if (ovr == ovrSeen_) {
         return;
     }
-
-    uint8_t eflg = mcp_can_->getError();
-    if ((eflg & (MCP_EFLG_RX0OVR | MCP_EFLG_RX1OVR)) == 0) {
-        return;
-    }
-
-    // RXnOVR is sticky and must be cleared by software, otherwise the flags stay
-    // latched forever and mask any later overflow.
-    modifyRegister(MCP_EFLG, MCP_EFLG_RX0OVR | MCP_EFLG_RX1OVR, 0x00);
+    const uint32_t fresh = ovr - ovrSeen_;
+    ovrSeen_ = ovr;
 
     // Hardware filtering should make overflows rare, but a burst still floods the log
     // one line per loop iteration — report at most once per CAN_OVERFLOW_LOG_INTERVAL
     // and carry the suppressed count so the real rate stays visible.
     uint32_t now = millis();
     if (lastOverflowLogTime_ != 0 && (now - lastOverflowLogTime_) < CAN_OVERFLOW_LOG_INTERVAL) {
-        rxOverflowSuppressed_++;
+        rxOverflowSuppressed_ += fresh;
         return;
     }
     lastOverflowLogTime_ = now;
 
     Debug::printfFeature(DebugFeature::CAN,
         "[CAN] RX overflow (EFLG=0x%02X), cleared (x%lu since last report)\n",
-        eflg, (unsigned long)rxOverflowSuppressed_);
+        (unsigned)cOvrEflg_, (unsigned long)(rxOverflowSuppressed_ + fresh - 1));
     rxOverflowSuppressed_ = 0;
-}
-
-void CANController::drainRxBuffers() {
-    if (mcp_can_ == nullptr) {
-        return;
-    }
-
-    unsigned long canId;
-    uint8_t len = 0;
-    uint8_t rxBuf[8];
-
-    // Bounded drain (same cap as the receive paths) — keeps the loop non-blocking
-    for (uint8_t i = 0; i < 5; i++) {
-        if (mcp_can_->checkReceive() != CAN_MSGAVAIL) {
-            break;
-        }
-        mcp_can_->readMsgBuf(&canId, &len, rxBuf);
-        if (dispatchSteeringFrame(canId, len, rxBuf)) {
-            continue;  // steering angle frame: handed to the LWS decoder
-        }
-        // No OBD-II reply is expected while IDLE, so every other frame is "unmatched"
-        logUnmatchedFrame(canId, len, rxBuf);
-    }
 }
 
 // ============================================================================
@@ -886,22 +1637,35 @@ bool CANController::dispatchSteeringFrame(unsigned long canId, uint8_t len, cons
 
 // The ONLY transmitter on 0x7C0 in the firmware. The payload is chosen here from the two
 // fixed constants in Lws305.h — no caller can supply one, so [03 00] (which would move
-// the sensor's output to ID 0x000) can never be sent.
+// the sensor's output to ID 0x000) can never be sent. Queued with a TX result request
+// (design D4): serviceLwsZero() waits for it.
 bool CANController::sendLwsCfg(bool zeroFrame) {
-    if (!initialized_ || mcp_can_ == nullptr) {
+    if (!initialized_) {
         return false;
     }
     const uint8_t* src = zeroFrame ? LWS_CFG_ZERO_ID305 : LWS_CFG_RESET;
-    uint8_t tx[2] = {src[0], src[1]};   // the library takes a non-const buffer
-    byte result = mcp_can_->sendMsgBuf(STEER_LWS_CFG_ID, 0, sizeof(tx), tx);
+    CanFrame f = {};
+    f.id = STEER_LWS_CFG_ID;
+    f.len = 2;
+    f.data[0] = src[0];
+    f.data[1] = src[1];
+    const bool queued = queueTx(f, CanTxTag::LWS_CFG, true);
+    lwsZeroTxSeq_ = txSeq_;
+    lwsZeroTxResult_ = 0;
     Debug::printfFeature(DebugFeature::CAN, "[CAN] LWS 0x%03X [%02X %02X] %s\n",
-                         (unsigned)STEER_LWS_CFG_ID, tx[0], tx[1],
-                         result == CAN_OK ? "sent" : "SEND FAILED");
-    return result == CAN_OK;
+                         (unsigned)STEER_LWS_CFG_ID, f.data[0], f.data[1],
+                         queued ? "queued" : "SEND FAILED (queue full)");
+    return queued;
+}
+
+void CANController::abortLwsZero() {
+    lwsZeroAbort_ = "tx_failed";
+    lwsZeroPhase_ = LwsZeroPhase::IDLE;
+    Debug::printlnFeature(DebugFeature::CAN, "[CAN] LWS zero-set aborted (tx_failed) — OBD-II resumed");
 }
 
 CANController::LwsZeroStart CANController::startLwsZero() {
-    if (!initialized_ || mcp_can_ == nullptr) {
+    if (!initialized_) {
         return LwsZeroStart::NOT_INITIALIZED;
     }
     if (mode_ == Mode::PROBING) {
@@ -929,6 +1693,7 @@ bool CANController::isLwsZeroRunning() const {
 
 void CANController::serviceLwsZero() {
     // Called only while state_ == IDLE in NORMAL mode: no OBD-II request is in flight.
+    // TX results were taken from the task's events at the start of this update().
     uint32_t now = millis();
     switch (lwsZeroPhase_) {
         case LwsZeroPhase::IDLE:
@@ -942,14 +1707,33 @@ void CANController::serviceLwsZero() {
 
         case LwsZeroPhase::SEND_RESET:
             if (!sendLwsCfg(false)) {
-                lwsZeroAbort_ = "tx_failed";
-                lwsZeroPhase_ = LwsZeroPhase::IDLE;
-                Debug::printlnFeature(DebugFeature::CAN, "[CAN] LWS zero-set aborted (tx_failed) — OBD-II resumed");
+                abortLwsZero();   // never queued: the sensor's zero is untouched
                 return;
             }
+            // Queued = it may reach the sensor whatever the TX result says later: from here on
+            // the old zero is not guaranteed and the steering erases its limits (err toward
+            // "calibration lost").
             lwsZeroResetSent_ = true;
-            lwsZeroPhase_ = LwsZeroPhase::GAP;
+            lwsZeroPhase_ = LwsZeroPhase::WAIT_RESET_TX;
             lwsZeroPhaseMs_ = millis();
+            return;
+
+        case LwsZeroPhase::WAIT_RESET_TX:
+            if (lwsZeroTxResult_ == 0 && (now - lwsZeroPhaseMs_) < CAN_TX_RESULT_WAIT_MS) {
+                return;   // non-blocking wait for the task's TX result (it always answers)
+            }
+            if (lwsZeroTxResult_ == 0) {
+                txCancelSeq_ = lwsZeroTxSeq_;   // giving up: the task must not send it later
+            }
+            if (lwsZeroTxResult_ != 1) {
+                Debug::printfFeature(DebugFeature::CAN, "[CAN] LWS 0x%03X [05 00] SEND FAILED\n",
+                                     (unsigned)STEER_LWS_CFG_ID);
+                abortLwsZero();
+                return;
+            }
+            Debug::printfFeature(DebugFeature::CAN, "[CAN] LWS 0x%03X [05 00] sent\n", (unsigned)STEER_LWS_CFG_ID);
+            lwsZeroPhase_ = LwsZeroPhase::GAP;
+            lwsZeroPhaseMs_ = millis();   // the gap starts at the confirmed send
             return;
 
         case LwsZeroPhase::GAP:
@@ -961,9 +1745,24 @@ void CANController::serviceLwsZero() {
 
         case LwsZeroPhase::SEND_ZERO:
             if (!sendLwsCfg(true)) {
-                lwsZeroAbort_ = "tx_failed";
-                lwsZeroPhase_ = LwsZeroPhase::IDLE;
-                Debug::printlnFeature(DebugFeature::CAN, "[CAN] LWS zero-set aborted (tx_failed) — OBD-II resumed");
+                abortLwsZero();
+                return;
+            }
+            lwsZeroPhase_ = LwsZeroPhase::WAIT_ZERO_TX;
+            lwsZeroPhaseMs_ = millis();
+            return;
+
+        case LwsZeroPhase::WAIT_ZERO_TX:
+            if (lwsZeroTxResult_ == 0 && (now - lwsZeroPhaseMs_) < CAN_TX_RESULT_WAIT_MS) {
+                return;
+            }
+            if (lwsZeroTxResult_ == 0) {
+                txCancelSeq_ = lwsZeroTxSeq_;   // giving up: the task must not send it later
+            }
+            if (lwsZeroTxResult_ != 1) {
+                Debug::printfFeature(DebugFeature::CAN, "[CAN] LWS 0x%03X [53 30] SEND FAILED\n",
+                                     (unsigned)STEER_LWS_CFG_ID);
+                abortLwsZero();
                 return;
             }
             lwsZeroZeroSent_ = true;
@@ -992,68 +1791,41 @@ static void formatDtc(uint16_t code, char* out, size_t outLen) {
 }
 
 bool CANController::sendMode03Request() {
-    if (!initialized_ || mcp_can_ == nullptr) {
+    if (!initialized_) {
         return false;
     }
 
     // Mode 03 = request stored DTCs (no PID byte)
-    uint8_t requestData[8] = {0x01, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-    byte result = mcp_can_->sendMsgBuf(0x7DF, 0, 8, requestData);
+    CanFrame f = {};
+    f.id = 0x7DF;
+    f.len = 8;
+    f.data[0] = 0x01;
+    f.data[1] = 0x03;
+    obdReplyLatched_ = false;
+    probeReplyLatched_ = false;
 
-    if (result != CAN_OK) {
-        Debug::printlnFeature(DebugFeature::CAN, "[CAN] ERROR: Failed to send Mode 03 request");
+    if (!queueTx(f, CanTxTag::OBD, false)) {
+        Debug::printlnFeature(DebugFeature::CAN, "[CAN] ERROR: Failed to send Mode 03 request (transmit queue full)");
         return false;
     }
-
-    consecutiveSendFailures_ = 0;
     return true;
 }
 
+// The router latched the first Mode 01 (0x41 + pid) / Mode 03 (0x43) reply (design D3); take it.
 bool CANController::tryReceiveProbeResponse(uint8_t expectedMode, uint8_t expectedPid,
                                             uint8_t* outBuf, uint8_t& outLen, uint16_t& outCanId) {
-    if (mcp_can_ == nullptr) {
+    (void)expectedMode;   // matched by routeFrame() against the same probeCurrentRequest()
+    (void)expectedPid;
+    if (!probeReplyLatched_) {
         return false;
     }
-
-    unsigned long canId;
-    uint8_t len = 0;
-    uint8_t rxBuf[8];
-
-    // Drain up to 5 messages to prevent MCP2515 RX buffer overflow
-    for (uint8_t i = 0; i < 5; i++) {
-        if (mcp_can_->checkReceive() != CAN_MSGAVAIL) {
-            break;  // No more messages
-        }
-
-        mcp_can_->readMsgBuf(&canId, &len, rxBuf);
-        if (dispatchSteeringFrame(canId, len, rxBuf)) {
-            continue;  // steering angle frame: handed to the LWS decoder
-        }
-
-        // OBD-II responses are from 0x7E8 to 0x7EF (ECU response IDs)
-        if (canId >= 0x7E8 && canId <= 0x7EF && len >= 2) {
-            bool match = false;
-            if (expectedMode == 0x01) {
-                // Mode 01 positive response (0x41) for the expected PID
-                match = (len >= 3 && rxBuf[1] == 0x41 && rxBuf[2] == expectedPid);
-            } else if (expectedMode == 0x03) {
-                // Mode 03 positive response (0x43)
-                match = (rxBuf[1] == 0x43);
-            }
-            if (match) {
-                outCanId = (uint16_t)canId;
-                outLen = len;
-                for (uint8_t j = 0; j < len && j < 8; j++) {
-                    outBuf[j] = rxBuf[j];
-                }
-                return true;
-            }
-        }
-        // Non-matching message — report it (rate-limited) and continue draining
-        logUnmatchedFrame(canId, len, rxBuf);
+    probeReplyLatched_ = false;
+    outCanId = (uint16_t)probeReply_.id;
+    outLen = probeReply_.len;
+    for (uint8_t j = 0; j < probeReply_.len && j < 8; j++) {
+        outBuf[j] = probeReply_.data[j];
     }
-
-    return false;
+    return true;
 }
 
 CANController::ProbeStart CANController::startProbe(bool gearChangeActive) {
@@ -1368,26 +2140,24 @@ void CANController::updateProbe() {
 // Open both receive buffers to everything. The filter's EXIDE bit decides whether it matches
 // standard or extended frames (the masks have no such bit), so each buffer gets one standard
 // and one extended filter, all ID bits "don't care" through mask 0. BUKT stays as begin() set it.
+// CAN task only; stops at the first failing call; never logs.
 bool CANController::applySniffFilters() {
     if (mcp_can_ == nullptr) {
         return false;
     }
-    bool ok = true;
-    ok &= (mcp_can_->init_Mask(0, 0, 0) == MCP2515_OK);
-    ok &= (mcp_can_->init_Filt(0, 0, 0) == MCP2515_OK);   // RXB0: standard
-    ok &= (mcp_can_->init_Filt(1, 1, 0) == MCP2515_OK);   // RXB0: extended
-    ok &= (mcp_can_->init_Mask(1, 0, 0) == MCP2515_OK);
-    ok &= (mcp_can_->init_Filt(2, 0, 0) == MCP2515_OK);   // RXB1: standard
-    ok &= (mcp_can_->init_Filt(3, 1, 0) == MCP2515_OK);   // RXB1: extended
-    ok &= (mcp_can_->init_Filt(4, 0, 0) == MCP2515_OK);
-    ok &= (mcp_can_->init_Filt(5, 1, 0) == MCP2515_OK);
-    Debug::printfFeature(DebugFeature::CAN,
-        "[CAN][SNIFF] RX filters opened: all standard + extended IDs%s\n", ok ? "" : " [FAILED]");
-    return ok;
+    if (mcp_can_->init_Mask(0, 0, 0) != MCP2515_OK) return false;
+    if (mcp_can_->init_Filt(0, 0, 0) != MCP2515_OK) return false;   // RXB0: standard
+    if (mcp_can_->init_Filt(1, 1, 0) != MCP2515_OK) return false;   // RXB0: extended
+    if (mcp_can_->init_Mask(1, 0, 0) != MCP2515_OK) return false;
+    if (mcp_can_->init_Filt(2, 0, 0) != MCP2515_OK) return false;   // RXB1: standard
+    if (mcp_can_->init_Filt(3, 1, 0) != MCP2515_OK) return false;   // RXB1: extended
+    if (mcp_can_->init_Filt(4, 0, 0) != MCP2515_OK) return false;
+    if (mcp_can_->init_Filt(5, 1, 0) != MCP2515_OK) return false;
+    return true;
 }
 
 CANController::SniffStart CANController::startSniff(uint32_t ms, bool gearChangeActive) {
-    if (!initialized_ || mcp_can_ == nullptr) {
+    if (!initialized_) {
         return SniffStart::NOT_INITIALIZED;
     }
     if (mode_ == Mode::PROBING) {
@@ -1399,6 +2169,9 @@ CANController::SniffStart CANController::startSniff(uint32_t ms, bool gearChange
     if (mode_ == Mode::SNIFFING || gearChangeActive) {
         return SniffStart::BUSY;
     }
+    if (cmdInFlight_ != CanCmd::NONE) {
+        return SniffStart::BUSY;   // a re-init is running in the CAN task
+    }
     if (ms == 0) ms = 1;
     if (ms > CAN_SNIFF_MAX_WINDOW_MS) ms = CAN_SNIFF_MAX_WINDOW_MS;
 
@@ -1406,23 +2179,37 @@ CANController::SniffStart CANController::startSniff(uint32_t ms, bool gearChange
     sniffExtraCount_ = 0;
     sniffResults_.windowMs = ms;
 
-    // An in-flight OBD-II request is abandoned; its reply (if any) lands in the table.
-    if (!applySniffFilters()) {
-        // Half-programmed filters: put the normal set back and refuse.
-        if (!applyRxFilters()) {
-            recoverFromBusOff("sniff_restore");
-        }
+    // The CAN task opens the filters (design D6); the window starts on its result
+    // (onSniffOpened()). OBD-II polling pauses now: an in-flight request is abandoned.
+    if (!postCommand(CanCmd::FILTERS_SNIFF)) {
         return SniffStart::BUSY;
     }
-    // Stale overflow flags from before the window must not be counted.
-    modifyRegister(MCP_EFLG, MCP_EFLG_RX0OVR | MCP_EFLG_RX1OVR, 0x00);
-
-    sniffResults_.running = true;
-    sniffResults_.startedAtMs = millis();
+    sniffPhase_ = SniffPhase::OPENING;
     mode_ = Mode::SNIFFING;
     Debug::printfFeature(DebugFeature::CAN,
-        "[CAN][SNIFF] Started (%lu ms) — OBD-II polling paused\n", (unsigned long)ms);
+        "[CAN][SNIFF] Opening the RX filters (%lu ms window) — OBD-II polling paused\n", (unsigned long)ms);
     return SniffStart::STARTED;
+}
+
+void CANController::onSniffOpened(const CanEvent& ev) {
+    if (mode_ != Mode::SNIFFING || sniffPhase_ != SniffPhase::OPENING) {
+        return;
+    }
+    if (ev.flags & EV_OK) {
+        Debug::printlnFeature(DebugFeature::CAN, "[CAN][SNIFF] RX filters opened: all standard + extended IDs");
+        sniffResults_.running = true;
+        sniffResults_.startedAtMs = millis();
+        sniffOvrBase_ = cOvr_;
+        sniffDropBase_ = cRxDrop_;
+        sniffPhase_ = SniffPhase::WINDOW;
+        Debug::printfFeature(DebugFeature::CAN,
+            "[CAN][SNIFF] Started (%lu ms) — OBD-II polling paused\n", (unsigned long)sniffResults_.windowMs);
+        return;
+    }
+    // Half-programmed filters: the task put the normal set back (EV_FILT) or could not.
+    Debug::printlnFeature(DebugFeature::CAN, "[CAN][SNIFF] RX filters opened: [FAILED] — sniff ends without frames");
+    sniffResults_.openFailed = true;
+    finishSniff((ev.flags & EV_FILT) != 0);
 }
 
 void CANController::recordSniffFrame(unsigned long canId, uint8_t len, const uint8_t* buf) {
@@ -1474,57 +2261,52 @@ void CANController::recordSniffFrame(unsigned long canId, uint8_t len, const uin
     }
 }
 
+// Window end, then the filter restore in the task (design D6)
 void CANController::updateSniff() {
-    unsigned long canId;
-    uint8_t len = 0;
-    uint8_t rxBuf[8];
-
-    for (uint8_t i = 0; i < CAN_SNIFF_DRAIN_PER_UPDATE; i++) {
-        if (mcp_can_->checkReceive() != CAN_MSGAVAIL) {
-            break;
-        }
-        mcp_can_->readMsgBuf(&canId, &len, rxBuf);
-        dispatchSteeringFrame(canId, len, rxBuf);   // keep feeding the LWS decoder
-        recordSniffFrame(canId, len, rxBuf);
+    if (sniffPhase_ == SniffPhase::WINDOW &&
+        (millis() - sniffResults_.startedAtMs) >= sniffResults_.windowMs) {
+        closeSniffWindow();
     }
-
-    uint8_t eflg = mcp_can_->getError();
-    uint8_t ovr = eflg & (MCP_EFLG_RX0OVR | MCP_EFLG_RX1OVR);
-    if (ovr) {
-        if (ovr & MCP_EFLG_RX0OVR) sniffResults_.overflows++;
-        if (ovr & MCP_EFLG_RX1OVR) sniffResults_.overflows++;
-        modifyRegister(MCP_EFLG, ovr, 0x00);
-    }
-
-    if (millis() - sniffResults_.startedAtMs >= sniffResults_.windowMs) {
-        finishSniff();
+    // A re-init may hold the command slot: the restore is posted as soon as it is free
+    if (sniffPhase_ == SniffPhase::CLOSE_PENDING && postCommand(CanCmd::FILTERS_NORMAL)) {
+        sniffPhase_ = SniffPhase::CLOSING;
     }
 }
 
-void CANController::finishSniff() {
-    bool ok = applyRxFilters();
-    if (!ok) {
-        Debug::printlnFeature(DebugFeature::CAN,
-            "[CAN][SNIFF] Filter restore failed — re-initialising the controller");
-        recoverFromBusOff("sniff_restore");   // full reset + applyRxFilters() + NORMAL
-    }
-    modifyRegister(MCP_EFLG, MCP_EFLG_RX0OVR | MCP_EFLG_RX1OVR, 0x00);
+// Stop recording; the window's overflow / queue-drop counts are the task's counter deltas
+void CANController::closeSniffWindow() {
+    sniffResults_.overflows = cOvr_ - sniffOvrBase_;
+    sniffResults_.queueDrops = cRxDrop_ - sniffDropBase_;
+    sniffPhase_ = SniffPhase::CLOSE_PENDING;
+}
 
+// Normal filters back (restoreOk) or not; called on the FILTERS_NORMAL result, or at once
+// when the filters could not be opened.
+void CANController::finishSniff(bool restoreOk) {
+    if (mode_ != Mode::SNIFFING) {
+        return;
+    }
     sniffResults_.running = false;
     sniffResults_.complete = true;
-    sniffResults_.restoreFailed = !ok;
+    sniffResults_.restoreFailed = !restoreOk;
     sniffResults_.completedAtMs = millis();
     mode_ = Mode::NORMAL;
     state_ = OBDState::IDLE;
     // No replies came back during the window: keep the no-data watchdog from forcing a chip
     // re-init on the first poll after it (it is rate-limited from lastReinitTime_).
     lastReinitTime_ = millis();
+    if (!restoreOk) {
+        Debug::printlnFeature(DebugFeature::CAN,
+            "[CAN][SNIFF] Filter restore failed — re-initialising the controller");
+        recoverFromBusOff("sniff_restore");   // full reset + applyRxFilters() + NORMAL, in the task
+    }
 
     Debug::printfFeature(DebugFeature::CAN,
-        "[CAN][SNIFF] Done: %u IDs (+%u beyond table%s), %lu frames, %lu overflows — OBD-II resumed\n",
+        "[CAN][SNIFF] Done: %u IDs (+%u beyond table%s), %lu frames, %lu overflows, %lu queue drops%s — OBD-II resumed\n",
         sniffResults_.idCount, sniffResults_.overflowIds,
         sniffResults_.overflowIdsSaturated ? "+" : "",
-        (unsigned long)sniffResults_.frames, (unsigned long)sniffResults_.overflows);
+        (unsigned long)sniffResults_.frames, (unsigned long)sniffResults_.overflows,
+        (unsigned long)sniffResults_.queueDrops, sniffResults_.openFailed ? " (open failed)" : "");
     for (uint8_t i = 0; i < sniffResults_.idCount; i++) {
         const SniffEntry& e = sniffResults_.entries[i];
         Debug::printfFeature(DebugFeature::CAN,

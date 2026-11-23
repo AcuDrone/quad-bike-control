@@ -93,7 +93,7 @@
 #define PIN_CAN_MISO        GPIO_NUM_41  // SPI MISO
 #define PIN_CAN_SCK         GPIO_NUM_40  // SPI SCK
 #define PIN_CAN_CS          GPIO_NUM_39  // SPI Chip Select
-#define PIN_CAN_INT         GPIO_NUM_38  // MCP2515 INT — DEFINED ONLY, the driver polls
+#define PIN_CAN_INT         GPIO_NUM_38  // MCP2515 INT → CAN task wake-up (FALLING edge); the task also polls every CAN_POLL_MS
 
 // X10 (Buck-Boost connector). aztec has NO boost board: pin 3 carries the 12 V battery +
 // for the battery sense (see "12 V BATTERY SENSE"). GPIO46 is still driven HIGH (harmless).
@@ -1132,7 +1132,6 @@ enum class InputSource {
 #define CAN_RETRY_ATTEMPTS        3     // Number of retry attempts on error
 
 // CAN Diagnostics / Recovery (bring-up aids, all non-blocking)
-#define CAN_MAX_CONSEC_SEND_FAILURES 3     // Consecutive sendMsgBuf() failures before abortTX()
 #define CAN_RX_LOG_INTERVAL          1000  // ms - rate limit for unmatched-RX-frame logging
 #define CAN_HEALTH_LOG_INTERVAL      5000  // ms - rate limit for TEC/REC/EFLG health logging
 #define CAN_OVERFLOW_LOG_INTERVAL    5000  // ms - rate limit for RXnOVR overflow logging
@@ -1148,6 +1147,23 @@ enum class InputSource {
 #define CAN_REINIT_RETRY_MS          100   // ms - spacing between the attempts of one trigger
 #define CAN_FIRST_FRAME_WAIT_MS      10000 // ms - give up waiting for the first LWS/OBD frame after a re-init
 #define CAN_WD_REPEAT_LOG_MS         600000 // ms - journal a still-silent watchdog episode again after this long (with a count)
+
+// CAN task `can_io`: the only code that touches the MCP2515 (change move-can-rx-to-interrupt).
+// loop() talks to it through the RX / TX / event rings and a command slot (design D1-D9).
+#define CAN_TASK_PRIORITY            12    // above async_tcp (10, web / OTA handlers), below lwIP 18 / esp_timer 22 / WiFi 23 / IPC 24 (D2)
+#define CAN_TASK_CONFIG_PRIORITY     1     // init / re-init / filter switch run at the loop's priority: library mode waits are time-sliced, never starve the loop (D6)
+#define CAN_TASK_CORE                1     // the loop's core: only pre-emption between task and loop, WiFi stays on core 0 (D2)
+#define CAN_TASK_STACK               4096  // bytes - mcp_can -> SPIClass call depth, no formatting in the task; high-water mark journaled at boot (D2)
+#define CAN_POLL_MS                  2     // ms - task wakes at least this often without INT: polling fallback, LWS RXB1 holds one 10 ms frame (D2)
+#define CAN_RX_DRAIN_CAP             16    // frames read per wake: bounds one cycle (~0.7 ms of SPI), the next wake continues (D2)
+#define CAN_RX_RING                  64    // frames task -> loop: > 600 ms of today's traffic, > 200 ms at ~300 fps; full = drop the oldest (D3)
+#define CAN_TX_RING                  8     // frames loop -> task: today <= 1 frame in flight; full = reject the newest (D4)
+#define CAN_TX_TIMEOUT_MS            20    // ms - TXB0 frame not sent by then is aborted alone (8-byte frame ~0.25 ms; OBD reply timeout 200 ms) (D4)
+#define CAN_TX_RESULT_WAIT_MS        1000  // ms - zero-set backstop for a TX result the task always gives (sent / aborted ~20 ms / failed at once); only a lost event or ~0.6 s of config work reaches it; the frame is then cancelled (D4)
+#define CAN_EFLG_POLL_MS             10    // ms - EFLG / TEC / REC read in every mode: RXnOVR counted, TXBO reported (D2)
+#define CAN_INIT_RETRY_MS            5000  // ms - boot init failed: the task retries the init this often, gate first (~6 ms without a chip) (D7)
+#define CAN_BOOT_INIT_WAIT_MS        1000  // ms - begin() waits this long for the first init result (healthy ~11 ms, worst ~0.6 s) (D7)
+#define CAN_INT_WINDOW_MS            5000  // ms - INT state window: frames read with no INT wake = INT dead (D9)
 
 // MCP2515 hardware acceptance filtering (standard 11-bit IDs only), two paths on ONE bus.
 // The ECU floods the bus with broadcast frames (Delphi MT05 sends 0x301 etc.) which
@@ -1182,7 +1198,6 @@ enum class InputSource {
 #define CAN_SNIFF_WINDOW_MS        10000 // ms - window used by the web "CAN sniffer (10 s)" button
 #define CAN_SNIFF_MAX_WINDOW_MS    60000 // ms - upper clamp for startSniff()
 #define CAN_SNIFF_MAX_IDS          32    // distinct IDs kept in the results table
-#define CAN_SNIFF_DRAIN_PER_UPDATE 32    // frames read per update() while sniffing (5 in normal operation)
 #define SNIFF_RESULT_TTL           30000 // ms - completed sniffer results stay in telemetry this long
 
 // Transmission Safety (CAN-based)
@@ -1223,7 +1238,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.37"
+#define FIRMWARE_VERSION "1.5.38"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry
