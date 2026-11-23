@@ -688,6 +688,10 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // Starter time limit since 1.5.36: crank_max_ms, 1 scalar slot (key by pointer, ≈ 16 B of
     // memory, ≈ 22 B of JSON) — worst case ≈ 8.58 + 0.02 ≈ 8.60 KB, ≈ 0.62 KB under 9216 (size
     // unchanged).
+    // CAN task health since 1.5.38: can_int / can_rx_drop / can_rx_ovr / can_rx_hwm / can_tx_fail /
+    // can_busy_max_us, 6 scalar slots (keys by pointer, can_int a static token by pointer, nothing
+    // copied; ≈ 96 B of memory, ≈ 110 B of JSON) — worst case ≈ 8.60 + 0.10 ≈ 8.70 KB, ≈ 0.52 KB
+    // under 9216 (size unchanged).
     // Static (single caller: the main-loop broadcast) so the larger document is off the stack.
     static StaticJsonDocument<9216> doc;
     doc.clear();
@@ -882,6 +886,15 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // Link recovery session totals + event journal size (-1 = flash writes on but impossible)
     doc["vesc_resync"] = telemetry.vesc_resync;
     doc["can_reinit"] = telemetry.can_reinit;
+    // CAN task health (session values), independent of can_status; absent without the task
+    if (telemetry.can_int != nullptr) {
+        doc["can_int"] = telemetry.can_int;
+        doc["can_rx_drop"] = telemetry.can_rx_drop;
+        doc["can_rx_ovr"] = telemetry.can_rx_ovr;
+        doc["can_rx_hwm"] = telemetry.can_rx_hwm;
+        doc["can_tx_fail"] = telemetry.can_tx_fail;
+        doc["can_busy_max_us"] = telemetry.can_busy_max_us;
+    }
     doc["i2c_unlock"] = telemetry.i2c_unlock;
     doc["journal_bytes"] = telemetry.journal_bytes;   // writes off: RAM tail bytes
     doc["journal_fs"] = telemetry.journal_fs;         // journal flash-write switch
@@ -992,6 +1005,8 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
         so["xid"] = sn.overflowIds;
         so["xsat"] = sn.overflowIdsSaturated;
         so["rfail"] = sn.restoreFailed;
+        so["ofail"] = sn.openFailed;       // the CAN task could not open the filters
+        so["qdrop"] = sn.queueDrops;       // frames dropped from the full receive queue
         JsonArray ids = so.createNestedArray("ids");
         for (uint8_t i = 0; i < sn.idCount; i++) {
             const CANController::SniffEntry& e = sn.entries[i];

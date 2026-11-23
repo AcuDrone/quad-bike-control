@@ -1,173 +1,91 @@
 ## 0. Preconditions
-- [ ] 0.1 `replace-aztec-steering-sensor-with-bosch-lws`, `redesign-web-ui-service-console`, `add-aztec-steering-rate-mode` and `auto-detect-aztec-steering-sensor-direction` are implemented on `aztec` (firmware 1.5.1). This change is archived AFTER them. Its MODIFIED `CAN Communication Error Handling` quotes the LWS change's delta.
-- [ ] 0.2 `move-aztec-vesc-to-can` is NOT implemented yet. It is archived immediately after this change, and its can-controller delta is already re-based on this one.
-- [ ] 0.3 Confirm from the `Control_v0` schematic that GPIO38 is the MCP2515 `INT` pin at 3.3 V logic (TJA1051T/3 = 3.3 V I/O variant) with no other load. If no schematic is at hand, task 10.2 proves it on the bench.
+- [x] 0.1 Proposal approved by the owner, including the version choice (design D12: 1.5.38 by the rule, or 1.6.0) and the open questions in design.md.
+- [x] 0.2 `add-can-bus-sniffer`, `add-event-journal-and-link-recovery` and `gate-obd-watchdog-and-pull-up-vesc-rx` are implemented on `master` (they are: 1.5.7, 1.5.26, 1.5.28). This change is **archived after** all three (its MODIFIED blocks quote their requirements).
+- [x] 0.3 `move-aztec-vesc-to-can` is NOT implemented. Its proposal must be re-based on this version (no SPI mutex, `queueTx()` tags, version numbers) before it is.
+- [x] 0.4 The chosen `FIRMWARE_VERSION` is still unclaimed by any change in `openspec/changes/` and on `aztec` / `old-board` at implementation time.
+- [x] 0.5 Work starts on `master`; `aztec` and `old-board` get it only by plain merges of `master` (§9).
 
-## 1. Pure logic (host-testable)
-- [ ] 1.1 Create `include/CanRxMonitor.h` (header-only, `<stdint.h>` only, no Arduino and no `Constants.h`), following design D6:
-  - `class CanIntMonitor`, constructed with `windowMs`;
-  - `update(nowMs, isrCount, frameCount)`, using window deltas with unsigned wrap-safe arithmetic;
-  - states `ACTIVE` / `INACTIVE` (start: `ACTIVE`);
-  - `intOk()`, `changed()` (true once per transition);
-  - rule: frames > 0 and ISR = 0 → INACTIVE; ISR > 0 → ACTIVE; no frames → unchanged.
-- [ ] 1.2 Create `include/Mcp2515Tx.h` (header-only, `<stdint.h>` only), following design D7:
-  - `mcp2515EncodeTxHeader(id, ext, dlc, out[5])`:
-    - standard: SIDH = id>>3, SIDL = (id&7)<<5;
-    - extended: SIDH = id>>21, SIDL = ((id>>13)&0xE0) | 0x08 | ((id>>16)&0x03), EID8 = id>>8, EID0 = id;
-    - DLC & 0x0F, clamped to 8.
-  - `mcp2515PickFreeTx(readStatusByte)`: TXREQ bits 2/4/6 → buffer 0/1/2, or −1 when all are busy.
-  - `mcp2515TxSidhAddr(n)` (0x31/0x41/0x51) and `mcp2515RtsCmd(n)` (0x81/0x82/0x84).
-- [ ] 1.3 Add `test/test_can_rx_irq/test_main.cpp` (Unity). It covers:
-  - Monitor:
-    - starts ok;
-    - frames without ISR for one full window → INACTIVE, with `changed()` once;
-    - ISR again → ACTIVE, with `changed()` once;
-    - a silent window keeps the state;
-    - a partial window decides nothing;
-    - `millis()` and counter wrap.
-  - TX header:
-    - std `0x7DF` → `FB E0 00 00 08` (DLC 8);
-    - std `0x7C0` → `F8 00 00 00 02`;
-    - std `0x305`;
-    - ext `0x00000901` (SIDH 00, SIDL 08, EID8 09, EID0 01);
-    - ext `0x18DAF110` round-trip against a reference decode (the `mcp2515_read_id` rule);
-    - DLC > 8 clamped.
-  - Free buffer: status `0x00` → 0, `0x04` → 1, `0x14` → 2, `0x54` → −1.
-- [ ] 1.4 `platformio.ini` `[env:native]`: add `test_can_rx_irq` as its own indented line in the multi-line `test_filter` (the single-line form silently skips suites), and extend the comment. `build_src_filter` stays as it is, because both headers are header-only.
+## 1. Pure law and native tests (`master`)
+- [x] 1.1 `include/CanIoLaw.h` (header-only, `<stdint.h>` / `<string.h>` only, no Arduino, no `Constants.h`), design D3, D4, D6, D9:
+  - `struct CanFrame { uint32_t id; uint8_t len; uint8_t data[8]; }`;
+  - `template <uint8_t N> struct CanFrameRing`: `pushDropOldest()` (returns true when it dropped), `pushReject()` (false when full), `pop()`, `count()`, `hwm()`, `drops()`; no locking inside (the firmware guards it with a `portMUX`);
+  - `canTxHeader(id, ext, dlc, out[5])`: SIDH, SIDL (EXIDE for extended), EID8, EID0, DLC clamped to 8 — the same bits as `mcp2515_write_id()` in `mcp_can.cpp:690-716`;
+  - READ STATUS decoding: `rxPending(st)`, `txPending(st, buf)` (bits 0/1 = RX0IF/RX1IF, 2/4/6 = TXnREQ);
+  - `txTimedOut(nowMs, loadedMs, timeoutMs)` (wrap-safe);
+  - `mcp2515AliveAfterReset(canstat, canctrl)` (CANSTAT bits 7:5 = CONFIG and CANCTRL = `0x87`);
+  - `canIntState(prev, hasIntPin, intWakes, frames)` → `NONE` / `OK` / `DEAD`, previous state kept when `frames == 0`.
+- [x] 1.2 `test/test_can_io/test_main.cpp` (Unity), cases:
+  - ring: FIFO order; `pushDropOldest` at full drops the oldest, keeps the newest 64, counts drops; `pushReject` at full refuses and keeps the content; `hwm` tracks the maximum; wrap-around over 1000 pushes;
+  - TX header: standard `0x7DF` DLC 8 → `FB E0 00 00 08`; standard `0x7C0` DLC 2 → `F8 00 00 00 02`; standard `0x305`; extended `0x00000901` (VESC STATUS, ID 1) and `0x1FFFFFFF` checked against hand-computed `mcp2515_write_id()` output; DLC 15 clamps to 8;
+  - READ STATUS: each RX/TX bit alone and combined;
+  - TX timeout: just before / at / after 20 ms, across a `millis()` wrap;
+  - liveness: `0x80`/`0x87` alive; `0x00`/`0x00`, `0xFF`/`0xFF`, `0x80`/`0xFF`, `0x00`/`0x87` not alive;
+  - INT state: no pin → `NONE`; frames with zero INT wakes → `DEAD`; any INT wake → `OK`; no frames → unchanged.
+- [x] 1.3 `platformio.ini` `[env:native]`: one indented `test_filter` line `test_can_io`; extend the suite list in the comment block. `pio test -e native` green.
 
-## 2. CAN controller: task, ISR, queue, mutex (`CANController.h/.cpp`)
-- [ ] 2.1 Add the members:
-  - `SemaphoreHandle_t rxSem_, spiMutex_`;
-  - `QueueHandle_t rxQueue_`;
-  - `TaskHandle_t rxTask_`;
-  - `volatile bool reinitActive_`;
-  - counters: `isrCount_` (volatile, ISR-only writer), `rxTaskFrames_`, `queueDrops_`, `capHits_`, `spiLockTimeouts_`, `rxOverflowCount_`, plus the window maxima `queueHwm_` and `maxQueueAgeMs_`;
-  - `CanIntMonitor intMon_`;
-  - `struct RxFrame { uint32_t id; uint8_t len; uint8_t data[8]; uint32_t tMs; }`.
-  - Add the `lockSpi(ms)` / `unlockSpi()` helpers and an RAII `SpiGuard`.
-- [ ] 2.2 `begin()`:
-  - create `spiMutex_`, `rxSem_` and `rxQueue_` first;
-  - run the whole existing init (`MCP_CAN` construction, `begin`, `applyRxFilters`, `setMode`, the CANSTAT readback) under the lock;
-  - then assert CANINTE (2.6);
-  - release, and only then log (move today's in-between prints after the release);
-  - on success: `pinMode(PIN_CAN_INT, INPUT_PULLUP)`, then `attachInterrupt(PIN_CAN_INT, canIntIsr, FALLING)` unless `CAN_RX_TEST_NO_INT` is defined, then create `can_rx` with `xTaskCreatePinnedToCore(…, CAN_RX_TASK_STACK, this, CAN_RX_TASK_PRIORITY, &rxTask_, CAN_RX_TASK_CORE)`, then give `rxSem_` once;
-  - on failure: delete whatever was created and return false (no task, no ISR).
-- [ ] 2.3 Add `static void IRAM_ATTR canIntIsr()`. It only does `isrCount_++` and `xSemaphoreGiveFromISR` + `portYIELD_FROM_ISR`, through a static instance pointer. No SPI, no queue.
-- [ ] 2.4 Add `static void canRxTask(void*)`, per design D2:
-  - wait with `CAN_RX_WAIT_MS`;
-  - skip while `reinitActive_`;
-  - per frame: lock → `checkReceive()` + `readMsgBuf()` → unlock → `tMs = millis()` → `xQueueSend(…, 0)`, counting drops;
-  - cap `CAN_RX_DRAIN_CAP`;
-  - count lock timeouts and cap hits;
-  - never log.
-- [ ] 2.5 Add `pumpRxQueue()` and `routeRxFrame()`, per design D3:
-  - call `pumpRxQueue()` first in `update()`, before the probe/normal branch, so it runs in every mode;
-  - drain ≤ `CAN_RX_QUEUE_DEPTH` frames with `xQueueReceive(…, 0)`;
-  - sample the high-water mark and the max age;
-  - route: `dispatchSteeringFrame()` (unchanged, `millis()` timestamp) → the NORMAL WAITING_RESPONSE match into `responseData_` / `responseLen_` / `responseReady_` → the probe-in-flight match into `probeRxBuf_` / `probeRxLen_` / `probeRxReady_` → `logUnmatchedFrame()`.
-- [ ] 2.6 CANINTE (design D5): after `begin()` and in `recoverFromBusOff()`, under the lock, `modifyRegister(MCP_CANINTE, 0xFF, CAN_CANINTE_VALUE)`, then `readRegister(MCP_CANINTE)`. After release, log `[CAN] CANINTE=0x%02X`, or an ERROR on mismatch.
-- [ ] 2.7 Remove `drainRxBuffers()` (declaration and definition), plus the `checkReceive()`/`readMsgBuf()` loops in `tryReceiveResponse()` and `tryReceiveProbeResponse()`. Turn both into "consume the latched reply" and clear the latch whenever a new request is sent. Update the comments that mention "up to 5 messages".
-- [ ] 2.8 `recoverFromBusOff()`:
-  - set `reinitActive_`;
-  - take the lock (the loop is the only caller);
-  - `begin` + `applyRxFilters` + `setMode` + CANINTE + the CANSTAT/EFLG readback;
-  - release, clear the flag, give `rxSem_`;
-  - then log. Keep the queue contents.
-- [ ] 2.9 Update the class Doxygen header and the `applyRxFilters()` comment ("caller holds the SPI lock"). Mark `readRegister()` / `modifyRegister()` / `applyRxFilters()` / `queueTx()` "requires lock", with a debug-build holder check (`xSemaphoreGetMutexHolder`) that counts violations.
+## 2. Constants and build (`master`)
+- [x] 2.1 `include/Constants.h`, CAN section: `CAN_TASK_PRIORITY` 12, `CAN_TASK_CONFIG_PRIORITY` 1, `CAN_TASK_CORE` 1, `CAN_TASK_STACK` 4096, `CAN_POLL_MS` 2, `CAN_RX_DRAIN_CAP` 16, `CAN_RX_RING` 64, `CAN_TX_RING` 8, `CAN_TX_TIMEOUT_MS` 20, `CAN_EFLG_POLL_MS` 10, `CAN_INIT_RETRY_MS` 5000, `CAN_BOOT_INIT_WAIT_MS` 1000, `CAN_INT_WINDOW_MS` 5000; each with a one-line reason (design D2–D9).
+- [x] 2.2 Remove `CAN_MAX_CONSEC_SEND_FAILURES` and `CAN_SNIFF_DRAIN_PER_UPDATE`; `PIN_CAN_INT` comment becomes "MCP2515 INT → CAN task wake-up (FALLING edge); the task also polls every CAN_POLL_MS".
+- [x] 2.3 `platformio.ini`: pin `MCP_CAN_lib.git#34807287506afc6b4aef7c577392c1c4e32d1b45`; add `-DDEBUG_MODE=0` to `[env]` `build_flags` with a comment (library prints to `Serial` otherwise, design D8). Clean build: `pio run` shows no "Setting Mask" strings in the binary (`strings .pio/build/*/firmware.elf | grep -c "Set Mask"` = 0).
 
-## 3. Transmit paths under the mutex
-- [ ] 3.1 Add `bool queueTx(uint32_t id, bool ext, uint8_t len, const uint8_t* data)` (caller holds the lock), per design D7:
-  - READ STATUS (0xA0) → `mcp2515PickFreeTx()`;
-  - one WRITE burst at `mcp2515TxSidhAddr(n)` (header + data);
-  - RTS `mcp2515RtsCmd(n)`;
-  - raw SPI with the library's `SPISettings(10000000, MSBFIRST, SPI_MODE0)` and `csPin_`, like `readRegister()`.
-- [ ] 3.2 `sendOBDRequest()` / `sendMode03Request()`: lock (timeout → count, return false, do not touch `consecutiveSendFailures_`), `queueTx(0x7DF, false, 8, …)`, unlock. "All buffers busy" returns false and keeps today's failure log and counters.
-- [ ] 3.3 The send-failure branch in `update()`: take one lock around `getError()`, `errorCountTX/RX()`, `abortTX()` and the ABAT clear. Call `recoverFromBusOff()` (which locks by itself) only after releasing it. Print after release.
-- [ ] 3.4 The WAITING_RESPONSE timeout and probe-timeout `getError()` reads: lock around the read only, and call `recoverFromBusOff()` after release.
-- [ ] 3.5 `sendLwsCfg()`: lock around `sendMsgBuf()` (still the library's confirmed transmit, held ≤ 5 ms), and print after release. The zero-set phases are otherwise unchanged.
-- [ ] 3.6 Grep check: every `mcp_can_->`, `readRegister(`, `modifyRegister(` and `queueTx(` call sits in `begin()`, `recoverFromBusOff()`, `canRxTask()` or a locked block. No `Debug::` call sits inside a locked block.
+## 3. CAN task skeleton (`master`, `src/CANController.cpp`, `include/CANController.h`)
+- [x] 3.1 Members: RX / TX / event rings (`CanFrameRing`) with one `portMUX` each, command slot (`volatile` command + sequence), task handle, ISR counter, task-written counters (D9), chip-up flag, TXB0 tracking state.
+- [x] 3.2 `begin()`: pins and `SPI.begin()` as today, create the task (D2 parameters), attach the ISR under `#if defined(PIN_CAN_INT) && !defined(CAN_TEST_NO_INT)` (`INPUT_PULLUP`, FALLING, IRAM ISR: count + `vTaskNotifyGiveFromISR` + `portYIELD_FROM_ISR`), post `INIT`, wait for its result at most `CAN_BOOT_INIT_WAIT_MS`, keep the existing boot log lines and return value (D7).
+- [x] 3.3 Task loop per design D2: notification wait with `CAN_POLL_MS`, command execution, READ STATUS, drain ≤ `CAN_RX_DRAIN_CAP`, TXB0 service, EFLG every `CAN_EFLG_POLL_MS` (RXnOVR count + clear, TXBO event once per episode, TEC/REC/EFLG snapshot), wake-type / busy-time accounting. No logging anywhere in the task.
+- [x] 3.4 Move every `mcp_can_->…`, `readRegister()`, `modifyRegister()`, `applyRxFilters()`, `applySniffFilters()` call into task-only functions. Grep check: these names appear only in task code paths and `begin()`'s pre-task pin setup.
 
-## 4. Error flags, health and diagnostics
-- [ ] 4.1 `checkRxOverflow()`:
-  - call it from `update()` in every mode, throttled to `CAN_EFLG_CHECK_MS`;
-  - lock around the EFLG read and clear;
-  - increment `rxOverflowCount_` on each detected overflow;
-  - keep the rate-limited log;
-  - add the accessor `rxOverflowCount()` (used by `move-aztec-vesc-to-can`).
-- [ ] 4.2 `logHealth()`: lock around the three reads, print after release. Behaviour is otherwise unchanged.
-- [ ] 4.3 Add `logRxStats()`, the `[CAN] rx:` line every `CAN_HEALTH_LOG_INTERVAL` with the fields of design D6 (stack via `uxTaskGetStackHighWaterMark(rxTask_)`). Reset the window maxima after printing.
-- [ ] 4.4 Call `intMon_.update(millis(), isrCount_, rxTaskFrames_)` from `update()`. On `changed()`, log `[CAN] INT inactive, polling fallback` or `[CAN] INT active`.
-- [ ] 4.5 Add the accessors `isIntOk()`, `rxQueueDrops()`, `rxTaskFrames()`, `isrCount()`.
+## 4. Receive path (`master`)
+- [x] 4.1 `update()`: drain the event ring (command results, TX results, bus-off) and then the RX ring (≤ `CAN_RX_RING` frames) at the very start, in every mode and also while `!initialized_` (events only), before any state machine step.
+- [x] 4.2 Single router per design D3: `dispatchSteeringFrame()` first (unchanged), sniffer record while SNIFFING, OBD-II latch while WAITING_RESPONSE, probe latch while a probe request is in flight, else `logUnmatchedFrame()`.
+- [x] 4.3 `tryReceiveResponse()` / `tryReceiveProbeResponse()` take the latched reply (RPM raw-frame debug line kept); sending a request clears the latch.
+- [x] 4.4 Delete `drainRxBuffers()`, the 5-frame loops and `updateSniff()`'s 32-frame loop.
+- [x] 4.5 `checkRxOverflow()` / `logHealth()` become loop-side readers of the task's counters and snapshot (same log lines and rate limits), called on every `update()` in every mode.
 
-## 5. Constants (`include/Constants.h`)
-- [ ] 5.1 Replace the `PIN_CAN_INT` comment: "MCP2515 INT (active low) → FALLING-edge ISR wakes the `can_rx` reader task; 2 ms polling fallback if dead".
-- [ ] 5.2 Add to the CAN section, each with a one-line rationale comment:
-  - `CAN_RX_TASK_PRIORITY 12`;
-  - `CAN_RX_TASK_STACK 4096`;
-  - `CAN_RX_TASK_CORE 1`;
-  - `CAN_RX_WAIT_MS 2`;
-  - `CAN_RX_DRAIN_CAP 16`;
-  - `CAN_RX_QUEUE_DEPTH 32`;
-  - `CAN_SPI_LOCK_TIMEOUT_MS 10`;
-  - `CAN_INT_CHECK_MS 5000`;
-  - `CAN_EFLG_CHECK_MS 100`;
-  - `CAN_CANINTE_VALUE 0x03` (RX0IE | RX1IE only).
-- [ ] 5.3 In the MCP2515 acceptance comment block, replace "faster than the loop can drain them" and "the only loss is one LWS frame on RX1OVR" with the task/queue wording.
+## 5. Transmit path (`master`)
+- [x] 5.1 `queueTx(frame, tag, wantResult)` (loop only): push-reject into the TX ring, count `tx_qfull`, notify the task.
+- [x] 5.2 Task: TXB0 load (WRITE burst from TXB0SIDH using `canTxHeader()`, TXP = 1, RTS `0x81`), completion by TXREQ clear, per-buffer abort after `CAN_TX_TIMEOUT_MS` (BIT MODIFY TXB0CTRL.TXREQ = 0), `TX_DONE` event when asked; frames asking for a result are failed at once while the chip is down.
+- [x] 5.3 `sendOBDRequest()` / `sendMode03Request()` use `queueTx(…, OBD, false)`; delete `consecutiveSendFailures_`, the `abortTX()` call and the ABAT clear (`src/CANController.cpp:313-336` today); the send-failure branch keeps the reschedule and the retry count; bus-off now arrives as a task event and goes to `handleBusOff()`.
+- [x] 5.4 `sendLwsCfg()` uses `queueTx(…, LWS_CFG, true)`; `serviceLwsZero()` gains the two "wait for TX result" phases (bounded by `CAN_TX_TIMEOUT_MS` + one cycle), `tx_failed` on a failed result or a full ring; the gap starts at the confirmed `[05 00]`. Payloads and the single-transmitter rule unchanged.
 
-## 6. Telemetry and web
-- [ ] 6.1 `TelemetryManager.h/.cpp`: add `can_int_ok` and `can_rx_queue_drops`, set only when the CAN controller is initialized. `WebPortal.cpp`: emit them outside the `can_status == "connected"` block, and re-check the `StaticJsonDocument<4096>` capacity comment.
-- [ ] 6.2 `data/index.html`, the "Стан CAN" tile:
-  - one muted line `RX: переривання` / `RX: interrupt`, or the warning-coloured `RX: опитування (INT не працює)` / `RX: polling (INT dead)`;
-  - `, втрачено N` / `, dropped N` when the drops are > 0;
-  - nothing when the keys are missing;
-  - new i18n keys in both dictionaries (parity).
-  - "Увага" is unchanged.
-- [ ] 6.3 Update the CAN card help (ⓘ) text in en and uk with one sentence on the receive mode.
+## 6. Init, re-init and sniffer through the task (`master`)
+- [x] 6.1 Task-side attempt per design D6: priority drop to `CAN_TASK_CONFIG_PRIORITY`, liveness gate, `begin()`, filters stopping at the first failure, `setMode(MCP_NORMAL)`, CANSTAT + CANINTE readback, priority restore, self-notify, result event with `begin` / `filt` / `mode` flags, CANSTAT, EFLG.
+- [x] 6.2 Loop-side `recoverFromBusOff()` / `attemptReinit()`: post `REINIT` and mark the attempt in flight; the existing journaling, counting, `CAN_REINIT_RETRY_MS` retry and `CAN_REINIT_MAX_ATTEMPTS` budget run when the result event arrives; no new trigger or command while one is in flight.
+- [x] 6.3 Boot retry (D7): after a failed `INIT` the task retries every `CAN_INIT_RETRY_MS`; first failure journaled `CAN E init result=fail …`, later failures counted; success → loop does the `begin()` success work (`initialized_`, `lastReinitTime_`, PID stagger) and journals `CAN I init result=ok attempt= after_s=`.
+- [x] 6.4 Sniffer: `startSniff()` keeps its refusals, posts `FILTERS_SNIFF`, returns `STARTED`; the window starts on success; failure → normal filters back (re-init if needed), sniff completes with `openFailed`; window end posts `FILTERS_NORMAL` (re-init on failure), then the existing completion. `SniffResults` gains `openFailed` and `queueDrops`; `overflows` comes from the task's counter delta over the window. Web sniffer view shows the two new fields (uk + en).
+- [x] 6.5 Check that the LWS silence watchdog, the OBD-II watchdog (`CanWatchdogLaw.h`), first-frame timing and the journal economy are untouched apart from "attempt in flight" (design D10 table) — `test_can_watchdog` still green.
 
-## 7. Docs
-- [ ] 7.1 `GPIO_PINOUT_CUSTOM_BOARD_S3.md`: the GPIO38 rows (pin table, the SPI (CAN) table, the migration table) change from "optional/future — firmware polls" to "MCP2515 INT → reader task (polling fallback)". Add one paragraph under "SPI (CAN)": ISR → `can_rx` task → queue → `update()`; one SPI mutex; the `[CAN] rx:` line.
-- [ ] 7.2 `openspec/project.md` Architecture Patterns: one bullet: "CAN RX: MCP2515 INT → FreeRTOS reader task → queue; all consumers stay in the main loop; one SPI mutex".
-- [ ] 7.3 `WEB_PORTAL_SETUP.md`: the CAN tile's RX line and what "polling (INT dead)" means.
-- [ ] 7.4 `DRONECAN_RESEARCH.md`: change the two "polled" remarks to "interrupt-driven since 1.6.0". The recommendation (no DroneCAN on the MCP2515) stays, and so does its bus-load reasoning.
-- [ ] 7.5 `platformio.ini`: pin `mcp_can` to `https://github.com/coryjfowler/MCP_CAN_lib.git#34807287506afc6b4aef7c577392c1c4e32d1b45`, with a comment saying the design relies on its `mcp2515_init()` CANINTE and `readMsg()` flag clearing.
+## 7. Diagnostics, telemetry, web (`master`)
+- [x] 7.1 `CAN I stats …` journal line every `JOURNAL_SNAP_MS` from `update()` (window deltas, `miss` from `LwsSensor::missedFrames()` when a sink is attached, `-` otherwise); INT-state transitions journaled once (`CAN W int state=dead` / `CAN I int state=ok`); boot line includes the task stack high-water mark.
+- [x] 7.2 `include/WebPortal.h` Telemetry + `src/TelemetryManager.cpp` + `createTelemetryJSON()`: `can_int` (static token), `can_rx_drop`, `can_rx_ovr`, `can_rx_hwm`, `can_tx_fail`, `can_busy_max_us`; update the capacity comment (≈ 6 slots, size unchanged).
+- [x] 7.3 `data/index.html`: one muted line under "Стан CAN" / "CAN Status" per the web-telemetry delta, i18n keys in `en` and `uk`; nothing in Calibration; no attention item.
 
-## 8. Version and changelog
-- [ ] 8.1 `include/Constants.h`: `FIRMWARE_VERSION` "1.5.1" → **"1.6.0"**.
-- [ ] 8.2 `include/Changelog.h`: new first entry `{"version":"1.6.0","date":"2026-10-29"}`:
-  - uk:
-    - "Приймання CAN переведено на переривання: кадри датчика кута більше не губляться під час роботи веб-панелі та OTA"
-    - "Повторне калібрування не потрібне"
-  - en:
-    - "CAN receive moved to an interrupt-driven task: steering sensor frames are no longer lost while the web UI or OTA is busy"
-    - "No recalibration required"
+## 8. Docs, changelog, version, checks (`master`)
+- [x] 8.1 `FIRMWARE_VERSION` → the approved number (1.5.38 by the rule).
+- [x] 8.2 `include/Changelog.h` entry (uk + en, operator wording): CAN now served by its own task woken by the INT line (steering-angle frames no longer lost while the web page or the journal is busy); CAN comes back by itself if the controller was not ready at power-on; new receive line on the CAN status tile; upload the LittleFS image; no recalibration.
+- [x] 8.3 `GPIO_PINOUT_CUSTOM_BOARD_S3.md`: GPIO38 is now used (MCP2515 `INT`, FALLING edge, polling fallback); `WEB_PORTAL_SETUP.md`: the tile line and the sniffer's new fields; `DRONECAN_RESEARCH.md`: replace "the firmware polls the MCP2515" remarks.
+- [x] 8.4 `pio run -e esp32-s3-devkitc-1` builds without new warnings; `pio test -e native` green; also build once with `-DCAN_TEST_NO_INT`.
+- [x] 8.5 `openspec validate move-can-rx-to-interrupt --strict` passes.
 
-## 9. Build and test
-- [ ] 9.1 `pio run` builds without new warnings.
-- [ ] 9.2 `pio test -e native` passes: `test_lws305`, `test_steer_rate`, `test_steer_sensor_dir` and `test_can_rx_irq`.
-- [ ] 9.3 `pio run -t buildfs` succeeds (`index.html` changed).
-- [ ] 9.4 `openspec validate move-can-rx-to-interrupt --strict` passes, and so does `openspec validate move-aztec-vesc-to-can --strict`.
+## 9. Merges
+- [ ] 9.1 Merge `master` → `aztec` (plain merge): `FIRMWARE_VERSION` resolves to the new number, `aztec`'s 1.5.37 changelog entry stays below the new one; the buggy wording ("багі") in the uk line; `pio run` on `aztec`, `pio test -e native`.
+- [ ] 9.2 Merge `master` → `old-board` (plain merge): its `Constants.h` has no `PIN_CAN_INT`, so the build is polling-only — check that the merge did not add a `PIN_CAN_INT` for GPIO38 there; `pio run` on `old-board`.
 
-## 10. Bench verification [USER/MANUAL]
-- [ ] 10.1 [USER/MANUAL] Boot log:
-  - `[CAN] CANINTE=0x03`;
-  - the filter line is unchanged;
-  - with the LWS powered, the `[CAN] rx:` line shows `isr` close to `frames`, `drops=0`, `ovr=0`, `int=ok`, and `stack` ≥ 1500 bytes free.
-- [ ] 10.2 [USER/MANUAL] `can_int_ok` is true in telemetry, and the CAN tile shows "RX: переривання". This proves that GPIO38 is the MCP2515 `INT`.
-- [ ] 10.3 [USER/MANUAL] Web UI open (Діагностика + a second client), no OTA, 10 min, ECU and LWS on:
-  - `steer_lws_miss` does not grow;
-  - `can_rx_queue_drops` = 0;
-  - `ovr` = 0;
-  - `steer_lws_fps` ≈ 100.
-- [ ] 10.4 [USER/MANUAL] The same, with an OTA upload running (design "Risks"):
-  - `can_rx_queue_drops` = 0;
-  - no LWS `timeout` fault;
-  - `steer_lws_miss` growth only during the upload. Record the number per MB of firmware.
-  - If a `timeout` appears, record it. It means a flash erase longer than 100 ms, not a receive bug.
-- [ ] 10.5 [USER/MANUAL] OBD-II: RPM, coolant, module voltage, IAT and load update at their usual rates, and the RPM boost rate works during a gear change. The ECU probe ("Опитати ECU") completes with the same results as on 1.5.1.
-- [ ] 10.6 [USER/MANUAL] "Встановити нуль датчика" (Set sensor zero) works: the zero-set frames are sent, the confirmation arrives, and no `tx_failed` appears.
-- [ ] 10.7 [USER/MANUAL] Fallback: flash a test build with `-DCAN_RX_TEST_NO_INT` (or disconnect GPIO38 if the board allows). Within 5 s of LWS traffic, the log shows `[CAN] INT inactive, polling fallback` once, `can_int_ok` is false, the tile shows the warning line, the LWS stays fresh (no `timeout`) and `steer_lws_miss` stays ≈ 0. Flash the normal build back.
-- [ ] 10.8 [USER/MANUAL] Re-init recovery:
-  - Turn the ECU off with the LWS still powered and wait > 15 s. `[CAN] No data … re-initializing` appears, and after it `CANINTE=0x03` and `isr` keeps counting, with the LWS uninterrupted apart from ≤ 1 timeout during the reset.
-  - Turn the ECU on: OBD-II data returns.
-  - Optionally, force a bus-off (short CAN_H–CAN_L briefly during traffic): `Bus-off detected, recovering…`, then reception resumes on its own.
-- [ ] 10.9 [USER/MANUAL] `lockto` stays 0 through all of the above. The "What's new" view shows 1.6.0 and the sidebar shows firmware 1.6.0.
+## 10. Bench — both vehicles (code and bench are separate: nothing here is done in §1–9)
+Common pass criteria: no reset or watchdog reboot; `CAN I stats` every 60 s; `bmax` ≤ 1 ms outside re-init / sniff windows; SNAP `loop_max` not worse than the 1.5.36 baseline over the same run.
+- [ ] 10.1 Boot (each vehicle): journal shows `init result=ok`, telemetry `can_int` = `ok` on `Control_v0`; within a minute `int` ≈ `rx` and `poll` ≈ 0 in the stats line (proves GPIO38 follows MCP2515 `INT`; if not, record it — design Open Questions).
+- [ ] 10.2 Steering-angle loss, journal flash writes OFF, ignition ON (engine running on the quad): 10 min with the web UI open on Diagnostics, page reloaded every ~30 s, the Event journal card refreshed, a WebSocket client on a second device, ≥ 10 gear changes, steering moved lock to lock → `miss` = 0, `drop` = 0, `ovr` = 0 in every stats line, no `STEER lws` fault.
+- [ ] 10.3 Same with journal flash writes ON for 10 min: any `miss` comes in bursts ≤ 5 frames, `drop` = 0, no LWS `timeout`.
+- [ ] 10.4 Long loop iterations: test build with an artificial 80 ms `delay()` in `loop()` every 2 s → `loop_overrun` journaled, `miss` = 0, `drop` = 0 (frames wait in the ring).
+- [ ] 10.5 Polling fallback: build with `-DCAN_TEST_NO_INT` → `can_int` = `none`, tile "RX: polling (no INT wire)", `poll` ≈ `rx`; repeat 10.2 for 5 min → `miss` = 0.
+- [ ] 10.6 Bus connector unplugged at boot (`Control_v0`): `init result=ok` (the chip needs no bus); `can_status` disconnected; with ignition OFF no `obd_silent` / `lws_silent`; OBD-II frames fail per frame (`txf` grows, at most one per poll), no hang, no abort of other frames; replug with ignition ON → OBD-II data and LWS frames return, `first_frame` journaled after any re-init.
+- [ ] 10.7 Controller absent at boot (`old-board`, hand-wired module: unplug the MCP2515 module's VCC before power-on): journal `init result=fail` once, steering `can_down`, `loop_max` unaffected; plug it in → `init result=ok attempt=<n> after_s=<s>` within ≈ 5 s, LWS healthy without a reboot.
+- [ ] 10.8 Watchdog re-init (buggy, ECU on): unplug the LWS connector → `lws_silent … -> reinit`, `reinit result=ok`, console `[CAN] task: cmd_max_us` ≈ 11–15 ms while `bmax` stays ≤ 1 ms, loop never stalls (`loop_max` unchanged); replug → `first_frame`.
+- [ ] 10.9 LWS zero-set from the web (vehicle where it is used): succeeds as on 1.5.36; with the bus connector unplugged → aborted `tx_failed`, OBD-II polling resumes.
+- [ ] 10.10 ECU probe from the web: same results as on 1.5.36.
+- [ ] 10.11 Sniffer, standing still, 10 s: quad — the ECU broadcast flood appears in the table, `frames` ≥ the 1.5.36 figure, `queueDrops` and `overflows` shown, `bmax` recorded; afterwards normal filters (stats `ovr` back to 0, `rx` back to LWS + OBD-II rates); buggy — ECU + LWS IDs as before.
+- [ ] 10.12 ArduinoOTA upload with the ignition ON: completes and reboots; the last pre-reboot stats line may show `drop` > 0 (consumers frozen, expected), nothing else abnormal. Web OTA: completes; `miss` bursts allowed (flash erases, design D11), no crash.
+- [ ] 10.13 `old-board` after the merge: `can_int` = `none`, 10.2 for 5 min → `miss` = 0.
+- [ ] 10.14 Chip down after a failed re-init (`old-board` or a `Control_v0` bench rig: unplug the MCP2515 supply with the ignition ON so three re-init attempts fail → `CAN E reinit result=fail`): no further journal lines while it stays down; plug it back → within ≈ 5 s `CAN I reinit reason=task_retry result=ok attempt=<n> after_s=<s>`, `first_frame`, LWS healthy without a reboot.
+
+## 11. Archive
+- [ ] 11.1 Archive after `add-can-bus-sniffer`, `add-event-journal-and-link-recovery` and `gate-obd-watchdog-and-pull-up-vesc-rx`, once the bench checks on both vehicles pass; `openspec validate --strict` after archiving.

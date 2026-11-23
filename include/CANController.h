@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <mcp_can.h>
+#include "CanIoLaw.h"
 #include "Constants.h"
 
 class LwsSensor;
@@ -15,9 +16,24 @@ class LwsSensor;
  * Uses a non-blocking state machine to avoid stalling the main loop.
  *
  * The same bus carries the Bosch LWS steering-angle sensor (0x305, 100 Hz): it has its
- * own receive buffer (RXB1, see applyRxFilters()), every receive path hands 0x305 frames
- * to the attached LwsSensor in any CAN state, and the LWS zero-set sequence
- * (startLwsZero()) is the only code that transmits on 0x7C0.
+ * own receive buffer (RXB1, see applyRxFilters()), every received 0x305 frame goes to the
+ * attached LwsSensor in any CAN state, and the LWS zero-set sequence (startLwsZero()) is the
+ * only code that transmits on 0x7C0.
+ *
+ * Threading (change move-can-rx-to-interrupt): the MCP2515 has ONE owner, the FreeRTOS task
+ * `can_io` (core 1, priority CAN_TASK_PRIORITY), woken by the INT line (GPIO38, FALLING) or
+ * every CAN_POLL_MS. Every SPI access — init, re-init, filters, receive, transmit, EFLG — runs
+ * in that task (the task* methods and the helpers they call). loop() (update() and every
+ * public method) never touches SPI and never waits on the chip; it talks to the task only
+ * through:
+ *   - rxRing_  (task -> loop, CAN_RX_RING frames, full = drop the oldest), rxMux_;
+ *   - txRing_  (loop -> task, CAN_TX_RING frames, full = reject the newest), txMux_;
+ *   - evRing_  (task -> loop, command / TX results and bus-off), evMux_;
+ *   - cmdSlot_ (loop -> task, one command at a time: written by the loop only while no
+ *     command is in flight, cleared by the task before it posts the result);
+ *   - counters / snapshots written by the task only (aligned 32-bit, read by the loop).
+ * Each ring's portMUX is held only for one element copy. The consumers (LWS decoder, OBD-II
+ * and probe state machines, sniffer table, watchdogs, journal) stay loop-only.
  */
 class CANController {
 public:
@@ -107,8 +123,10 @@ public:
         uint32_t startedAtMs;       // millis() at start
         uint32_t completedAtMs;     // millis() at the end of the last window
         uint32_t windowMs;          // requested window length
+        bool openFailed;            // the task could not open the filters: completed at once, no frames
         uint32_t frames;            // all frames read during the window
-        uint32_t overflows;         // RX0OVR/RX1OVR flags seen (each = at least one frame lost)
+        uint32_t overflows;         // RX0OVR/RX1OVR flags counted by the CAN task in the window
+        uint32_t queueDrops;        // frames dropped from the full receive queue in the window
         uint16_t overflowIds;       // distinct IDs that did not fit the table
         bool overflowIdsSaturated;  // the dedup list for overflowIds filled up (count is a minimum)
         uint8_t idCount;            // rows used in entries[]
@@ -120,6 +138,20 @@ public:
 
     // Outcome of a startLwsZero() request
     enum class LwsZeroStart : uint8_t { STARTED, NOT_INITIALIZED, BUSY_PROBE, BUSY };
+
+    // Sender of a queued frame (design D4). Follow-ups add their own tags (e.g. VESC).
+    enum class CanTxTag : uint8_t { OBD, LWS_CFG };
+
+    // CAN task health (design D9): session values for the telemetry
+    struct DriverStats {
+        bool taskRunning;          // the can_io task exists
+        const char* intState;      // "ok" / "dead" / "none" (static token)
+        uint32_t rxDrop;           // frames dropped from the full receive queue
+        uint32_t rxOvr;            // RX0OVR / RX1OVR flags counted
+        uint8_t rxHwm;             // receive-queue high-water mark
+        uint32_t txFail;           // frames not sent (timeout abort, chip down)
+        uint32_t busyMaxUs;        // longest RX / TX / EFLG service pass, µs (commands excluded)
+    };
 
     CANController();
     ~CANController();
@@ -217,6 +249,17 @@ public:
      */
     void setLwsPowered(bool on);
 
+    /**
+     * @brief Queue one frame for the CAN task (loop only). Returns at once: false when the
+     * transmit ring is full (counted). The task loads it into TXB0 (FIFO) and aborts it alone
+     * if it has not left after CAN_TX_TIMEOUT_MS. With wantResult a TX_DONE result comes back
+     * on a later update() (sent / failed; failed at once while the chip is down).
+     */
+    bool queueTx(const CanFrame& f, CanTxTag tag, bool wantResult);
+
+    /** @brief CAN task health counters (session values) */
+    DriverStats getDriverStats() const;
+
     // ---- Bosch LWS steering-angle sensor (shared bus) ------------------------
 
     /**
@@ -237,7 +280,11 @@ public:
 
     /** @brief True while the zero-set sequence is running (OBD-II polling paused) */
     bool isLwsZeroRunning() const;
-    /** @brief The reset frame [05 00] of the last sequence was sent */
+    /**
+     * @brief The reset frame [05 00] of the last sequence MAY have reached the sensor: true from
+     * the moment it is queued (the old zero is then no longer guaranteed, so the steering erases
+     * its limits), whatever the TX result.
+     */
     bool lwsZeroResetSent() const { return lwsZeroResetSent_; }
     /** @brief The zero frame [53 30] of the last sequence was sent (at lwsZeroSentMs()) */
     bool lwsZeroZeroSent() const { return lwsZeroZeroSent_; }
@@ -263,9 +310,55 @@ private:
     enum class LwsZeroPhase : uint8_t {
         IDLE,        // not running (last result in the lwsZero* fields)
         WAIT_IDLE,   // let an in-flight OBD-II request complete / time out
-        SEND_RESET,  // send 0x7C0 [05 00]
-        GAP,         // wait STEER_LWS_ZERO_GAP_MS (non-blocking)
-        SEND_ZERO    // send 0x7C0 [53 30], then back to IDLE (OBD-II resumes)
+        SEND_RESET,  // queue 0x7C0 [05 00]
+        WAIT_RESET_TX, // wait for its TX result (at most CAN_TX_RESULT_WAIT_MS)
+        GAP,         // wait STEER_LWS_ZERO_GAP_MS from the confirmed send (non-blocking)
+        SEND_ZERO,   // queue 0x7C0 [53 30]
+        WAIT_ZERO_TX // wait for its TX result, then back to IDLE (OBD-II resumes)
+    };
+
+    // Sniffer window phases while mode_ == SNIFFING (the filter switches run in the task)
+    enum class SniffPhase : uint8_t { OPENING, WINDOW, CLOSE_PENDING, CLOSING };
+
+    // Commands from the loop to the task (cmdSlot_; 0 = none)
+    enum class CanCmd : uint8_t { NONE = 0, INIT, REINIT, FILTERS_SNIFF, FILTERS_NORMAL };
+
+    // Task -> loop events
+    enum class CanEvType : uint8_t { CMD_DONE, INIT_OK, TX_DONE, BUS_OFF };
+    struct CanEvent {
+        CanEvType type;
+        uint8_t cmd;         // CMD_DONE: CanCmd;  TX_DONE: CanTxTag
+        uint8_t flags;       // EV_* bits
+        uint8_t seq;         // TX_DONE: sequence number of the frame
+        uint8_t canstat;
+        uint8_t eflg;
+        uint8_t tec;
+        uint8_t rec;
+        uint32_t attempt;    // INIT / INIT_OK: init attempt number
+        uint32_t afterMs;    // INIT_OK: ms since the first init attempt
+    };
+    static constexpr uint8_t EV_OK = 0x01;         // command / frame succeeded
+    static constexpr uint8_t EV_BEGIN = 0x02;      // reset gate + begin() passed
+    static constexpr uint8_t EV_FILT = 0x04;       // filter programming passed (FILTERS_SNIFF failure: restore passed)
+    static constexpr uint8_t EV_MODE = 0x08;       // setMode(NORMAL) + CANSTAT / CANINTE readback passed
+
+    // One queued frame
+    struct CanTxItem {
+        CanFrame frame;
+        uint8_t tag;         // CanTxTag
+        uint8_t seq;
+        bool wantResult;
+    };
+
+    // Result of one task-side chip init attempt (design D6)
+    struct InitResult {
+        bool begin;
+        bool filt;
+        bool mode;
+        uint8_t canstat;
+        uint8_t eflg;
+        uint8_t tec;
+        uint8_t rec;
     };
 
     // Probe sequencer phases
@@ -298,13 +391,87 @@ private:
     static constexpr uint8_t PID_ENGINE_LOAD = 0x04;
     // static constexpr uint8_t PID_FUEL_LEVEL = 0x2F;
 
-    MCP_CAN* mcp_can_;              // MCP2515 CAN controller object
+    MCP_CAN* mcp_can_;              // MCP2515 CAN controller object — used by the CAN task ONLY
     VehicleData vehicleData_;       // Current vehicle data
-    bool initialized_;              // Initialization status
+    bool initialized_;              // Initialization status (loop-side: first init succeeded)
     gpio_num_t csPin_;              // MCP2515 chip-select (raw register access, see readRegister())
 
+    // ---- CAN task and its channels (move-can-rx-to-interrupt) ---------------------
+    TaskHandle_t task_;
+    CanFrameRing<CAN_RX_RING> rxRing_;                  // task -> loop
+    CanRing<CanTxItem, CAN_TX_RING> txRing_;            // loop -> task
+    CanRing<CanEvent, 8> evRing_;                       // task -> loop
+    portMUX_TYPE rxMux_;
+    portMUX_TYPE txMux_;
+    portMUX_TYPE evMux_;
+    volatile uint8_t cmdSlot_;      // CanCmd posted by the loop, cleared by the task when taken
+    CanCmd cmdInFlight_;            // loop-only: command posted, result not yet received
+    uint8_t txSeq_;                 // loop-only: sequence number of the last queued frame
+    bool hasIntPin_;                // an INT interrupt is attached
+    volatile uint32_t isrCount_;    // INT edges (ISR only)
+
+    // Task-only state
+    bool chipUp_;                   // last init / re-init succeeded
+    bool initAttempted_;            // an init ran: while the chip is down, retry every CAN_INIT_RETRY_MS
+    uint32_t initAttempts_;         // attempts since the chip went down (boot INIT = 1)
+    uint32_t firstInitMs_;          // millis() when the chip went down (boot: first INIT)
+    uint32_t lastInitTryMs_;
+    uint32_t lastEflgMs_;
+    uint32_t lastIsrSeen_;
+    bool busOffLatched_;            // TXBO reported for this episode
+    bool txBusy_;                   // TXB0 holds our frame (or an abort is completing)
+    bool txAborting_;               // TXREQ cleared by us, waiting for it to read clear
+    bool txReported_;               // the frame in TXB0 has had its result counted / reported
+    uint32_t txLoadMs_;
+    uint32_t txAbortMs_;
+    CanTxItem txCur_;
+    uint32_t statsResetAck_;
+
+    // Task-written counters (single writer, aligned 32-bit, read by the loop) — design D9
+    volatile uint32_t cRx_;         // frames read
+    volatile uint32_t cRxDrop_;     // receive-ring drops (oldest discarded)
+    volatile uint32_t cRxHwm_;      // receive-ring high-water mark (session)
+    volatile uint32_t cWinHwm_;     // receive-ring high-water mark since the last stats line
+    volatile uint32_t cOvr_;        // RX0OVR + RX1OVR flags seen
+    volatile uint32_t cOvrEflg_;    // EFLG of the last overflow
+    volatile uint32_t cIntWakes_;   // cycles woken by the INT line
+    volatile uint32_t cPollFrames_; // frames found on a wake that was not an INT
+    volatile uint32_t cCapHits_;    // drain cap reached with frames still pending
+    volatile uint32_t cTx_;         // frames sent
+    volatile uint32_t cTxFail_;     // frames aborted on timeout / failed while the chip is down
+    volatile uint32_t cBusyMaxUs_;  // longest RX / TX / EFLG service pass, commands excluded (session)
+    volatile uint32_t cWinBusyMaxUs_; // same, since the last stats line
+    volatile uint32_t cCmdMaxUs_;   // longest init / re-init / filter command or init retry (session)
+    volatile uint32_t cBusyUs_;     // sum of cycle times
+    volatile uint32_t cInitFails_;  // failed boot init retries
+    volatile uint32_t cEvDrops_;    // event ring full (never expected)
+    volatile uint32_t cHealth_;     // TEC | REC << 8 | EFLG << 16 | valid << 24 (one write)
+
+    // Results that must never be lost: single-entry slots, guarded by evMux_ (finding: an event
+    // ring full of bus-off / TX events must not swallow a command result)
+    CanSlot<CanEvent> cmdResult_;   // the result of the one command in flight
+    CanSlot<CanEvent> recovered_;   // the task's own init retry succeeded (INIT_OK)
+
+    // Loop-written
+    uint32_t txQueueFull_;          // queueTx() refused (ring full)
+    volatile uint8_t txCancelSeq_;  // a requester gave up on this frame: the task must not load it
+    volatile uint32_t statsResetReq_; // loop asks the task to restart the window maxima
+
+    // Loop-side diagnostics bookkeeping
+    uint32_t lastStatsMs_;
+    uint32_t stRx_, stDrop_, stOvr_, stInt_, stPoll_, stTx_, stTxf_, stMiss_;
+    uint32_t lastIntWinMs_;
+    uint32_t iwInt_, iwRx_;
+    CanIoLaw::IntState intState_;
+    uint32_t ovrSeen_;              // cOvr_ already reported by checkRxOverflow()
+
+    // Replies latched by the frame router (design D3); sending a request clears the latch
+    bool obdReplyLatched_;
+    CanFrame obdReply_;
+    bool probeReplyLatched_;
+    CanFrame probeReply_;
+
     // ---- Diagnostics / recovery state ---------------------------------------
-    uint8_t consecutiveSendFailures_; // sendMsgBuf() failures since the last successful send
     uint32_t lastRxLogTime_;          // millis() of the last unmatched-frame log (rate limit)
     uint32_t lastHealthLogTime_;      // millis() of the last TEC/REC/EFLG health log (rate limit)
     uint32_t lastOverflowLogTime_;    // millis() of the last RXnOVR log (rate limit)
@@ -365,6 +532,9 @@ private:
     SniffResults sniffResults_;
     uint32_t sniffExtraIds_[CAN_SNIFF_MAX_IDS];   // dedup list for IDs beyond the table
     uint8_t sniffExtraCount_;
+    SniffPhase sniffPhase_;
+    uint32_t sniffOvrBase_;         // cOvr_ at the window start
+    uint32_t sniffDropBase_;        // cRxDrop_ at the window start
 
     // ---- LWS steering sensor state --------------------------------------------
     LwsSensor* lwsSink_;            // steering-angle frame sink (nullptr = none attached)
@@ -374,6 +544,8 @@ private:
     bool lwsZeroZeroSent_;
     uint32_t lwsZeroSentMs_;        // millis() when [53 30] was sent
     const char* lwsZeroAbort_;      // "tx_failed" or nullptr
+    uint8_t lwsZeroTxSeq_;          // sequence number of the frame whose result is awaited
+    uint8_t lwsZeroTxResult_;       // 0 = pending, 1 = sent, 2 = not sent (aborted / failed)
 
     bool sendOBDRequest(uint8_t pid);
     bool sendMode03Request();
@@ -385,60 +557,92 @@ private:
     void parseAndStore(uint8_t index, const uint8_t* data, uint8_t len);
     bool isDataStale() const;
 
-    // ---- Diagnostics / recovery helpers --------------------------------------
-    // Raw MCP2515 register access. The vendored coryjfowler library keeps
-    // mcp2515_readRegister()/mcp2515_modifyRegister() private and exposes no
-    // getMode()/clearRXnOVR(), so mode readback and EFLG overflow clearing are
-    // done here over the same SPI bus/settings the library uses (10 MHz, MODE0).
+    // ---- CAN task (the ONLY code that touches the MCP2515) ---------------------
+    static void canIoTask(void* arg);
+    static void canIntIsr(void* arg);   // IRAM; counts + notifies only
+    void taskLoop();
+    void taskRunCommand(uint8_t cmd);
+    void taskInitRetry();
+    void taskAbortTxb0();
+    InitResult taskInitAttempt();
+    uint16_t taskDrain(uint8_t& st);
+    void taskServiceTx(uint8_t st);
+    void taskFinishTx(bool ok);
+    void taskFailQueuedTx();
+    void taskServiceErrors();
+    void taskPostEvent(const CanEvent& ev);
+    // Raw MCP2515 access over the library's SPI bus and settings (10 MHz, MODE0, same CS).
+    // The library keeps mcp2515_readRegister()/modifyRegister() private and has no getMode(),
+    // READ STATUS, raw TX load or single-buffer abort, so those are done here — task only.
     uint8_t readRegister(uint8_t address) const;
+    void readRegisters(uint8_t address, uint8_t* out, uint8_t n) const;
     void modifyRegister(uint8_t address, uint8_t mask, uint8_t data) const;
+    uint8_t readStatus() const;
+    void spiCommand(uint8_t instruction) const;
+    void loadTxb0(const CanFrame& f);
 
-    // Re-initialize the MCP2515 (bus-off, send failure, no-data watchdog, LWS silence watchdog,
-    // sniffer filter restore). Checks begin(), applyRxFilters() and setMode(MCP_NORMAL); a failed
-    // attempt is retried on later update() calls (CAN_REINIT_RETRY_MS apart, no in-call loop),
-    // at most CAN_REINIT_MAX_ATTEMPTS per trigger. Every outcome is journaled.
-    // Non-blocking apart from the library's own SPI waits. Returns this attempt's result.
+    // ---- Loop side of the channels ---------------------------------------------
+    bool postCommand(CanCmd cmd);
+    void serviceTaskEvents();
+    void drainRxQueue();
+    void routeFrame(const CanFrame& f);
+    void onInitResult(const CanEvent& ev);
+    void onReinitResult(const CanEvent& ev);
+    void becomeInitialized();
+    void printFiltersLine(bool ok) const;
+    void serviceStats(uint32_t now);
+    void serviceIntState(uint32_t now);
+
+    // Re-initialize the MCP2515 (bus-off, no-data watchdog, LWS silence watchdog, sniffer filter
+    // restore). The loop decides and journals; each attempt is posted to the CAN task, which
+    // checks the reset gate, begin(), applyRxFilters() and setMode(MCP_NORMAL). A failed attempt
+    // is retried on later update() calls (CAN_REINIT_RETRY_MS apart), at most
+    // CAN_REINIT_MAX_ATTEMPTS per trigger. Every outcome is journaled when the result arrives.
+    // Returns true when an attempt was posted (or one is already in flight).
     bool recoverFromBusOff(const char* reason = "bus_off", bool quiet = false);
     bool attemptReinit();
+    bool reinitInFlight() const { return cmdInFlight_ == CanCmd::REINIT; }
     // Journal `CAN E bus_off tec rec eflg`, then recoverFromBusOff("bus_off")
-    void handleBusOff(uint8_t eflg);
+    void handleBusOff(uint8_t tec, uint8_t rec, uint8_t eflg);
     void serviceLwsWatchdog(uint32_t now);
     void serviceFirstFrame(uint32_t now);
 
     // Rate-limited (~1/s) dump of a received frame that did not match the expected response
     void logUnmatchedFrame(unsigned long canId, uint8_t len, const uint8_t* buf);
 
-    // Rate-limited (~5 s, only while dataValid == false) TEC/REC/EFLG health line
+    // Rate-limited (~5 s, only while dataValid == false) TEC/REC/EFLG health line, from the
+    // task's snapshot
     void logHealth();
 
-    // Clear MCP_EFLG_RX0OVR/RX1OVR if set, logging at most once per CAN_OVERFLOW_LOG_INTERVAL
+    // Report new RX0OVR/RX1OVR counts from the task, at most once per CAN_OVERFLOW_LOG_INTERVAL
     void checkRxOverflow();
 
     // Program the MCP2515 masks/filters: RXB0 = OBD-II replies 0x7E8-0x7EF, RXB1 = LWS
     // 0x305 only. Must run after begin() and before setMode(MCP_NORMAL) — init_Mask()/
     // init_Filt() drop the chip into CONFIG mode and restore the library's cached mode.
+    // Task only; stops at the first failing call; never logs.
     bool applyRxFilters();
 
     // Sniffer: accept every standard and extended ID in both buffers (masks 0, one std and
-    // one ext filter per buffer). Same CONFIG-mode round trip as applyRxFilters().
+    // one ext filter per buffer). Same CONFIG-mode round trip as applyRxFilters(). Task only.
     bool applySniffFilters();
     void updateSniff();
     void recordSniffFrame(unsigned long canId, uint8_t len, const uint8_t* buf);
-    void finishSniff();
+    void closeSniffWindow();
+    void onSniffOpened(const CanEvent& ev);
+    void finishSniff(bool restoreOk);
 
-    // While IDLE: pull any queued frames out of the MCP2515 RX buffers so they
-    // never sit full between polls; unmatched frames go through logUnmatchedFrame()
-    void drainRxBuffers();
-
-    // Called FIRST for every frame read on any receive path: a standard-ID 0x305 frame
+    // Called FIRST for every frame taken from the receive queue: a standard-ID 0x305 frame
     // goes to the LWS sink (if attached) and returns true — it is then neither an
     // OBD-II candidate nor logged as unmatched.
     bool dispatchSteeringFrame(unsigned long canId, uint8_t len, const uint8_t* buf);
 
     // Zero-set sequencer step (called from update() while IDLE in NORMAL mode)
     void serviceLwsZero();
-    // Send one of the two fixed 0x7C0 payloads: zeroFrame=false -> [05 00], true -> [53 30]
+    // Queue one of the two fixed 0x7C0 payloads: zeroFrame=false -> [05 00], true -> [53 30]
+    // (with a TX result request; lwsZeroTxSeq_ / lwsZeroTxResult_ track it)
     bool sendLwsCfg(bool zeroFrame);
+    void abortLwsZero();
 
     // Probe sequencer helpers
     void updateProbe();

@@ -73,7 +73,7 @@ document is the wiring / pin reference only.
 | **35** | not connected | — | FREE | N/C |
 | **36** | not connected | — | `PIN_RELAY1` | N/C (→ relay board) |
 | **37** | not connected | — | `PIN_RELAY2` | N/C (→ relay board) |
-| **38** | MCP2515 INT | `PIN_CAN_INT` — optional/future (firmware polls) | `PIN_RELAY3` | NEW |
+| **38** | MCP2515 INT | `PIN_CAN_INT` — wakes the CAN task (FALLING edge, input pull-up), 2 ms polling fallback (fw 1.5.38) | `PIN_RELAY3` | NEW |
 | **39** | MCP2515 SPI CS | `PIN_CAN_CS` (engine ECU + Bosch LWS steering-angle sensor on one bus) | `PIN_WHEEL_LOCK` | MOVED (was 10) |
 | **40** | MCP2515 SPI CLK | `PIN_CAN_SCK` | FREE | MOVED (was 12) |
 | **41** | MCP2515 SPI MISO | `PIN_CAN_MISO` | `PIN_STEER_SDA` | MOVED (was 13) |
@@ -233,7 +233,7 @@ BAV199 clamp + 100n, into the CD4051 mux.
 | CLK | 40 |
 | MISO | 41 |
 | MOSI | 42 |
-| INT | 38 (optional/future — firmware currently polls) |
+| INT | 38 (used since fw 1.5.38: FALLING edge wakes the `can_io` task; the task also polls every 2 ms, so a dead INT line only costs latency — telemetry `can_int` = `dead`) |
 
 The MCP2515 crystal on this board is **8 MHz**; firmware already uses `MCP_8MHZ`
 (`src/CANController.cpp`) — no clock change needed.
@@ -521,7 +521,7 @@ A separate 7s LiFePO4 battery also exists in the vehicle power system.
 
 | Constant | GPIO | Purpose |
 |----------|------|---------|
-| `PIN_CAN_INT` | 38 | MCP2515 interrupt (optional — firmware polls today) |
+| `PIN_CAN_INT` | 38 | MCP2515 interrupt → CAN task wake-up (FALLING edge); 2 ms polling fallback |
 | `PIN_BOOST_EN` | 46 | 24V boost enable → X10 |
 | `PIN_ADC_24V` | 9 | 24V rail measurement (÷9.33) |
 | `PIN_ADC_IS_MUX` | 3 | CD4051 common output — BTS7960 IS channels |

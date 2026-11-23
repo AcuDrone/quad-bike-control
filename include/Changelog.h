@@ -14,6 +14,13 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.5.38","date":"2026-11-23","uk":[
+"CAN тепер обслуговує окрема задача плати, яку будить лінія INT контролера CAN: кадри датчика кута керма більше не губляться, коли веб-сторінка, журнал подій чи оновлення прошивки займають плату. Якщо контролер CAN не був готовий при ввімкненні живлення, плата пробує знову кожні 5 с і CAN запрацьовує сам, без перезавантаження. Перезапуск контролера більше не пригальмовує роботу плати. У журналі щохвилини рядок «CAN I stats» (прийнято, втрачено, переповнення, пробуджень від INT)",
+"Розділ «Діагностика», плитка «Стан CAN»: новий рядок «RX: переривання» (норма), «RX: опитування (INT не працює)» (жовтим — лінія INT не спрацьовує, CAN працює на опитуванні кожні 2 мс) або «RX: опитування (без INT)»; якщо кадри втрачались — «втрачено N», «переповнення N». Сніфер CAN показує ще й «втрачено в черзі». Перекалібрування не потрібне. Потрібно залити оновлений образ LittleFS"
+],"en":[
+"CAN is now served by its own board task, woken by the CAN controller's INT line: steering-angle sensor frames are no longer lost while the web page, the event journal or a firmware update keeps the board busy. If the CAN controller was not ready at power-on, the board retries every 5 s and CAN comes up by itself, without a reboot. Re-initialising the controller no longer stalls the board. The journal gets a “CAN I stats” line every minute (frames received, lost, overflows, INT wake-ups)",
+"Diagnostics, “CAN Status” tile: a new line “RX: interrupt” (normal), “RX: polling (INT dead)” (yellow — the INT line does not fire, CAN runs on a 2 ms poll) or “RX: polling (no INT wire)”; if frames were lost, “dropped N”, “overflow N”. The CAN sniffer also shows “queue drops”. No recalibration needed. Upload the updated LittleFS image"
+]},
 {"version":"1.5.36","date":"2026-11-17","uk":[
 "Макс. час роботи стартера: найдовше, скільки стартер крутить за одну спробу запуску, тепер задається в розділі «Калібрування → Запуск двигуна», повзунок «Макс. час роботи стартера» під затримкою стартера (2–10 с, крок 0,5). Типово 5 с, як і раніше. Діє для перемикача пульта, наземної станції і кнопки ПУСК; стартер, як і раніше, вимикається раніше, щойно двигун завівся (обороти). Зміна діє з наступної спроби. Значення зберігається окремо для кожної машини (квадроцикл, багі). Не ставте довше, ніж потрібно: довгий запуск гріє стартер і розряджає акумулятор, а якщо оберти читаються заниженими, стартер крутитиме заведений двигун до кінця межі. Потрібно залити оновлений образ LittleFS"
 ],"en":[

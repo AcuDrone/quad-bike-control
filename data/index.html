@@ -862,6 +862,9 @@
                     <div class="telemetry-item">
                         <div class="telemetry-label" data-i18n="lbl_can_status">CAN Status</div>
                         <div class="telemetry-value" id="can-status-text" data-i18n="can_disconnected">disconnected</div>
+                        <!-- CAN task receive mode + losses (can_int / can_rx_drop / can_rx_ovr, fw 1.5.38).
+                             Informational only: not an attention item, not a setting. -->
+                        <div id="can-rx-mode" style="font-size: 0.6em; color: var(--muted-foreground); margin-top: 3px;"></div>
                     </div>
                 </div>
 
@@ -1930,6 +1933,11 @@
                 lbl_can_status: 'CAN Status',
                 can_connected: 'connected',
                 can_disconnected: 'disconnected',
+                can_rx_int: 'RX: interrupt',
+                can_rx_poll_dead: 'RX: polling (INT dead)',
+                can_rx_poll_none: 'RX: polling (no INT wire)',
+                can_rx_dropped: 'dropped %s',
+                can_rx_overflow: 'overflow %s',
                 unit_kmh: 'km/h',
 
                 // Speed sensor card (hall pulse input — independent of CAN)
@@ -2066,6 +2074,8 @@
                 sniff_refused_init: 'Sniffer refused: CAN not initialised',
                 sniff_refused_busy: 'Sniffer refused: gear change or sniffer already running',
                 sniff_restore_failed: '⚠ Filter restore failed, controller re-initialised',
+                sniff_open_failed: '⚠ Filters could not be opened: no frames recorded',
+                sniff_queue_drops: 'queue drops: %s',
                 sniff_col_id: 'ID',
                 sniff_col_n: 'Count',
                 sniff_col_hz: 'Hz',
@@ -2483,6 +2493,11 @@
                 lbl_can_status: 'Стан CAN',
                 can_connected: 'підключено',
                 can_disconnected: 'відключено',
+                can_rx_int: 'RX: переривання',
+                can_rx_poll_dead: 'RX: опитування (INT не працює)',
+                can_rx_poll_none: 'RX: опитування (без INT)',
+                can_rx_dropped: 'втрачено %s',
+                can_rx_overflow: 'переповнення %s',
                 unit_kmh: 'км/год',
 
                 // Speed sensor card (hall pulse input — independent of CAN)
@@ -2619,6 +2634,8 @@
                 sniff_refused_init: 'Сніфер відхилено: CAN не ініціалізовано',
                 sniff_refused_busy: 'Сніфер відхилено: перемикання передачі або сніфер уже працює',
                 sniff_restore_failed: '⚠ Фільтри не відновились, контролер переініціалізовано',
+                sniff_open_failed: '⚠ Фільтри не вдалося відкрити: кадрів не записано',
+                sniff_queue_drops: 'втрачено в черзі: %s',
                 sniff_col_id: 'ID',
                 sniff_col_n: 'Кадрів',
                 sniff_col_hz: 'Гц',
@@ -3201,6 +3218,22 @@
                 document.getElementById('can-status-text').style.color = 'var(--danger)';
             }
 
+            // CAN task receive mode (fw 1.5.38) — independent of can_status; nothing without the keys
+            const canRxEl = document.getElementById('can-rx-mode');
+            if (canRxEl) {
+                const mode = data.can_int;
+                let txt = '';
+                if (mode === 'ok') txt = t('can_rx_int');
+                else if (mode === 'dead') txt = t('can_rx_poll_dead');
+                else if (mode === 'none') txt = t('can_rx_poll_none');
+                if (txt) {
+                    if (data.can_rx_drop > 0) txt += ', ' + t('can_rx_dropped', data.can_rx_drop);
+                    if (data.can_rx_ovr > 0) txt += ', ' + t('can_rx_overflow', data.can_rx_ovr);
+                }
+                canRxEl.textContent = txt;
+                canRxEl.style.color = mode === 'dead' ? 'var(--warning)' : 'var(--muted-foreground)';
+            }
+
             // Engine hour meter — rendered OUTSIDE the can_status branch above (and outside its
             // else), because accumulated running time is not invalidated by the bus going quiet;
             // it merely stops growing. Number.isFinite, not typeof === 'number': NaN and Infinity
@@ -3766,6 +3799,7 @@
             }
             const secs = Math.max(s.el, 1) / 1000;
             let html = '';
+            if (s.ofail) html += '<div style="color: var(--warning);">' + t('sniff_open_failed') + '</div>';
             if (s.rfail) html += '<div style="color: var(--warning);">' + t('sniff_restore_failed') + '</div>';
             html += '<table style="width:100%; border-collapse:collapse; font-family: var(--font-mono, monospace);">';
             html += '<tr style="color: var(--muted-foreground); text-align:left;">' +
@@ -3793,7 +3827,8 @@
             });
             html += '</table>';
             html += '<div style="margin-top:6px; color: var(--muted-foreground);">' +
-                    t('sniff_summary', s.xid + (s.xsat ? '+' : ''), s.fr, s.ovf) + '</div>';
+                    t('sniff_summary', s.xid + (s.xsat ? '+' : ''), s.fr, s.ovf) +
+                    (s.qdrop != null ? ', ' + t('sniff_queue_drops', s.qdrop) : '') + '</div>';
             panel.innerHTML = '<div style="overflow-x:auto;">' + html + '</div>';
             panel.style.display = 'block';
         }

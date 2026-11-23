@@ -197,6 +197,15 @@ public:
         // Link recovery session totals + event journal size (change add-event-journal-and-link-recovery)
         uint32_t vesc_resync;     // VESC UART parser resyncs since boot
         uint32_t can_reinit;      // verified MCP2515 re-initializations of any cause since boot
+
+        // CAN task driver health (change move-can-rx-to-interrupt), session values; emitted only
+        // while the CAN task exists (can_int != nullptr), independently of can_status
+        const char* can_int;      // "ok" / "dead" / "none" (static token), nullptr = no CAN task
+        uint32_t can_rx_drop;     // frames dropped from the full receive queue
+        uint32_t can_rx_ovr;      // MCP2515 RX0OVR / RX1OVR flags counted
+        uint32_t can_rx_hwm;      // receive-queue high-water mark (frames)
+        uint32_t can_tx_fail;     // frames not sent (TXB0 timeout abort, chip down)
+        uint32_t can_busy_max_us; // longest CAN task RX / TX service pass, µs (commands excluded)
         uint32_t i2c_unlock;      // I2C2 bus recoveries (Wire1 restarts) since boot
         int32_t journal_bytes;    // writes on: both journal files + unflushed bytes (-1 = cannot
                                   // write to flash); writes off: RAM tail bytes

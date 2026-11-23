@@ -259,6 +259,9 @@ public:
     /** @brief Completed MCP2515 re-initializations of any cause since boot (telemetry / journal) */
     uint32_t getCanReinitCount() const { return canController_.getReinitCount(); }
 
+    /** @brief CAN task health: INT state and loss / load counters (telemetry, move-can-rx-to-interrupt) */
+    CANController::DriverStats getCanDriverStats() const { return canController_.getDriverStats(); }
+
     /**
      * @brief Get the latest ECU capability probe snapshot (for telemetry)
      */
