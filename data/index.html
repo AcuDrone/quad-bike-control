@@ -1149,25 +1149,32 @@
                 </div>
                 <div id="crank-max-status" style="margin-top: 8px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
             </div>
-            <!-- Brake tuning (travel time + hold drive, endstop state) -->
+            <!-- Service brake: Bosch iBooster on CAN (max stroke, apply / release rate, unit state) -->
             <div class="card" id="brake-card">
-                <h2 class="card-title"><span data-i18n="card_brake">🛑 Brake</span><button type="button" class="help-btn" onclick="openHelp('brake_help', 'card_brake')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <h2 class="card-title"><span data-i18n="card_brake">🛑 Brake (iBooster)</span><button type="button" class="help-btn" onclick="openHelp('brake_help,brake_help_rates,brake_help_off,brake_help_fault', 'card_brake')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
                 <div>
-                    <label data-i18n="lbl_brake_travel" for="brake-travel-slider" style="font-size: 0.8em; color: var(--muted-foreground);">Full travel time</label>
+                    <label data-i18n="lbl_brake_max" for="brake-max-slider" style="font-size: 0.8em; color: var(--muted-foreground);">Maximum stroke (100 %)</label>
                     <div style="display: flex; gap: 8px; align-items: center; margin-top: 4px;">
-                        <input type="range" min="1000" max="3000" step="50" value="1500" id="brake-travel-slider" style="flex:1; min-width:0; height: 28px;">
-                        <span id="brake-travel-val" style="color:var(--foreground); min-width:4.5em; text-align:right;">1500 ms</span>
+                        <input type="range" min="2" max="16" step="0.5" value="16" id="brake-max-slider" style="flex:1; min-width:0; height: 28px;">
+                        <span id="brake-max-val" style="color:var(--foreground); min-width:4.5em; text-align:right;">16.0 mm</span>
                     </div>
                 </div>
                 <div style="margin-top: 10px;">
-                    <label data-i18n="lbl_brake_hold" for="brake-hold-input" style="font-size: 0.8em; color: var(--muted-foreground);">Hold drive (PWM 0-100)</label>
-                    <div style="display: flex; gap: 6px; margin-top: 4px;">
-                        <input type="number" id="brake-hold-input" min="0" max="100" step="5" inputmode="numeric" style="flex:1; min-width:0; padding:6px; border-radius:4px; border:1px solid var(--border); background:var(--input); color:var(--foreground);">
-                        <button onclick="saveBrakeHoldPwm()" data-i18n="btn_save" style="padding:6px 10px; border-radius:4px; border:none; background:color-mix(in srgb, var(--info) 65%, black); color:var(--foreground); cursor:pointer;">Save</button>
+                    <label data-i18n="lbl_brake_apply" for="brake-apply-slider" style="font-size: 0.8em; color: var(--muted-foreground);">Apply rate</label>
+                    <div style="display: flex; gap: 8px; align-items: center; margin-top: 4px;">
+                        <input type="range" min="1" max="40" step="1" value="8" id="brake-apply-slider" style="flex:1; min-width:0; height: 28px;">
+                        <span id="brake-apply-val" style="color:var(--foreground); min-width:4.5em; text-align:right;">8 ml/s</span>
                     </div>
-                    <div data-i18n="brake_hold_hint" style="margin-top: 4px; font-size: 0.75em; color: var(--muted-foreground);">0 = no hold push</div>
                 </div>
-                <div id="brake-endstop" style="margin-top: 12px; font-size: 0.8em; color: var(--muted-foreground);">--</div>
+                <div style="margin-top: 10px;">
+                    <label data-i18n="lbl_brake_release" for="brake-release-slider" style="font-size: 0.8em; color: var(--muted-foreground);">Release rate</label>
+                    <div style="display: flex; gap: 8px; align-items: center; margin-top: 4px;">
+                        <input type="range" min="1" max="40" step="1" value="8" id="brake-release-slider" style="flex:1; min-width:0; height: 28px;">
+                        <span id="brake-release-val" style="color:var(--foreground); min-width:4.5em; text-align:right;">8 ml/s</span>
+                    </div>
+                </div>
+                <div id="brake-unit-state" style="margin-top: 12px; font-size: 0.85em; color: var(--muted-foreground);">--</div>
+                <div id="brake-unit-fields" style="margin-top: 4px; font-size: 0.8em; color: var(--muted-foreground);">--</div>
                 <div id="brake-status-msg" style="margin-top: 8px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
             </div>
             <!-- Gear Position Defaults -->
@@ -1529,7 +1536,7 @@
                 <div class="slider-container">
                     <div class="slider-label">
                         <span data-i18n="lbl_brake">Brake</span>
-                        <span id="brake-value">0%</span>
+                        <span><span id="brake-value">0%</span> <span id="brake-slider-state" style="font-size: 0.85em; color: var(--muted-foreground);"></span></span>
                     </div>
                     <input type="range" min="0" max="100" value="0" class="slider" id="brake-slider">
                 </div>
@@ -1947,18 +1954,35 @@
                 invalid_steer_park_max: 'Max pulses must be a whole number 1-10',
                 steer_park_saving: 'Saving the park correction setting...',
 
-                // Brake tuning card
-                card_brake: '🛑 Brake',
-                brake_help: 'The brake position is estimated by time (there is no position sensor). <b>Full travel time</b>: set it so that the panel\'s brake percentage reaches 100 % just as the actuator reaches its end. <b>Hold drive</b>: the push that keeps a held brake from creeping back; 0 = none, higher values heat the actuator and the driver.',
+                // Service brake card (iBooster)
+                card_brake: '🛑 Brake (iBooster)',
+                brake_help: 'The service brake is a Bosch iBooster driven over CAN: the brake percentage is a stroke of its push rod, measured by the unit itself. <b>Maximum stroke</b> (2–16 mm): the stroke that 100 % brake means; 5 % brake is 5 % of it. 16 mm is the full stroke the unit accepts on request. For the first runs with brake fluid lower it (e.g. 4 mm) and raise it step by step while watching how hard the buggy brakes.',
+                brake_help_rates: '<b>Apply rate</b> / <b>Release rate</b> (1–40 ml/s): how fast the rod may move when the brake is pressed / let go — about 2 mm/s per ml/s. 8 ml/s moves the full 16 mm in about a second. Fast releases from a long stroke feed energy back into the battery. The settings are saved at once and cannot be changed while the brake is applied.',
+                brake_help_off: '<b>No service brake with the ignition off</b> (the unit sleeps) <b>and on fail-safe</b> (the fail-safe switches the ignition off, so the brake drops). A brake commanded while the unit is unavailable is kept and acts as soon as the unit is ready again.',
+                brake_help_fault: '<b>Lost / Fault:</b> switch the ignition off and on again; if that does not help, remove the iBooster\'s power (X150 pin 1) for a few seconds. Every lost / fault event is in the event journal (source BRAKE).',
+                // used by the parking brake card (the former brake card's labels)
                 lbl_brake_travel: 'Full travel time',
                 brake_travel_val: '%s ms',
-                lbl_brake_hold: 'Hold drive (PWM 0-100)',
-                brake_hold_hint: '0 = no hold push',
-                brake_endstop_released: 'Endstop: released',
-                brake_endstop_no: 'Endstop: no',
-                invalid_brake_travel: 'Travel time must be 1000-3000 ms',
-                invalid_brake_hold: 'Hold drive must be a whole number 0-100',
+                lbl_brake_max: 'Maximum stroke (100 %)',
+                lbl_brake_apply: 'Apply rate',
+                lbl_brake_release: 'Release rate',
+                brake_mm_val: '%s mm',
+                brake_rate_val: '%s ml/s',
                 brake_saving: 'Saving the brake setting...',
+                brake_state_line: 'Unit: %s',
+                brake_fields_line: 'st %s · is %s · drv %s · rod %s · sees us: %s · pRunout %s bar',
+                brake_st_asleep: 'asleep (ignition off)',
+                brake_st_starting: 'starting',
+                brake_st_ready: 'ready',
+                brake_st_braking: 'braking',
+                brake_st_releasing: 'releasing',
+                brake_st_lost: 'LOST (no iBooster on the bus)',
+                brake_st_fault: 'FAULT',
+                brake_yes: 'yes',
+                brake_no: 'no',
+                att_brake_lost: 'Service brake: no iBooster on the bus — switch the ignition off and on; if that does not help, remove the iBooster\'s power',
+                att_brake_fault: 'Service brake: iBooster FAULT — switch the ignition off and on; if that does not help, remove the iBooster\'s power',
+                att_brake_starting: 'Service brake: iBooster still starting (more than 20 s)',
 
                 // Parking brake card (aztec, X6)
                 card_pbrake: '🅿️ Parking brake',
@@ -1992,7 +2016,7 @@
                 pbrake_saving: 'Saving the park brake setting...',
                 pbrake_help_apply: '<b>Apply</b> — only by the operator\'s command (two presses within 5 s). Above 3 km/h the command is refused. The brake is never applied automatically: not on link loss, not in fail-safe, not when the ignition is switched off.',
                 pbrake_help_driveaway: '<b>Release by throttle.</b> With the brake applied (or the state unknown), the ignition on and L, H or R selected, pressing the throttle above 10 % releases the brake. If the throttle was already above 10 % (while applying or when the ignition was switched on), drop it below 10 % and press again. In N and with the ignition off the throttle does not release the brake; the Release button always works.',
-                pbrake_help_svcbrake: '<b>Release by the service brake.</b> Pressing the service brake (RC, GCS joystick or the web Brake) releases an applied parking brake once the service brake has reached the pressed position. <b>This includes the automatic brake on RC loss:</b> the parking brake releases, and when the automatic brake ends (15 s by default) nothing holds the buggy. A brake already held when the parking brake is applied does not release it — let go and press again.',
+                pbrake_help_svcbrake: '<b>Release by the service brake.</b> Pressing the service brake (RC, GCS joystick or the web Brake) releases an applied parking brake once the service brake reports that it has reached the pressed position. <b>With the ignition off (the iBooster asleep) or the service brake unavailable, a press releases the parking brake at once while the service brake does not hold: nothing holds the buggy then.</b> <b>This includes the automatic brake on RC loss:</b> the parking brake releases, and when the automatic brake ends (15 s by default) nothing holds the buggy. A brake already held when the parking brake is applied does not release it — let go and press again.',
                 pbrake_help_pass: '<b>Throttle release point.</b> While releasing, the throttle in gear is held at idle for this share of the travel time, then opens smoothly while the brake finishes releasing — so the buggy does not roll back on a slope. 100 % = hold until the run ends.',
                 pbrake_help_end: '<b>End of travel by time:</b> the actuator runs for the full travel time + 0.5 s and stops (it has its own limit switches and is self-locking). There is no position sensor.',
                 pbrake_help_unknown: 'After a power loss during a run the state is <b>“Unknown”</b>: the throttle in gear is held at idle until the brake has been released.',
@@ -2285,6 +2309,8 @@
                 fw_confirm_btn: 'Confirm upload',
                 fw_upload_success: 'Firmware uploaded successfully! Device will reboot.',
                 fw_upload_failed: 'Upload failed: %s',
+                fw_upload_refused_brake: 'Update refused: the brake is applied, a brake is commanded or the buggy is moving. Release the brake, stand still and try again.',
+                fw_upload_aborted_brake: 'Update aborted: a brake was applied or the buggy started moving during the upload. Nothing was installed. A web-page (LittleFS) update must be uploaded again — until then the page may be missing.',
                 fw_upload_error: 'Upload error occurred',
 
                 // Input source (client-side indicator, if present)
@@ -2367,6 +2393,8 @@
                 journal_confirm_btn: 'Confirm delete',
                 journal_cleared: 'Journal cleared',
                 journal_load_failed: 'Could not load the journal',
+                journal_clear_failed: 'Could not clear the journal',
+                journal_clear_refused_brake: 'Journal not cleared: the brake is applied, a brake is commanded or the buggy is moving',
                 journal_empty: '(no lines)',
                 journal_help: 'A persistent record of what the controller saw: boots and resets, fail-safe and control-source changes, steering mode changes and stall stops, steering-angle sensor health, steering VESC link loss / recovery, CAN and relay-bus (I2C) faults and their automatic recoveries, main-loop overruns, low memory, and a snapshot every minute. It survives a firmware update and most resets; lines from the last second before a power cut may be missing. The header shows how many times the VESC link, the CAN controller and the relay I2C bus recovered themselves since boot.',
                 journal_format_help: 'Line format: <b>boot uptime_s SOURCE LEVEL event key=value …</b> — boot = boot counter, uptime in seconds since that boot, LEVEL I = info, W = warning, E = error. <b>sup=N</b> means N identical events were suppressed. Lines after <b>RTC replay</b> were recovered from memory after a crash or reset. Download saves both journal files (≈ 1–2 days) as one text file.',
@@ -2574,18 +2602,35 @@
                 relay_board_err_cfg_mismatch: 'Вибрана плата не відповідає шині',
                 relay_board_err_init_failed: 'Не вдалося ініціалізувати плату реле (повторна спроба)',
 
-                // Brake tuning card
-                card_brake: '🛑 Гальмо',
-                brake_help: 'Положення гальма оцінюється за часом (датчика положення немає). <b>Час повного ходу</b>: підберіть так, щоб відсоток гальма на панелі досягав 100 % саме тоді, коли актуатор доходить до краю. <b>Утримання</b>: підтиск, що не дає утримуваному гальму відпускатися; 0 = без утримання, більші значення гріють актуатор і драйвер.',
+                // Service brake card (iBooster)
+                card_brake: '🛑 Гальмо (iBooster)',
+                brake_help: 'Робоче гальмо — Bosch iBooster, керований по CAN: відсоток гальма — це хід його штока, який вимірює сам вузол. <b>Максимальний хід</b> (2–16 мм): хід, що означає 100 % гальма; 5 % гальма — 5 % від нього. 16 мм — повний хід, який вузол приймає за запитом. Для перших виїздів із гальмівною рідиною зменште його (напр. до 4 мм) і підвищуйте крок за кроком, стежачи, як сильно гальмує багі.',
+                brake_help_rates: '<b>Швидкість натискання</b> / <b>Швидкість відпускання</b> (1–40 мл/с): як швидко шток може рухатися, коли гальмо натискають / відпускають — приблизно 2 мм/с на 1 мл/с. 8 мл/с проходять повні 16 мм приблизно за секунду. Швидке відпускання з великого ходу віддає енергію назад в акумулятор. Налаштування зберігаються одразу і не змінюються, поки гальмо натиснуте.',
+                brake_help_off: '<b>З вимкненим запалюванням робочого гальма немає</b> (вузол спить), <b>і в аварійному режимі теж</b> (аварійний режим вимикає запалювання, тож гальмо відпускається). Гальмо, задане, поки вузол недоступний, зберігається і спрацьовує, щойно вузол знову готовий.',
+                brake_help_fault: '<b>Втрачено / Несправність:</b> вимкніть і знову увімкніть запалювання; не допомогло — зніміть живлення iBooster (X150 контакт 1) на кілька секунд. Кожна втрата / несправність є в журналі подій (джерело BRAKE).',
+                // used by the parking brake card (the former brake card's labels)
                 lbl_brake_travel: 'Час повного ходу',
                 brake_travel_val: '%s мс',
-                lbl_brake_hold: 'Утримання (ШІМ 0-100)',
-                brake_hold_hint: '0 = без утримання',
-                brake_endstop_released: 'Кінцевик: відпущено',
-                brake_endstop_no: 'Кінцевик: ні',
-                invalid_brake_travel: 'Час ходу має бути 1000-3000 мс',
-                invalid_brake_hold: 'Утримання має бути цілим числом 0-100',
+                lbl_brake_max: 'Максимальний хід (100 %)',
+                lbl_brake_apply: 'Швидкість натискання',
+                lbl_brake_release: 'Швидкість відпускання',
+                brake_mm_val: '%s мм',
+                brake_rate_val: '%s мл/с',
                 brake_saving: 'Збереження налаштування гальма...',
+                brake_state_line: 'Вузол: %s',
+                brake_fields_line: 'st %s · is %s · drv %s · шток %s · бачить нас: %s · pRunout %s бар',
+                brake_st_asleep: 'спить (запалювання вимкнено)',
+                brake_st_starting: 'запускається',
+                brake_st_ready: 'готовий',
+                brake_st_braking: 'гальмує',
+                brake_st_releasing: 'відпускає',
+                brake_st_lost: 'ВТРАЧЕНО (iBooster немає на шині)',
+                brake_st_fault: 'НЕСПРАВНІСТЬ',
+                brake_yes: 'так',
+                brake_no: 'ні',
+                att_brake_lost: 'Робоче гальмо: iBooster немає на шині — вимкніть і увімкніть запалювання; не допомогло — зніміть живлення iBooster',
+                att_brake_fault: 'Робоче гальмо: НЕСПРАВНІСТЬ iBooster — вимкніть і увімкніть запалювання; не допомогло — зніміть живлення iBooster',
+                att_brake_starting: 'Робоче гальмо: iBooster запускається понад 20 с',
 
                 // Стоянкове гальмо (багі, X6)
                 card_pbrake: '🅿️ Стоянкове гальмо',
@@ -2619,7 +2664,7 @@
                 pbrake_saving: 'Збереження налаштування стоянкового гальма...',
                 pbrake_help_apply: '<b>Затягування</b> — лише командою оператора (два натискання кнопки протягом 5 с). Якщо багі їде швидше за 3 км/год, команду буде відхилено. Автоматично гальмо ніколи не затягується: ні при втраті зв\'язку, ні в аварійному режимі, ні при вимкненні запалювання.',
                 pbrake_help_driveaway: '<b>Відпускання газом.</b> Якщо гальмо затягнуте (або стан невідомий), увімкнено запалювання і вибрано L, H чи R, натискання газу понад 10 % відпускає гальмо. Якщо газ уже був понад 10 % (під час затягування або коли вмикали запалювання), відпустіть його нижче 10 % і натисніть знову. У N і з вимкненим запалюванням газ гальмо не відпускає; кнопка «Відпустити» працює завжди.',
-                pbrake_help_svcbrake: '<b>Відпускання робочим гальмом.</b> Натискання робочого гальма (пульт, джойстик GCS або «Гальмо» у вебі) відпускає затягнуте стоянкове гальмо, щойно робоче гальмо дотисне. <b>Це стосується й автоматичного гальма при втраті зв\'язку з пультом:</b> стоянкове гальмо відпуститься, а коли автоматичне гальмо закінчиться (типово 15 с), багі не триматиме нічого. Якщо гальмо вже натиснуте в момент затягування — відпустіть і натисніть знову.',
+                pbrake_help_svcbrake: '<b>Відпускання робочим гальмом.</b> Натискання робочого гальма (пульт, джойстик GCS або «Гальмо» у вебі) відпускає затягнуте стоянкове гальмо, щойно робоче гальмо повідомить, що дотисло. <b>З вимкненим запалюванням (iBooster спить) або коли робоче гальмо недоступне натискання відпускає стоянкове гальмо одразу, а робоче гальмо не тримає: тоді багі не тримає нічого.</b> <b>Це стосується й автоматичного гальма при втраті зв\'язку з пультом:</b> стоянкове гальмо відпуститься, а коли автоматичне гальмо закінчиться (типово 15 с), багі не триматиме нічого. Якщо гальмо вже натиснуте в момент затягування — відпустіть і натисніть знову.',
                 pbrake_help_pass: '<b>Точка пропуску газу.</b> Під час відпускання газ на передачі тримається на холостому до цієї частки часу ходу, потім плавно відкривається, поки гальмо довідпускається — щоб багі не покотилася назад на схилі. 100 % = утримувати до кінця ходу.',
                 pbrake_help_end: '<b>Кінець ходу — за часом:</b> актуатор працює «час повного ходу» + 0,5 с і зупиняється (у ньому є власні кінцевики, він самоутримний). Датчика положення немає.',
                 pbrake_help_unknown: 'Після втрати живлення під час руху стан буде <b>«Невідомо»</b>: газ на передачі тримається на холостому, доки гальмо не буде відпущено.',
@@ -2911,6 +2956,8 @@
                 fw_confirm_btn: 'Підтвердити завантаження',
                 fw_upload_success: 'Прошивку успішно завантажено! Пристрій перезавантажиться.',
                 fw_upload_failed: 'Помилка завантаження: %s',
+                fw_upload_refused_brake: 'Оновлення відхилено: гальмо натиснуте, задане або багі їде. Відпустіть гальмо, зупиніться і спробуйте знову.',
+                fw_upload_aborted_brake: 'Оновлення перервано: під час завантаження натиснули гальмо або багі поїхала. Нічого не встановлено. Оновлення веб-сторінки (LittleFS) треба залити знову — доти сторінки може не бути.',
                 fw_upload_error: 'Сталася помилка завантаження',
 
                 // Input source (client-side indicator, if present)
@@ -2992,6 +3039,8 @@
                 journal_confirm_btn: 'Підтвердити видалення',
                 journal_cleared: 'Журнал очищено',
                 journal_load_failed: 'Не вдалося завантажити журнал',
+                journal_clear_failed: 'Не вдалося очистити журнал',
+                journal_clear_refused_brake: 'Журнал не очищено: гальмо натиснуте, задане або багі їде',
                 journal_empty: '(рядків немає)',
                 journal_help: 'Постійний запис того, що бачив контролер: запуски й перезапуски, аварійний режим (failsafe) і зміна джерела керування, зміна режиму керма та зупинки через заклинювання, стан датчика кута керма, втрата й відновлення зв’язку з VESC керма, збої CAN і шини реле (I2C) та їх автоматичне відновлення, перевищення часу головного циклу, нестача пам’яті та знімок стану щохвилини. Журнал переживає оновлення прошивки й більшість перезапусків; рядки за останню секунду перед зникненням живлення можуть бути втрачені. У заголовку — скільки разів зв’язок із VESC, контролер CAN і шина реле I2C відновилися самі з моменту запуску.',
                 journal_format_help: 'Формат рядка: <b>запуск час_с ДЖЕРЕЛО РІВЕНЬ подія ключ=значення …</b> — запуск = номер запуску, час у секундах від цього запуску, РІВЕНЬ I = інформація, W = попередження, E = помилка. <b>sup=N</b> — N однакових подій пропущено. Рядки після <b>RTC replay</b> відновлено з пам’яті після збою або перезапуску. «Завантажити» зберігає обидва файли журналу (≈ 1–2 доби) одним текстовим файлом.',
@@ -3284,11 +3333,13 @@
                                    data.success ? 'var(--success)' : 'var(--danger)');
                     if (!data.success) crankMaxRevert();
                 }
-                // Brake tuning card
-                if (data.message && (data.message.startsWith('Brake travel') || data.message.startsWith('Brake hold') ||
+                // Service brake card (iBooster); a refused / failed setting puts the thumbs back
+                if (data.message && (data.message.startsWith('Brake max stroke') || data.message.startsWith('Brake apply rate') ||
+                    data.message.startsWith('Brake release rate') || data.message.startsWith('Brake settings') ||
                     data.message.startsWith('Failed to save the brake'))) {
                     brakeStatus(data.success ? data.message : t('error_prefix') + data.message,
                                 data.success ? 'var(--success)' : 'var(--danger)');
+                    if (!data.success) brakeRevert();
                 }
                 // Gear code calibration status
                 if (data.message && (data.message.startsWith('Gear code') || data.message.startsWith('Gear codes'))) {
@@ -3358,8 +3409,8 @@
             // Update servo position
             document.getElementById('telemetry-hall').textContent = (data.hall_position || 0).toFixed(1) + '%';
 
-            // Update brake
-            document.getElementById('telemetry-brake').textContent = (data.brake_pct || 0).toFixed(0) + '%';
+            // Update brake (iBooster): measured % and rod while available, else the state in words
+            updateBrakeTile(data);
 
             // Update throttle (servo pulse width in µs)
             document.getElementById('telemetry-throttle').textContent = (data.throttle_us || 0) + 'µs';
@@ -4199,66 +4250,105 @@
             });
         })();
 
-        // ---- Brake tuning card ----
-        // Travel time: a slider, label live on `input`, ONE set_brake_travel_ms on `change`
-        // (every command is an NVS write, so nothing is streamed while dragging); brakeDragging
-        // keeps telemetry from moving the thumb while the operator holds it (as gdDragging).
-        let brakeDragging = false;
+        // ---- Service brake card (iBooster on CAN) ----
+        // Three sliders, label live on `input`, ONE command on `change` (each is an NVS write, so
+        // nothing is streamed while dragging); brakeDrag keeps telemetry from moving a thumb while
+        // the operator holds it. The firmware refuses a setting while the brake is applied.
+        const brakeDrag = { max: false, apply: false, release: false };
+        let brakeInUse = { max: 16, apply: 8, release: 8 };   // telemetry values in use
+        let brakeStartingSince = 0;                           // page time the state became "starting"
         function brakeStatus(text, color) {
             const el = document.getElementById('brake-status-msg');
             if (!el) return;
             el.textContent = text;
             el.style.color = color;
         }
-        function brakeTravelLabel(ms) {
-            const el = document.getElementById('brake-travel-val');
-            if (el) el.textContent = t('brake_travel_val', ms);
+        function brakeLabel(which, v) {
+            const el = document.getElementById('brake-' + which + '-val');
+            if (!el) return;
+            el.textContent = which === 'max' ? t('brake_mm_val', Number(v).toFixed(1)) : t('brake_rate_val', v);
+        }
+        function brakeRevert() {
+            ['max', 'apply', 'release'].forEach(w => {
+                const sl = document.getElementById('brake-' + w + '-slider');
+                if (sl && !brakeDrag[w]) { sl.value = brakeInUse[w]; brakeLabel(w, brakeInUse[w]); }
+            });
+        }
+        function brakeStateText(st) {
+            const k = 'brake_st_' + st;
+            return (st && t(k) !== k) ? t(k) : '--';
+        }
+        function brakeStateColor(st) {
+            if (st === 'lost' || st === 'fault') return 'var(--danger)';
+            if (st === 'starting') return 'var(--warning)';
+            if (st === 'asleep') return 'var(--muted-foreground)';
+            return 'var(--success)';
+        }
+        function brakeAvailable(st) {
+            return st === 'ready' || st === 'braking' || st === 'releasing';
+        }
+        function updateBrakeTile(data) {
+            const el = document.getElementById('telemetry-brake');
+            if (!el) return;
+            const st = data.brake_state;
+            if (st === undefined || brakeAvailable(st)) {
+                const pct = Number.isFinite(data.brake_pct) ? data.brake_pct : 0;
+                const rod = Number.isFinite(data.brake_rod_mm) ? ' · ' + data.brake_rod_mm.toFixed(1) + (currentLang === 'uk' ? ' мм' : ' mm') : '';
+                el.textContent = pct.toFixed(0) + '%' + rod;
+                el.style.color = '';
+            } else {
+                el.textContent = brakeStateText(st);
+                el.style.color = brakeStateColor(st);
+            }
+            const ss = document.getElementById('brake-slider-state');
+            if (ss) {
+                ss.textContent = st === undefined ? '' : '(' + brakeStateText(st) + ')';
+                ss.style.color = st === undefined ? '' : brakeStateColor(st);
+            }
+        }
+        function brakeStartingTooLong(data) {
+            if (data.brake_state !== 'starting') { brakeStartingSince = 0; return false; }
+            if (!brakeStartingSince) brakeStartingSince = Date.now();
+            return (Date.now() - brakeStartingSince) > 20000;
         }
         function updateBrakeCard(data) {
-            if (data.brake_travel_ms === undefined) return;   // older firmware: card stays at its defaults
-            const sl = document.getElementById('brake-travel-slider');
-            if (sl && !brakeDragging && Number.isFinite(data.brake_travel_ms)) {
-                sl.value = data.brake_travel_ms;
-                brakeTravelLabel(data.brake_travel_ms);
+            if (data.brake_state === undefined) return;   // older firmware: card stays at its defaults
+            if (Number.isFinite(data.brake_max_mm)) brakeInUse.max = data.brake_max_mm;
+            if (Number.isFinite(data.brake_apply_mlps)) brakeInUse.apply = data.brake_apply_mlps;
+            if (Number.isFinite(data.brake_release_mlps)) brakeInUse.release = data.brake_release_mlps;
+            brakeRevert();   // sliders show the values in use unless being dragged
+            const stEl = document.getElementById('brake-unit-state');
+            if (stEl) {
+                stEl.textContent = t('brake_state_line', brakeStateText(data.brake_state));
+                stEl.style.color = brakeStateColor(data.brake_state);
             }
-            syncSpeedInput('brake-hold-input', data.brake_hold_pwm);
-            const es = document.getElementById('brake-endstop');
-            if (es) {
-                const rel = data.brake_released === true;
-                es.textContent = t(rel ? 'brake_endstop_released' : 'brake_endstop_no');
-                es.style.color = rel ? 'var(--success)' : 'var(--muted-foreground)';
+            const fEl = document.getElementById('brake-unit-fields');
+            if (fEl) {
+                const n = v => (v === null || v === undefined) ? '--' : String(v);
+                const rod = Number.isFinite(data.brake_rod_mm) ? t('brake_mm_val', data.brake_rod_mm.toFixed(2)) : '--';
+                fEl.textContent = t('brake_fields_line', n(data.ib_st), n(data.ib_is), n(data.ib_drv), rod,
+                                    t(data.ib_partner ? 'brake_yes' : 'brake_no'), n(data.ib_runout));
             }
         }
-        function saveBrakeTravelMs(val) {
-            if (!Number.isInteger(val) || val < 1000 || val > 3000) {
-                brakeStatus(t('invalid_brake_travel'), 'var(--danger)');
-                return;
-            }
-            sendCommand('set_brake_travel_ms', val);
+        function saveBrakeSetting(which, v) {
+            const cmd = which === 'max' ? 'set_brake_max_mm' : (which === 'apply' ? 'set_brake_apply_rate' : 'set_brake_release_rate');
+            sendCommand(cmd, v);
             brakeStatus(t('brake_saving'), 'var(--muted-foreground)');
         }
-        function saveBrakeHoldPwm() {
-            const raw = document.getElementById('brake-hold-input').value;
-            const val = Number(raw);
-            if (raw === '' || !Number.isInteger(val) || val < 0 || val > 100) {
-                brakeStatus(t('invalid_brake_hold'), 'var(--danger)');
-                return;
-            }
-            sendCommand('set_brake_hold_pwm', val);
-            brakeStatus(t('brake_saving'), 'var(--muted-foreground)');
-        }
-        (function initBrakeTravelSlider() {
-            const sl = document.getElementById('brake-travel-slider');
-            if (!sl) return;
-            sl.addEventListener('pointerdown', () => { brakeDragging = true; });
-            sl.addEventListener('pointercancel', () => { brakeDragging = false; });
-            sl.addEventListener('input', () => {
-                brakeDragging = true;   // keyboard drags too
-                brakeTravelLabel(sl.value);   // label only, nothing is sent while dragging
-            });
-            sl.addEventListener('change', () => {
-                saveBrakeTravelMs(Math.round(Number(sl.value)));   // one send on release
-                brakeDragging = false;
+        (function initBrakeSliders() {
+            ['max', 'apply', 'release'].forEach(w => {
+                const sl = document.getElementById('brake-' + w + '-slider');
+                if (!sl) return;
+                sl.addEventListener('pointerdown', () => { brakeDrag[w] = true; });
+                sl.addEventListener('pointercancel', () => { brakeDrag[w] = false; });
+                sl.addEventListener('input', () => {
+                    brakeDrag[w] = true;          // keyboard drags too
+                    brakeLabel(w, sl.value);      // label only, nothing is sent while dragging
+                });
+                sl.addEventListener('change', () => {
+                    saveBrakeSetting(w, Number(sl.value));   // one send on release
+                    brakeDrag[w] = false;
+                });
             });
         })();
 
@@ -5642,6 +5732,11 @@
                 if (xhr.status === 200) {
                     fwStatus(t('fw_upload_success'), 'var(--success)');
                     updateProgress(100);
+                } else if (xhr.status === 409) {
+                    // Refused / aborted by the firmware: the brake is applied or the buggy moves
+                    const aborted = (xhr.responseText || '').indexOf('aborted') >= 0;
+                    fwStatus(t(aborted ? 'fw_upload_aborted_brake' : 'fw_upload_refused_brake'), 'var(--danger)');
+                    hideProgress();
                 } else {
                     fwStatus(t('fw_upload_failed', xhr.statusText), 'var(--danger)');
                     hideProgress();
@@ -5964,12 +6059,17 @@
         function clearJournal(btn) {
             if (!confirmTwice(btn, 'journal_confirm_btn', 'journal_confirm_clear', 'journal-status')) return;
             fetch('/api/events/clear', { method: 'POST' })
-                .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+                .then(r => {
+                    if (r.status === 409) throw new Error('brake');   // refused: brake applied / moving
+                    if (!r.ok) throw new Error(r.status);
+                    return r.json();
+                })
                 .then(() => {
                     journalStatus(t('journal_cleared'), 'var(--success, inherit)');
                     setTimeout(loadJournal, 600);   // the loop executes the clear
                 })
-                .catch(() => journalStatus(t('journal_load_failed'), 'var(--danger)'));
+                .catch(e => journalStatus(t(e && e.message === 'brake' ? 'journal_clear_refused_brake'
+                                                                       : 'journal_clear_failed'), 'var(--danger)'));
         }
         // Refresh on open and every 5 s while the System section is visible; stop when hidden.
         function journalSectionChanged() {
@@ -6098,6 +6198,11 @@
             if (data.can_status !== 'connected') {
                 items.push([t('att_can'), 'warn']);
             }
+            // Service brake (iBooster): lost / fault = danger, starting > 20 s = warning; asleep is
+            // not an item (no brake with the ignition off is normal)
+            if (data.brake_state === 'lost') items.push([t('att_brake_lost'), 'bad']);
+            else if (data.brake_state === 'fault') items.push([t('att_brake_fault'), 'bad']);
+            if (brakeStartingTooLong(data)) items.push([t('att_brake_starting'), 'warn']);
             const box = document.getElementById('attention-box');
             const list = document.getElementById('attention-list');
             if (!box || !list) return;

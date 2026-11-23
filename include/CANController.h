@@ -9,6 +9,43 @@
 class LwsSensor;
 
 /**
+ * @brief Frames one periodic client wants sent in one CAN_SLOT_MS slot (change
+ * replace-aztec-brake-with-ibooster, design D2 / D3). frame[0] goes to TXB2 (TXP 3), frame[1] to
+ * TXB1 (TXP 2), frame[2] to TXB1 on the first task cycle that finds it free. n = 0: nothing.
+ */
+struct CanSlotTx {
+    CanFrame frame[3];
+    uint8_t n;
+};
+
+/** @brief What the CAN task tells the periodic client at a slot. */
+struct CanSlotInfo {
+    uint32_t nowMs;      // millis() of the slot
+    bool canSend;        // the chip is up and no command runs: frames returned now are loaded
+    uint32_t txMiss;     // periodic frames not sent in their slot since boot (aborted / never loaded)
+};
+
+/**
+ * @brief The one periodic client of the CAN task (the aztec iBooster service brake). The CAN
+ * controller knows nothing about the client's protocol; it gives it a 10 ms slot clock, TXB1 /
+ * TXB2, the first look at every received frame, and asks it whether the bus must be left alone.
+ *
+ * onSlot() and onFrame() run ONLY in the `can_io` task (never log, allocate, block or touch NVS
+ * there); holdsBus() is called from loop() and must only read one task-written flag.
+ */
+class ICanPeriodicClient {
+public:
+    virtual ~ICanPeriodicClient() {}
+    /** CAN TASK. Once per slot (also while the chip is down: canSend false, frames discarded). */
+    virtual void onSlot(const CanSlotInfo& info, CanSlotTx& out) = 0;
+    /** CAN TASK. A frame drained from the chip; true = it is the client's (not for the RX ring
+     *  unless the sniffer filters are open). */
+    virtual bool onFrame(const CanFrame& f, uint32_t nowMs) = 0;
+    /** LOOP. True while the client's periodic frames must not be interrupted (brake request). */
+    virtual bool holdsBus() const = 0;
+};
+
+/**
  * @brief CAN bus controller for reading vehicle OBD-II data via MCP2515
  *
  * Interfaces with MCP2515 SPI CAN controller to read standard OBD-II diagnostic data
@@ -133,7 +170,7 @@ public:
     };
 
     // Outcome of a startSniff() request
-    enum class SniffStart : uint8_t { STARTED, NOT_INITIALIZED, BUSY_PROBE, BUSY_LWS_ZERO, BUSY };
+    enum class SniffStart : uint8_t { STARTED, NOT_INITIALIZED, BUSY_PROBE, BUSY_LWS_ZERO, BUSY, BUSY_BRAKE };
 
     // Outcome of a startLwsZero() request
     enum class LwsZeroStart : uint8_t { STARTED, NOT_INITIALIZED, BUSY_PROBE, BUSY };
@@ -255,6 +292,14 @@ public:
      * on a later update() (sent / failed; failed at once while the chip is down).
      */
     bool queueTx(const CanFrame& f, CanTxTag tag, bool wantResult);
+
+    /**
+     * @brief Attach the periodic client (the aztec iBooster brake) BEFORE begin(); never changed
+     * afterwards. Its onSlot() / onFrame() then run in the CAN task every CAN_SLOT_MS / for every
+     * received frame, TXB1 / TXB2 carry its frames, and while holdsBus() is true the LWS-silence and
+     * OBD-II no-data watchdog re-inits are postponed and the sniffer is refused (design D9).
+     */
+    void attachPeriodicClient(ICanPeriodicClient* c) { if (task_ == nullptr) periodic_ = c; }
 
     /** @brief CAN task health counters (session values) */
     DriverStats getDriverStats() const;
@@ -427,6 +472,18 @@ private:
     uint32_t txAbortMs_;
     CanTxItem txCur_;
     uint32_t statsResetAck_;
+    bool sniffFiltersOpen_;         // the accept-all sniffer filters are programmed (task-written)
+
+    // ---- Periodic client (replace-aztec-brake-with-ibooster D3), task-only except periodic_ ----
+    ICanPeriodicClient* periodic_;  // set before begin(), never changed
+    uint32_t nextSlotUs_;           // micros() of the next slot
+    bool slotClockStarted_;
+    CanFrame pTxb2_;                // frame waiting to be loaded into TXB2
+    bool pTxb2Pending_;
+    CanFrame pTxb1_[2];             // frames waiting for TXB1, in order
+    uint8_t pTxb1Next_;             // index of the next pTxb1_ frame to load
+    uint8_t pTxb1Count_;            // frames in pTxb1_ for this slot
+    volatile uint32_t cTxMiss_;     // periodic frames aborted / never loaded in their slot
 
     // Task-written counters (single writer, aligned 32-bit, read by the loop) — design D9
     volatile uint32_t cRx_;         // frames read
@@ -565,6 +622,11 @@ private:
     void taskRunCommand(uint8_t cmd);
     void taskInitRetry();
     void taskAbortTxb0();
+    void taskAbortPeriodic();
+    void taskPeriodicSlot(bool canSend);
+    void taskLoadPeriodic();
+    bool periodicLoadPending() const { return pTxb2Pending_ || pTxb1Next_ < pTxb1Count_; }
+    uint32_t taskWaitTicks() const;
     InitResult taskInitAttempt();
     uint16_t taskDrain(uint8_t& st);
     void taskServiceTx(uint8_t st);
@@ -581,6 +643,10 @@ private:
     uint8_t readStatus() const;
     void spiCommand(uint8_t instruction) const;
     void loadTxb0(const CanFrame& f);
+    // One WRITE burst into TXBn (ctrl address, TXP) + RTS; TXB1 / TXB2 for the periodic client only
+    void loadTxb(uint8_t ctrlAddr, uint8_t txp, uint8_t rts, const CanFrame& f);
+    // Loop: the periodic client holds the bus (brake request active) — maintenance postponed
+    bool busHeld() const { return periodic_ != nullptr && periodic_->holdsBus(); }
 
     // ---- Loop side of the channels ---------------------------------------------
     bool postCommand(CanCmd cmd);
@@ -618,8 +684,8 @@ private:
     // Report new RX0OVR/RX1OVR counts from the task, at most once per CAN_OVERFLOW_LOG_INTERVAL
     void checkRxOverflow();
 
-    // Program the MCP2515 masks/filters: RXB0 = OBD-II replies 0x7E8-0x7EF, RXB1 = LWS
-    // 0x305 only. Must run after begin() and before setMode(MCP_NORMAL) — init_Mask()/
+    // Program the MCP2515 masks/filters: RXB0 = OBD-II replies 0x7E8-0x7EF, RXB1 = LWS 0x305
+    // (RXF2) and the iBooster 0x38E / 0x38F / 0x39D (RXF3-RXF5). Must run after begin() and before setMode(MCP_NORMAL) — init_Mask()/
     // init_Filt() drop the chip into CONFIG mode and restore the library's cached mode.
     // Task only; stops at the first failing call; never logs.
     bool applyRxFilters();

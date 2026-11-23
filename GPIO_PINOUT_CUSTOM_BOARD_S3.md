@@ -56,8 +56,8 @@ document is the wiring / pin reference only.
 | **3** | CD4051 8:1 mux common out (Analog_1..8 = BTS7960 IS) | `PIN_ADC_IS_MUX` — ADC1 | `PIN_THROTTLE_PWM` | NEW (input only) |
 | **4** | PWM_1 → X6 pin 2 (L_PWM) | `PIN_PARK_BRAKE_LPWM` — LEDC ch7, aztec parking brake (10 kHz) | `PIN_VESC_TX` | NEW function (aztec only; VESC moved to UART0 / X1) |
 | **5** | PWM_2 → X6 pin 3 (R_PWM) | `PIN_PARK_BRAKE_RPWM` — LEDC ch6, aztec parking brake (10 kHz) | `PIN_VESC_RX` | NEW function (aztec only; VESC moved to UART0 / X1) |
-| **6** | PWM_3 → X7 pin 2 (L_PWM) | `PIN_BRAKE_LPWM` — LEDC ch5 | same | UNCHANGED |
-| **7** | PWM_4 → X7 pin 3 (R_PWM) | `PIN_BRAKE_RPWM` — LEDC ch4 | same | UNCHANGED |
+| **6** | PWM_3 → X7 pin 2 (L_PWM) | FREE — left unconfigured (aztec 1.6.0: the service brake is the iBooster on CAN, §4) | `PIN_BRAKE_LPWM` | FREED (aztec) |
+| **7** | PWM_4 → X7 pin 3 (R_PWM) | FREE — left unconfigured (aztec 1.6.0) | `PIN_BRAKE_RPWM` | FREED (aztec) |
 | **8** | Opto-isolated input via 6N137 (X2, ex-"S-BUS") | `PIN_SPEED_SENSOR` — driveline speed (PCNT) ⚠ inverted, see §3/§8.9 | `PIN_MAVLINK_RX` | RE-PINNED |
 | **9** | X10 pin 3 via 200K/24K divider (aztec: 12 V battery +) | `PIN_ADC_24V` — ADC1, 12 V battery sense | `PIN_TRANS_SERVO` | NEW feature |
 | **10** | Hall_3 channel A (X5) | spare | `PIN_CAN_CS` | SPARE |
@@ -105,17 +105,17 @@ document is the wiring / pin reference only.
 | **X4** | Hall 2 — spare | 1=5V, 2=Hall A (GPIO12), 3=Hall B (GPIO13), 4=GND |
 | **X5** | Hall 3 — spare | 1=5V, 2=Hall A (GPIO10), 3=Hall B (GPIO11), 4=GND |
 | **X6** | Parking-brake BTS7960 (aztec only — on master X6 is the steering VESC) | 1=5V(fused), 2=L_PWM (GPIO4, `PIN_PARK_BRAKE_LPWM`), 3=R_PWM (GPIO5, `PIN_PARK_BRAKE_RPWM`), 4/5=L_IS/R_IS (mux CH3/CH0, **not sampled**), 6=GND. Enables hard-wired as on X7. Which pin tightens the cable is not measured yet (NVS `pbrake`/`invert`, bench task). *History:* carried the steering VESC UART2 until it moved to X1 / UART0 |
-| **X7** | Brake BTS7960 | 1=5V(fused), 2=L_PWM (GPIO6), 3=R_PWM (GPIO7), 4=L_IS, 5=R_IS, 6=GND |
+| **X7** | BTS7960 header — **free on aztec since 1.6.0** (the X7 service-brake actuator and its harness are removed; the brake is the iBooster on CAN) | 1=5V(fused), 2=L_PWM (GPIO6), 3=R_PWM (GPIO7), 4=L_IS, 5=R_IS, 6=GND |
 | **X8** | Servos | 1=5V(fused, servo supply), 2=throttle PWM (GPIO15), 3=transmission PWM (GPIO16 — GXservo HS-1005SGT 150KG on aztec), 4/5=IS, 6=GND |
 | **X9** | MAVLink → Pixhawk TELEM | 2 → Pixhawk RX (GPIO17 TX), 3 ← Pixhawk TX (GPIO18 RX), 6=GND. ⚠ **Do NOT connect pin 1 (5V)**; leave 4/5 unconnected |
 | **X10** | Buck Boost board (master) / none (aztec) | 1 = Boost On/Off (GPIO46, unused on aztec), 2 = GND, 3 = 12 V battery + sense (no boost board on aztec; +24V measure on master) → divider → GPIO9 |
 | **X11** | Power in | 3× +12V, 3× GND (main 12V input) |
 | **X12** | LAN UART2 | CH9121T's second UART — LAN-side, **not** an ESP UART |
-| **X13** | CAN | CANL, GND, CANH — TJA1051T/3, split termination 2×60Ω + 47n, common-mode choke. One 500 kbit/s bus shared by the **engine ECU** (OBD-II) and the **Bosch LWS steering-angle sensor** (0x305) — see §4 "SPI (CAN)" for termination |
+| **X13** | CAN | CANL, GND, CANH — TJA1051T/3, split termination 2×60Ω + 47n, common-mode choke. One 500 kbit/s bus shared by the **engine ECU** (OBD-II), the **Bosch LWS steering-angle sensor** (0x305) and, on aztec since 1.6.0, the **Bosch iBooster Gen2** service brake (X150 pins 18 / 10) — see §4 "SPI (CAN)" for termination |
 | **X14** | I2C1 header — **empty** (no device fitted; `Wire` is not started). Kept as the relay-board contingency | VCC 3V3, SDA (GPIO1), SCL (GPIO2), GND |
 | **X15** | I2C2 header — relay board @ 0x1F, **working / bench-verified** | VCC, SDA (GPIO48), SCL (GPIO47), GND. ⚠ *History:* on the first assembled board this connector passed no signals until rework in the `FB3`/`FB4` ferrite area — **check that area first on any board copy that shows a silent X15** |
 | **X16** | Opto inputs | In1..In4 (In_Plus / In_Minus pairs) + GND |
-| **X17** | Opto inputs | In5..In8 (In_Plus / In_Minus pairs) + GND |
+| **X17** | Opto inputs | In5..In8 (In_Plus / In_Minus pairs) + GND — all spare on aztec (In5 was the brake endstop until 1.6.0) |
 | **X18** | Ethernet | RJ45 (CH9121T) |
 | **USB-C** | Flashing + console | Native USB (GPIO19/20), USB-CDC |
 
@@ -248,10 +248,29 @@ The MCP2515 crystal on this board is **8 MHz**; firmware already uses `MCP_8MHZ`
 |------|-----|-------|
 | Engine ECU | requests `0x7DF`, replies `0x7E8`–`0x7EF` | OBD-II polling (RPM, coolant, ...) |
 | Bosch LWS steering-angle sensor 0 265 005 486 (PSA 9650236180) | sends `0x305` (DLC 6, every 10 ms); config `0x7C0` | Mounted **directly on the steering shaft**. 12 V from the **ignition key** (switched), ground common with the board. Angle int16, 0.1°/bit, sensor + = left (firmware negates: + = right) |
+| Bosch iBooster Gen2 (Tesla Model 3/Y, P/N 1044671-00-x) — aztec, fw 1.6.0 | we send `0x38B` / `0x38C` / `0x38D` every 10 ms (TXB1 / TXB2, CAN task); it sends `0x38E` (10 ms), `0x38F` (20 ms), `0x39D` (40 ms) | Service brake. Wake from the ignition line (Relay_1): asleep with the ignition OFF. Wiring: X150 table below |
 
 - **Receive filters** (`applyRxFilters()`): RXB0 = mask `0x7F8` / filters 0–1 `0x7E8` (OBD-II
-  replies); RXB1 = mask `0x7FF` / filters 2–5 `0x305` (steering angle only). Extended frames are
-  rejected; RXB0 → RXB1 rollover stays on.
+  replies); RXB1 = mask `0x7FF` / filter 2 `0x305` (steering angle), filter 3 `0x38E`, filter 4
+  `0x38F`, filter 5 `0x39D` (iBooster, aztec 1.6.0; consumed in the CAN task). Extended frames are
+  rejected; RXB0 → RXB1 rollover stays on. RXB1 carries ≈ 275 frames/s and relies on the INT wake
+  (GPIO38).
+- **Transmit buffers:** TXB0 (TXP 1) = the general queue (OBD-II, LWS zero-set); TXB1 (TXP 2) and
+  TXB2 (TXP 3) = the iBooster frames only.
+
+**X150 — Bosch iBooster Gen2 connector (aztec, fw 1.6.0; owner decision 3):**
+
+| X150 pin | Wire | Notes |
+|----------|------|-------|
+| 1 | +12 V **straight from the battery**, 4 mm², no diode, no converter | the unit regenerates into its supply on a fast rod return; a supply that cannot sink current makes it reboot (bench). Power-cycling this pin is the only confirmed way out of a latched `failure` |
+| 9 | Ground, common with the control board | without a common ground the bus stays silent |
+| 20 | Wake — the ACC / ignition line switched by **Relay_1** | ignition OFF (also fail-safe `allOff()`) → the unit sleeps → **no service brake** (accepted) |
+| 18 | CAN-H → X13 | control bus. Do not swap with pin 16 (bench pitfall) |
+| 10 | CAN-L → X13 | |
+| 25 / 16 | the unit's second ("vehicle") bus | **not connected** |
+| X158 | pedal-travel sensor connector on the unit | **stays connected** |
+
+No new relay; Relay_7 / Relay_8 stay reserved.
 - **`0x7C0` is transmitted only by the "Set sensor zero" sequence**, with exactly `05 00`, ~100 ms,
   `53 30` (zero here, keep output ID `0x305`). Never `03 00`: it moves the sensor's output to ID
   `0x000`.
@@ -260,6 +279,10 @@ The MCP2515 crystal on this board is **8 MHz**; firmware already uses `MCP_8MHZ`
 - ⚠ **Termination:** the bus must have **exactly two 120 Ω terminators**, one at each end. With the
   power off, measure **≈ 60 Ω between CAN-H and CAN-L**; ≈ 40 Ω means three terminators (remove the
   one in the middle of the bus), ≈ 120 Ω means one is missing. Keep the stub to the sensor short.
+- **iBooster termination (aztec 1.6.0 — to be measured, task 9.1 of
+  replace-aztec-brake-with-ibooster, before the first power-up):** X150 pin 18–10 on the unit alone
+  (≈ 120 Ω = internal terminator, open = none): **not yet measured**; assembled bus (board, ECU, LWS,
+  iBooster): **not yet measured** — must read ≈ 60 Ω. Record here which nodes terminate.
 
 ### LEDC PWM Channels
 
@@ -268,12 +291,12 @@ The MCP2515 crystal on this board is **8 MHz**; firmware already uses `MCP_8MHZ`
 | 1 | **15** | Throttle servo | 50 Hz | 14-bit |
 | 2 | **16** | Transmission servo | 50 Hz | 14-bit |
 | 0 / 3 | — | FREE | — | — |
-| 4 | 7 | Brake RPWM | 10 kHz | 8-bit |
-| 5 | 6 | Brake LPWM | 10 kHz | 8-bit |
+| 4 / 5 | — | FREE on aztec since 1.6.0 (were the X7 brake RPWM / LPWM on GPIO7 / 6) | — | — |
 | 6 | 5 | Parking brake RPWM (aztec, X6) | 10 kHz | 8-bit |
 | 7 | 4 | Parking brake LPWM (aztec, X6) | 10 kHz | 8-bit |
 
-Channels 4–7 share `LEDC_TIMER_1` (configured once by the first `BTS7960Controller::begin()`).
+Channels 6–7 use `LEDC_TIMER_1`, configured by the first `BTS7960Controller::begin()` — on aztec
+since 1.6.0 the parking brake's, the only BTS7960 left.
 Channels 6 / 7 were the former steering PWM channels (GPIO17/18 are now MAVLink).
 
 Channel numbers are unchanged; only the throttle/transmission pins move to 15/16.
@@ -315,8 +338,7 @@ ignores it completely (it may float HIGH).
 | 1 | X16 | Gear code bit B — middle (quad-bike REVERSE line) | **HIGH** |
 | 6 | X16 | Gear code bit C — right/LSB (quad-bike LOW line) | **HIGH** |
 | 7 | X16 | Not wired on aztec — ignored | — |
-| 4 | X17 | Brake limit sensor ("released" endstop — 1000 ms overrun logic, I2C latency acceptable) | LOW (`BOARD_INPUT_ACTIVE_LOW`, **not** bench-verified) |
-| 2, 3, 5 | X17 | Spare — never moved during the sweep | — |
+| 2, 3, 4, 5 | X17 | Spare — no firmware function (bit 4 / In5 was the brake "released" endstop until fw 1.6.0; `BOARD_IN_BIT_BRAKE_LIMIT` and `BOARD_INPUT_ACTIVE_LOW` removed) | — |
 
 Gear code, written `[bit0 bit1 bit6]` (`GEAR_CODE_*` in `Constants.h`, decoded only in
 `TransmissionController::decodeGearCode()`):
@@ -607,7 +629,7 @@ The LED series resistor is now **1 kΩ** (was 1.5 kΩ) for more drive margin on 
 | `PIN_STEER_SDA` → `PIN_I2C1_SDA` | GPIO 41 | **GPIO 1** (renamed in 1.3.0; X14 empty, defined but unused) |
 | `PIN_STEER_SCL` → `PIN_I2C1_SCL` | GPIO 42 | **GPIO 2** (renamed in 1.3.0; X14 empty, defined but unused) |
 | `PIN_VESC_TX` / `PIN_VESC_RX` | GPIO 4 / 5 | **GPIO 43 / 44** (UART0, X1 — aztec) |
-| `PIN_BRAKE_LPWM` / `PIN_BRAKE_RPWM` | GPIO 6 / 7 | unchanged |
+| `PIN_BRAKE_LPWM` / `PIN_BRAKE_RPWM` | GPIO 6 / 7 | **removed on aztec in 1.6.0** (with `LEDC_CH_BRAKE_*` 4 / 5): the service brake is the iBooster on CAN; GPIO6 / 7 left unconfigured |
 
 ### New constants
 
@@ -632,7 +654,7 @@ Parking-brake constants (fw 1.5.29, `include/ParkBrakeLaw.h` keeps the same lite
 
 | Constant | Old GPIO | New location |
 |----------|----------|--------------|
-| `PIN_BRAKE_SENSOR` | 14 | Opto input **bit 4** (PCA9557 U10, I2C2) |
+| `PIN_BRAKE_SENSOR` | 14 | Opto input **bit 4** (PCA9557 U10, I2C2) — removed altogether on aztec in 1.6.0 (no brake endstop) |
 | `PIN_GEAR_REVERSE` | 19 | Opto input **bit 1** (see §5) |
 | `PIN_GEAR_NEUTRAL` | 20 | Opto input **bit 0** (see §5) |
 | `PIN_GEAR_LOW` | 21 | Opto input **bit 6** (see §5) |
@@ -647,7 +669,7 @@ Parking-brake constants (fw 1.5.29, `include/ParkBrakeLaw.h` keeps the same lite
 
 | Item | Work |
 |------|------|
-| PCA9557 input reader | New driver on **I2C2** @ 0x1A (U10) — supplies gear switches and the brake limit sensor to `TransmissionController` / brake logic (replaces `digitalRead`) |
+| PCA9557 input reader | New driver on **I2C2** @ 0x1A (U10) — supplies the gear switches to `TransmissionController` (replaces `digitalRead`; the brake limit sensor it also carried is gone on aztec since 1.6.0) |
 | `RelayController` | Rewrite from direct GPIO to the relay-board PCA9557 @ 0x1F — bus passed in by `main.cpp` (**`Wire1`/I2C2** via X15) |
 | Battery sense / telemetry | `PIN_BOOST_EN` HIGH at boot (harmless); `PIN_ADC_24V` = 12 V battery → `ecu_voltage` telemetry and MAVLink `EFI_STATUS.ignition_voltage`, web calibration `cal_bat_v` |
 | `TachoSensor` (aztec) | New: `PIN_TACHO` IRAM ISR + period averaging (`include/TachoLaw.h`), ppr in NVS `tacho`; `VehicleController` composes the effective RPM (TACHO → CAN fallback); `ENGINE_RUNNING_RPM_THRESHOLD` 1500 → 800 |

@@ -18,7 +18,8 @@
  *   from any task (a spinlock guards the buffer).
  * - service() (last step of loop()): heap watch, SNAP every JOURNAL_SNAP_MS, pending clear, and
  *   the flash flush — at most once per JOURNAL_FLUSH_MS and only with data (earlier at ≥ 75 %),
- *   DEFERRED while the steering motor is driven, at most JOURNAL_FLUSH_DEFER_MAX_MS. The loop
+ *   DEFERRED while the steering motor is driven or a service-brake request is active, at most
+ *   JOURNAL_FLUSH_DEFER_MAX_MS. The loop
  *   only try-takes the file mutex: a busy mutex postpones the flush, never blocks the loop.
  * - Write errors degrade the journal only: after 3 consecutive failed flushes (or a failed
  *   mount) file output is off for the session (journalBytes() = -1); RAM + RTC keep working.
@@ -43,8 +44,9 @@ public:
 
     /**
      * @brief Main-loop service (call as the last step of loop()).
-     * @param steeringDriving true while the steering motor is driven: the flush is deferred, at
-     *        most JOURNAL_FLUSH_DEFER_MAX_MS from the moment it became due
+     * @param steeringDriving true while the steering motor is driven or a service-brake request
+     *        is active (the caller ORs both, change replace-aztec-brake-with-ibooster D9): the
+     *        flush is deferred, at most JOURNAL_FLUSH_DEFER_MAX_MS from the moment it became due
      */
     static void service(bool steeringDriving);
 

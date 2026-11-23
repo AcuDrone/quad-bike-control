@@ -24,9 +24,14 @@ static const uint8_t kProbeCandidates[CANController::PROBE_CANDIDATE_COUNT] = {
 // Supported-PID bitmap group request PIDs (Mode 01)
 static const uint8_t kBitmapGroups[4] = {0x00, 0x20, 0x40, 0x60};
 
-// TXB0CTRL value written with every frame: TXP = 1 (TXREQ 0). The follow-up's periodic frames
-// get TXB1 / TXB2 at a higher TXP (design D5).
+// TXBnCTRL value written with every frame (TXREQ 0): TXB0 TXP 1 for the general queue; the
+// periodic client's TXB1 TXP 2 and TXB2 TXP 3, so a general frame retransmitting in TXB0 never
+// delays a brake frame (replace-aztec-brake-with-ibooster D3). Written with every load, so a chip
+// reset (which clears TXP) is followed by the right priorities on the first load after it.
 static constexpr uint8_t CAN_TXB0_CTRL_TXP = 0x01;
+static constexpr uint8_t CAN_TXB1_CTRL_TXP = 0x02;
+static constexpr uint8_t CAN_TXB2_CTRL_TXP = 0x03;
+static constexpr uint32_t CAN_SLOT_US = (uint32_t)IB_SLOT_MS * 1000UL;
 
 static uint8_t popCount8(uint8_t v) {
     uint8_t n = 0;
@@ -110,6 +115,17 @@ CANController::CANController()
     txCur_ = {};
     txCancelSeq_ = 0;
     statsResetAck_ = 0;
+    sniffFiltersOpen_ = false;
+    periodic_ = nullptr;
+    nextSlotUs_ = 0;
+    slotClockStarted_ = false;
+    pTxb2_ = {};
+    pTxb2Pending_ = false;
+    pTxb1_[0] = {};
+    pTxb1_[1] = {};
+    pTxb1Next_ = 0;
+    pTxb1Count_ = 0;
+    cTxMiss_ = 0;
     cRx_ = 0; cRxDrop_ = 0; cRxHwm_ = 0; cWinHwm_ = 0; cOvr_ = 0; cOvrEflg_ = 0;
     cIntWakes_ = 0; cPollFrames_ = 0; cCapHits_ = 0; cTx_ = 0; cTxFail_ = 0;
     cBusyMaxUs_ = 0; cWinBusyMaxUs_ = 0; cCmdMaxUs_ = 0; cBusyUs_ = 0; cInitFails_ = 0; cEvDrops_ = 0; cHealth_ = 0;
@@ -250,10 +266,32 @@ void IRAM_ATTR CANController::canIntIsr(void* arg) {
     }
 }
 
+// Wait of one cycle: CAN_POLL_MS, shortened to the next periodic slot, and to one tick while a
+// periodic frame waits for its buffer (replace-aztec-brake-with-ibooster D3). Never blocks longer.
+uint32_t CANController::taskWaitTicks() const {
+    uint32_t ticks = pdMS_TO_TICKS(CAN_POLL_MS);
+    if (periodic_ == nullptr || !slotClockStarted_) {
+        return ticks;
+    }
+    if (periodicLoadPending()) {
+        return 1;
+    }
+    const int32_t toSlotUs = (int32_t)(nextSlotUs_ - micros());
+    if (toSlotUs <= 0) {
+        return 0;
+    }
+    const uint32_t slotTicks = pdMS_TO_TICKS(((uint32_t)toSlotUs + 999UL) / 1000UL);
+    if (slotTicks < ticks) {
+        ticks = slotTicks < 1 ? 1 : slotTicks;
+    }
+    return ticks;
+}
+
 void CANController::taskLoop() {
     for (;;) {
-        // INT, a loop request (TX / command), or the CAN_POLL_MS poll. Every cycle ends here.
-        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(CAN_POLL_MS));
+        // INT, a loop request (TX / command), the CAN_POLL_MS poll or the next periodic slot.
+        // Every cycle ends here.
+        ulTaskNotifyTake(pdTRUE, taskWaitTicks());
         const uint32_t isr = isrCount_;
         const bool intWake = (isr != lastIsrSeen_);
         lastIsrSeen_ = isr;
@@ -287,10 +325,12 @@ void CANController::taskLoop() {
         uint16_t frames = 0;
         if (!chipUp_) {
             taskFailQueuedTx();
+            taskPeriodicSlot(false);       // the client keeps stepping; nothing is loaded
         } else {
             uint8_t st = 0;
             frames = taskDrain(st);
             taskServiceTx(st);
+            taskPeriodicSlot(true);        // after the drain: the slot sees the newest unit frames
             if ((millis() - lastEflgMs_) >= CAN_EFLG_POLL_MS) {
                 taskServiceErrors();
             }
@@ -365,8 +405,11 @@ void CANController::taskRunCommand(uint8_t cmd) {
     vTaskPrioritySet(nullptr, CAN_TASK_CONFIG_PRIORITY);
 
     // A frame pending in TXB0 would hold any mode change until it leaves (the MCP2515 changes
-    // mode only after pending transmissions): abort it alone and report what became of it.
+    // mode only after pending transmissions): abort it alone and report what became of it. The
+    // periodic client's TXB1 / TXB2 likewise, each alone (no ABAT); nothing of the current slot is
+    // kept for after the command (replace-aztec-brake-with-ibooster D3).
     taskAbortTxb0();
+    taskAbortPeriodic();
 
     CanEvent ev = {};
     ev.type = CanEvType::CMD_DONE;
@@ -380,6 +423,7 @@ void CANController::taskRunCommand(uint8_t cmd) {
             const bool ok = r.begin && r.filt && r.mode;
             chipUp_ = ok;
             busOffLatched_ = false;
+            sniffFiltersOpen_ = false;      // the reset wiped them; normal filters (or none)
             // While the chip is down after this (boot or re-init), the task itself retries every
             // CAN_INIT_RETRY_MS from the last attempt of any kind (design D7, extended).
             initAttempted_ = true;
@@ -404,6 +448,7 @@ void CANController::taskRunCommand(uint8_t cmd) {
             const bool open = applySniffFilters();
             // Half-programmed filters: put the normal set back (the loop re-inits if that fails).
             const bool restored = open ? true : applyRxFilters();
+            sniffFiltersOpen_ = open || !restored;   // whatever is open: brake frames reach the ring
             if (open) {
                 // Stale overflow flags from before the window must not be counted.
                 modifyRegister(MCP_EFLG, MCP_EFLG_RX0OVR | MCP_EFLG_RX1OVR, 0x00);
@@ -415,6 +460,7 @@ void CANController::taskRunCommand(uint8_t cmd) {
         }
         case CanCmd::FILTERS_NORMAL: {
             const bool ok = applyRxFilters();
+            sniffFiltersOpen_ = !ok;
             ev.flags = ok ? (EV_OK | EV_FILT) : 0;
             ev.canstat = readRegister(MCP_CANSTAT);
             ev.eflg = readRegister(MCP_EFLG);
@@ -448,6 +494,7 @@ void CANController::taskInitRetry() {
     }
     chipUp_ = true;
     busOffLatched_ = false;
+    sniffFiltersOpen_ = false;
     lastEflgMs_ = millis();
     CanEvent ev = {};
     ev.type = CanEvType::INIT_OK;
@@ -479,6 +526,13 @@ uint16_t CANController::taskDrain(uint8_t& st) {
         }
         f.id = (uint32_t)id;
         f.len = len;
+        n++;
+        // The periodic client sees every frame first; its frames stay in the task unless the
+        // sniffer's accept-all filters are open (replace-aztec-brake-with-ibooster D3).
+        if (periodic_ != nullptr && periodic_->onFrame(f, millis()) && !sniffFiltersOpen_) {
+            st = readStatus();
+            continue;
+        }
         portENTER_CRITICAL(&rxMux_);
         const bool dropped = rxRing_.pushDropOldest(f);   // full: the oldest goes (design D3)
         const uint8_t cnt = rxRing_.count();
@@ -486,7 +540,6 @@ uint16_t CANController::taskDrain(uint8_t& st) {
         if (dropped) cRxDrop_ = cRxDrop_ + 1;
         if (cnt > cRxHwm_) cRxHwm_ = cnt;
         if (cnt > cWinHwm_) cWinHwm_ = cnt;
-        n++;
         st = readStatus();
     }
     if (n >= CAN_RX_DRAIN_CAP && CanIoLaw::rxPending(st)) {
@@ -576,6 +629,115 @@ void CANController::taskAbortTxb0() {
     if (o != CanIoLaw::TxOutcome::PENDING) {
         txBusy_ = false;
         txAborting_ = false;
+    }
+}
+
+// Before a command (re-init, filter switch): the periodic client's TXB1 / TXB2 are aborted each
+// alone (TXREQ cleared, no ABAT) and given up to 2 ms to read clear, for the same reason as TXB0
+// (a pending, unacknowledged frame would hold every mode switch). Frames of the current slot not
+// yet loaded are dropped. All of them count as transmit misses, not as general tx_fail. Nothing is
+// kept for after the command: the next slot is built from the client's current command
+// (replace-aztec-brake-with-ibooster D3).
+void CANController::taskAbortPeriodic() {
+    if (periodic_ == nullptr) {
+        return;
+    }
+    uint32_t miss = (pTxb2Pending_ ? 1u : 0u) + (uint32_t)(pTxb1Count_ - pTxb1Next_);
+    pTxb2Pending_ = false;
+    pTxb1Next_ = 0;
+    pTxb1Count_ = 0;
+    if (chipUp_) {
+        uint8_t st = readStatus();
+        if (CanIoLaw::txPending(st, 1)) {
+            modifyRegister(MCP_TXB1CTRL, MCP_TXB_TXREQ_M, 0x00);
+            miss++;
+        }
+        if (CanIoLaw::txPending(st, 2)) {
+            modifyRegister(MCP_TXB2CTRL, MCP_TXB_TXREQ_M, 0x00);
+            miss++;
+        }
+        const uint32_t t0 = micros();
+        while ((CanIoLaw::txPending(st, 1) || CanIoLaw::txPending(st, 2)) && (micros() - t0) < 2000) {
+            st = readStatus();
+        }
+    }
+    cTxMiss_ = cTxMiss_ + miss;
+}
+
+// The periodic client's slot (replace-aztec-brake-with-ibooster D3). Every task cycle: a frame
+// still waiting for TXB1 is loaded once the buffer is free; when a slot is due, whatever of the
+// previous slot is still pending is aborted alone (its own TXREQ) or dropped and counted as a
+// miss, the client is stepped and the new frames are loaded: frame 0 -> TXB2, frame 1 -> TXB1,
+// frame 2 -> TXB1 on the first cycle it is free (the wait is one tick meanwhile). A late slot is
+// sent once: the clock restarts from now, no catch-up burst (the client measures the gap).
+void CANController::taskPeriodicSlot(bool canSend) {
+    if (periodic_ == nullptr) {
+        return;
+    }
+    const uint32_t nowUs = micros();
+    if (!slotClockStarted_) {
+        slotClockStarted_ = true;
+        nextSlotUs_ = nowUs;
+    }
+    if (canSend && periodicLoadPending()) {
+        taskLoadPeriodic();
+    }
+    if ((int32_t)(nowUs - nextSlotUs_) < 0) {
+        return;
+    }
+    nextSlotUs_ += CAN_SLOT_US;
+    if ((int32_t)(nowUs - nextSlotUs_) >= 0) {
+        nextSlotUs_ = nowUs + CAN_SLOT_US;   // late by a slot or more: no catch-up
+    }
+
+    uint32_t miss = (pTxb2Pending_ ? 1u : 0u) + (uint32_t)(pTxb1Count_ - pTxb1Next_);
+    pTxb2Pending_ = false;
+    pTxb1Next_ = 0;
+    pTxb1Count_ = 0;
+    if (canSend) {
+        const uint8_t st = readStatus();
+        if (CanIoLaw::txPending(st, 2)) {
+            modifyRegister(MCP_TXB2CTRL, MCP_TXB_TXREQ_M, 0x00);
+            miss++;
+        }
+        if (CanIoLaw::txPending(st, 1)) {
+            modifyRegister(MCP_TXB1CTRL, MCP_TXB_TXREQ_M, 0x00);
+            miss++;
+        }
+    }
+    if (miss) {
+        cTxMiss_ = cTxMiss_ + miss;
+    }
+
+    CanSlotInfo info;
+    info.nowMs = millis();
+    info.canSend = canSend;
+    info.txMiss = cTxMiss_;
+    CanSlotTx out;
+    out.n = 0;
+    periodic_->onSlot(info, out);
+    if (!canSend || out.n == 0) {
+        return;
+    }
+    pTxb2_ = out.frame[0];
+    pTxb2Pending_ = true;
+    for (uint8_t i = 1; i < out.n && i < 3; i++) {
+        pTxb1_[pTxb1Count_++] = out.frame[i];
+    }
+    taskLoadPeriodic();
+}
+
+// Load what the slot still has into TXB2 / TXB1 where the buffer reads free. A buffer whose TXREQ
+// was just cleared may still finish the attempt on the wire: it is loaded on a later cycle.
+void CANController::taskLoadPeriodic() {
+    const uint8_t st = readStatus();
+    if (pTxb2Pending_ && !CanIoLaw::txPending(st, 2)) {
+        loadTxb(MCP_TXB2CTRL, CAN_TXB2_CTRL_TXP, MCP_RTS_TX2, pTxb2_);
+        pTxb2Pending_ = false;
+    }
+    if (pTxb1Next_ < pTxb1Count_ && !CanIoLaw::txPending(st, 1)) {
+        loadTxb(MCP_TXB1CTRL, CAN_TXB1_CTRL_TXP, MCP_RTS_TX1, pTxb1_[pTxb1Next_]);
+        pTxb1Next_++;
     }
 }
 
@@ -806,11 +968,12 @@ void CANController::routeFrame(const CanFrame& f) {
 void CANController::printFiltersLine(bool ok) const {
     Debug::printfFeature(DebugFeature::CAN,
         "[CAN] RX filters: RXB0 OBD 0x%03X-0x%03X (mask=0x%03X filt=0x%03X), "
-        "RXB1 LWS 0x%03X (mask=0x%03X filt=0x%03X), std IDs only%s\n",
+        "RXB1 LWS 0x%03X + iBooster 0x%03X/0x%03X/0x%03X (mask=0x%03X), std IDs only%s\n",
         (unsigned)CAN_RX_OBD_FILTER,
         (unsigned)(CAN_RX_OBD_FILTER | (~CAN_RX_OBD_MASK & 0x7FF)),
         (unsigned)CAN_RX_OBD_MASK, (unsigned)CAN_RX_OBD_FILTER,
-        (unsigned)STEER_LWS_CAN_ID, (unsigned)CAN_RX_LWS_MASK, (unsigned)STEER_LWS_CAN_ID,
+        (unsigned)STEER_LWS_CAN_ID, (unsigned)IB_ID_EXT_STATUS, (unsigned)IB_ID_RUNOUT,
+        (unsigned)IB_ID_STATUS, (unsigned)CAN_RX_LWS_MASK,
         ok ? "" : " [FAILED]");
 }
 
@@ -1038,7 +1201,9 @@ void CANController::update() {
             // (change gate-obd-watchdog-and-pull-up-vesc-rx; CanWatchdogLaw.h).
             uint32_t now = millis();
             uint32_t noDataFor = 0;
-            if (!reinitInFlight() &&
+            // Postponed while the brake client holds the bus (replace-aztec-brake-with-ibooster
+            // D9): the condition is evaluated again on the first update() after the request.
+            if (!reinitInFlight() && !busHeld() &&
                 CanWatchdogLaw::obdNoDataDue(lwsPowered_, now, vehicleData_.lastUpdateTime, lastReinitTime_,
                                              ignitionOnMs_, CAN_REINIT_NO_DATA_MS,
                                              CAN_REINIT_MIN_INTERVAL_MS, &noDataFor)) {
@@ -1346,26 +1511,35 @@ void CANController::spiCommand(uint8_t instruction) const {
 // Load TXB0 with one WRITE burst (TXB0CTRL with TXP = 1, SIDH, SIDL, EID8, EID0, DLC, data) and
 // request transmission with RTS TX0 (design D4). Only while TXREQ reads 0.
 void CANController::loadTxb0(const CanFrame& f) {
+    loadTxb(MCP_TXB0CTRL, CAN_TXB0_CTRL_TXP, MCP_RTS_TX0, f);
+}
+
+// One WRITE burst into TXBnCTRL..TXBnDn (control with its TXP, header, data) and RTS for that
+// buffer. TXB0 for the general queue; TXB1 / TXB2 only for the periodic client. Only while the
+// buffer's TXREQ reads 0. CAN task only.
+void CANController::loadTxb(uint8_t ctrlAddr, uint8_t txp, uint8_t rts, const CanFrame& f) {
     uint8_t buf[6 + 8];
-    buf[0] = CAN_TXB0_CTRL_TXP;
+    buf[0] = txp;
     CanIoLaw::canTxHeader(f.id, (f.id & 0x80000000UL) != 0, f.len, &buf[1]);
     const uint8_t dlc = buf[5];
     memcpy(&buf[6], f.data, dlc);
     SPI.beginTransaction(SPISettings(10000000, MSBFIRST, SPI_MODE0));
     digitalWrite(csPin_, LOW);
     SPI.transfer(MCP_WRITE);
-    SPI.transfer(MCP_TXB0CTRL);
+    SPI.transfer(ctrlAddr);
     for (uint8_t i = 0; i < 6 + dlc; i++) {
         SPI.transfer(buf[i]);
     }
     digitalWrite(csPin_, HIGH);
     SPI.endTransaction();
-    spiCommand(MCP_RTS_TX0);
+    spiCommand(rts);
 }
 
 // Two acceptance paths on the one shared bus (design D3):
 //   RXB0 = MASK0 0x7F8 + RXF0/RXF1 0x7E8  -> OBD-II responses 0x7E8-0x7EF
-//   RXB1 = MASK1 0x7FF + RXF2..RXF5 0x305 -> Bosch LWS steering angle only
+//   RXB1 = MASK1 0x7FF + RXF2 0x305       -> Bosch LWS steering angle,
+//                        RXF3 0x38E / RXF4 0x38F / RXF5 0x39D -> Bosch iBooster status
+//                        (replace-aztec-brake-with-ibooster D3; RXF1 stays as it is)
 // so the 100 Hz angle stream and the OBD replies never evict each other. BUKT (RXB0 ->
 // RXB1 rollover) is left enabled as the library sets it in begin(): an OBD reply that
 // arrives while RXB0 is full rolls into RXB1 (the receive paths accept it from either
@@ -1396,11 +1570,12 @@ bool CANController::applyRxFilters() {
     if (mcp_can_->init_Mask(0, 0, CAN_RX_OBD_MASK_REG) != MCP2515_OK) return false;
     if (mcp_can_->init_Filt(0, 0, CAN_RX_OBD_FILTER_REG) != MCP2515_OK) return false;
     if (mcp_can_->init_Filt(1, 0, CAN_RX_OBD_FILTER_REG) != MCP2515_OK) return false;
-    // RXB1: steering-angle frame only
+    // RXB1: steering-angle frame + the three iBooster status frames, exact matches
     if (mcp_can_->init_Mask(1, 0, CAN_RX_LWS_MASK_REG) != MCP2515_OK) return false;
-    for (uint8_t n = 2; n < 6; n++) {
-        if (mcp_can_->init_Filt(n, 0, CAN_RX_LWS_FILTER_REG) != MCP2515_OK) return false;
-    }
+    if (mcp_can_->init_Filt(2, 0, CAN_RX_LWS_FILTER_REG) != MCP2515_OK) return false;
+    if (mcp_can_->init_Filt(3, 0, CAN_RX_IB_EXT_STATUS_REG) != MCP2515_OK) return false;
+    if (mcp_can_->init_Filt(4, 0, CAN_RX_IB_RUNOUT_REG) != MCP2515_OK) return false;
+    if (mcp_can_->init_Filt(5, 0, CAN_RX_IB_STATUS_REG) != MCP2515_OK) return false;
     return true;
 }
 
@@ -1515,6 +1690,9 @@ void CANController::serviceLwsWatchdog(uint32_t now) {
     }
     // Fixed spacing from the last re-init of any kind; no back-off (decision 1).
     if ((now - lastReinitTime_) < CAN_LWS_REINIT_MIN_MS || reinitPending_ || reinitInFlight()) return;
+    // A brake request holds the bus: the re-init waits for the first update() after it, when the
+    // silence (if it still lasts) triggers it again (replace-aztec-brake-with-ibooster D9).
+    if (busHeld()) return;
 
     Debug::printfFeature(DebugFeature::CAN,
         "[CAN] No LWS 0x305 frame for %lu ms while the ECU answers — re-initializing controller\n",
@@ -2171,6 +2349,9 @@ CANController::SniffStart CANController::startSniff(uint32_t ms, bool gearChange
     }
     if (cmdInFlight_ != CanCmd::NONE) {
         return SniffStart::BUSY;   // a re-init is running in the CAN task
+    }
+    if (busHeld()) {
+        return SniffStart::BUSY_BRAKE;   // the filter switches would gap the brake frames (D9)
     }
     if (ms == 0) ms = 1;
     if (ms > CAN_SNIFF_MAX_WINDOW_MS) ms = CAN_SNIFF_MAX_WINDOW_MS;

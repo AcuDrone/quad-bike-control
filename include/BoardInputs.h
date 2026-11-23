@@ -13,16 +13,15 @@
  * I2C2 (`Wire1`), shared with the on-board CD4051 mux expander U2 @0x1C. (Live
  * bus scans put U10 on I2C2; the schematic's port names suggested I2C1 — the
  * copper wins.) Consumers
- * (`TransmissionController::getPhysicalGear()`, `VehicleController::isBrakeReleased()`)
- * read the published snapshot and never issue I2C themselves, so a control-loop
+ * (`TransmissionController::getPhysicalGear()`) read the published snapshot and never issue I2C themselves, so a control-loop
  * read can never turn into a burst of blocking transactions.
  *
  * Input map (aztec, see Constants.h): port bits 0/1/6 carry the 3-bit gear CODE
  * [bit0 bit1 bit6] (engaged-HIGH), published raw as `Snapshot::gearCode`; it is
  * decoded to a gear in exactly one place, `TransmissionController::decodeGearCode()`.
  * Bit 7 (the quad bike's one-hot HIGH line, see `master`) is not wired on aztec and
- * is ignored. Bit 4 = brake "released" endstop, polarity from
- * `BOARD_INPUT_ACTIVE_LOW`. The remaining bits are spare.
+ * is ignored. Bits 2-5 (X17) are spare: bit 4 (In5) was the brake "released" endstop until
+ * the service brake became the iBooster on CAN (change replace-aztec-brake-with-ibooster).
  *
  * Fault policy (see the change's design.md, Decision 2):
  *  - a single failed read keeps the last-known snapshot and retries next poll;
@@ -36,7 +35,6 @@ public:
     /** @brief Immutable view of the input state published to consumers */
     struct Snapshot {
         uint8_t gearCode;    // 3-bit gear code [bit0 bit1 bit6] = (b0<<2)|(b1<<1)|b6
-        bool brakeReleased;  // bit 4 asserted — brake at its retracted endstop
         bool valid;          // false once the data is stale (do not trust the bools)
         uint32_t ageMs;      // ms since the last successful read
     };
@@ -86,9 +84,6 @@ public:
 private:
     /** @brief Decode the raw port byte into the snapshot bools */
     void applyRaw(uint8_t raw);
-
-    /** @brief True when the given bit index is asserted in `raw` (active-low inputs) */
-    static bool bitAsserted(uint8_t raw, uint8_t bit);
 
     /** @brief Raw level of the given bit index in `raw` (engaged-HIGH gear code bits) */
     static bool bitHigh(uint8_t raw, uint8_t bit);

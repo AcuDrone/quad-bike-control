@@ -15,6 +15,7 @@
 #include "BoardInputs.h"
 #include "SpeedSensor.h"
 #include "SteerDiag.h"
+#include "IboosterBrake.h"
 #include "EventJournal.h"
 #include "I2cBusRecovery.h"
 #include "nvs_flash.h"
@@ -40,8 +41,10 @@ ThrottleController throttle;
 
 // Transmission servo (PWM servo-based gear selector)
 TransmissionController transmissionActuator;
-// Brake actuator (BTS7960)
-BTS7960Controller brakeActuator;
+// Service brake: Bosch iBooster Gen2 on the shared CAN bus (aztec; change
+// replace-aztec-brake-with-ibooster). No GPIO, no LEDC: its frames and rod loop run in the CAN
+// task, attached in setup() (vehicleController.initCAN()). X7 (GPIO6/7) is free.
+IboosterBrake serviceBrake;
 // Parking-brake actuator (BTS7960 on X6, aztec only — on master X6 is the steering VESC)
 BTS7960Controller parkBrakeActuator;
 
@@ -62,7 +65,7 @@ MavlinkInterface mavlinkInterface;
 // (change the RelayController argument below from Wire1 to Wire, and start Wire on
 // PIN_I2C1_SDA/PIN_I2C1_SCL in setup()).
 
-// Opto-isolated board inputs (3-bit gear code on port bits 0/1/6, brake endstop bit 4) on I2C2
+// Opto-isolated board inputs (3-bit gear code on port bits 0/1/6; X17 spare) on I2C2
 BoardInputs boardInputs(Wire1);
 
 // Relay Controller for ignition, starter, front light and the lock (aztec: Relay_4+5+6) — I2C2 via X15,
@@ -73,7 +76,7 @@ RelayController relayController(Wire1);
 SpeedSensor speedSensor;
 
 // Vehicle Controller (coordinates all actuators and input sources)
-VehicleController vehicleController(steeringActuator, throttle, transmissionActuator, brakeActuator,
+VehicleController vehicleController(steeringActuator, throttle, transmissionActuator, serviceBrake,
                                      parkBrakeActuator, mavlinkInterface, relayController, boardInputs, speedSensor);
 
 // Web Portal for telemetry and manual control
@@ -187,7 +190,7 @@ void setup() {
     // the in-memory flags with the NVS-stored state. Uncomment one to trace it.
     // Debug::setFeatureEnabled(DebugFeature::CAN, true);           // MCP2515 health, unmatched RX, overflow
     // Debug::setFeatureEnabled(DebugFeature::RELAY, true);         // relay/ignition switching
-    // Debug::setFeatureEnabled(DebugFeature::BRAKE, true);         // brake moves + endstop
+    // Debug::setFeatureEnabled(DebugFeature::BRAKE, true);         // service brake (iBooster) + park brake
     // Debug::setFeatureEnabled(DebugFeature::VEHICLE, true);       // speed sensor + vehicle state
     // Debug::setFeatureEnabled(DebugFeature::TRANSMISSION, true);
     // Debug::setFeatureEnabled(DebugFeature::MAVLINK, true);       // diagnose command-stream / fail-safe flapping
@@ -225,15 +228,9 @@ void setup() {
         scanI2CBus(Wire1, "I2C2 (Wire1, expect 0x1A 0x1C + 0x1F or 0x20..0x27)");
     }
 
-    // Opto-isolated inputs (gear code lines + brake limit sensor)
+    // Opto-isolated inputs (gear code lines)
     if (!boardInputs.begin()) {
         Debug::println("[INIT] ERROR: Board input expander failed — gear will report UNKNOWN");
-    }
-    {
-        BoardInputs::Snapshot snap = boardInputs.getSnapshot();
-        Debug::printfFeature(DebugFeature::BRAKE, "Brake endstop: %s\n",
-            !snap.valid ? "UNKNOWN (input expander unavailable)"
-                        : (snap.brakeReleased ? "Released (endstop reached)" : "Not released"));
     }
 
     // Initialize throttle servo (loads calibration from NVS, moves to calibrated idle)
@@ -270,16 +267,8 @@ void setup() {
         Debug::printlnFeature(DebugFeature::TRANSMISSION, "ERROR: Transmission servo failed");
     }
 
-    // Initialize brake
-    if (!brakeActuator.begin(PIN_BRAKE_RPWM, PIN_BRAKE_LPWM,
-                             LEDC_CH_BRAKE_RPWM, LEDC_CH_BRAKE_LPWM)) {
-        Debug::printlnFeature(DebugFeature::BRAKE, "ERROR: Brake actuator failed");
-    }
-
-    brakeActuator.stop();
-
-    // Parking brake on X6 (aztec): second BTS7960 on the already configured motor timer
-    // (LEDC_TIMER_1, 10 kHz, 8-bit). begin() leaves both outputs at zero duty; nothing is driven
+    // Parking brake on X6 (aztec): the only BTS7960 — its begin() configures the shared motor
+    // timer (LEDC_TIMER_1, 10 kHz, 8-bit) and leaves both outputs at zero duty; nothing is driven
     // at boot — the stored state is only restored (vehicleController.initParkBrake() below).
     if (!parkBrakeActuator.begin(PIN_PARK_BRAKE_RPWM, PIN_PARK_BRAKE_LPWM,
                                  LEDC_CH_PARK_BRAKE_RPWM, LEDC_CH_PARK_BRAKE_LPWM)) {
@@ -310,9 +299,14 @@ void setup() {
     // Restore the engine hour meter from NVS (must run after NVS is up, so not in a ctor)
     vehicleController.initEngineHourMeter();
 
-    // Initialize CAN controller (engine ECU + steering-angle sensor on one bus). It also
-    // attaches the steering controller's LWS decoder as the 0x305 frame sink.
-    if (!vehicleController.initCAN()) {
+    // Service brake settings (NVS "brake"; the old X7 keys travel_ms / hold_pwm are removed once)
+    // — before the CAN bus starts, with the brake idle.
+    serviceBrake.begin();
+
+    // Initialize CAN controller (engine ECU + steering-angle sensor + iBooster on one bus). It
+    // attaches the steering controller's LWS decoder as the 0x305 frame sink and the iBooster as
+    // the CAN task's periodic client (10 ms frames, rod loop).
+    if (!vehicleController.initCAN(&serviceBrake)) {
         Debug::printlnFeature(DebugFeature::CAN, "WARNING: CAN controller failed (will continue without vehicle data)");
     }
 
@@ -375,7 +369,10 @@ void loop() {
     mavlinkInterface.update();
     loopTimer.mark(PH_MAVLINK);
 
-    // Update web portal (handles OTA, WebSocket cleanup, etc.)
+    // Update web portal (handles OTA, WebSocket cleanup, etc.). OTA, LittleFS upload and the
+    // journal clear are refused while a brake request is active or the buggy moves (the previous
+    // loop's state; change replace-aztec-brake-with-ibooster D9).
+    webPortal.setOtaBlocked(vehicleController.isOtaRefused());
     webPortal.update();
     loopTimer.mark(PH_WEB);
 
@@ -465,6 +462,9 @@ void loop() {
     // Speed governor no-speed warning / recovery (STATUSTEXT only, change add-speed-governor).
     report.govNoSpeed       = vehicleController.isGovNoSpeedWarn();
     report.govActive        = (vehicleController.getGovMode() == GovMode::ACTIVE);
+    // Service brake availability (STATUSTEXT only: LOST / FAULT / OK, change
+    // replace-aztec-brake-with-ibooster D10). IServiceBrake state, cast to its uint8_t code.
+    report.brakeState       = (uint8_t)serviceBrake.state();
     mavlinkInterface.report(report);
     loopTimer.mark(PH_REPORT);
 
@@ -473,8 +473,9 @@ void loop() {
     loopTimer.mark(PH_TELEMETRY);
 
     // Event journal: SNAP, heap watch, and the flash flush (≤ 1/s, only with data) — the last
-    // step of the iteration, deferred while the steering motor is driven (≤ 10 s).
-    EventJournal::service(steeringActuator.isDriving());
+    // step of the iteration, deferred while the steering motor is driven or a service-brake
+    // request is active (≤ 10 s).
+    EventJournal::service(steeringActuator.isDriving() || serviceBrake.requestActive());
     loopTimer.mark(PH_JOURNAL);
     EventJournal::noteLoop(loopTimer.total(), kPhaseNames[loopTimer.worst], loopTimer.worstUs);
 }

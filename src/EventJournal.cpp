@@ -488,7 +488,8 @@ void EventJournal::service(bool steeringDriving) {
     if (!intervalDue && !fillDue && !switchDue) return;
     if (s_dueSinceMs == 0) s_dueSinceMs = now | 1u;
     // Decision 2: no flash erase while the steering motor is driven (a sector erase stalls both
-    // cores for 30-50 ms; the LWS timeout is 100 ms) — at most JOURNAL_FLUSH_DEFER_MAX_MS.
+    // cores for 30-50 ms; the LWS timeout is 100 ms) or a service-brake request is active (the
+    // stall holds the CAN task's 10 ms brake frames) — at most JOURNAL_FLUSH_DEFER_MAX_MS.
     if (steeringDriving && (now - s_dueSinceMs) < JOURNAL_FLUSH_DEFER_MAX_MS) return;
     if (xSemaphoreTake(s_fileMutex, 0) != pdTRUE) {
         s_lastFlushMs = now;   // an HTTP reader holds it: retry one interval later, never wait

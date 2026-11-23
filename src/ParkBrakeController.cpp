@@ -13,7 +13,6 @@ static_assert(PB_LAW_THR_PASS_PCT_MAX == PARK_BRAKE_THR_PASS_PCT_MAX, "ParkBrake
 static_assert(PB_LAW_THR_PASS_PCT_DEFAULT == PARK_BRAKE_THR_PASS_PCT_DEFAULT, "ParkBrakeLaw.h release point default out of sync");
 static_assert(PB_LAW_APPLY_MAX_SPEED_MS == PARK_BRAKE_APPLY_MAX_SPEED_MS, "ParkBrakeLaw.h apply speed out of sync");
 static_assert(PB_LAW_DRIVE_AWAY_PCT == PARK_BRAKE_DRIVE_AWAY_THROTTLE_PCT, "ParkBrakeLaw.h drive-away threshold out of sync");
-static_assert(PB_LAW_SVC_TOL_PCT == BRAKE_TOLERANCE, "ParkBrakeLaw.h service-brake tolerance out of sync");
 
 static const char* dirName(ParkBrakeRequest r) {
     return (r == ParkBrakeRequest::APPLY) ? "apply" : "release";

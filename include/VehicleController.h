@@ -24,6 +24,8 @@
 #include "SpeedGovernorLaw.h"
 #include "VehicleCommandLaw.h"
 #include "CrankLaw.h"
+#include "IServiceBrake.h"
+#include "IboosterBrake.h"
 
 /**
  * @brief Vehicle control coordination layer
@@ -36,7 +38,7 @@ public:
     VehicleController(SteeringController& steering,
                       ThrottleController& throttle,
                       TransmissionController& transmission,
-                      BTS7960Controller& brake,
+                      IboosterBrake& serviceBrake,
                       BTS7960Controller& parkBrake,
                       MavlinkInterface& mavlink,
                       RelayController& relayController,
@@ -70,9 +72,11 @@ public:
 
     /**
      * @brief Initialize CAN controller
+     * @param periodic the CAN task's periodic client (the iBooster service brake), attached before
+     *        the bus starts (change replace-aztec-brake-with-ibooster)
      * @return true if initialization successful
      */
-    bool initCAN();
+    bool initCAN(ICanPeriodicClient* periodic);
 
     /**
      * @brief Update control loop - call every loop iteration
@@ -180,36 +184,18 @@ public:
     TransmissionController& getTransmission() { return transmission_; }
     const TransmissionController& getTransmission() const { return transmission_; }
 
-    /**
-     * @brief Check the brake "fully released" endstop (opto input In5).
-     *
-     * Read from the `BoardInputs` snapshot — never a `digitalRead()` and never an
-     * I2C transaction of its own. A stale snapshot returns false ("not confirmed
-     * released"), so retraction stays bounded by BRAKE_SENSOR_OVERRUN_TIME /
-     * BRAKE_FULL_TRAVEL_TIME instead of stopping early on a failed read.
-     *
-     * @return true only if the endstop is confirmed reached
-     */
-    bool isBrakeReleased() const {
-        BoardInputs::Snapshot snap = boardInputs_.getSnapshot();
-        return snap.valid && snap.brakeReleased;
-    }
-
-    /** @brief Current open-loop brake position estimate, 0–100 % (telemetry `brake_pct`) */
-    float getBrakePositionPct() const { return currentBrakePosition_; }
-    /** @brief Brake full travel time in use, ms (NVS "brake"/travel_ms, default BRAKE_FULL_TRAVEL_TIME) */
-    uint16_t getBrakeTravelMs() const { return brakeTravelMs_; }
-    /** @brief Brake hold drive in use, PWM 0–100 on the 0–255 scale, 0 = no push (NVS "brake"/hold_pwm) */
-    uint8_t getBrakeHoldPwm() const { return brakeHoldPwm_; }
+    /** @brief The service brake (aztec: Bosch iBooster on CAN) — telemetry and the brake card */
+    const IboosterBrake& getServiceBrake() const { return brakeUnit_; }
+    /** @brief Commanded service-brake target, 0–100 % (applyBrake() value) */
+    float getBrakeTargetPct() const { return currentBrakeTarget_; }
 
     /**
-     * @brief Set the brake full travel time / hold drive. Validated (BrakeLaw.h), persisted to
-     * NVS "brake" FIRST, then applied; false (value in use unchanged) on an invalid value or a
-     * failed NVS write. A new travel time changes the estimate's rate from the next
-     * updateBrakeControl() without rescaling the estimate; a new hold applies at the next hold cycle.
+     * @brief Flash-writing maintenance must not start now (change replace-aztec-brake-with-ibooster
+     * D9): a service-brake request is active, or the wheel speed is valid and above
+     * OTA_MAX_SPEED_KMH. An invalid speed counts as standing. Web OTA / LittleFS upload,
+     * ArduinoOTA and the journal clear are refused while true.
      */
-    bool setBrakeTravelMs(uint16_t ms);
-    bool setBrakeHoldPwm(uint8_t pwm);
+    bool isOtaRefused() const;
 
     /** @brief Pre-crank dwell in use, ms (NVS "crank"/dwell_ms, default ACC_PRECRANK_DWELL_MS) */
     uint16_t getCrankDwellMs() const { return crankDwellMs_; }
@@ -587,13 +573,16 @@ private:
     SteeringController& steering_;
     ThrottleController& throttle_;
     TransmissionController& transmission_;
-    BTS7960Controller& brake_;
+    // Aztec service brake (Bosch iBooster on CAN). Every control call goes through the IServiceBrake
+    // interface; the concrete type is used only for its settings card and telemetry.
+    IServiceBrake& serviceBrake_;
+    IboosterBrake& brakeUnit_;
     ParkBrakeController parkBrake_;   // aztec parking brake on X6 (owns its BTS7960 reference)
 
     // Input and output references
     MavlinkInterface& mavlink_;
     RelayController& relayController_;
-    BoardInputs& boardInputs_;     // opto inputs (gear code lines + brake endstop)
+    BoardInputs& boardInputs_;     // opto inputs (gear code lines)
     SpeedSensor& speedSensor_;     // hall speed sensor (updated from main.cpp)
     EngineHourMeter engineHours_;  // OWNED by value: a counter, not a shared device
     CANController canController_;  // CAN bus controller (owned, not reference)
@@ -621,15 +610,8 @@ private:
     bool failsafeApplied_;
     bool webControl_;   // latched web-control override (MAVLink ignored while true)
 
-    // Brake actuator tracking
+    // Service brake command (applyBrake() value; the iBooster gets it through IServiceBrake)
     float currentBrakeTarget_;          // Current brake percentage target (0-100)
-    float currentBrakePosition_;        // Estimated brake position (0-100)
-    uint32_t brakeMovementStartTime_;   // Time when brake started moving
-    uint32_t lastBrakeUpdateTime_;      // Last position update timestamp
-    uint32_t brakeSensorTriggerTime_;   // Time when brake sensor detected release (0 = not triggered)
-    bool brakeIsMoving_;
-    uint16_t brakeTravelMs_;            // full travel time in use, ms (NVS "brake"/travel_ms)
-    uint8_t brakeHoldPwm_;              // hold drive in use, 0–100 PWM, 0 = coast (NVS "brake"/hold_pwm)
 
     // Pre-crank dwell and the ignition-OFF engine RPM clear (change add-precrank-dwell-setting)
     uint16_t crankDwellMs_;             // pre-crank dwell in use, ms (NVS "crank"/dwell_ms)
@@ -732,7 +714,7 @@ private:
     // Stepped every loop in update(), whatever the park-brake state.
     ParkBrakeSvcRelease pbSvc_;
 
-    /** @brief One step of the service-brake release law (update(), after updateBrakeControl()) */
+    /** @brief One step of the service-brake release law (update(), after serviceBrake_.update()) */
     void updateParkBrakeServiceRelease();
 
     // Portal waiting for the final result of a "Set sensor zero" (steer_lws_zero): the
@@ -790,10 +772,6 @@ private:
      */
     void applyBrake(float brakePct);
 
-    /**
-     * @brief Update brake actuator control and tracking
-     */
-    void updateBrakeControl();
 
     /**
      * @brief PID-controlled RPM hold during gear changes
@@ -1039,12 +1017,12 @@ private:
     void processSetSteerParkMaxCommand(float count, WebPortal& webPortal);
 
     /**
-     * @brief Brake tuning (`set_brake_travel_ms` ms, `set_brake_hold_pwm` 0–100). Rounded to a
-     * whole number, validated, persisted to NVS "brake" first, then applied. Accepted from any
-     * input source (settings, not the brake command).
+     * @brief Service-brake card (`set_brake_max_mm` mm 2.0–16.0, `set_brake_apply_rate` /
+     * `set_brake_release_rate` ml/s 1–40). Validated, persisted to NVS "brake" first, then applied;
+     * refused while a brake request is active. Accepted from any input source (settings, not the
+     * brake command). Change replace-aztec-brake-with-ibooster D6.
      */
-    void processSetBrakeTravelMsCommand(float value, WebPortal& webPortal);
-    void processSetBrakeHoldPwmCommand(float value, WebPortal& webPortal);
+    void processSetBrakeSettingCommand(const String& cmd, float value, WebPortal& webPortal);
 
     /**
      * @brief Pre-crank dwell (`set_crank_dwell_ms` ms). Rounded to a whole ms, validated

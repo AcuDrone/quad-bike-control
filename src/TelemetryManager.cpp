@@ -126,12 +126,30 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     // Transmission servo position (0.0–100.0 %)
     telemetry.hall_position = vehicleController_.getTransmission().getCurrentServoPct();
 
-    // Brake: the open-loop position estimate the firmware acts on (not the target), the tuning
-    // values in use and the released endstop (In5; false on an invalid expander snapshot).
-    telemetry.brake_pct = vehicleController_.getBrakePositionPct();
-    telemetry.brake_travel_ms = vehicleController_.getBrakeTravelMs();
-    telemetry.brake_hold_pwm = vehicleController_.getBrakeHoldPwm();
-    telemetry.brake_released = vehicleController_.isBrakeReleased();
+    // Service brake (Bosch iBooster on CAN, change replace-aztec-brake-with-ibooster D10): the
+    // measured rod (not the target), the command, the unit's state and fields, the settings in use
+    // and the session counters. Unknown unit fields are -1 / NAN (JSON null).
+    {
+        const IboosterBrake& sb = vehicleController_.getServiceBrake();
+        const IboosterBrake::IbSnapshot& ib = sb.snapshot();
+        const bool fresh = ib.have39D && ib.age39DMs <= IB_STATUS_STALE_MS;
+        const bool fresh38F = ib.have38F && ib.age38FMs <= IB_STATUS_STALE_MS;
+        telemetry.brake_pct = sb.appliedPct();
+        telemetry.brake_target_pct = vehicleController_.getBrakeTargetPct();
+        telemetry.brake_rod_mm = sb.rodMm();
+        telemetry.brake_state = sb.stateToken();
+        telemetry.ib_st = fresh ? (int16_t)ib.st : (int16_t)-1;
+        telemetry.ib_is = fresh ? (int16_t)ib.is : (int16_t)-1;
+        telemetry.ib_drv = fresh ? (int16_t)ib.drv : (int16_t)-1;
+        telemetry.ib_partner = fresh38F && ib.partner == 1;
+        telemetry.ib_runout = fresh38F ? ib.runoutBar : 0;
+        telemetry.brake_max_mm = sb.getMaxMm10() / 10.0f;
+        telemetry.brake_apply_mlps = sb.getApplyRate();
+        telemetry.brake_release_mlps = sb.getReleaseRate();
+        telemetry.ib_tx_miss = ib.txMiss;
+        telemetry.ib_gap_max_ms = ib.gapMaxMs;
+        telemetry.ib_faults = ib.faults;
+    }
     telemetry.mav_active = mavlink_.isSignalValid();
     telemetry.web_control = vehicleController_.isWebControl();
 

@@ -181,7 +181,7 @@ the autopilot. Scheduling is internal to `MavlinkInterface::report()`, called ev
 | `NAMED_VALUE_FLOAT` | 251 | 5 Hz (same tick) ×3 + 1 Hz (`MAVLINK_STEER_SLOW_TX_MS` = 1000 ms) ×3 | The six steering values: `STEER_POS`, `STEER_A`, `VESC_V`, `VESC_TEMP`, `VESC_OK`, `STEER_SCA` | none — values go NaN instead (`VESC_OK` and `STEER_SCA` never do) | 1.1.0 |
 | `NAMED_VALUE_INT` | 252 | 1 Hz (`MAVLINK_STEER_SLOW_TX_MS`) + once immediately on every change | `STEER_MODE`: steering control mode, `0` = position, `1` = rate (no sensor), `2` = blocked | none — always sent, never any other value | 1.5.0 (`QB_CAPS`, `IGN_STATE`: 1.5.30) |
 | `VISION_POSITION_DELTA` | 11011 | ≤ 5 Hz (same tick) | Wheel odometry as an EKF3-fusable body-frame delta | **heavily gated** — silence over zeros | 1.1.0 |
-| `STATUSTEXT` | 253 | on change, ≥ 250 ms apart | Gear / ignition / fail-safe transitions; steering mode changes; speed-governor no-speed warning / recovery | only on an actual change (governor warning: repeated every 10 s while it holds) | 1.1.0 (steering mode texts: 1.5.0; governor texts: 1.5.35) |
+| `STATUSTEXT` | 253 | on change, ≥ 250 ms apart | Gear / ignition / fail-safe transitions; steering mode changes; speed-governor no-speed warning / recovery; aztec service brake (iBooster) lost / fault / OK | only on an actual change (governor warning: repeated every 10 s while it holds; brake texts at most one per 5 s) | 1.1.0 (steering mode texts: 1.5.0; governor texts: 1.5.35; brake texts: 1.6.0, aztec only) |
 | `COMMAND_ACK` | 77 | reactive | Answer to a `COMMAND_LONG` addressed exactly to 1/25 | broadcasts get **no** ACK | 1.1.0 |
 | `REQUEST_DATA_STREAM` | 66 | ≤ 1 per 3 s | Ask for `SERVO_OUTPUT_RAW` | while the command rate is below 10 Hz | 1.1.0 |
 | `COMMAND_LONG` (`SET_MESSAGE_INTERVAL`) | 76 | ≤ 1 per 3 s | Same request, modern form | same gate, sent together | 1.1.0 |
@@ -755,6 +755,25 @@ the **same** 250 ms limiter, a held-back one stays pending and is sent on the ne
 
 Nothing is sent when the condition ends for another reason (stick released, switch off, limit gone),
 and nothing while the stick stays in the dead-band. No other message, parameter or field changes.
+
+**Service brake (aztec buggy only, since firmware 1.6.0)** — the Bosch iBooster Gen2 on the
+buggy's CAN bus (change replace-aztec-brake-with-ibooster). Three texts through the **same** 250 ms
+limiter plus a brake hold-off `IB_STATUSTEXT_MIN_MS` = 5 s:
+
+| When | `text` | `severity` |
+|------|--------|------------|
+| The brake state enters `LOST`: no valid `0x39D` from the unit for more than 250 ms with the ignition on | `Brake: LOST (no iBooster)` | `MAV_SEVERITY_WARNING` (4) |
+| The brake state enters `FAULT`: the unit reports status 2 (failure) or driver_brake_apply 3 (fault) | `Brake: FAULT (iBooster)` | `MAV_SEVERITY_WARNING` (4) |
+| The unit is `READY` again after an **announced** `LOST` / `FAULT` — once | `Brake: OK` | `MAV_SEVERITY_INFO` (6) |
+
+- `ASLEEP` (ignition off — no service brake then), `STARTING` and normal braking are **silent**.
+- **Anti-flapping:** at most one brake text per 5 s. A change inside the hold-off replaces the pending
+  text (latest state wins); a change back to what was last announced cancels it, so a recovery that
+  comes before an unsent `LOST` / `FAULT` sends nothing. The last text sent always describes the
+  current state. A text held back by the shared 250 ms limiter stays pending.
+- The full detail (unit fields, raw frames, battery voltage) is in the board's event journal
+  (source `BRAKE`) and the web page; the GCS text is the alarm only. No other message, parameter or
+  field changes; `master` (quad bike) never sends these texts.
 
 **Trigger:** the first `report()` after boot, or any change of gear string, ignition string or the
 fail-safe flag. **Rate limit:** `MAVLINK_STATUSTEXT_MIN_MS` = 250 ms; the "last sent" strings are

@@ -57,10 +57,22 @@ public:
         int8_t gear_code_l;
         uint8_t gear_codes_custom; // Bitmask of table entries differing from the default: bit0 R, bit1 N, bit2 H, bit3 L
         float hall_position;      // Transmission servo position (0.0–100.0 %)
-        float brake_pct;          // Brake position ESTIMATE (open loop, 0-100 %)
-        uint16_t brake_travel_ms; // Brake full travel time in use (ms)
-        uint8_t brake_hold_pwm;   // Brake hold drive in use (0-100 PWM, 0 = no push)
-        bool brake_released;      // Released endstop (In5) asserted in a valid expander snapshot
+        // Service brake (aztec iBooster on CAN, change replace-aztec-brake-with-ibooster D10)
+        float brake_pct;          // MEASURED rod as % of the max stroke, 0-100 (0 when not available)
+        float brake_target_pct;   // commanded, 0-100 %
+        float brake_rod_mm;       // rod position, mm; NAN = unknown (JSON null)
+        const char* brake_state;  // static token: asleep / starting / ready / braking / releasing / lost / fault
+        int16_t ib_st;            // 0x39D status, -1 = unknown (JSON null)
+        int16_t ib_is;            // 0x39D internal state, -1 = unknown
+        int16_t ib_drv;           // 0x39D driver_brake_apply, -1 = unknown
+        bool ib_partner;          // 0x38F byte 4 = 0x40: the unit sees our frames
+        uint8_t ib_runout;        // 0x38F byte 3, bar
+        float brake_max_mm;       // max stroke in use, mm
+        uint8_t brake_apply_mlps; // apply rate in use, ml/s
+        uint8_t brake_release_mlps; // release rate in use, ml/s
+        uint32_t ib_tx_miss;      // brake frames missed (session)
+        uint32_t ib_gap_max_ms;   // longest gap between two sent brake slots (session)
+        uint32_t ib_faults;       // FAULT entries (session)
         uint16_t throttle_us;         // Throttle servo pulse width (µs)
         uint16_t throttle_idle_us;    // Calibrated idle endpoint (µs)
         uint16_t throttle_full_us;    // Calibrated full-throttle endpoint (µs)
@@ -287,6 +299,14 @@ public:
     void update();
 
     /**
+     * Refuse flash-writing maintenance (change replace-aztec-brake-with-ibooster D9): while set,
+     * a web firmware / LittleFS upload is answered "OTA refused: brake applied or vehicle moving"
+     * before Update.begin(), ArduinoOTA.handle() is not called (one log line per episode) and the
+     * journal clear is refused. Set every loop by main.cpp from VehicleController::isOtaRefused().
+     */
+    void setOtaBlocked(bool blocked) { otaBlocked_ = blocked; }
+
+    /**
      * Get the most recent web command (if any)
      * @return WebCommand structure (hasCommand = false if no command)
      */
@@ -342,6 +362,10 @@ private:
 
     bool otaInProgress;              // True during OTA update
     int otaUpdateType;               // Current OTA update type (U_FLASH or U_SPIFFS)
+    volatile bool otaBlocked_;       // loop-written: brake request active or moving (D9)
+    bool otaBlockLogged_;            // loop-only: ArduinoOTA hold-off logged for this episode
+    bool uploadRefused_;             // web upload task: the current /update upload was refused / aborted
+    const char* uploadRefuseMsg_;    // the reply for it (static string)
     uint32_t lastActivityTime;       // Last client activity timestamp
 
     /**

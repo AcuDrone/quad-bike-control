@@ -1,4 +1,5 @@
 #include "EngineHourMeter.h"
+#include "FlashHold.h"
 #include "Debug.h"
 #include <Preferences.h>
 
@@ -49,6 +50,14 @@ void EngineHourMeter::update(bool engineTurning, uint32_t nowMs) {
     // DISCARDED rather than banked: when CAN comes back, the outage is not credited as hours.
     lastUpdateMs_ = nowMs;
 
+    // Periodic save, every ENGINE_HOURS_NVS_WRITE_INTERVAL_S of counted time. Checked on EVERY update
+    // (engine turning or not), so a save postponed while a service-brake request was active
+    // (FlashHold) runs on the first update after the request ends (change
+    // replace-aztec-brake-with-ibooster D9). Unsigned and monotonic — no wrap handling.
+    if (engineSeconds_ - lastWriteSeconds_ >= ENGINE_HOURS_NVS_WRITE_INTERVAL_S && !FlashHold::active()) {
+        persist();
+    }
+
     if (!engineTurning) {
         return;   // engine stopped, or engine state unknown — neither invents running time
     }
@@ -70,10 +79,7 @@ void EngineHourMeter::update(bool engineTurning, uint32_t nowMs) {
         remainderMs_   %= 1000;
         dirty_ = true;
 
-        // Unsigned and monotonic — engineSeconds_ never decreases, so no wrap handling.
-        if (engineSeconds_ - lastWriteSeconds_ >= ENGINE_HOURS_NVS_WRITE_INTERVAL_S) {
-            persist();
-        }
+        // The periodic save is checked at the top of every update (see above).
     }
 }
 

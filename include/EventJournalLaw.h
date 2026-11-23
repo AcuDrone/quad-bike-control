@@ -26,7 +26,7 @@
 #endif
 
 /** @brief Event source (the <SRC> column) */
-enum class JSrc : uint8_t { SYS, SRC, STEER, VESC, CAN, I2C, RELAY, SNAP, RTC, COUNT };
+enum class JSrc : uint8_t { SYS, SRC, STEER, VESC, CAN, I2C, RELAY, SNAP, RTC, BRAKE, COUNT };
 
 /** @brief Level (the <LVL> column) */
 enum class JLvl : uint8_t { I, W, E };
@@ -42,6 +42,7 @@ inline const char* jSrcToken(JSrc s) {
         case JSrc::RELAY: return "RELAY";
         case JSrc::SNAP:  return "SNAP";
         case JSrc::RTC:   return "RTC";
+        case JSrc::BRAKE: return "BRAKE";
         default:          return "?";
     }
 }
@@ -101,6 +102,10 @@ inline size_t jFormatLine(char* out, uint32_t boot, uint32_t uptimeMs, JSrc src,
 inline bool jDedupeExempt(JSrc src, const char* event) {
     if (src == JSrc::SNAP || src == JSrc::RTC) return true;
     if (event == nullptr) return true;
+    // Brake availability transitions come in quick pairs (ASLEEP -> STARTING -> READY within
+    // ~0.3 s): the dedupe would eat the second. IboosterBrake rate-limits them itself
+    // (change replace-aztec-brake-with-ibooster D10).
+    if (src == JSrc::BRAKE && strcmp(event, "state") == 0) return true;
     if (src == JSrc::SYS) {
         if (strcmp(event, "boot") == 0 || strcmp(event, "reboot") == 0 ||
             strcmp(event, "suppressed") == 0 || strncmp(event, "journal_", 8) == 0) {

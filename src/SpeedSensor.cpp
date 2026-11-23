@@ -1,4 +1,5 @@
 #include "SpeedSensor.h"
+#include "FlashHold.h"
 #include "Debug.h"
 #include <Preferences.h>
 
@@ -136,6 +137,14 @@ void SpeedSensor::update() {
     }
     lastSampleMs_ = now;
 
+    // Periodic odometer save, every ODO_NVS_WRITE_INTERVAL_MM. Checked on EVERY sample (not only
+    // when the wheel moved), so a save postponed while a service-brake request was active
+    // (FlashHold) runs on the first sample after the request ends, moving or not (change
+    // replace-aztec-brake-with-ibooster D9). Unsigned and monotonic — odoMm_ never decreases.
+    if (odoMm_ - lastOdoWriteMm_ >= ODO_NVS_WRITE_INTERVAL_MM && !FlashHold::active()) {
+        persistDistance();
+    }
+
     int rawCount = 0;
     if (pcnt_unit_get_count(unit_, &rawCount) != ESP_OK) {
         return;   // transient read failure: keep the previous reading
@@ -163,10 +172,7 @@ void SpeedSensor::update() {
         odoMm_  += stepMm;
         tripMm_ += stepMm;
         distanceDirty_ = true;
-        // Unsigned and monotonic — odoMm_ never decreases, so no wrap handling is needed.
-        if (odoMm_ - lastOdoWriteMm_ >= ODO_NVS_WRITE_INTERVAL_MM) {
-            persistDistance();
-        }
+        // The periodic save is checked at the top of every sample (see above).
 
         // Measure over the interval since the last window that SAW edges, not since the
         // last sample: below ~5 km/h one pulse period spans several sample windows, and

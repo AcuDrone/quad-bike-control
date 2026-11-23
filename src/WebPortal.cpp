@@ -15,6 +15,10 @@ WebPortal::WebPortal()
       lastTelemetryTime(0),
       otaInProgress(false),
       otaUpdateType(U_FLASH),
+      otaBlocked_(false),
+      otaBlockLogged_(false),
+      uploadRefused_(false),
+      uploadRefuseMsg_(""),
       lastActivityTime(0) {
     currentCommand.hasCommand = false;
 }
@@ -75,8 +79,17 @@ void WebPortal::update() {
     // Process DNS requests for captive portal
     dnsServer.processNextRequest();
 
-    // Handle OTA updates
-    ArduinoOTA.handle();
+    // Handle OTA updates — not while a service-brake request is active or the buggy moves: the
+    // invitation then times out on the sender's side (change replace-aztec-brake-with-ibooster D9)
+    if (otaBlocked_ && !otaInProgress) {
+        if (!otaBlockLogged_) {
+            otaBlockLogged_ = true;
+            Debug::printlnFeature(DebugFeature::WEB, "[OTA] ArduinoOTA held off: brake applied or vehicle moving");
+        }
+    } else {
+        otaBlockLogged_ = false;
+        ArduinoOTA.handle();
+    }
 
     // Check for command timeout (web control inactive)
     if (currentCommand.hasCommand) {
@@ -293,7 +306,12 @@ void WebPortal::setupWebServer() {
         }
     );
     // POST /api/events/clear — executed by the main loop (both files + RAM, SYS I journal_cleared)
-    server.on("/api/events/clear", HTTP_POST, [](AsyncWebServerRequest* request) {
+    server.on("/api/events/clear", HTTP_POST, [this](AsyncWebServerRequest* request) {
+        if (otaBlocked_) {   // a clear erases flash: not while braking or moving (D9)
+            request->send(409, "application/json",
+                          "{\"ok\":false,\"message\":\"Journal clear refused: brake applied or vehicle moving\"}");
+            return;
+        }
         EventJournal::requestClear();
         request->send(200, "application/json", "{\"ok\":true}");
     });
@@ -323,6 +341,12 @@ void WebPortal::setupWebServer() {
     server.on("/update", HTTP_POST,
         // Handler when upload finishes
         [this](AsyncWebServerRequest* request) {
+            if (uploadRefused_) {
+                // Refused before Update.begin() (nothing written), or aborted mid-upload (D9)
+                uploadRefused_ = false;
+                request->send(409, "text/plain", uploadRefuseMsg_);
+                return;
+            }
             bool success = !Update.hasError();
 
             if (success) {
@@ -347,7 +371,36 @@ void WebPortal::setupWebServer() {
         },
         // Upload handler for data chunks
         [this](AsyncWebServerRequest* request, const String& filename, size_t index, uint8_t* data, size_t len, bool final) {
-            // Start of upload
+            // Start of upload. Refused while a service-brake request is active or the buggy moves
+            // (a flash erase stalls the CAN task that keeps the brake applied): no Update.begin(),
+            // no filesystem unmount, every chunk ignored, the final handler answers the refusal.
+            if (index == 0) {
+                uploadRefused_ = otaBlocked_;
+                if (uploadRefused_) {
+                    uploadRefuseMsg_ = "OTA refused: brake applied or vehicle moving";
+                    Debug::printlnFeature(DebugFeature::WEB, "[WEB OTA] Refused: brake applied or vehicle moving");
+                    return;
+                }
+            }
+            if (uploadRefused_) {
+                return;
+            }
+            // A brake request (or movement) that starts while the upload runs: abort before the next
+            // write so no further flash erase happens during it. A firmware abort keeps the running
+            // firmware; a LittleFS abort leaves the filesystem partly erased (web page and journal
+            // file gone until a LittleFS upload by USB or ArduinoOTA) — accepted over erasing
+            // flash while the brake depends on the CAN task (implementation note 23).
+            if (index > 0 && otaBlocked_ && otaInProgress) {
+                Update.abort();
+                otaInProgress = false;
+                uploadRefused_ = true;
+                uploadRefuseMsg_ = "OTA aborted: brake applied or vehicle moving";
+                Debug::printlnFeature(DebugFeature::WEB, "[WEB OTA] Aborted: brake applied or vehicle moving");
+                if (otaUpdateType == U_SPIFFS) {
+                    FILESYSTEM.begin(false);   // may fail: the partition was partly erased
+                }
+                return;
+            }
             if (index == 0) {
                 // Determine update type from query parameter or filename
                 otaUpdateType = U_FLASH;  // Default: firmware update
@@ -704,6 +757,15 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // can_busy_max_us, 6 scalar slots (keys by pointer, can_int a static token by pointer, nothing
     // copied; ≈ 96 B of memory, ≈ 110 B of JSON) — aztec worst case ≈ 9.07 + 0.10 ≈ 9.17 KB,
     // ≈ 1.07 KB under 10240 (size unchanged).
+    // iBooster service brake since 1.6.0 (replace-aztec-brake-with-ibooster D10): brake_travel_ms /
+    // brake_hold_pwm / brake_released removed (−3 slots), brake_pct kept (now measured) and 14 keys
+    // added: brake_target_pct / brake_rod_mm / brake_state / ib_st / ib_is / ib_drv / ib_partner /
+    // ib_runout / brake_max_mm / brake_apply_mlps / brake_release_mlps / ib_tx_miss /
+    // ib_gap_max_ms / ib_faults (keys by pointer, brake_state a static token by pointer; 4 copied
+    // number strings of ≤ 6 B each for brake_pct / _target_pct / _rod_mm / _max_mm). Net +11 slots
+    // × 16 B + ≈ 30 B of copied strings ≈ 0.21 KB of memory, ≈ +250 B of JSON — aztec worst case
+    // ≈ 9.17 + 0.21 ≈ 9.38 KB, ≈ 0.86 KB under 10240 (size unchanged; an estimate from the slot
+    // count, not a measurement — the "[WEB] telemetry JSON peak" console line measures it).
     // Static (single caller: the main-loop broadcast) so the larger document is off the stack.
     static StaticJsonDocument<10240> doc;
     doc.clear();
@@ -722,10 +784,24 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
         doc["gear_codes_custom"] = telemetry.gear_codes_custom;  // bit0 R, bit1 N, bit2 H, bit3 L
     }
     doc["hall_position"] = telemetry.hall_position;
-    doc["brake_pct"] = telemetry.brake_pct;             // position estimate, 0-100 %
-    doc["brake_travel_ms"] = telemetry.brake_travel_ms; // ms
-    doc["brake_hold_pwm"] = telemetry.brake_hold_pwm;   // 0-100, 0 = no hold push
-    doc["brake_released"] = telemetry.brake_released;   // In5 endstop
+    // Service brake (iBooster): measured %, command, rod, state, unit fields, settings, session
+    // counters. Unknown values are JSON null (change replace-aztec-brake-with-ibooster D10).
+    doc["brake_pct"] = serialized(String(telemetry.brake_pct, 1));   // measured, 0-100 %
+    doc["brake_target_pct"] = serialized(String(telemetry.brake_target_pct, 1));
+    if (!isnan(telemetry.brake_rod_mm)) doc["brake_rod_mm"] = serialized(String(telemetry.brake_rod_mm, 2));
+    else                                doc["brake_rod_mm"] = (const char*)nullptr;
+    doc["brake_state"] = telemetry.brake_state;          // static token, by pointer
+    if (telemetry.ib_st >= 0) doc["ib_st"] = telemetry.ib_st;   else doc["ib_st"] = (const char*)nullptr;
+    if (telemetry.ib_is >= 0) doc["ib_is"] = telemetry.ib_is;   else doc["ib_is"] = (const char*)nullptr;
+    if (telemetry.ib_drv >= 0) doc["ib_drv"] = telemetry.ib_drv; else doc["ib_drv"] = (const char*)nullptr;
+    doc["ib_partner"] = telemetry.ib_partner;
+    doc["ib_runout"] = telemetry.ib_runout;
+    doc["brake_max_mm"] = serialized(String(telemetry.brake_max_mm, 1));
+    doc["brake_apply_mlps"] = telemetry.brake_apply_mlps;
+    doc["brake_release_mlps"] = telemetry.brake_release_mlps;
+    doc["ib_tx_miss"] = telemetry.ib_tx_miss;
+    doc["ib_gap_max_ms"] = telemetry.ib_gap_max_ms;
+    doc["ib_faults"] = telemetry.ib_faults;
     doc["throttle_us"] = telemetry.throttle_us;
     doc["throttle_idle_us"] = telemetry.throttle_idle_us;
     doc["throttle_full_us"] = telemetry.throttle_full_us;

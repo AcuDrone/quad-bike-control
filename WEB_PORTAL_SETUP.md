@@ -84,11 +84,17 @@ it. Cards are shown in one column.
 - **Увага / Attention** box, shown only while something is wrong: steering sensor unhealthy (jog
   without stall protection), steering VESC down or faulted, a steering limit beyond ±550°, MAVLink
   inactive, board I/O fault, low steering VESC input voltage, low 12 V battery (X10 sense; shown
-  whether or not the ECU link is up, only while a battery is seen), no ECU link.
+  whether or not the ECU link is up, only while a battery is seen), no ECU link; on aztec since
+  1.6.0 the service brake: iBooster **lost** or in **fault** (red, with the action "ignition off and
+  on; if that does not help, remove the iBooster's power") and **still starting after 20 s**
+  (yellow). "Asleep" (ignition off) is not an item.
   The voltage thresholds are firmware constants (`STEER_VIN_LOW_V`, `BAT12_LOW_V` /
   `BAT12_LOW_CLEAR_V` in `include/Constants.h`); the page only shows the flags the firmware sends.
 - **Telemetry**: gear and its sensor code, servo position, brake, throttle (µs), steering, speed,
-  MAVLink link.
+  MAVLink link. The **Гальмо / Brake** tile (aztec 1.6.0, iBooster) shows the measured brake and
+  the rod, e.g. "50% · 8.0 mm", while the unit is ready / braking / releasing; otherwise the state
+  in words: "спить (запалювання вимкнено)" / "asleep (ignition off)" (muted), "запускається" /
+  "starting" (yellow), "ВТРАЧЕНО" / "LOST" and "НЕСПРАВНІСТЬ" / "FAULT" (red).
 - **Кермо: стан / Steering: state**: tiles for angle, rate, left/right limits, sensor state (with
   the "mirrored" marker for a mirrored sensor mount), calibration, VESC driver, sensor zero, motor current, FET temperature and VESC input voltage, plus
   one line of raw LWS status bits and error counters.
@@ -118,6 +124,19 @@ it. Cards are shown in one column.
   re-mounting the sensor: jog straight ahead, Set sensor zero, then capture both limits.
 - **Throttle calibration**: the idle and full sliders always show the saved endpoints and are
   locked; "Start Calibration" unlocks them (engine off), then Save or Cancel.
+- **🛑 Гальмо (iBooster) / Brake (iBooster)** (aztec, since 1.6.0, in place of the former brake
+  tuning card): three sliders, value on the right, saved on release (no Save button) —
+  **maximum stroke** (2.0–16.0 mm, step 0.5 — the firmware refuses other steps, default 16.0 mm = the full external-request stroke;
+  100 % brake = this stroke; `set_brake_max_mm`), **apply rate** and **release rate** (1–40 ml/s,
+  step 1, default 8 ≈ 15–16 mm/s; `set_brake_apply_rate` / `set_brake_release_rate`). Saved to NVS
+  `brake` (`max_mm10`, `apply_mlps`, `release_mlps`) first, then used from the next 10 ms slot;
+  **refused while the brake is applied** ("Brake settings: not while braking"). Status lines: the
+  unit state in words, `st / is / drv`, the rod in mm, whether the unit sees our frames, pRunout in
+  bar. Before the first drive with fluid lower the maximum stroke (e.g. 4 mm) and the rates (e.g.
+  2 ml/s) and raise them step by step. There is **no service brake with the ignition off**
+  (the unit sleeps) **or on fail-safe** (the ignition opens). The old `set_brake_travel_ms` /
+  `set_brake_hold_pwm` commands are gone (handled like any unknown command); the old NVS keys `brake/travel_ms`
+  and `brake/hold_pwm` are removed at boot.
 - **Engine start** ("Запуск двигуна", since 1.5.33): the pre-crank delay slider ("Pre-crank
   delay", 1–8 s, step 0.5, value on the right, default 3 s; saved on release, no Save button) —
   how long the ignition is on before the starter on an RC or GCS auto-start; the START button in
@@ -151,7 +170,9 @@ it. Cards are shown in one column.
 
 **Тести / Tests** (bench checks):
 - **Manual control**: Take / Release control, gear buttons, steering, throttle and brake sliders.
-  Disabled while MAVLink control is active.
+  Disabled while MAVLink control is active. Next to the brake value the service-brake state is
+  shown (aztec, iBooster); a brake sent while the unit is unavailable is kept as the target (the
+  brake acts as soon as the unit is ready) and the reply says "(brake unavailable)".
 - **Ignition & lighting**: ignition OFF / ACC / START, front light, wheel lock (if fitted), the
   **12 V battery** tile and its calibration, and their telemetry. (aztec has no boost board: the
   24 V rail button and reading are gone; `set_boost` is still accepted but only replies "Boost rail
@@ -317,10 +338,15 @@ refused above 3 km/h. Released by the Release button / GCS, by the throttle driv
 > 10 % in L/H/R with the ignition on), and, **since 1.5.37, by a new service-brake press**:
 
 - **Service-brake release.** With the parking brake applied (or "Unknown"), pressing the service
-  brake — RC, GCS joystick or the web Brake slider — releases it. The run starts only when the
-  service-brake estimate has reached the pressed position (hand-over wait ≈ (brake % − 1) / 100 ×
-  brake `travel_ms`, e.g. ≈ 1.2 s for 80 % at 1500 ms), so the service brake takes the load first;
-  a press let go before that does nothing. It needs a **new** press: a brake already held when the
+  brake — RC, GCS joystick or the web Brake slider — releases it. While the iBooster is available
+  the run starts only when it reports **"reached"** (the rod within 0.2 mm of the pressed target,
+  stalled by hydraulic pressure, or at its stroke stop; since 1.6.0 — before it was a time
+  estimate), so the service brake takes the load first; a press let go before that does nothing.
+  **While the iBooster is not available** (ignition off / asleep, starting, lost, fault) **a press
+  releases at once and the service brake does not hold: nothing holds the buggy** (owner decision
+  2026-11-23). If the iBooster is ready but its rod does not move for 3 s under the press ("no
+  move", journal `BRAKE W no_move`), the hand-over is cancelled and the parking brake stays
+  applied — use Release. It needs a **new** press: a brake already held when the
   parking brake was applied does not release it — let go and press again. Any gear, any ignition
   state. The release itself is the usual run (throttle held at idle in L/H/R up to the release
   point; the run completes if the brake is let go). No new control or telemetry key; the card's ⓘ
@@ -331,8 +357,8 @@ refused above 3 km/h. Released by the Release button / GCS, by the throttle driv
 - **Trailer ramp procedure.** N, engine off (or idling in N), parking brake applied. Press and
   **hold** the service brake firmly; wait until the card shows "Releasing…" and then "Released";
   check the buggy stays put on the service brake alone; then ease the service brake off and roll
-  down under control, no throttle. If the parking brake lets go before the pads bite, lengthen the
-  service-brake "Full travel time" (NVS `brake`/`travel_ms`), which also lengthens the hand-over wait.
+  down under control, no throttle. The ignition must be on (ACC is enough): with it off the
+  iBooster sleeps and a press releases the parking brake with no service brake at all.
 - The firmware never moves or holds the service brake for this; after the release only the
   service brake (and so the link) holds the buggy.
 
@@ -470,9 +496,19 @@ HTTP API (text/plain, streamed; the main loop never waits for a reader):
   (400 `{"success":false,"message":…}` for invalid JSON or a missing boolean `fs`). Applied by the
   main loop on its next iteration (persisted to NVS, `journal_fs on=…` line, flush).
 - `POST /api/events/clear` — deletes both files and the RAM buffer (executed by the main loop) and
-  writes `SYS I journal_cleared`; answers `{"ok":true}`. The boot counter is kept.
+  writes `SYS I journal_cleared`; answers `{"ok":true}`. The boot counter is kept. Refused (409,
+  `{"ok":false,…}`) while a service-brake request is active or the buggy moves (aztec 1.6.0).
 
 **OTA Firmware Update** (Система → System maintenance):
+> **aztec 1.6.0:** a web firmware or LittleFS upload is refused before anything is written
+> ("OTA refused: brake applied or vehicle moving", HTTP 409) while a service brake is commanded or
+> applied (iBooster BRAKING / RELEASING) or the wheel speed is valid and above 1 km/h; ArduinoOTA is
+> not served then (the upload invitation times out; one console line). An invalid speed counts as
+> standing. A web upload already running when a brake is commanded or the buggy starts moving is
+> **aborted** ("OTA aborted…"): a firmware upload leaves the old firmware running; an aborted
+> **LittleFS** upload leaves the web page missing until a LittleFS upload by USB or ArduinoOTA.
+> A flash erase stalls the CAN task that keeps the brake applied.
+
 1. Build new firmware: `pio run`
 2. Locate firmware binary: `.pio/build/esp32-s3-devkitc-1/firmware.bin`
 3. Click "Click to select firmware (.bin)" on web portal
@@ -539,6 +575,7 @@ All settings are in [include/Constants.h](include/Constants.h):
 - Try OTA update via Arduino IDE OTA (hostname: `quadbike-control`)
 - If update fails, device will automatically rollback to previous firmware
 - A filesystem (LittleFS) update erases the event journal — download it first
+- aztec: "OTA refused: brake applied or vehicle moving" — release the brake and stand still
 
 ### Build errors
 If you see library-related errors:

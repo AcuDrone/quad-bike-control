@@ -5,6 +5,7 @@
 #include "Constants.h"
 #include "TransmissionController.h"
 #include "VehicleCommandLaw.h"
+#include "IboosterLaw.h"
 
 /**
  * @brief MAVLink 2 vehicle interface to a Pixhawk autopilot (TELEM2).
@@ -175,6 +176,12 @@ public:
         // govActive: the governor is ACTIVE this iteration (the recovery INFO needs it).
         bool        govNoSpeed;
         bool        govActive;
+
+        // --- Service brake (aztec iBooster, change replace-aztec-brake-with-ibooster D10) ----
+        // BrakeState / IbState code (0 ASLEEP, 1 STARTING, 2 READY, 3 BRAKING, 4 RELEASING,
+        // 5 LOST, 6 FAULT). STATUSTEXT only: "Brake: LOST (no iBooster)" / "Brake: FAULT
+        // (iBooster)" WARNING, "Brake: OK" INFO after an announced one; at most one per 5 s.
+        uint8_t     brakeState;
         // Note: oil temperature is not available from the ECU and is not reported.
         // Ground speed is NOT carried in EFI_STATUS — it comes from the hall speed
         // sensor and is reported separately via VFR_HUD.
@@ -397,6 +404,9 @@ private:
     bool     govWarnPending_;          // WARNING due (rising edge or repeat), held by the limiter
     bool     govInfoPending_;          // recovery INFO due, held by the limiter
     uint32_t govWarnLastTx_;           // millis() of the last WARNING sent (0 = none this episode)
+
+    // Service brake STATUSTEXT decision (IboosterLaw.h ibStatustextStep(), design D10)
+    IbTextState brakeText_;
 
     // GCS vehicle commands (MAV_CMD_USER_2) + QB_CAPS / IGN_STATE broadcasts
     VehicleCommandSink* vcmdSink_;     // nullptr = not registered → USER_2 answered UNSUPPORTED

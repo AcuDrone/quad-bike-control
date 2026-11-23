@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include "RelayBoardLaw.h"   // RELAY_N() for the relay-number sets below
+#include "IboosterProto.h"   // IB_ID_* for the RXB1 acceptance filters
 
 // ============================================================================
 // GPIO PIN ASSIGNMENTS — custom control board "Control_v0" (ESP32-S3-WROOM-1U)
@@ -68,17 +69,13 @@
 #define PIN_THROTTLE_PWM    GPIO_NUM_15  // LEDC Channel 1
 #define LEDC_CH_THROTTLE    1
 
-// Brake Linear Actuator (BTS7960) — X7
-// Note: R_EN and L_EN hardwired to 5V (always enabled)
-#define PIN_BRAKE_RPWM      GPIO_NUM_7   // LEDC Channel 4 (X7 pin 3)
-#define PIN_BRAKE_LPWM      GPIO_NUM_6   // LEDC Channel 5 (X7 pin 2)
-#define LEDC_CH_BRAKE_RPWM  4
-#define LEDC_CH_BRAKE_LPWM  5
+// X7 (GPIO6 / GPIO7, LEDC channels 4 / 5) is free on aztec: the service brake is the Bosch
+// iBooster on the CAN bus (change replace-aztec-brake-with-ibooster). Left unconfigured.
 
 // Parking-brake linear actuator (BTS7960) — X6, AZTEC ONLY (change add-aztec-parking-brake).
 // Self-locking actuator with built-in limit switches, no position feedback: a run is timed
-// (travel + margin at full duty, then both PWM 0, no hold). Same shared motor timer
-// (LEDC_TIMER_1, MOTOR_PWM_FREQ 10 kHz, 8-bit) as the X7 brake. L_IS / R_IS go to the CD4051
+// (travel + margin at full duty, then both PWM 0, no hold). The only BTS7960 on aztec: its begin()
+// configures the shared motor timer (LEDC_TIMER_1, MOTOR_PWM_FREQ 10 kHz, 8-bit). L_IS / R_IS go to the CD4051
 // mux CH3 / CH0 and are not sampled. Which pin tightens the cable is set by NVS "pbrake"/invert.
 // On master X6 is the steering VESC: never cherry-pick this into master.
 #define PIN_PARK_BRAKE_LPWM      GPIO_NUM_4   // LEDC Channel 7 (X6 pin 2)
@@ -87,8 +84,9 @@
 #define LEDC_CH_PARK_BRAKE_LPWM  7
 
 // SPI CAN Controller (MCP2515 + TJA1051T/3, 8 MHz crystal → MCP_8MHZ). One shared
-// 500 kbit/s bus: the engine ECU (OBD-II 0x7DF/0x7E8) AND the Bosch LWS steering
-// angle sensor (0x305, 100 Hz). See "CAN CONTROLLER CONFIGURATION" for the filter plan.
+// 500 kbit/s bus: the engine ECU (OBD-II 0x7DF/0x7E8), the Bosch LWS steering angle sensor
+// (0x305, 100 Hz) AND the Bosch iBooster service brake (0x38B-0x38D ours, 0x38E/0x38F/0x39D its).
+// See "CAN CONTROLLER CONFIGURATION" for the filter plan.
 #define PIN_CAN_MOSI        GPIO_NUM_42  // SPI MOSI
 #define PIN_CAN_MISO        GPIO_NUM_41  // SPI MISO
 #define PIN_CAN_SCK         GPIO_NUM_40  // SPI SCK
@@ -128,8 +126,7 @@
 // I2C BUSES AND PORT EXPANDERS
 // ============================================================================
 //
-// Functions that used to be direct GPIO (gear switches, brake limit sensor,
-// four relays) now live behind PCA9557 port expanders, so reads and writes are
+// Functions that used to be direct GPIO (gear switches, four relays) now live behind PCA9557 port expanders, so reads and writes are
 // fallible. Every expander driver instance is bound to exactly one bus and one
 // address at construction — there is no bus scanning.
 //
@@ -196,8 +193,7 @@
 //
 // Same opto polarity as before: a line reads HIGH ("1") when it is engaged (the
 // opto conducts at rest → pin LOW; engaging the line opens it → pin HIGH).
-// BOARD_INPUT_ACTIVE_LOW below therefore describes the brake input only — do NOT
-// apply it to the gear code bits.
+// X17 (bits 2-5) is spare; bit 4 (In5) was the brake "released" endstop until the iBooster.
 //
 // Code bit order, written left to right as [A B C] = [bit 0, bit 1, bit 6]:
 //   code = (A << 2) | (B << 1) | C, so the literal 0b101 reads A=1 B=0 C=1.
@@ -224,12 +220,6 @@ static_assert(GEAR_CODE_LOW != 0b000 && GEAR_CODE_HIGH != 0b000 && GEAR_CODE_NEU
               GEAR_CODE_REVERSE != 0b000 && GEAR_CODE_LOW != 0b111 && GEAR_CODE_HIGH != 0b111 &&
               GEAR_CODE_NEUTRAL != 0b111 && GEAR_CODE_REVERSE != 0b111,
               "000 (mid-shift) and 111 (lost opto feed) must stay UNKNOWN");
-#define BOARD_IN_BIT_BRAKE_LIMIT   4     // In5 (X17) — brake "released" endstop
-
-// Brake input bit polarity. A PC817 that is conducting pulls its PCA9557 input
-// LOW, so an asserted input reads 0 — hence active-low. NOT bench-verified: bit 4
-// never moved during the 2026-08-21 sweep, so this is still the schematic's sense.
-#define BOARD_INPUT_ACTIVE_LOW     1     // 1 = asserted input reads 0, 0 = asserted reads 1
 
 // Relay function assignment, as RELAY-NUMBER sets (bit0 = Relay_1 … bit7 = Relay_8 — the
 // same encoding as the `relay_test` telemetry), NOT port masks. RelayController::begin()
@@ -797,28 +787,52 @@ static_assert(STEER_PWM_MIN_DUTY >= STEER_PWM_TRACK_MIN_DUTY, "break-away floor 
 #define TRANS_INIT_SETTLE_MS                1500       // ms - init-step overshoot move from an unknown servo position (max 20 % + 1 % overshoot ≈ 0.75 s at 35 ms/%, doubled)
 
 // ============================================================================
-// BRAKE SYSTEM CONFIGURATION
+// SERVICE BRAKE — Bosch iBooster Gen2 on CAN (aztec, change replace-aztec-brake-with-ibooster)
 // ============================================================================
+// Pure law in include/IboosterLaw.h (IB_LAW_* literals, checked against these by static_assert in
+// src/IboosterBrake.cpp); frames in include/IboosterProto.h. Bench figures: Arduino/iBooster-TEST
+// README «Що виміряно на стенді» (22–23.11.2026, one dry unit).
+#define IB_SLOT_MS                 10      // ms - our 0x38B / 0x38C / 0x38D period (unit releases ~130-180 ms after frames stop under a request)
+#define IB_SILENT_MS               500     // ms - ignition OFF + no unit frame this long = ASLEEP, frames stop (nobody may ACK)
+#define IB_STATUS_STALE_MS         250     // ms - 0x39D older than this = not fresh -> LOST (six 40 ms frames)
+#define IB_ROD_HOLD_MS             100     // ms - rod sample older than this: flow 0 (hold), never P on an old rod
+#define IB_START_TIMEOUT_MS        20000   // ms - STARTING this long = start_timeout (bench: reboot -> ready ~12 s)
+#define IB_NO_UNIT_MS              20000   // ms - LOST this long = no_unit
+#define IB_FAULT_PERSIST_MS        20000   // ms - FAULT this long = fault_latched (longer than the ~12 s self-reboot)
+#define IB_ACCEPT_TIMEOUT_MS       1000    // ms - request set, internal state != 3 this long = unit_drop (bench 260-290 ms)
+#define IB_CRANK_GRACE_MS          3000    // ms - LOST / FAULT starting within this after CRANKING: W crank=1
+#define IB_CMD_STALE_MS            500     // ms - loop command older than this = stale (target held, flagged)
+#define IB_GAP_WARN_MS             50      // ms - gap between two sent slots above this = tx_gap (50 / 100 ms harmless on the bench)
+#define IB_STATUSTEXT_MIN_MS       5000    // ms - at most one brake STATUSTEXT per 5 s (latest state wins)
+#define IB_ROD_KP                  250     // flow units per mm of rod error (bench P, ~1.95 ml/s per mm, no overshoot)
+#define IB_ROD_DEADBAND_MM         0.05f   // mm - |error| inside -> flow 0 (bench deadband 3 raw = 0.047 mm)
+#define IB_REACHED_TOL_MM          0.2f    // mm - "reached" tolerance (park-brake hand-over)
+#define IB_STALL_MM                0.05f   // mm - "reached" by stall: less progress than this ...
+#define IB_STALL_MS                300     // ms - ... over this long with a positive flow (pressure stops the rod)
+#define IB_RELEASE_HANDOFF_MM      1.0f    // mm - RELEASING clears the request here (unit returns 1 mm at ~4.7 mm/s itself)
+#define IB_RELEASE_TIMEOUT_MS      3000    // ms - release timeout FLOOR; the timeout is 1 s + 2 x the nominal return from the entry rod at the release rate
+#define IB_RELEASE_MAX_MS          30000   // ms - release hard cap; past the timeout the request is cleared only if the rod stopped coming down (0.1 mm / 1 s)
+#define IB_ARM_MM                  0.3f    // mm - stall / pRunout "reached" only after the rod moved this far in the BRAKING episode (the ~2 mm take-up moves only the actuator)
+#define IB_NO_MOVE_MS              3000    // ms - accepted, pushing, rod never moved IB_ARM_MM: no_move (take-up at 1 ml/s ~1 s)
+#define IB_ROD_CEIL_MM             16.0f   // mm - hard rod-target ceiling (stroke stop 16.62-16.64 mm, dry unit)
+#define IB_RX_TRUST_MS             25      // ms - a frame drained more than this after the last slot may have waited in the chip (stall): not used as fresh
+// A checksum-valid 0x39D rod outside -1..40 mm (IboosterLaw.h ibRodPlausible) is discarded and counted as bad.
 
-// Brake Movement Parameters
-// BRAKE_FULL_TRAVEL_TIME and BRAKE_HOLD_SPEED are the DEFAULTS of the per-vehicle, web-tunable
-// values (change add-brake-tuning-card; NVS "brake"/travel_ms and hold_pwm, owned by
-// VehicleController, law in include/BrakeLaw.h — keep its literals in sync).
-#define BRAKE_FULL_TRAVEL_TIME 1500  // ms - default estimated time for 0-100% brake travel (measured on the quad)
-#define BRAKE_TOLERANCE        1  // % - position tolerance for "at target"
-#define BRAKE_SENSOR_OVERRUN_TIME 1000  // ms - continue moving after sensor triggers (full retraction)
-#define BRAKE_HOLD_SPEED          30    // PWM (0-255) default push against the hydraulic return when at target position
-// Travel 1000–3000 ms around the measured 1500 ms: covers a faster or slower actuator on the other
-// vehicle; the cap also bounds how long a too-long setting stalls the actuator at full drive.
-#define BRAKE_TRAVEL_MS_MIN    1000  // ms
-#define BRAKE_TRAVEL_MS_MAX    3000  // ms
-// Hold 0–100 on the 0–255 PWM scale: 0 = no push (coast); above ~100 the stalled actuator and the
-// BTS7960 heat up for as long as the brake is held, so the cap is well below full drive.
-#define BRAKE_HOLD_PWM_MIN     0
-#define BRAKE_HOLD_PWM_MAX     100
-#define BRAKE_NVS_NAMESPACE    "brake"
-#define BRAKE_TRAVEL_NVS_KEY   "travel_ms"   // uint16, ms
-#define BRAKE_HOLD_NVS_KEY     "hold_pwm"    // uint8, PWM 0-255 scale
+// Settings (Calibration card "🛑 Гальмо (iBooster)", NVS "brake", owned by IboosterBrake).
+// Defaults: owner decision 2026-11-23 (16 mm = the full external-request stroke, 8 ml/s each way).
+#define BRAKE_NVS_NAMESPACE        "brake"
+#define BRAKE_MAX_MM10_NVS_KEY     "max_mm10"      // uint8, 0.1 mm
+#define BRAKE_APPLY_NVS_KEY        "apply_mlps"    // uint8, ml/s
+#define BRAKE_RELEASE_NVS_KEY      "release_mlps"  // uint8, ml/s
+#define BRAKE_MAX_MM10_MIN         20      // 2.0 mm
+#define BRAKE_MAX_MM10_MAX         160     // 16.0 mm (= IB_ROD_CEIL_MM)
+#define BRAKE_MAX_MM10_DEFAULT     160     // 16.0 mm
+#define BRAKE_RATE_MIN_MLPS        1       // ml/s
+#define BRAKE_RATE_MAX_MLPS        40      // ml/s = the unit's usable flow 0x9200 / 0x6A00 (~80 mm/s)
+#define BRAKE_RATE_DEFAULT_MLPS    8       // ml/s (~15-16 mm/s)
+// Keys of the removed X7 actuator (travel time / hold drive): removed once at boot, never read
+#define BRAKE_OLD_TRAVEL_NVS_KEY   "travel_ms"
+#define BRAKE_OLD_HOLD_NVS_KEY     "hold_pwm"
 
 // ============================================================================
 // PARKING BRAKE (aztec, X6) — change add-aztec-parking-brake
@@ -1100,6 +1114,11 @@ static_assert(GEAR_SPEED_CEILING_REVERSE_MS > 0.0f && GEAR_SPEED_CEILING_REVERSE
 
 #define OTA_HOSTNAME          "quadbike-control"  // OTA hostname base; "-xxxx" chip suffix appended at boot
 #define OTA_PASSWORD          ""                  // OTA password (empty = no password)
+// Web OTA, LittleFS upload, ArduinoOTA and the journal clear are refused while a service brake is
+// commanded (target > 0) or its request is active, or the wheel speed is valid and above this; a
+// web upload already running is aborted then (a flash erase stalls the CAN task
+// that keeps the brake applied; change replace-aztec-brake-with-ibooster D9). Invalid = standing.
+#define OTA_MAX_SPEED_KMH     1.0f
 
 // ============================================================================
 // INPUT SOURCE PRIORITY
@@ -1167,13 +1186,16 @@ enum class InputSource {
 
 // MCP2515 hardware acceptance filtering (standard 11-bit IDs only), two paths on ONE bus.
 // The ECU floods the bus with broadcast frames (Delphi MT05 sends 0x301 etc.) which
-// overrun the two RX buffers faster than the loop can drain them, so only two things
-// are accepted, each through its own buffer:
+// overrun the two RX buffers faster than the loop can drain them, so only these are
+// accepted:
 //   RXB0: MASK0 0x7F8, RXF0/RXF1 0x7E8      -> OBD-II responses 0x7E8-0x7EF
-//   RXB1: MASK1 0x7FF, RXF2..RXF5 0x305     -> Bosch LWS steering angle (100 Hz)
-// so the 100 Hz angle stream and the OBD replies never evict each other. BUKT (RXB0 ->
-// RXB1 rollover, set by the library) stays on: an OBD reply arriving while RXB0 is full
-// lands in RXB1; the only loss is one LWS frame on RX1OVR, which is harmless.
+//   RXB1: MASK1 0x7FF, RXF2 0x305           -> Bosch LWS steering angle (100 Hz)
+//                      RXF3 0x38E, RXF4 0x38F, RXF5 0x39D -> Bosch iBooster status (~175 fps),
+//                      consumed in the CAN task (replace-aztec-brake-with-ibooster D3)
+// so the 100 Hz angle stream and the OBD replies never evict each other. RXB1 carries
+// ~275 frames/s: it relies on the INT wake (a 2 ms poll alone can lose some to RX1OVR, counted).
+// BUKT (RXB0 -> RXB1 rollover, set by the library) stays on: an OBD reply arriving while RXB0
+// is full lands in RXB1; the only loss is one RXB1 frame on RX1OVR, which is tolerated.
 // The coryjfowler MCP_CAN library expects standard mask/filter IDs shifted left by 16
 // (mcp2515_write_mf() takes bits 26:16 as the 11-bit ID when ext == 0).
 #define CAN_RX_OBD_MASK           0x7F8   // 11-bit acceptance mask (care bits 10:3)
@@ -1186,6 +1208,9 @@ enum class InputSource {
                                           // in CANController, with ONLY [05 00] / [53 30] (never [03 00])
 #define CAN_RX_LWS_MASK_REG   (((uint32_t)CAN_RX_LWS_MASK) << 16)    // 0x07FF0000
 #define CAN_RX_LWS_FILTER_REG (((uint32_t)STEER_LWS_CAN_ID) << 16)   // 0x03050000
+#define CAN_RX_IB_EXT_STATUS_REG (((uint32_t)IB_ID_EXT_STATUS) << 16) // 0x038E0000 (RXF3)
+#define CAN_RX_IB_RUNOUT_REG     (((uint32_t)IB_ID_RUNOUT) << 16)     // 0x038F0000 (RXF4)
+#define CAN_RX_IB_STATUS_REG     (((uint32_t)IB_ID_STATUS) << 16)     // 0x039D0000 (RXF5)
 
 // The "ECU/module voltage" low threshold (ECU_VOLTAGE_LOW_V) is gone: ecu_voltage_low now
 // comes from the X10 battery sense with hysteresis (BAT12_LOW_V / BAT12_LOW_CLEAR_V).
@@ -1223,7 +1248,7 @@ enum class InputSource {
 #define JOURNAL_LINE_MAX           120     // bytes per line incl. '\n'; longer lines end with '~'
 #define JOURNAL_RAM_BUF_BYTES      4096    // unflushed lines held in RAM
 #define JOURNAL_FLUSH_MS           1000    // ms — at most one flash flush per interval
-#define JOURNAL_FLUSH_DEFER_MAX_MS 10000   // ms — max flush deferral while the steering motor drives
+#define JOURNAL_FLUSH_DEFER_MAX_MS 10000   // ms — max flush deferral while the steering motor drives or a brake request is active
 #define JOURNAL_DEDUPE_MS          2000    // ms — same (source, event) written at most once per window
 #define JOURNAL_SNAP_MS            60000   // ms — SNAP line period
 #define JOURNAL_RTC_RING           16      // unflushed lines kept in RTC memory across a reset
@@ -1238,7 +1263,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.5.38"
+#define FIRMWARE_VERSION "1.6.0"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry

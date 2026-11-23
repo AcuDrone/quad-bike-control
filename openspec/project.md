@@ -6,6 +6,8 @@ Electronic control system for an off-road vehicle, receiving commands via MAVLin
 Vehicles: the `aztec` branch targets the **ODES JUNGLECROSS 800 EFI/EPS** buggy on the same
 `Control_v0` board; `master` targets the quad bike. On aztec the transmission servo is a GXservo
 HS-1005SGT 150KG (16.8 V max supply — never on the 24V boost rail).
+On aztec the service brake is a Bosch iBooster Gen2 on the CAN bus (X7 free, In5 spare; change
+replace-aztec-brake-with-ibooster, fw 1.6.0); 1.6.x belongs to aztec, master's next minor is 1.7.0.
 The aztec steering VESC (Flipsky 75200) talks UART0 on the Prog header X1 (GPIO43 TX / GPIO44 RX);
 this requires R63/R64 (UART0 → CH9121T LAN chip) removed on the board. X6 (GPIO4/5) is free for a
 fourth BTS7960. MAVLink stays on UART1 (X9); the console is USB-CDC.
@@ -21,7 +23,10 @@ stay fitted; the front-wheel lock is fitted.
 - **Hardware**:
   - MAVLink serial link to the Pixhawk TELEM port (SERVO_OUTPUT_RAW command channels)
   - 2x PWM Servo Motors (steering, throttle)
-  - 2x Linear Actuators with BTS7960 H-bridge drivers (transmission, brakes)
+  - Service brake: on `master` (quad) a linear actuator on a BTS7960; on `aztec` (buggy, since
+    1.6.0) a Bosch iBooster Gen2 on the shared CAN bus (X150, Wake from the ignition line) — no
+    service brake with the ignition off
+  - aztec parking brake: a self-locking linear actuator on a BTS7960 (X6)
 
 ## Project Conventions
 

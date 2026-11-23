@@ -86,6 +86,25 @@ static void test_dedupe_exempt() {
     TEST_ASSERT_FALSE(d.admit(JSrc::SYS, "loop_overrun", 20, sup));
 }
 
+// Source BRAKE (change replace-aztec-brake-with-ibooster): token, the line of the spec scenario
+// "Brake source", state lines exempt from the dedupe, the other brake events deduped as usual
+static void test_brake_source() {
+    TEST_ASSERT_EQUAL_STRING("BRAKE", jSrcToken(JSrc::BRAKE));
+    TEST_ASSERT_TRUE((uint8_t)JSrc::BRAKE < (uint8_t)JSrc::COUNT);
+    char out[JOURNAL_LINE_MAX + 1];
+    jFormatLine(out, 47, 3200, JSrc::BRAKE, JLvl::I, "state",
+                "from=STARTING to=READY st=5 is=0 drv=1 rod=0.02 ign=1 crank=0", 0);
+    TEST_ASSERT_EQUAL_STRING(
+        "47 3.200 BRAKE I state from=STARTING to=READY st=5 is=0 drv=1 rod=0.02 ign=1 crank=0\n", out);
+    JDedupe<24> d(2000);
+    uint32_t sup = 0;
+    TEST_ASSERT_TRUE(d.admit(JSrc::BRAKE, "state", 10, sup));
+    TEST_ASSERT_TRUE(d.admit(JSrc::BRAKE, "state", 20, sup));
+    TEST_ASSERT_TRUE(d.admit(JSrc::BRAKE, "fault", 30, sup));
+    TEST_ASSERT_FALSE(d.admit(JSrc::BRAKE, "fault", 40, sup));
+    TEST_ASSERT_TRUE(d.admit(JSrc::BRAKE, "fault_raw", 40, sup));
+}
+
 static void test_dedupe_pending_drain() {
     JDedupe<24> d(2000);
     uint32_t sup = 0;
@@ -302,6 +321,7 @@ int main(int, char**) {
     RUN_TEST(test_format_newline_sanitised);
     RUN_TEST(test_dedupe_burst);
     RUN_TEST(test_dedupe_exempt);
+    RUN_TEST(test_brake_source);
     RUN_TEST(test_dedupe_pending_drain);
     RUN_TEST(test_dedupe_lru);
     RUN_TEST(test_rotation);

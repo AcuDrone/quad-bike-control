@@ -104,6 +104,7 @@ MavlinkInterface::MavlinkInterface()
       govWarnPending_(false),
       govInfoPending_(false),
       govWarnLastTx_(0),
+      brakeText_(ibTextInitial()),
       vcmdSink_(nullptr),
       vcmdCaps_(0),
       vcmdHwVersion_(0),
@@ -1008,6 +1009,28 @@ void MavlinkInterface::report(const StateReport& state) {
             } else {
                 govInfoPending_ = false;
                 sendStatusText(MAV_SEVERITY_INFO, "Gov: speed OK - governing");
+            }
+        }
+    }
+
+    // Service brake STATUSTEXT (aztec iBooster, change replace-aztec-brake-with-ibooster D10):
+    // WARNING on entry into LOST / FAULT, INFO "Brake: OK" on READY after an announced one. At
+    // most one per IB_STATUSTEXT_MIN_MS (latest state wins, a recovery cancelling an unsent
+    // warning sends nothing) and through the shared MAVLINK_STATUSTEXT_MIN_MS limiter: a text held
+    // back stays pending. ASLEEP / STARTING are silent.
+    {
+        uint8_t code = state.brakeState;
+        if (code > (uint8_t)IbState::FAULT) code = (uint8_t)IbState::ASLEEP;
+        const bool sharedReady = (now - lastStatustextTx_ >= MAVLINK_STATUSTEXT_MIN_MS);
+        const IbText t = ibStatustextStep(brakeText_, (IbState)code, now, sharedReady);
+        if (t != IbText::NONE) {
+            lastStatustextTx_ = now;
+            if (t == IbText::LOST) {
+                sendStatusText(MAV_SEVERITY_WARNING, "Brake: LOST (no iBooster)");
+            } else if (t == IbText::FAULT) {
+                sendStatusText(MAV_SEVERITY_WARNING, "Brake: FAULT (iBooster)");
+            } else {
+                sendStatusText(MAV_SEVERITY_INFO, "Brake: OK");
             }
         }
     }

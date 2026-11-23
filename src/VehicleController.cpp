@@ -1,15 +1,7 @@
 #include "VehicleController.h"
 #include "Debug.h"
 #include "EventJournal.h"
-#include "BrakeLaw.h"
-
-// BrakeLaw.h cannot include Constants.h (native tests): keep its literals in sync.
-static_assert(BRAKE_LAW_TRAVEL_MS_MIN == BRAKE_TRAVEL_MS_MIN, "BrakeLaw.h travel min out of sync");
-static_assert(BRAKE_LAW_TRAVEL_MS_MAX == BRAKE_TRAVEL_MS_MAX, "BrakeLaw.h travel max out of sync");
-static_assert(BRAKE_LAW_TRAVEL_MS_DEFAULT == BRAKE_FULL_TRAVEL_TIME, "BrakeLaw.h travel default out of sync");
-static_assert(BRAKE_LAW_HOLD_PWM_MIN == BRAKE_HOLD_PWM_MIN, "BrakeLaw.h hold min out of sync");
-static_assert(BRAKE_LAW_HOLD_PWM_MAX == BRAKE_HOLD_PWM_MAX, "BrakeLaw.h hold max out of sync");
-static_assert(BRAKE_LAW_HOLD_PWM_DEFAULT == BRAKE_HOLD_SPEED, "BrakeLaw.h hold default out of sync");
+#include "FlashHold.h"
 // SpeedGovernorLaw.h cannot include Constants.h (native tests): keep its range literals in sync.
 static_assert(GOV_LAW_KP_MIN == GOV_KP_MIN && GOV_LAW_KP_MAX == GOV_KP_MAX, "SpeedGovernorLaw.h Kp range out of sync");
 static_assert(GOV_LAW_KI_MIN == GOV_KI_MIN && GOV_LAW_KI_MAX == GOV_KI_MAX, "SpeedGovernorLaw.h Ki range out of sync");
@@ -32,7 +24,7 @@ static TransmissionController::Gear vcmdGearToTrans(int8_t code) {
 VehicleController::VehicleController(SteeringController& steering,
                                      ThrottleController& throttle,
                                      TransmissionController& transmission,
-                                     BTS7960Controller& brake,
+                                     IboosterBrake& serviceBrake,
                                      BTS7960Controller& parkBrake,
                                      MavlinkInterface& mavlink,
                                      RelayController& relayController,
@@ -41,7 +33,8 @@ VehicleController::VehicleController(SteeringController& steering,
     : steering_(steering),
       throttle_(throttle),
       transmission_(transmission),
-      brake_(brake),
+      serviceBrake_(serviceBrake),
+      brakeUnit_(serviceBrake),
       parkBrake_(parkBrake),
       mavlink_(mavlink),
       relayController_(relayController),
@@ -63,13 +56,6 @@ VehicleController::VehicleController(SteeringController& steering,
       failsafeApplied_(false),
       webControl_(false),
       currentBrakeTarget_(0.0f),
-      currentBrakePosition_(100.0f),
-      brakeMovementStartTime_(0),
-      lastBrakeUpdateTime_(0),
-      brakeSensorTriggerTime_(0),
-      brakeIsMoving_(false),
-      brakeTravelMs_(BRAKE_FULL_TRAVEL_TIME),
-      brakeHoldPwm_(BRAKE_HOLD_SPEED),
       crankDwellMs_(ACC_PRECRANK_DWELL_MS),
       crankMaxMs_(CRANKING_TIMEOUT),
       prevIgnitionOn_(false),
@@ -342,7 +328,7 @@ void VehicleController::initEngineHourMeter() {
     engineHours_.begin();
 }
 
-bool VehicleController::initCAN() {
+bool VehicleController::initCAN(ICanPeriodicClient* periodic) {
     Preferences prefs;
     if (prefs.begin("boost", true)) {
         boostTargetRpm_ = prefs.getInt("target_rpm", TRANS_GEAR_BOOST_TARGET_RPM);
@@ -427,29 +413,6 @@ bool VehicleController::initCAN() {
         "[GOV] Speed governor %s, Kp %.2f, Ki %.2f, acc %.1f, dec %.1f, start limit %.1f %%\n",
         govEnabled_ ? "ON" : "OFF", govKp_, govKi_, govAccMs2_, govDecMs2_, govLaunchPct_);
 
-    // Brake full travel time and hold drive, NVS "brake" (VehicleController owns the brake
-    // estimate). A missing key reads as the default; an out-of-range stored value is logged and
-    // ignored (default used, never rewritten).
-    if (prefs.begin(BRAKE_NVS_NAMESPACE, true)) {
-        int32_t travel = prefs.getUShort(BRAKE_TRAVEL_NVS_KEY, BRAKE_FULL_TRAVEL_TIME);
-        int32_t hold = prefs.getUChar(BRAKE_HOLD_NVS_KEY, BRAKE_HOLD_SPEED);
-        prefs.end();
-        if (!brakeTravelMsValid(travel)) {
-            Debug::printfFeature(DebugFeature::VEHICLE,
-                "[BRAKE] Stored travel time %ld ms out of range (%d-%d ms) — ignored\n",
-                (long)travel, BRAKE_TRAVEL_MS_MIN, BRAKE_TRAVEL_MS_MAX);
-        }
-        if (!brakeHoldPwmValid(hold)) {
-            Debug::printfFeature(DebugFeature::VEHICLE,
-                "[BRAKE] Stored hold drive %ld out of range (%d-%d) — ignored\n",
-                (long)hold, BRAKE_HOLD_PWM_MIN, BRAKE_HOLD_PWM_MAX);
-        }
-        brakeTravelMs_ = (uint16_t)brakeTravelMsOrDefault(travel);
-        brakeHoldPwm_ = (uint8_t)brakeHoldPwmOrDefault(hold);
-    }
-    Debug::printfFeature(DebugFeature::VEHICLE, "[BRAKE] Travel time: %u ms, hold drive: %u\n",
-                         (unsigned)brakeTravelMs_, (unsigned)brakeHoldPwm_);
-
     // Pre-crank dwell and starter time limit, NVS "crank" (VehicleController owns them;
     // RelayController gets them RAM-only). A missing key reads as the default; an
     // out-of-range stored value is logged and ignored (default used, never rewritten).
@@ -475,6 +438,9 @@ bool VehicleController::initCAN() {
     Debug::printfFeature(DebugFeature::VEHICLE, "[VEHICLE] Pre-crank delay: %u ms, starter time limit: %u ms\n",
                          (unsigned)crankDwellMs_, (unsigned)crankMaxMs_);
 
+    // The iBooster service brake: its frames and its rod loop run in the CAN task (slot clock,
+    // TXB1 / TXB2, RXF3-RXF5) — attached before the task exists (replace-aztec-brake-with-ibooster).
+    canController_.attachPeriodicClient(periodic);
     bool result = canController_.begin();
     canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM);
     // The Bosch LWS steering-angle sensor shares this bus: every 0x305 frame goes to the
@@ -688,11 +654,25 @@ void VehicleController::update() {
     // Update position control for transmission actuator
     transmission_.update();
 
-    // Update brake actuator control
-    updateBrakeControl();
+    // Service brake (Bosch iBooster on CAN): publish this loop's command to the CAN task, read the
+    // unit's state, journal its events. The rod loop and the 10 ms frames run in the CAN task.
+    {
+        const RelayController::IgnitionState ign = relayController_.getIgnitionState();
+        BrakeLoopInputs in;
+        in.nowMs = millis();
+        in.ignOn = (ign != RelayController::IgnitionState::OFF);
+        in.cranking = (ign == RelayController::IgnitionState::CRANKING);
+        in.speedMs = speedSensor_.getSpeedMs();
+        in.speedValid = speedSensor_.isValid();
+        in.batteryV = batteryValid_ ? batteryV_ : NAN;
+        serviceBrake_.update(in);
+        // Periodic odometer / engine-hour saves wait while a brake request is active (D9)
+        FlashHold::set(serviceBrake_.requestActive());
+    }
 
-    // Aztec parking brake: a new service-brake press releases it once the X7 estimate (this
-    // loop's, from updateBrakeControl() above) has reached the target. Before parkBrake_.update().
+    // Aztec parking brake: a new service-brake press releases it once the service brake (this
+    // loop's state, from serviceBrake_.update() above) reports `reached`, or at once while it is
+    // not available (owner Q1 (b)). Before parkBrake_.update().
     updateParkBrakeServiceRelease();
 
     // Aztec parking brake on X6: reverse dwell / run timer / settle.
@@ -706,9 +686,17 @@ void VehicleController::updateParkBrakeServiceRelease() {
         (currentInputSource_ == InputSource::MAVLINK) ? ParkBrakeSvcSource::MAVLINK :
         (currentInputSource_ == InputSource::WEB)     ? ParkBrakeSvcSource::WEB :
                                                         ParkBrakeSvcSource::NONE;
-    const ParkBrakeSvcStep st = parkBrakeSvcStep(pbSvc_, src, currentBrakeTarget_,
-                                                 currentBrakePosition_, parkBrake_.getState());
+    const bool wasPending = pbSvc_.pending;
+    const ParkBrakeSvcStep st = parkBrakeSvcStep(pbSvc_, src, currentBrakeTarget_, serviceBrake_.reached(),
+                                                 serviceBrake_.available(), parkBrake_.getState(),
+                                                 serviceBrake_.stuck());
     pbSvc_ = st.next;
+    if (wasPending && !st.next.pending && !st.fire && serviceBrake_.stuck()) {
+        // Ready but the rod does not move: no release on a brake that produces no force
+        Debug::printlnFeature(DebugFeature::BRAKE,
+            "[PBRAKE] release by service brake cancelled: brake rod not moving (use Release)");
+        EventJournal::log(JSrc::BRAKE, JLvl::W, "pbrake_handover_cancel", "why=no_move");
+    }
     if (!st.fire) return;
 
     // Owner decision 2026-11-17 "no protection": any press counts, including an automatic brake.
@@ -717,8 +705,9 @@ void VehicleController::updateParkBrakeServiceRelease() {
     if (o.result == ParkBrakeResult::STARTED || o.result == ParkBrakeResult::REVERSING) {
         pbArmed_ = false;   // a release always needs a new rising edge for the next drive-away
         Debug::printfFeature(DebugFeature::BRAKE,
-            "[PBRAKE] release by service brake (%s), target %.0f %%\n",
-            src == ParkBrakeSvcSource::WEB ? "web" : "mavlink", currentBrakeTarget_);
+            "[PBRAKE] release by service brake (%s), target %.0f %%, brake %s\n",
+            src == ParkBrakeSvcSource::WEB ? "web" : "mavlink", currentBrakeTarget_,
+            serviceBrake_.available() ? "reached" : "unavailable");
     } else {
         Debug::printfFeature(DebugFeature::BRAKE,
             "[PBRAKE] release by service brake refused (result %u)\n", (unsigned)o.result);
@@ -921,11 +910,9 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
     } else if (cmd.cmd == "set_steer_park_max") {
         processSetSteerParkMaxCommand(cmd.floatValue, webPortal);
         return;
-    } else if (cmd.cmd == "set_brake_travel_ms") {
-        processSetBrakeTravelMsCommand(cmd.floatValue, webPortal);
-        return;
-    } else if (cmd.cmd == "set_brake_hold_pwm") {
-        processSetBrakeHoldPwmCommand(cmd.floatValue, webPortal);
+    } else if (cmd.cmd == "set_brake_max_mm" || cmd.cmd == "set_brake_apply_rate" ||
+               cmd.cmd == "set_brake_release_rate") {
+        processSetBrakeSettingCommand(cmd.cmd, cmd.floatValue, webPortal);
         return;
     } else if (cmd.cmd == "set_crank_dwell_ms") {
         processSetCrankDwellCommand(cmd.floatValue, webPortal);
@@ -1024,9 +1011,8 @@ void VehicleController::applyFailsafe() {
         steering_.setSteeringPercent(0.0f);
         throttle_.idle();
         webThrottleDemandPct_ = 0.0f;  // a demand that outlives the idle would reopen the throttle
-        brake_.stop();         // Stop brake actuator (hold position)
-        brakeIsMoving_ = false;
-        brakeSensorTriggerTime_ = 0;  // Reset sensor trigger
+        // Service brake: no action (owner decision 4) — the target stays frozen; allOff() below
+        // opens the ignition, the iBooster sleeps and the brake drops (accepted, design D1).
         transmission_.stop();  // Stop transmission actuator
         relayController_.allOff();  // Turn off ignition and lights
         // A fail-safe is a power-down in every respect that matters to the persisted counters
@@ -1040,7 +1026,6 @@ void VehicleController::applyFailsafe() {
     } else if (currentInputSource_ != InputSource::FAILSAFE && failsafeApplied_) {
         Debug::printlnFeature(DebugFeature::VEHICLE, "[FAILSAFE] Exiting safe state");
         EventJournal::log(JSrc::SRC, JLvl::I, "failsafe_exit", "to=%s", inputSourceName(currentInputSource_));
-        brake_.stop();  // Ensure brake is stopped before handing control
         failsafeApplied_ = false;
     }
 }
@@ -2240,69 +2225,56 @@ void VehicleController::processSetThrottleOpenSlewCommand(float value, WebPortal
     }
 }
 
-bool VehicleController::setBrakeTravelMs(uint16_t ms) {
-    if (!brakeTravelMsValid(ms)) return false;
-    // Persist first: RAM only changes once NVS holds the new value. Own namespace, one key.
-    Preferences prefs;
-    bool ok = false;
-    if (prefs.begin(BRAKE_NVS_NAMESPACE, false)) {
-        ok = prefs.putUShort(BRAKE_TRAVEL_NVS_KEY, ms) == sizeof(uint16_t);
-        prefs.end();
-    }
-    if (!ok) return false;
-    brakeTravelMs_ = ms;   // the estimate's rate changes from the next updateBrakeControl(); no rescale
-    Debug::printfFeature(DebugFeature::BRAKE, "[BRAKE] Travel time set to %u ms\n", (unsigned)ms);
-    return true;
-}
-
-bool VehicleController::setBrakeHoldPwm(uint8_t pwm) {
-    if (!brakeHoldPwmValid(pwm)) return false;
-    Preferences prefs;
-    bool ok = false;
-    if (prefs.begin(BRAKE_NVS_NAMESPACE, false)) {
-        ok = prefs.putUChar(BRAKE_HOLD_NVS_KEY, pwm) == sizeof(uint8_t);
-        prefs.end();
-    }
-    if (!ok) return false;
-    brakeHoldPwm_ = pwm;   // read every hold cycle
-    Debug::printfFeature(DebugFeature::BRAKE, "[BRAKE] Hold drive set to %u\n", (unsigned)pwm);
-    return true;
-}
-
-void VehicleController::processSetBrakeTravelMsCommand(float value, WebPortal& webPortal) {
-    if (!isnan(value)) value = roundf(value);   // whole ms
-    if (isnan(value) || !brakeTravelMsValid((int32_t)value)) {
-        webPortal.sendResponse(false, "Brake travel time out of range (" +
-                                      String(BRAKE_TRAVEL_MS_MIN) + "-" +
-                                      String(BRAKE_TRAVEL_MS_MAX) + " ms)");
-        return;
-    }
-    const uint16_t ms = (uint16_t)value;
-    if (!setBrakeTravelMs(ms)) {
-        webPortal.sendResponse(false, "Failed to save the brake setting");
-        return;
-    }
-    webPortal.sendResponse(true, "Brake travel time set to " + String(ms) + " ms");
-}
-
-void VehicleController::processSetBrakeHoldPwmCommand(float value, WebPortal& webPortal) {
-    if (!isnan(value)) value = roundf(value);   // whole PWM step
-    if (isnan(value) || !brakeHoldPwmValid((int32_t)value)) {
-        webPortal.sendResponse(false, "Brake hold out of range (" +
-                                      String(BRAKE_HOLD_PWM_MIN) + "-" +
-                                      String(BRAKE_HOLD_PWM_MAX) + ")");
-        return;
-    }
-    const uint8_t pwm = (uint8_t)value;
-    if (!setBrakeHoldPwm(pwm)) {
-        webPortal.sendResponse(false, "Failed to save the brake setting");
-        return;
-    }
-    if (pwm == 0) {
-        webPortal.sendResponse(true, "Brake hold off");
+// Service-brake card (change replace-aztec-brake-with-ibooster D6): validated, refused while a
+// brake request is active, persisted first, then applied from the next command to the CAN task.
+void VehicleController::processSetBrakeSettingCommand(const String& cmd, float value, WebPortal& webPortal) {
+    IboosterBrake::SetResult r;
+    String unit;
+    String what;
+    String shown;
+    if (cmd == "set_brake_max_mm") {
+        const int32_t mm10 = isnan(value) ? -1 : (int32_t)lroundf(value * 10.0f);
+        r = brakeUnit_.setMaxMm10(mm10);
+        what = "max stroke";
+        unit = " mm";
+        shown = String(brakeUnit_.getMaxMm10() / 10.0f, 1);
+        if (r == IboosterBrake::SetResult::OUT_OF_RANGE) {
+            webPortal.sendResponse(false, "Brake max stroke out of range (" +
+                                          String(BRAKE_MAX_MM10_MIN / 10.0f, 1) + "-" +
+                                          String(BRAKE_MAX_MM10_MAX / 10.0f, 1) + " mm, step 0.5)");
+            return;
+        }
     } else {
-        webPortal.sendResponse(true, "Brake hold set to " + String(pwm));
+        const bool apply = (cmd == "set_brake_apply_rate");
+        const int32_t mlps = isnan(value) ? -1 : (int32_t)lroundf(value);
+        r = apply ? brakeUnit_.setApplyRate(mlps) : brakeUnit_.setReleaseRate(mlps);
+        what = apply ? "apply rate" : "release rate";
+        unit = " ml/s";
+        shown = String(apply ? brakeUnit_.getApplyRate() : brakeUnit_.getReleaseRate());
+        if (r == IboosterBrake::SetResult::OUT_OF_RANGE) {
+            webPortal.sendResponse(false, "Brake " + what + " out of range (" + String(BRAKE_RATE_MIN_MLPS) +
+                                          "-" + String(BRAKE_RATE_MAX_MLPS) + " ml/s)");
+            return;
+        }
     }
+    if (r == IboosterBrake::SetResult::BUSY) {
+        webPortal.sendResponse(false, "Brake settings: not while braking");
+        return;
+    }
+    if (r == IboosterBrake::SetResult::SAVE_FAILED) {
+        webPortal.sendResponse(false, "Failed to save the brake setting");
+        return;
+    }
+    Debug::printfFeature(DebugFeature::BRAKE, "[BRAKE] %s set to %s%s\n", what.c_str(), shown.c_str(), unit.c_str());
+    webPortal.sendResponse(true, "Brake " + what + " set to " + shown + unit);
+}
+
+bool VehicleController::isOtaRefused() const {
+    // Also while a brake is merely commanded: during an ArduinoOTA upload loop() is blocked and the
+    // command frozen, so a commanded target could otherwise start a request (unit becoming ready,
+    // owner Q2 (a)) while the upload erases flash.
+    if (serviceBrake_.requestActive() || serviceBrake_.targetPct() > 0.0f) return true;
+    return speedSensor_.isValid() && (speedSensor_.getSpeedMs() * 3.6f) > OTA_MAX_SPEED_KMH;
 }
 
 bool VehicleController::setCrankDwellMs(uint16_t ms) {
@@ -2562,9 +2534,14 @@ void VehicleController::processBrakeCommand(float value, WebPortal& webPortal) {
         return;
     }
 
-    // Apply brake percentage (uses same mechanism as MAVLink control)
+    // Apply brake percentage (uses same mechanism as MAVLink control). While the service brake
+    // is unavailable the target is kept and braking resumes when it is ready (owner Q2 (a)).
     applyBrake(value);
-    webPortal.sendResponse(true, "Brake set to " + String((int)value) + "%");
+    String msg = "Brake set to " + String((int)value) + "%";
+    if (!serviceBrake_.available()) {
+        msg += " (brake unavailable)";
+    }
+    webPortal.sendResponse(true, msg);
 }
 
 void VehicleController::processSetGearDefaultCommand(const String& gearStr, float positionPct, WebPortal& webPortal) {
@@ -2734,6 +2711,9 @@ void VehicleController::processCanSniffCommand(WebPortal& webPortal) {
             break;
         case CANController::SniffStart::NOT_INITIALIZED:
             webPortal.sendResponse(false, "CAN sniffer refused: CAN not initialized");
+            break;
+        case CANController::SniffStart::BUSY_BRAKE:
+            webPortal.sendResponse(false, "CAN sniffer: not while braking");
             break;
         case CANController::SniffStart::BUSY:
         default:
@@ -2950,141 +2930,9 @@ void VehicleController::applyBrake(float brakePct) {
     if (brakePct < 5.0f) brakePct = 0.0f;
     if (brakePct > 100.0f) brakePct = 100.0f;
 
-    // Update target
+    // Update target; the service brake turns it into a rod target (iBooster, CAN task)
     currentBrakeTarget_ = brakePct;
-}
-
-void VehicleController::updateBrakeControl() {
-    float positionError = currentBrakeTarget_ - currentBrakePosition_;
-
-    // Special case: If target is 0% (released), check sensor for confirmation with overrun
-    if (currentBrakeTarget_ == 0.0f && 
-        isBrakeReleased() && 
-        abs(positionError) < BRAKE_TOLERANCE) {
-
-        // Sensor detected release
-        if (brakeSensorTriggerTime_ == 0) {
-            // First detection - start overrun timer
-            brakeSensorTriggerTime_ = millis();
-            Debug::printfFeature(DebugFeature::BRAKE,
-                "[BRAKE] Sensor triggered at %.1f%%, continuing for %dms overrun\n",
-                currentBrakePosition_, BRAKE_SENSOR_OVERRUN_TIME);
-        }
-
-        // Check if overrun period has elapsed
-        uint32_t now = millis();
-        uint32_t overrunDuration = now - brakeSensorTriggerTime_;
-
-        if (overrunDuration >= BRAKE_SENSOR_OVERRUN_TIME) {
-            // Overrun complete - stop and sync position
-            if (currentBrakePosition_ != 0.0f) {
-                Debug::printfFeature(DebugFeature::BRAKE,
-                    "[BRAKE] Overrun complete (%lums), syncing position to 0%%\n", overrunDuration);
-                currentBrakePosition_ = 0.0f;
-            }
-
-            // Stop actuator
-            if (brakeIsMoving_) {
-                uint32_t movementDuration = millis() - brakeMovementStartTime_;
-                Debug::printfFeature(DebugFeature::BRAKE,
-                    "[BRAKE] Stopped by sensor. Movement: %lums\n", movementDuration);
-                brakeIsMoving_ = false;
-                lastBrakeUpdateTime_ = 0;
-            }
-            brake_.stop();
-            return;
-        } else {
-            // Still in overrun period - keep retracting
-            brake_.setSpeed(-255);
-            static uint32_t lastOverrunLog = 0;
-            if (now - lastOverrunLog > 100) {
-                Debug::printfFeature(DebugFeature::BRAKE,
-                    "[BRAKE] Sensor overrun: %lums / %ldms remaining\n",
-                    overrunDuration, (long)(BRAKE_SENSOR_OVERRUN_TIME - overrunDuration));
-                lastOverrunLog = now;
-            }
-            return;
-        }
-    } else {
-        // Not releasing or sensor not triggered - reset trigger time
-        brakeSensorTriggerTime_ = 0;
-    }
-
-    // Check if we need to move
-    if (abs(positionError) > BRAKE_TOLERANCE) {
-        // Brake needs to move
-        if (!brakeIsMoving_) {
-            // Just started moving
-            brakeMovementStartTime_ = millis();
-            lastBrakeUpdateTime_ = brakeMovementStartTime_;  // Reset position tracking baseline
-            brakeIsMoving_ = true;
-            Debug::printfFeature(DebugFeature::BRAKE,
-                "[BRAKE] Starting movement: %.1f%% -> %.1f%% (error: %.1f%%)\n",
-                currentBrakePosition_, currentBrakeTarget_, positionError);
-        }
-
-        // Positive = extend (apply brake), negative = retract (release brake)
-        float direction = (positionError > 0.0f) ? 1.0f : -1.0f;
-        int16_t speed = (int16_t)(255 * direction);
-
-        // Apply speed to actuator
-        brake_.setSpeed(speed);
-
-        // Update estimated position based on time and speed
-        uint32_t now = millis();
-        uint32_t dt = min(now - lastBrakeUpdateTime_, 100UL);  // Cap at 100ms
-
-        float oldPosition = currentBrakePosition_;
-
-        // Calculate movement rate based on speed
-        float speedFraction = abs(speed) / 255.0f;
-        float movementRate = brakeRatePctPerMs(brakeTravelMs_) * speedFraction;  // %/ms
-        float expectedMovement = movementRate * dt;
-
-        currentBrakePosition_ += direction * expectedMovement;
-
-        // Clamp to valid range
-        if (currentBrakePosition_ < 0.0f) currentBrakePosition_ = 0.0f;
-        if (currentBrakePosition_ > 100.0f) currentBrakePosition_ = 100.0f;
-
-        // Detailed logging every 500ms
-        static uint32_t lastProgressLog = 0;
-        if (now - lastProgressLog > 500) {
-            float actualMovement = currentBrakePosition_ - oldPosition;
-            Debug::printfFeature(DebugFeature::BRAKE,
-                "[BRAKE] Progress: %.1f%%→%.1f%% (Δ%.2f%% in %lums, rate=%.3f%%/ms)\n",
-                oldPosition, currentBrakePosition_, actualMovement, dt, movementRate);
-            Debug::printfFeature(DebugFeature::BRAKE,
-                "[BRAKE] Target: %.1f%%, Error: %.1f%%, Duration: %lums, Speed: %d PWM, Dir: %s\n",
-                currentBrakeTarget_, positionError, now - brakeMovementStartTime_, speed,
-                direction > 0 ? "PRESS" : "RELEASE");
-            lastProgressLog = now;
-        }
-
-        // Update timestamp
-        lastBrakeUpdateTime_ = now;
-
-    } else if (currentBrakeTarget_ != 0.0f) {
-        // Brake is at target position (within tolerance)
-        if (brakeIsMoving_) {
-            // Just stopped moving
-            uint32_t movementDuration = millis() - brakeMovementStartTime_;
-            Debug::printfFeature(DebugFeature::BRAKE,
-                "[BRAKE] Stopped at %.1f%%. Movement: %lums\n",
-                currentBrakePosition_, movementDuration);
-            brakeIsMoving_ = false;
-            lastBrakeUpdateTime_ = 0;
-            brakeSensorTriggerTime_ = 0;  // Reset sensor trigger
-        }
-
-        // Hold position against cylinder hydraulic preassure return
-        // (configured hold drive; 0 = no push, the actuator coasts)
-        if (brakeHoldPwm_ > 0) {
-            brake_.setSpeed(brakeHoldPwm_);
-        } else {
-            brake_.stop();
-        }
-    }
+    serviceBrake_.setTargetPct(currentBrakeTarget_);
 }
 
 void VehicleController::updateShiftIdleHold() {

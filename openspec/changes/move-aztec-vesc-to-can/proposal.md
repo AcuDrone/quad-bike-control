@@ -106,6 +106,15 @@ traffic.
 - Re-fitting R63/R64 or any other use of X1.
 
 ## Relationship to other pending changes (archive order)
+> **Stale — re-base before implementing (note added 2026-11-23 by `replace-aztec-brake-with-ibooster`,
+> its task 0.3).** `move-can-rx-to-interrupt` shipped as firmware **1.5.38**, not 1.6.0, and
+> `replace-aztec-brake-with-ibooster` is implemented on `aztec` as **1.6.0**: the X7 brake is gone,
+> RXB1 filters 3–5 now take the iBooster `0x38E` / `0x38F` / `0x39D` (RXF1 stays free for this
+> change), TXB1 / TXB2 carry the brake frames, and the CAN task has a periodic client. This change
+> must be re-based on that text ("Hardware Configuration", "Shared-Bus Steering Angle Frame
+> Reception", "Queued CAN Transmit", version — 1.6.x belongs to aztec's iBooster line) before it is
+> implemented.
+
 This change SHALL be **implemented** only after `move-can-rx-to-interrupt` (interrupt/task-driven
 MCP2515 reception, firmware 1.6.0) is implemented. `move-can-rx-to-interrupt` SHALL be archived
 **immediately before** this change. That is a functional prerequisite, not just a spec-ordering one
