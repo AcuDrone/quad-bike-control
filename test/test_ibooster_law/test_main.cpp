@@ -1,6 +1,7 @@
 // Native tests of include/IboosterLaw.h (change replace-aztec-brake-with-ibooster, tasks 2.2 and
 // 7a.2): the unit state machine (design D4), percent -> rod -> flow (D5), settings (D6), the stale
-// command (D7), reached (D8) and the brake STATUSTEXT decision (D10).
+// command (D7), reached (D8) and the brake STATUSTEXT decision (D10); change add-ibooster-speed-floor:
+// the speed-byte floor (D1) and the brake episode summary (D2).
 #include <unity.h>
 #include <math.h>
 #include "IboosterLaw.h"
@@ -125,14 +126,192 @@ static void test_flow_law() {
     }
 }
 
+// Change add-ibooster-speed-floor, design D1: never below 2 km/h = 5 counts
 static void test_speed_byte() {
-    TEST_ASSERT_EQUAL(0, ibSpeedByte(5.0f, false));          // invalid -> 0
-    TEST_ASSERT_EQUAL(0, ibSpeedByte(NAN, true));
-    TEST_ASSERT_EQUAL(0, ibSpeedByte(-3.0f, true));
-    TEST_ASSERT_EQUAL(3, ibSpeedByte(1.2f / 3.6f, true));    // 1.2 km/h -> 3
+    TEST_ASSERT_EQUAL(5, ibSpeedByte(0.0f, true));           // standing still -> floor
+    TEST_ASSERT_EQUAL(5, ibSpeedByte(5.0f, false));          // invalid -> floor, never 0
+    TEST_ASSERT_EQUAL(5, ibSpeedByte(NAN, true));
+    TEST_ASSERT_EQUAL(5, ibSpeedByte(NAN, false));
+    TEST_ASSERT_EQUAL(5, ibSpeedByte(-3.0f, true));
+    TEST_ASSERT_EQUAL(5, ibSpeedByte(1.0f / 3.6f, true));    // 1 km/h -> floor
+    TEST_ASSERT_EQUAL(5, ibSpeedByte(1.2f / 3.6f, true));    // 1.2 km/h (3 counts in 1.6.0) -> floor
+    TEST_ASSERT_EQUAL(5, ibSpeedByte(2.0f / 3.6f, true));    // exactly 2 km/h -> 5
+    TEST_ASSERT_EQUAL(8, ibSpeedByte(3.0f / 3.6f, true));    // 3 km/h -> 7.5 rounds up
     TEST_ASSERT_EQUAL(25, ibSpeedByte(10.0f / 3.6f, true));  // 10 km/h -> 25
+    TEST_ASSERT_EQUAL(100, ibSpeedByte(40.0f / 3.6f, true)); // 40 km/h -> 100
+    TEST_ASSERT_EQUAL(255, ibSpeedByte(102.0f / 3.6f, true));
     TEST_ASSERT_EQUAL(255, ibSpeedByte(200.0f, true));       // clamp
     TEST_ASSERT_EQUAL(255, ibSpeedByte(INFINITY, true));
+    TEST_ASSERT_EQUAL(5, ibSpeedByte(-INFINITY, true));
+}
+
+// ---- Brake episode summary (change add-ibooster-speed-floor, design D2) ---------------------------
+struct Ep {
+    IbEpisode e;
+    IbEpisodeSummary out;
+    IbState state;
+    uint32_t now;
+    int ends;
+    Ep(uint32_t t0 = 5000) : e(ibEpisodeInitial()), out(), state(IbState::READY), now(t0), ends(0) {}
+    // One slot: the state after the step, what is sent and what the unit reported
+    bool slot(IbState to, bool fresh39 = true, uint8_t is = 3, bool new38F = true, uint8_t runout = 103,
+              uint8_t spd = 5, bool rodFresh = true, int16_t rod = 500, uint32_t dt = 10) {
+        now += dt;
+        const IbState prev = state;
+        state = to;
+        const bool req = ibRequestState(to);
+        const bool r = ibEpisodeStep(e, prev, to, req, fresh39, is, new38F, runout, spd, rodFresh, rod, now, out);
+        if (r) ends++;
+        return r;
+    }
+};
+
+static void test_episode_basic() {
+    Ep p;
+    TEST_ASSERT_FALSE(p.slot(IbState::READY));                     // no episode while READY
+    TEST_ASSERT_FALSE(p.e.active);
+    TEST_ASSERT_FALSE(p.slot(IbState::BRAKING, true, 0, true, 51, 5, true, 0));   // entry, not accepted yet
+    TEST_ASSERT_TRUE(p.e.active);
+    const uint32_t t0 = p.now;
+    for (int i = 0; i < 20; i++) TEST_ASSERT_FALSE(p.slot(IbState::BRAKING, true, 3, true, 103, 5, true, (int16_t)(100 + 40 * i)));
+    TEST_ASSERT_FALSE(p.slot(IbState::RELEASING, true, 3, true, 103, 5, true, 500));
+    TEST_ASSERT_TRUE(p.slot(IbState::READY, true, 3, true, 60, 5, true, 50));
+    TEST_ASSERT_EQUAL(1, p.ends);
+    TEST_ASSERT_FALSE(p.e.active);
+    TEST_ASSERT_EQUAL_UINT32(p.now - t0, p.out.ms);
+    TEST_ASSERT_TRUE(p.out.rodValid);
+    TEST_ASSERT_EQUAL(100 + 40 * 19, p.out.rodMaxCmm);
+    TEST_ASSERT_EQUAL(5, p.out.spdMin);
+    TEST_ASSERT_TRUE(p.out.runoutValid);
+    TEST_ASSERT_EQUAL(103, p.out.runoutMin);
+    TEST_ASSERT_EQUAL(103, p.out.runoutMax);
+    TEST_ASSERT_FALSE(p.out.stop);
+    // Nothing more after the end
+    TEST_ASSERT_FALSE(p.slot(IbState::READY));
+    TEST_ASSERT_EQUAL(1, p.ends);
+}
+
+static void test_episode_repress_is_one_episode() {
+    Ep p;
+    p.slot(IbState::BRAKING);
+    p.slot(IbState::BRAKING);
+    p.slot(IbState::RELEASING);
+    p.slot(IbState::BRAKING, true, 3, true, 51);
+    p.slot(IbState::RELEASING);
+    TEST_ASSERT_EQUAL(0, p.ends);
+    TEST_ASSERT_TRUE(p.slot(IbState::READY));
+    TEST_ASSERT_EQUAL(1, p.ends);
+    TEST_ASSERT_EQUAL(51, p.out.runoutMin);                       // 103 then 51: "51..103"
+    TEST_ASSERT_EQUAL(103, p.out.runoutMax);
+}
+
+static void test_episode_ignores_before_accept_and_after_release() {
+    Ep p;
+    p.slot(IbState::BRAKING, true, 0, true, 50);                  // idle 50, not accepted
+    p.slot(IbState::BRAKING, true, 1, true, 51);                  // settling 51, not accepted
+    p.slot(IbState::BRAKING, false, 3, true, 51);                 // 0x39D not fresh: not sampled
+    p.slot(IbState::BRAKING, true, 3, true, 103);
+    p.slot(IbState::RELEASING, true, 3, true, 103);
+    TEST_ASSERT_TRUE(p.slot(IbState::READY, true, 3, true, 90));  // the decay after the request is cleared
+    p.slot(IbState::READY, true, 0, true, 70);
+    p.slot(IbState::READY, true, 0, true, 50);
+    TEST_ASSERT_EQUAL(1, p.ends);
+    TEST_ASSERT_EQUAL(103, p.out.runoutMin);
+    TEST_ASSERT_EQUAL(103, p.out.runoutMax);
+}
+
+static void test_episode_not_sampled_without_request() {
+    // A slot whose state is BRAKING but whose request is not sent (frames disabled) is not sampled.
+    IbEpisode e = ibEpisodeInitial();
+    IbEpisodeSummary out = {};
+    TEST_ASSERT_FALSE(ibEpisodeStep(e, IbState::READY, IbState::BRAKING, false, true, 3, true, 51, 5, true, 0, 100, out));
+    TEST_ASSERT_FALSE(ibEpisodeStep(e, IbState::BRAKING, IbState::BRAKING, true, true, 3, true, 103, 5, true, 0, 110, out));
+    TEST_ASSERT_TRUE(ibEpisodeStep(e, IbState::BRAKING, IbState::READY, false, true, 3, true, 50, 5, true, 0, 120, out));
+    TEST_ASSERT_EQUAL(103, out.runoutMin);
+    TEST_ASSERT_EQUAL(103, out.runoutMax);
+}
+
+static void test_episode_stroke_stop() {
+    Ep p;
+    p.slot(IbState::BRAKING, true, 3, true, 103);
+    p.slot(IbState::BRAKING, true, 3, true, 0);                   // stroke stop
+    p.slot(IbState::BRAKING, true, 3, true, 103);
+    TEST_ASSERT_TRUE(p.slot(IbState::READY));
+    TEST_ASSERT_TRUE(p.out.runoutValid);
+    TEST_ASSERT_EQUAL(103, p.out.runoutMin);                      // 0 excluded from min / max
+    TEST_ASSERT_EQUAL(103, p.out.runoutMax);
+    TEST_ASSERT_TRUE(p.out.stop);
+
+    Ep q;                                                         // only zeros
+    q.slot(IbState::BRAKING, true, 3, true, 0);
+    q.slot(IbState::BRAKING, true, 3, true, 0);
+    TEST_ASSERT_TRUE(q.slot(IbState::READY));
+    TEST_ASSERT_FALSE(q.out.runoutValid);
+    TEST_ASSERT_TRUE(q.out.stop);
+}
+
+static void test_episode_no_38f() {
+    Ep p;
+    p.slot(IbState::BRAKING, true, 3, false, 103);
+    p.slot(IbState::BRAKING, true, 3, false, 103);
+    TEST_ASSERT_TRUE(p.slot(IbState::READY, true, 3, false));
+    TEST_ASSERT_FALSE(p.out.runoutValid);
+    TEST_ASSERT_FALSE(p.out.stop);
+}
+
+static void test_episode_repeated_38f_not_resampled() {
+    Ep p;
+    p.slot(IbState::BRAKING, true, 3, true, 103);
+    p.slot(IbState::BRAKING, true, 3, false, 0);                  // the same 0x38F again: not new
+    p.slot(IbState::BRAKING, true, 3, false, 51);
+    TEST_ASSERT_TRUE(p.slot(IbState::READY));
+    TEST_ASSERT_EQUAL(103, p.out.runoutMin);
+    TEST_ASSERT_EQUAL(103, p.out.runoutMax);
+    TEST_ASSERT_FALSE(p.out.stop);
+}
+
+static void test_episode_ended_by_trouble() {
+    const IbState enders[] = {IbState::LOST, IbState::FAULT, IbState::STARTING, IbState::ASLEEP};
+    for (IbState s : enders) {
+        Ep p;
+        p.slot(IbState::BRAKING);
+        p.slot(IbState::RELEASING);
+        TEST_ASSERT_TRUE(p.slot(s, false, 0, false));
+        TEST_ASSERT_EQUAL(1, p.ends);
+        TEST_ASSERT_FALSE(p.e.active);
+        TEST_ASSERT_FALSE(p.slot(IbState::READY));                // no new episode without READY -> BRAKING
+    }
+    // ... and from BRAKING directly
+    Ep p;
+    p.slot(IbState::BRAKING);
+    TEST_ASSERT_TRUE(p.slot(IbState::FAULT));
+}
+
+static void test_episode_speed_and_rod() {
+    Ep p;
+    p.slot(IbState::BRAKING, true, 3, true, 103, 9, false, 1500);  // rod not fresh: ignored
+    p.slot(IbState::BRAKING, true, 3, true, 103, 7, true, 300);
+    p.slot(IbState::BRAKING, true, 3, true, 103, 12, true, 800);
+    p.slot(IbState::BRAKING, true, 3, true, 103, 6, false, 1200);  // not fresh: ignored
+    p.slot(IbState::RELEASING, true, 3, true, 103, 8, true, -20);
+    TEST_ASSERT_TRUE(p.slot(IbState::READY, true, 3, true, 103, 2, true, 3000));   // end slot not counted
+    TEST_ASSERT_EQUAL(6, p.out.spdMin);
+    TEST_ASSERT_TRUE(p.out.rodValid);
+    TEST_ASSERT_EQUAL(800, p.out.rodMaxCmm);
+
+    Ep q;                                                          // no fresh rod at all
+    q.slot(IbState::BRAKING, true, 3, true, 103, 5, false, 900);
+    TEST_ASSERT_TRUE(q.slot(IbState::READY));
+    TEST_ASSERT_FALSE(q.out.rodValid);
+    TEST_ASSERT_EQUAL(5, q.out.spdMin);
+}
+
+static void test_episode_duration_wraps() {
+    Ep p(0xFFFFFFFFUL - 25);
+    p.slot(IbState::BRAKING);                                      // starts at 2^32 - 16
+    for (int i = 0; i < 5; i++) p.slot(IbState::BRAKING);          // crosses 0
+    TEST_ASSERT_TRUE(p.slot(IbState::READY));
+    TEST_ASSERT_EQUAL_UINT32(60, p.out.ms);
 }
 
 static void test_tx_enabled() {
@@ -972,5 +1151,15 @@ int main(int, char**) {
     RUN_TEST(test_release_timeout_scales_and_bounds);
     RUN_TEST(test_release_timeout_value);
     RUN_TEST(test_rod_plausible);
+    RUN_TEST(test_episode_basic);
+    RUN_TEST(test_episode_repress_is_one_episode);
+    RUN_TEST(test_episode_ignores_before_accept_and_after_release);
+    RUN_TEST(test_episode_not_sampled_without_request);
+    RUN_TEST(test_episode_stroke_stop);
+    RUN_TEST(test_episode_no_38f);
+    RUN_TEST(test_episode_repeated_38f_not_resampled);
+    RUN_TEST(test_episode_ended_by_trouble);
+    RUN_TEST(test_episode_speed_and_rod);
+    RUN_TEST(test_episode_duration_wraps);
     return UNITY_END();
 }

@@ -22,7 +22,12 @@
  *   0x38D DLC 7: [CRC] [cnt]   00 00 00 50 47        (pMC1 117 = 5.1 bar, qualifier 1)
  * Q = 0x40 (external request) while requesting, 0x00 otherwise. 0x80 in 0x38B ("speed faulty")
  * and a pMC1 qualifier other than 1 make the unit drop the request at once (bench): this builder
- * can produce neither.
+ * can produce neither. In 0x38B, byte 1 bits 6-7 are also the vehicle-speed qualifier
+ * (VehicleSpeed_Q, bench field table: 0 not initialised, 1 normal, 2 faulty): Q = 0x40 is
+ * qualifier 1, so frames without a request carry qualifier 0 (whether the unit uses their speed
+ * byte is not known). The speed byte (0.4 km/h per count) is never below 5 counts = 2 km/h:
+ * ibSpeedByte() in IboosterLaw.h applies the floor (change add-ibooster-speed-floor, firmware
+ * 1.6.1); this builder sends the byte it is given.
  *
  * Unit frames:
  *   0x38E DLC 6 / 10 ms, J1850: byte 1 high nibble = ext-request status (2 idle, 4->5 request);

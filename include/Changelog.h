@@ -14,6 +14,13 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.6.1","date":"2026-11-23","uk":[
+"Багі: iBooster тепер завжди отримує швидкість щонайменше 2 км/год — і коли багі стоїть, і коли датчик швидкості не працює (1.6.0 передавала 0). На стенді iBooster тоді повідомляє вищу межу тиску (103 бар замість 51), тож гальмо на місці, можливо, триматиме сильніше; що реальний тиск зростає, НЕ перевірено. Довге утримання на місці може сильніше гріти iBooster — для довгої стоянки затягуйте стоянкове гальмо. Решта плати (обмежувач, регулятор, телеметрія, наземна станція, веб) бачить справжню швидкість",
+"Журнал подій: після кожного гальмування один рядок «BRAKE I episode … runout=…» — тривалість, найбільший хід штока, найменша передана швидкість і межа тиску, яку повідомив iBooster (103..103 — висока, 51 — низька, stop=1 — шток дійшов до упору). Потрібна лише нова прошивка, образ LittleFS заливати НЕ потрібно"
+],"en":[
+"Buggy: the iBooster is now always told a speed of at least 2 km/h — with the buggy standing and with the speed sensor not working (1.6.0 sent 0). On the bench the iBooster then reports a higher pressure ceiling (103 bar instead of 51), so the brake may hold harder at a standstill; that the real pressure rises is NOT verified. A long hold at a standstill may warm the iBooster more — for a long stop apply the parking brake. The rest of the board (limiter, governor, telemetry, ground station, web) sees the true speed",
+"Event journal: one line “BRAKE I episode … runout=…” after each brake application — duration, largest rod stroke, lowest speed sent and the pressure ceiling the iBooster reported (103..103 high, 51 low, stop=1 the rod reached its stop). Firmware only, NO LittleFS upload needed"
+]},
 {"version":"1.6.0","date":"2026-11-23","uk":[
 "Багі: робоче гальмо тепер — Bosch iBooster на шині CAN замість лінійного актуатора на X7. Плата сама керує штоком iBooster і бачить, де він насправді: на плитці «Гальмо» — відсоток і хід штока в мм, а коли гальмо недоступне — його стан словами («спить (запалювання вимкнено)», «запускається», «ВТРАЧЕНО», «НЕСПРАВНІСТЬ»). Гальмо з пульта, джойстика й вебу задається як і раніше",
 "Нова картка «🛑 Гальмо (iBooster)» у розділі «Калібрування» замість старої (час ходу / утримання): максимальний хід (2–16 мм, типово 16 мм = 100 % гальма), швидкість натискання і відпускання (1–40 мл/с, типово 8). ОБОВ'ЯЗКОВО налаштуйте перед першим виїздом: спершу зменште максимальний хід (напр. 4 мм) і швидкості, підвищуйте крок за кроком. Налаштування не змінюються, поки гальмо натиснуте",

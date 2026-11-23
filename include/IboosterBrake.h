@@ -142,9 +142,13 @@ private:
         uint16_t flowWord;
         uint32_t valMs;            // gap / age / drop / stale length
         uint8_t raw39D[5], raw38E[6], raw38F[6];
+        // EV_EPISODE only (valMs = duration): the `BRAKE I episode` summary
+        bool epRodValid, epRunValid, epStop;
+        uint8_t epSpdMin, epRunMin, epRunMax;
+        int16_t epRodMaxCmm;
     };
     enum EvKind : uint8_t { EV_STATE, EV_UNIT_DROP, EV_RELEASE_SLOW, EV_FAULT_LATCHED, EV_START_TIMEOUT,
-                            EV_NO_UNIT, EV_CMD_STALE, EV_TX_GAP, EV_NO_MOVE };
+                            EV_NO_UNIT, EV_CMD_STALE, EV_TX_GAP, EV_NO_MOVE, EV_EPISODE };
     CanRing<IbEvent, 8> ev_;       // task pushes, loop pops (evMux_)
     volatile bool holdBus_;        // task-written: request active
     volatile uint32_t winResetReq_; // loop-written: restart the window maxima
@@ -164,8 +168,13 @@ private:
     bool prevReq_;
     uint16_t prevFlowWord_;
     uint32_t tSlots_, tBad_, tLate_, tDrops_, tFaults_, tGapMax_, tWinGapMax_, tCmdMax_, tWinCmdMax_, tEvDrops_;
+    // Brake episode summary (change add-ibooster-speed-floor, design D2)
+    IbEpisode episode_;
+    bool epHave38F_;               // a 0x38F arrival time was seen by a previous slot ...
+    uint32_t epT38F_;              // ... and this was it ("new 0x38F this slot" = it changed)
 
-    void taskPushEvent(uint8_t kind, const IbStepOut& o, const IbCommand& c, uint32_t valMs);
+    void taskPushEvent(uint8_t kind, const IbStepOut& o, const IbCommand& c, uint32_t valMs,
+                       const IbEpisodeSummary* ep = nullptr);
     void journalEvent(const IbEvent& e);
     void journalStats(uint32_t now);
     bool takeStateToken(uint32_t now);

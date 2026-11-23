@@ -481,6 +481,23 @@ task: `CAN I init result=ok attempt=1 after_s=0 stk=N` at boot (`stk` = free tas
 result=ok attempt=N after_s=S` when a 5 s retry succeeds, `CAN W int state=dead` / `CAN I int
 state=ok` when the INT line stops / starts waking the task.
 
+`BRAKE I episode` (aztec, fw 1.6.1): one line per service-brake request episode, written when the
+brake state leaves BRAKING / RELEASING (back to READY, or to LOST / FAULT / STARTING / ASLEEP — then
+after that slot's `state` line); a re-press during RELEASING continues the same episode. Example:
+`BRAKE I episode ms=4210 rod_max=9.85 spd_min=5 runout=103..103 stop=0`. Fields: `ms` episode
+duration; `rod_max` highest fresh rod position, mm (`-` if none); `spd_min` lowest vehicle-speed byte
+sent to the unit (`0x38B` byte 2, 0.4 km/h per count; since 1.6.1 never below 5 = 2 km/h, also with
+the buggy standing or the speed sensor invalid); `runout=<min>..<max>` the lowest and highest
+non-zero pressure ceiling the unit reported (`0x38F` byte 3, bar), sampled only after the unit
+accepted the request and while the request is sent (`-` if no non-zero sample); `stop=1` the unit
+reported 0 at least once (rod at the stroke stop). How to read it: `runout=103..103` = the unit
+reported its high ceiling throughout (what the 1.6.1 speed floor is meant to give); `51` anywhere
+(`51..51`, `51..103`) = the low ceiling (1.6.0 at standstill gave 51) — report it; `stop=1` = the
+stroke stop was reached. Whether a higher reported ceiling means more real brake pressure is not
+verified. Normal BRAKING / RELEASING transitions themselves are still not journaled. The line is
+subject to the 2 s dedupe: pumping the brake gives at most one `episode` line per 2 s, the next
+written one carrying `sup=N`.
+
 The VESC link lines (`link_lost`, `link_up`, `link_down_snap`) use compact keys to stay within the
 line limit: `st` parser state, `bsg` bytes since the last good packet, `good`, `crc` / `stop` dropped
 packets, `rs` resyncs, `vin`, `fet`, `fault`, `down_ms`. The snapshot is written every 60 s as two

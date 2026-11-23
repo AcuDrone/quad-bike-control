@@ -84,7 +84,10 @@ IboosterBrake::IboosterBrake()
       prevReq_(false),
       prevFlowWord_(IB_FLOW_ZERO),
       tSlots_(0), tBad_(0), tLate_(0), tDrops_(0), tFaults_(0), tGapMax_(0), tWinGapMax_(0),
-      tCmdMax_(0), tWinCmdMax_(0), tEvDrops_(0) {
+      tCmdMax_(0), tWinCmdMax_(0), tEvDrops_(0),
+      episode_(ibEpisodeInitial()),
+      epHave38F_(false),
+      epT38F_(0) {
     portMUX_INITIALIZE(&cmdMux_);
     portMUX_INITIALIZE(&snapMux_);
     portMUX_INITIALIZE(&evMux_);
@@ -364,6 +367,21 @@ void IboosterBrake::journalEvent(const IbEvent& e) {
             EventJournal::log(JSrc::BRAKE, JLvl::W, "no_move", "ms=%lu rod=%s tgt=%s flow=0x%04X",
                               (unsigned long)IB_NO_MOVE_MS, rod, tgt, (unsigned)e.flowWord);
             break;
+        case EV_EPISODE: {
+            // One line per brake request episode (change add-ibooster-speed-floor, design D2); the
+            // normal 2 s (source, event) dedupe applies (held-back episodes -> sup=N).
+            char rmax[12];
+            char run[12];
+            fmtMm(rmax, sizeof(rmax), e.epRodValid, e.epRodMaxCmm);
+            if (e.epRunValid) {
+                snprintf(run, sizeof(run), "%u..%u", (unsigned)e.epRunMin, (unsigned)e.epRunMax);
+            } else {
+                snprintf(run, sizeof(run), "-");
+            }
+            EventJournal::log(JSrc::BRAKE, JLvl::I, "episode", "ms=%lu rod_max=%s spd_min=%u runout=%s stop=%d",
+                              (unsigned long)e.valMs, rmax, (unsigned)e.epSpdMin, run, e.epStop ? 1 : 0);
+            break;
+        }
         case EV_START_TIMEOUT:
             EventJournal::log(JSrc::BRAKE, JLvl::E, "start_timeout", nullptr);
             break;
@@ -455,7 +473,8 @@ bool IboosterBrake::onFrame(const CanFrame& f, uint32_t nowMs) {
     return true;
 }
 
-void IboosterBrake::taskPushEvent(uint8_t kind, const IbStepOut& o, const IbCommand& c, uint32_t valMs) {
+void IboosterBrake::taskPushEvent(uint8_t kind, const IbStepOut& o, const IbCommand& c, uint32_t valMs,
+                                  const IbEpisodeSummary* ep) {
     IbEvent e;
     e.ms = lastSlotMs_;
     e.kind = kind;
@@ -475,6 +494,13 @@ void IboosterBrake::taskPushEvent(uint8_t kind, const IbStepOut& o, const IbComm
     memcpy(e.raw39D, raw39D_, sizeof(e.raw39D));
     memcpy(e.raw38E, raw38E_, sizeof(e.raw38E));
     memcpy(e.raw38F, raw38F_, sizeof(e.raw38F));
+    e.epRodValid = ep != nullptr && ep->rodValid;
+    e.epRunValid = ep != nullptr && ep->runoutValid;
+    e.epStop = ep != nullptr && ep->stop;
+    e.epSpdMin = ep != nullptr ? ep->spdMin : 0;
+    e.epRunMin = ep != nullptr ? ep->runoutMin : 0;
+    e.epRunMax = ep != nullptr ? ep->runoutMax : 0;
+    e.epRodMaxCmm = ep != nullptr ? ep->rodMaxCmm : 0;
     portENTER_CRITICAL(&evMux_);
     const bool dropped = ev_.pushDropOldest(e);
     portEXIT_CRITICAL(&evMux_);
@@ -496,6 +522,7 @@ void IboosterBrake::onSlot(const CanSlotInfo& info, CanSlotTx& out) {
     c = cmd_;
     portEXIT_CRITICAL(&cmdMux_);
 
+    const IbState prevState = law_.state;
     const IbStepOut o = ibStep(law_, c, unit_, now);
     if (o.cmdAgeMs > tCmdMax_) tCmdMax_ = o.cmdAgeMs;
     if (o.cmdAgeMs > tWinCmdMax_) tWinCmdMax_ = o.cmdAgeMs;
@@ -514,6 +541,22 @@ void IboosterBrake::onSlot(const CanSlotInfo& info, CanSlotTx& out) {
     if (o.ev & IB_EV_NO_UNIT) taskPushEvent(EV_NO_UNIT, o, c, 0);
     if (o.ev & IB_EV_CMD_STALE) taskPushEvent(EV_CMD_STALE, o, c, o.evStaleMs);
     if (o.ev & IB_EV_NO_MOVE) taskPushEvent(EV_NO_MOVE, o, c, 0);
+
+    // Brake episode summary (design D2): after ibStep() and after this slot's state event, so an
+    // episode ended by LOST / FAULT / STARTING / ASLEEP is journaled after its state line.
+    {
+        const bool new38F = unit_.have38F && (!epHave38F_ || unit_.t38F != epT38F_);
+        epHave38F_ = unit_.have38F;
+        epT38F_ = unit_.t38F;
+        const uint32_t age39 = unit_.have39D ? (now - unit_.t39D) : 0xFFFFFFFFUL;
+        const bool fresh39 = unit_.have39D && age39 <= IB_LAW_STATUS_STALE_MS;
+        const bool rodFresh = unit_.have39D && age39 <= IB_LAW_ROD_HOLD_MS;
+        IbEpisodeSummary sum;
+        if (ibEpisodeStep(episode_, prevState, o.state, o.req, fresh39, unit_.is, new38F, unit_.runoutBar,
+                          c.speedByte, rodFresh, unit_.rodCmm, now, sum)) {
+            taskPushEvent(EV_EPISODE, o, c, sum.ms, &sum);
+        }
+    }
 
     if (o.txEnabled && info.canSend) {
         // Gap between two sent slots (flash erase, task starvation, a CAN command). A late slot is

@@ -248,7 +248,7 @@ The MCP2515 crystal on this board is **8 MHz**; firmware already uses `MCP_8MHZ`
 |------|-----|-------|
 | Engine ECU | requests `0x7DF`, replies `0x7E8`–`0x7EF` | OBD-II polling (RPM, coolant, ...) |
 | Bosch LWS steering-angle sensor 0 265 005 486 (PSA 9650236180) | sends `0x305` (DLC 6, every 10 ms); config `0x7C0` | Mounted **directly on the steering shaft**. 12 V from the **ignition key** (switched), ground common with the board. Angle int16, 0.1°/bit, sensor + = left (firmware negates: + = right) |
-| Bosch iBooster Gen2 (Tesla Model 3/Y, P/N 1044671-00-x) — aztec, fw 1.6.0 | we send `0x38B` / `0x38C` / `0x38D` every 10 ms (TXB1 / TXB2, CAN task); it sends `0x38E` (10 ms), `0x38F` (20 ms), `0x39D` (40 ms) | Service brake. Wake from the ignition line (Relay_1): asleep with the ignition OFF. Wiring: X150 table below |
+| Bosch iBooster Gen2 (Tesla Model 3/Y, P/N 1044671-00-x) — aztec, fw 1.6.0 | we send `0x38B` / `0x38C` / `0x38D` every 10 ms (TXB1 / TXB2, CAN task); it sends `0x38E` (10 ms), `0x38F` (20 ms), `0x39D` (40 ms) | Service brake. Wake from the ignition line (Relay_1): asleep with the ignition OFF. `0x38B` byte 2 (vehicle speed, 0.4 km/h per count) = max(wheel speed, 2 km/h) since fw 1.6.1: never below 5 counts, also standing or with the speed sensor invalid (only this byte; the rest of the firmware keeps the true speed). Wiring: X150 table below |
 
 - **Receive filters** (`applyRxFilters()`): RXB0 = mask `0x7F8` / filters 0–1 `0x7E8` (OBD-II
   replies); RXB1 = mask `0x7FF` / filter 2 `0x305` (steering angle), filter 3 `0x38E`, filter 4

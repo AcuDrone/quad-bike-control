@@ -59,6 +59,8 @@
 #define IB_LAW_FLOW_MAX             0x9200
 #define IB_LAW_STATUSTEXT_MIN_MS    5000    // at most one brake STATUSTEXT per 5 s
 #define IB_LAW_SPEED_KMH_PER_BIT    0.4f    // 0x38B byte 2 (Rivian DBC scale, unverified)
+#define IB_LAW_SPEED_FLOOR_KMH      2.0f    // 0x38B byte 2 never below 2 km/h = 5 counts (bench: pRunout 103 from 3 counts)
+                                            // (change add-ibooster-speed-floor, design D1)
 
 static_assert(IB_LAW_RATE_MAX_MLPS * IB_LAW_UNITS_PER_MLPS == IB_LAW_FLOW_MAX - IB_LAW_FLOW_ZERO,
               "40 ml/s must be the top of the flow range");
@@ -194,10 +196,16 @@ inline uint16_t ibFlowWord(int32_t flowUnits) {
   return (uint16_t)w;
 }
 
-/** 0x38B byte 2: round(km/h / 0.4), 0..255; 0 while the wheel speed is invalid (never "faulty"). */
+/**
+ * 0x38B byte 2: round(max(km/h, IB_LAW_SPEED_FLOOR_KMH) / 0.4), clamped to 0..255 (change
+ * add-ibooster-speed-floor, design D1). An invalid, NaN or non-positive wheel speed gives the floor
+ * (5 counts), never 0 and never "faulty". The floored value exists only in this byte (IbCommand
+ * speedByte and the frames): the rest of the firmware keeps the true speed.
+ */
 inline uint8_t ibSpeedByte(float speedMs, bool valid) {
-  if (!valid || !(speedMs > 0.0f)) return 0;   // also NaN
-  const float counts = speedMs * 3.6f / IB_LAW_SPEED_KMH_PER_BIT + 0.5f;
+  float kmh = (valid && speedMs > 0.0f) ? speedMs * 3.6f : 0.0f;   // NaN -> 0
+  if (!(kmh >= IB_LAW_SPEED_FLOOR_KMH)) kmh = IB_LAW_SPEED_FLOOR_KMH;
+  const float counts = kmh / IB_LAW_SPEED_KMH_PER_BIT + 0.5f;
   if (counts >= 255.0f) return 255;
   return (uint8_t)counts;
 }
@@ -565,6 +573,86 @@ inline IbStepOut ibStep(IbLaw& s, const IbCommand& cmd, const IbUnitView& u, uin
   }
   o.reached = ibReached(s.state, fresh39, u.is, u.rodCmm, target, stalled, fresh38F, u.runoutBar, s.armed);
   return o;
+}
+
+// ---- Brake episode summary (change add-ibooster-speed-floor, design D2) ---------------------------
+/**
+ * One brake request episode: from the slot whose state enters BRAKING from READY to the first slot
+ * whose state is neither BRAKING nor RELEASING (RELEASING -> BRAKING continues it). Task-owned.
+ */
+struct IbEpisode {
+  bool active;
+  uint32_t startMs;        // slot time of the READY -> BRAKING entry
+  bool rodValid;           // a fresh rod was seen
+  int16_t rodMaxCmm;       // highest fresh rod, 0.01 mm
+  uint8_t spdMin;          // lowest 0x38B byte 2 sent
+  bool anyRunout;          // a non-zero pRunout sample was taken
+  uint8_t runoutMin, runoutMax;   // over the non-zero samples (bar)
+  bool stop;               // a sample was 0 (stroke stop)
+};
+
+/** The `BRAKE I episode` line's fields, produced once, on the episode's last slot. */
+struct IbEpisodeSummary {
+  uint32_t ms;             // episode duration
+  bool rodValid;
+  int16_t rodMaxCmm;
+  uint8_t spdMin;
+  bool runoutValid;        // false = `runout=-`
+  uint8_t runoutMin, runoutMax;
+  bool stop;
+};
+
+inline IbEpisode ibEpisodeInitial() {
+  IbEpisode e = {};
+  return e;
+}
+
+/**
+ * Called once per slot after ibStep() with the step's previous and new state. Samples: the byte 3
+ * of a 0x38F frame newly decoded since the previous slot (`new38F`: checksum-valid, trusted), only
+ * while the request is sent (`req`) and a fresh 0x39D reports internal state 3 (accepted) — so the
+ * idle 50 / settling 51 before acceptance and the decay after the request is cleared are never
+ * sampled. Returns true with `out` filled on the episode's last slot (whatever state ends it).
+ */
+inline bool ibEpisodeStep(IbEpisode& e, IbState prev, IbState now, bool req, bool fresh39D, uint8_t is,
+                          bool new38F, uint8_t runoutBar, uint8_t speedByte, bool rodFresh, int16_t rodCmm,
+                          uint32_t nowMs, IbEpisodeSummary& out) {
+  if (!e.active) {
+    if (prev != IbState::READY || now != IbState::BRAKING) return false;
+    e = ibEpisodeInitial();
+    e.active = true;
+    e.startMs = nowMs;
+    e.spdMin = speedByte;
+  } else if (!ibRequestState(now)) {
+    out.ms = nowMs - e.startMs;   // unsigned: wrap-safe
+    out.rodValid = e.rodValid;
+    out.rodMaxCmm = e.rodMaxCmm;
+    out.spdMin = e.spdMin;
+    out.runoutValid = e.anyRunout;
+    out.runoutMin = e.runoutMin;
+    out.runoutMax = e.runoutMax;
+    out.stop = e.stop;
+    e.active = false;
+    return true;
+  }
+  if (speedByte < e.spdMin) e.spdMin = speedByte;
+  if (rodFresh && (!e.rodValid || rodCmm > e.rodMaxCmm)) {
+    e.rodValid = true;
+    e.rodMaxCmm = rodCmm;
+  }
+  if (req && fresh39D && is == 3 && new38F) {
+    if (runoutBar == 0) {
+      e.stop = true;
+    } else if (!e.anyRunout) {
+      e.anyRunout = true;
+      e.runoutMin = runoutBar;
+      e.runoutMax = runoutBar;
+    } else {
+      if (runoutBar < e.runoutMin) e.runoutMin = runoutBar;
+      if (runoutBar > e.runoutMax) e.runoutMax = runoutBar;
+    }
+  }
+  return false;
 }
 
 // ---- Brake STATUSTEXT decision (design D10, owner Q4 (a)) -----------------------------------------
