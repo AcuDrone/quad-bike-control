@@ -110,10 +110,10 @@ and the plausibility cap. The `Constants.h` comment that calls 1500 "above idle"
   "Effective Engine RPM in MAVLink Reports" instead (its "rpm … CAN" wording is superseded at archive).
   Same pattern for the `cal_bat_v` command plumbing and the "Battery" reply routing that this change
   copies.
-- `move-aztec-vesc-to-can` and `repurpose-x10-battery-sense` both MODIFY vehicle-actuators "Hardware
-  Configuration"; to avoid a third concurrent edit, `PIN_TACHO` = GPIO14 is specified in the new
-  tacho-sensor capability. Archive order: fold GPIO14 into the pin list when the later of these is
-  archived.
+- `repurpose-x10-battery-sense` (archived 2026-11-24) and `move-aztec-vesc-to-can` (dropped
+  2026-11-24) both modified vehicle-actuators "Hardware Configuration"; to avoid a third concurrent
+  edit, `PIN_TACHO` = GPIO14 is specified in the new tacho-sensor capability. Archive order: fold
+  GPIO14 into the "Hardware Configuration" pin list when this change is archived.
 - `move-can-rx-to-interrupt` adds a GPIO ISR (MCP2515 INT) and modifies the OBD-II reading
   requirement; no requirement overlap, but both share the GPIO ISR service.
 - `add-can-bus-sniffer`, `fix-steering-continuous-tracking`: no overlap.
