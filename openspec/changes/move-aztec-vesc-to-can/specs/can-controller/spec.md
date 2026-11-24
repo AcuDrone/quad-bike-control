@@ -24,18 +24,23 @@ The system SHALL detect and recover from CAN communication errors without blocki
 **And** log error details to Serial
 **And** every reset or re-initialization SHALL re-apply all acceptance paths (OBD-II window, steering VESC extended frames and steering-angle frame)
 **And** steering VESC transmit failures SHALL NOT count toward the send-failure threshold that triggers a reset
-**And** the whole reset or re-initialization SHALL run under the MCP2515 SPI lock, the CAN reader task SHALL skip reading while it runs, and the receive interrupts (CANINTE = RX0IE | RX1IE) SHALL be re-asserted and read back before the lock is released
-**And** frames already in the receive queue SHALL be kept, and the reader task SHALL be woken once afterwards to read any frame latched during the reset
+**And** the reset or re-initialization SHALL be executed by the CAN task, never inside `loop()`, and the main loop SHALL continue to run while it is in progress
+
+#### Scenario: Error flags monitored in every state
+**Given** the CAN controller is initialized, in any OBD-II state, in probe mode, during an LWS zero-set or while sniffing
+**When** `CAN_EFLG_POLL_MS` (10 ms) elapses
+**Then** the CAN task SHALL read EFLG, count and clear RX0OVR / RX1OVR, and keep a TEC / REC / EFLG snapshot for the health log
+**And** a set TXBO SHALL be reported to the main loop once per bus-off episode, which SHALL journal `bus_off` and request the re-initialization as before
 
 #### Scenario: Drain MCP2515 receive buffers
-**Given** the CAN controller is initialized, in any OBD-II state (IDLE or WAITING_RESPONSE), in probe mode or during an LWS zero-set
-**When** the CAN reader task has queued received frames
-**Then** every `update()` call SHALL take all queued frames, at most `CAN_RX_QUEUE_DEPTH` per call, before running the OBD-II or probe state machine
+**Given** the CAN controller is initialized, in any OBD-II state (IDLE or WAITING_RESPONSE), in probe mode, during an LWS zero-set or while sniffing
+**When** the CAN task has placed received frames in the receive queue
+**Then** every `update()` call SHALL take all queued frames, at most `CAN_RX_RING` (64) per call, before running the OBD-II, probe, zero-set or sniffer step
 **And** every standard-ID `0x305` message SHALL be dispatched to the steering-angle decoder and SHALL NOT be logged as unmatched
 **And** every extended-ID steering VESC message (requirement "Shared-Bus Steering VESC Frames") SHALL be dispatched to the VESC steering driver and SHALL NOT be logged as unmatched
 **And** while waiting for an OBD-II or probe response, the first matching response SHALL be accepted and parsed
 **And** other non-matching messages SHALL be discarded and logged as unmatched at most once per `CAN_RX_LOG_INTERVAL`
-**And** the MCP2515 hardware receive buffers SHALL be read only by the CAN reader task
+**And** the MCP2515 receive buffers SHALL be read only by the CAN task
 
 ### Requirement: Shared-Bus Steering Angle Frame Reception
 The MCP2515 SHALL accept the Bosch LWS steering-angle frame (`0x305`) through its own receive buffer, and the OBD-II response window together with the steering VESC's extended frames through the other, so that the 100 Hz angle stream, the engine replies and the VESC traffic on the one shared bus do not evict each other.
