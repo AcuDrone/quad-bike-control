@@ -32,7 +32,9 @@ static void test_decode_functions_accepted() {
 }
 
 static void test_decode_unknown_function() {
-    TEST_ASSERT_EQUAL((int)VehicleCmdDecodeKind::UNSUPPORTED, (int)kindOf(6.0f, 0.0f));
+    TEST_ASSERT_EQUAL((int)VehicleCmdDecodeKind::UNSUPPORTED, (int)kindOf(6.0f, 0.0f));   // bit6 clear
+    TEST_ASSERT_EQUAL((int)VehicleCmdDecodeKind::UNSUPPORTED, (int)kindOf(7.0f, 0.0f, 0xFF));
+    TEST_ASSERT_EQUAL((int)VehicleCmdDecodeKind::UNSUPPORTED, (int)kindOf(7.0f, 1.0f, 0x5F));
     TEST_ASSERT_EQUAL((int)VehicleCmdDecodeKind::UNSUPPORTED, (int)kindOf(-1.0f, 0.0f));
     TEST_ASSERT_EQUAL((int)VehicleCmdDecodeKind::UNSUPPORTED, (int)kindOf(2.5f, 0.0f));
     TEST_ASSERT_EQUAL((int)VehicleCmdDecodeKind::UNSUPPORTED, (int)kindOf(NAN, 0.0f));
@@ -291,13 +293,77 @@ static void test_pending_rc_gear() {
 // ---- Caps, versions, IGN_STATE --------------------------------------------------------------
 
 static void test_caps_and_qb_caps() {
-    TEST_ASSERT_EQUAL_HEX16(0x1F, vehicleCapsMask(true, true, true, true, true, false));
-    TEST_ASSERT_EQUAL_HEX16(0x3F, vehicleCapsMask(true, true, true, true, true, true));
-    TEST_ASSERT_EQUAL_HEX16(0x0F, vehicleCapsMask(true, true, true, true, false, false));
+    TEST_ASSERT_EQUAL_HEX16(0x1F, vehicleCapsMask(true, true, true, true, true, false, false));
+    TEST_ASSERT_EQUAL_HEX16(0x3F, vehicleCapsMask(true, true, true, true, true, true, false));
+    TEST_ASSERT_EQUAL_HEX16(0x0F, vehicleCapsMask(true, true, true, true, false, false, false));
     TEST_ASSERT_EQUAL_INT32(16777247, qbCapsValue(0x1F, 1));
     TEST_ASSERT_EQUAL_INT32(16777279, qbCapsValue(0x3F, 1));
     TEST_ASSERT_EQUAL_HEX32(0, (uint32_t)qbCapsValue(0xFFFF, 1) & 0x00FF0000u);
     TEST_ASSERT_EQUAL_HEX32(0x0100FFFFu, (uint32_t)qbCapsValue(0xFFFF, 1));
+}
+
+// ---- Headlight washer (param1 6, change add-headlight-washer-relay) ------------------------
+
+static void test_washer_decode() {
+    // bit6 set (washer fitted): 0 / 1 decode as the function
+    for (int v = 0; v <= 1; v++) {
+        VehicleCmdDecoded d = vehicleCmdDecode(6.0f, (float)v, 0x5F);
+        TEST_ASSERT_EQUAL((int)VehicleCmdDecodeKind::FUNCTION, (int)d.kind);
+        TEST_ASSERT_EQUAL((int)VehicleCmdFunction::WASHER, (int)d.fn);
+        TEST_ASSERT_EQUAL(v, d.value);
+    }
+    TEST_ASSERT_EQUAL((int)VehicleCmdDecodeKind::FUNCTION, (int)kindOf(6.0f, 1.0f, 0x7F));
+    // bit6 clear (washer not fitted, quad 0x1F / buggy 0x3F): UNSUPPORTED for stop and wash
+    TEST_ASSERT_EQUAL((int)VehicleCmdDecodeKind::UNSUPPORTED, (int)kindOf(6.0f, 0.0f, 0x1F));
+    TEST_ASSERT_EQUAL((int)VehicleCmdDecodeKind::UNSUPPORTED, (int)kindOf(6.0f, 1.0f, 0x1F));
+    TEST_ASSERT_EQUAL((int)VehicleCmdDecodeKind::UNSUPPORTED, (int)kindOf(6.0f, 1.0f, 0x3F));
+    // ... unsupported before the value check
+    TEST_ASSERT_EQUAL((int)VehicleCmdDecodeKind::UNSUPPORTED, (int)kindOf(6.0f, 2.0f, 0x1F));
+    // Values outside 0/1
+    TEST_ASSERT_EQUAL((int)VehicleCmdDecodeKind::DENIED, (int)kindOf(6.0f, 2.0f, 0x5F));
+    TEST_ASSERT_EQUAL((int)VehicleCmdDecodeKind::DENIED, (int)kindOf(6.0f, 0.5f, 0x5F));
+    TEST_ASSERT_EQUAL((int)VehicleCmdDecodeKind::DENIED, (int)kindOf(6.0f, NAN, 0x5F));
+    TEST_ASSERT_EQUAL((int)VehicleCmdDecodeKind::DENIED, (int)kindOf(6.0f, -1.0f, 0x5F));
+}
+
+static void test_washer_interlocks() {
+    // wash, in order: not under MAVLink → 3; relays down → FAILED; ignition not ok → 5; else ACCEPTED
+    VehicleCmdOutcome o = vcmdWasherDecide(1, false, true, true);
+    TEST_ASSERT_EQUAL((int)VehicleCmdResult::TEMPORARILY_REJECTED, (int)o.result);
+    TEST_ASSERT_EQUAL(VCMD_REASON_FAILSAFE, o.reason);
+    o = vcmdWasherDecide(1, false, false, false);   // source first
+    TEST_ASSERT_EQUAL(VCMD_REASON_FAILSAFE, o.reason);
+    o = vcmdWasherDecide(1, true, false, false);    // relays before ignition
+    TEST_ASSERT_EQUAL((int)VehicleCmdResult::FAILED, (int)o.result);
+    TEST_ASSERT_EQUAL(0, o.reason);
+    o = vcmdWasherDecide(1, true, true, false);
+    TEST_ASSERT_EQUAL((int)VehicleCmdResult::TEMPORARILY_REJECTED, (int)o.result);
+    TEST_ASSERT_EQUAL(VCMD_REASON_IGNITION_OFF, o.reason);
+    TEST_ASSERT_EQUAL(5, VCMD_REASON_IGNITION_OFF);
+    o = vcmdWasherDecide(1, true, true, true);
+    TEST_ASSERT_EQUAL((int)VehicleCmdResult::ACCEPTED, (int)o.result);
+    TEST_ASSERT_EQUAL(0, o.reason);
+    // stop: accepted in every source and ignition state; FAILED only with the relays down
+    for (int mav = 0; mav <= 1; mav++) {
+        for (int ign = 0; ign <= 1; ign++) {
+            o = vcmdWasherDecide(0, mav != 0, true, ign != 0);
+            TEST_ASSERT_EQUAL((int)VehicleCmdResult::ACCEPTED, (int)o.result);
+            o = vcmdWasherDecide(0, mav != 0, false, ign != 0);
+            TEST_ASSERT_EQUAL((int)VehicleCmdResult::FAILED, (int)o.result);
+        }
+    }
+}
+
+static void test_washer_caps() {
+    // quad: lock fitted, no handbrake; buggy: lock + handbrake (X6 initialised)
+    TEST_ASSERT_EQUAL_HEX16(0x5F, vehicleCapsMask(true, true, true, true, true, false, true));
+    TEST_ASSERT_EQUAL_HEX16(0x1F, vehicleCapsMask(true, true, true, true, true, false, false));
+    TEST_ASSERT_EQUAL_HEX16(0x7F, vehicleCapsMask(true, true, true, true, true, true, true));
+    TEST_ASSERT_EQUAL_HEX16(0x3F, vehicleCapsMask(true, true, true, true, true, true, false));
+    TEST_ASSERT_EQUAL_HEX16(0x40, VCMD_LAW_CAP_WASHER);
+    TEST_ASSERT_EQUAL_INT32(16777311, qbCapsValue(0x5F, 1));
+    TEST_ASSERT_EQUAL_INT32(16777343, qbCapsValue(0x7F, 1));
+    TEST_ASSERT_EQUAL_INT32(16777247, qbCapsValue(0x1F, 1));
 }
 
 static void test_version_codes() {
@@ -345,9 +411,14 @@ static void test_park_brake_ack() {
 }
 
 static void test_park_brake_caps() {
-    // Buggy with the X6 driver: 0x3F, QB_CAPS 16777279; without it: 0x1F and function 5 unsupported.
-    const uint16_t withDriver = vehicleCapsMask(true, true, true, true, true, true);
-    const uint16_t noDriver   = vehicleCapsMask(true, true, true, true, true, false);
+    // Buggy with the X6 driver: 0x3F, QB_CAPS 16777279; without it: 0x1F and function 5 unsupported
+    // (washer not fitted, the default). Washer fitted: 0x7F / 0x5F, QB_CAPS 16777343 / 16777311.
+    const uint16_t withDriver = vehicleCapsMask(true, true, true, true, true, true, false);
+    const uint16_t noDriver   = vehicleCapsMask(true, true, true, true, true, false, false);
+    TEST_ASSERT_EQUAL_HEX16(0x7F, vehicleCapsMask(true, true, true, true, true, true, true));
+    TEST_ASSERT_EQUAL_HEX16(0x5F, vehicleCapsMask(true, true, true, true, true, false, true));
+    TEST_ASSERT_EQUAL_INT32(16777343, qbCapsValue(0x7F, 1));
+    TEST_ASSERT_EQUAL_INT32(16777311, qbCapsValue(0x5F, 1));
     TEST_ASSERT_EQUAL_HEX16(0x3F, withDriver);
     TEST_ASSERT_EQUAL_INT32(16777279, qbCapsValue(withDriver, 1));
     TEST_ASSERT_EQUAL((int)VehicleCmdDecodeKind::FUNCTION, (int)vehicleCmdDecode(5.0f, 0.0f, withDriver).kind);
@@ -371,6 +442,9 @@ int main(int, char**) {
     RUN_TEST(test_resync_with_absent_channel);
     RUN_TEST(test_pending_rc_gear);
     RUN_TEST(test_caps_and_qb_caps);
+    RUN_TEST(test_washer_decode);
+    RUN_TEST(test_washer_interlocks);
+    RUN_TEST(test_washer_caps);
     RUN_TEST(test_version_codes);
     RUN_TEST(test_ign_state_code);
     RUN_TEST(test_park_brake_ack);

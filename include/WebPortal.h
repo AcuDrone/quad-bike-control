@@ -211,6 +211,10 @@ public:
         bool wheel_lock_on;       // True if the lock is engaged (aztec: Relay_4+5+6; always false when not fitted)
         bool wheel_lock_fitted;   // True on aztec (RELAY_WHEEL_LOCK_FITTED); false = no relay behind the function
         uint8_t relay_test;       // Web relay test bits, bit0 = Relay_1 … bit7 = Relay_8
+        bool washer_fitted;       // Headlight washer fitted switch (NVS "washer"/fitted, default off)
+        bool washer_on;           // A headlight-washer pulse is running (Relay_8)
+        uint32_t washer_left_ms;  // Remaining pulse time, ms (0 when none runs)
+        uint16_t washer_pulse_ms; // Pulse length for the next wash (ms, 2000-20000; NVS "washer"/pulse_ms)
 
         // 12 V battery (X10 / GPIO9 sense; aztec has no boost board). Not gated on CAN.
         uint16_t module_voltage_mv; // CALIBRATED battery voltage, mV → JSON "ecu_voltage" (V)

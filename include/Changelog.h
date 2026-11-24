@@ -14,6 +14,15 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.6.3","date":"2026-11-25","uk":[
+"Омивач фар (новий, на квадроциклі й на багі): насос омивача підключається до реле 8. Кнопка «Омити фари» в розділі «Тести» → «Запалювання та освітлення», під блокуванням колеса: одне натискання вмикає насос на заданий час, далі він вимикається сам; нове натискання під час омивання починає відлік заново. Кнопка показує, скільки секунд лишилось. Працює лише з увімкненим запалюванням (ACC або двигун працює), ніколи під час запуску двигуна; вимкнення запалювання зупиняє омивач одразу",
+"Після оновлення омивач ВИМКНЕНО: кнопка сіра. Увімкніть перемикач «Омивач встановлено» в розділі «Калібрування» → картка «Омивач фар» лише на машині, де насос справді підключено. Там же повзунок «Тривалість омивання» (2–20 с, крок 0,5; типово 3 с), значення зберігається окремо для кожної машини",
+"Омивач можна ввімкнути й з наземної станції (кнопки в Mission Planner і QGC з'являться з оновленням плагіна). Реле 7 і далі не використовується. Потрібно залити оновлений образ LittleFS (спершу завантажте журнал подій — заливка образу його стирає)"
+],"en":[
+"Headlight washer (new, on the quad and on the buggy): the washer pump is wired to relay 8. A “Wash headlights” button in Tests → Vehicle Ignition & Lighting, under the wheel lock: one press runs the pump for the set time, then it stops by itself; a new press during a wash restarts it. The button shows the seconds left. It works only with the ignition on (ACC or engine running), never during an engine start; switching the ignition off stops the washer at once",
+"After the update the washer is OFF: the button is greyed. Turn on “Washer fitted” in Calibration → card “Headlight washer” only on the vehicle that actually has the pump. The same card has the “Wash duration” slider (2–20 s, step 0.5; default 3 s), stored per vehicle",
+"The washer can also be started from the ground station (Mission Planner and QGC buttons come with a plugin update). Relay 7 stays unused. Upload the updated LittleFS image (download the event journal first — uploading the image erases it)"
+]},
 {"version":"1.6.2","date":"2026-11-25","uk":[
 "Веб-сторінка завантажується приблизно вп'ятеро швидше: плата надсилає її стиснутою.",
 "Телефон на слабкому Wi-Fi більше не з'їдає пам'ять плати: показання на ньому відстають не більше ніж на секунду, а при поганому зв'язку оновлення лише призупиняються. Сторінка більше не від'єднується після команди на слабкому зв'язку. Перекалібрування не потрібне. Потрібно залити оновлений образ LittleFS (спершу завантажте журнал подій — заливка образу його стирає)"

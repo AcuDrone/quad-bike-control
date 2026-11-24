@@ -382,8 +382,12 @@ on both vehicles.
 | Relay_4 | **IO7** | `0b10000000` | X7 | Lock (switched together with Relay_5 + Relay_6) |
 | Relay_5 | **IO3** | `0b00001000` | X8 | Lock (switched together with Relay_4 + Relay_6) |
 | Relay_6 | **IO2** | `0b00000100` | X9 | Lock (switched together with Relay_4 + Relay_5) |
-| Relay_7 | **IO0** | `0b00000001` | X10 | Spare — off except in the web relay test |
-| Relay_8 | **IO1** | `0b00000010` | X11 | Spare — off except in the web relay test |
+| Relay_7 | **IO0** | `0b00000001` | X10 | Spare — off except in the web relay test; stays unused (see note) |
+| Relay_8 | **IO1** | `0b00000010` | X11 | Headlight washer pump — timed pulse (since 1.6.3, both vehicles) |
+
+> **Relay_7 stays unused** (owner decision 2026-11-25): it was faulty on some boards — likely because
+> PCA9557 IO0 is that chip's only open-drain output (datasheet property; not verified on these
+> boards). The headlight washer therefore went to Relay_8.
 
 > ⚠ **The PCA9557 IO routing is NOT 1:1 with the relay numbers.** Verified from the `Relay.PrjPcb`
 > schematic netlist: `Relay_1=IO4, Relay_2=IO5, Relay_3=IO6, Relay_4=IO7, Relay_5=IO3, Relay_6=IO2,
@@ -401,7 +405,8 @@ through the detected board's table (on aztec only the lock is a group — three 
 | Starter | `RELAY_SET_STARTER` | `0b00100000` | `0b00000010` | Relay_2 (IO5 / P0.1) |
 | Front light | `RELAY_SET_FRONT_LIGHT` | `0b01000000` | `0b00000100` | Relay_3 (IO6 / P0.2) |
 | Lock | `RELAY_SET_WHEEL_LOCK` | `0b10001100` (`0x8C`) | `0b00111000` (`0x38`) | Relay_4 + Relay_5 + Relay_6 (IO7 + IO3 + IO2 / P0.3..P0.5) |
-| Reserved (2 spares) | `RELAY_SET_RESERVED` | `0b00000011` | `0b11000000` | Relay_7, Relay_8 — 0 except in the web relay test |
+| Headlight washer | `RELAY_SET_WASHER` | `0b00000010` | `0b10000000` | Relay_8 (IO1 / P0.7) — timed pulse, only while the washer fitted switch is on (web, default off) |
+| Spare | `RELAY_SET_RESERVED` | `0b00000001` | `0b01000000` | Relay_7 (IO0 / P0.6) — 0 except in the web relay test |
 
 **Lock (fw 1.5.25, `RELAY_WHEEL_LOCK_FITTED = 1`).** The firmware's existing "wheel lock" function
 drives the buggy's lock: Relay_4, Relay_5 and Relay_6 are energized and released **together** in one
@@ -415,7 +420,8 @@ the quad bike.
 
 **Harness wiring note (aztec).** The ignition/ECU line is wired to **X4**, the starter solenoid to
 **X5**, and the front light to **X6**. **X7, X8 and X9** carry the three lock relays, switched
-together as one lock function. Nothing is landed on X10 or X11. The whole 8-bit port is written from a single shadow byte and read back for verification.
+together as one lock function, and, where fitted, the headlight washer pump is on **X11**. Nothing
+is landed on X10. The whole 8-bit port is written from a single shadow byte and read back for verification.
 
 **Web relay test (wiring check).** The web UI's *Relay Test* card has an on/off toggle for each of
 the eight relays (`set_relay_test`), so the harness — in particular each of the three lock relays
@@ -455,7 +461,8 @@ isolation.
 | Relay_2 | P0.1 | Starter solenoid |
 | Relay_3 | P0.2 | Front light |
 | Relay_4..Relay_6 | P0.3..P0.5 | Lock — the three relays switched together (`RELAY_SET_WHEEL_LOCK`, `0x38`) |
-| Relay_7, Relay_8 | P0.6, P0.7 | Spare — off except in the web relay test |
+| Relay_7 | P0.6 | Spare — off except in the web relay test; stays unused (see §6) |
+| Relay_8 | P0.7 | Headlight washer pump — timed pulse (since 1.6.3) |
 
 > ✅ **Mapping and polarity (identity, active-high) were bench-confirmed on 2026-11-07** on an
 > XL9535-K8V5 @0x20 (firmware 1.5.24): every relay Relay_1..Relay_8 switched correctly from the web
@@ -582,9 +589,10 @@ The LED series resistor is now **1 kΩ** (was 1.5 kΩ) for more drive margin on 
      `RELAY_TABLE_PCA9557` (`include/RelayBoardLaw.h`).
    - Aztec assignment (the quad bike's paired assignment lives on `master`): ignition/ECU line on
      **X4** (Relay_1), starter on **X5** (Relay_2), front light on **X6** (Relay_3), lock on
-     **X7/X8/X9** (Relay_4/5/6, IO7/IO3/IO2 — switched together, mask `0x8C`; fw 1.5.25).
-     X10/X11 (Relay_7/Relay_8) stay unconnected and are written off; the only exception is the web
-     relay test (§6), ignition OFF only and auto-off after 30 s.
+     **X7/X8/X9** (Relay_4/5/6, IO7/IO3/IO2 — switched together, mask `0x8C`; fw 1.5.25),
+     headlight washer on **X11** (Relay_8, since 1.6.3). X10 (Relay_7) stays unconnected and is
+     written off; the only exception is the web relay test (§6), ignition OFF only and auto-off
+     after 30 s.
 9. **Driveline speed sensor is on GPIO8 — the X2 6N137 opto input, not a Hall channel.** The fitted
    sensor outputs **12V**; the Hall channels are scaled for 5V (warning 5), while the opto input is
    current-driven and galvanically isolated, so it takes 12V with a single external series resistor.

@@ -9,10 +9,11 @@
 #include "XL9535Expander.h"
 #include "RelayBoardLaw.h"
 #include "CrankLaw.h"
+#include "WasherLaw.h"
 
 /**
- * @brief Relay controller for ignition, starter, lighting and (where fitted) the
- * front-wheel lock.
+ * @brief Relay controller for ignition, starter, lighting, (where fitted) the
+ * front-wheel lock and the headlight-washer pulse.
  *
  * Manages relay outputs for vehicle ignition states (OFF/ACC/IGNITION/CRANKING),
  * the front light and, when RELAY_WHEEL_LOCK_FITTED is 1, the front-wheel lock (driven by the
@@ -44,14 +45,26 @@
  *     starter           = Relay_3 (RELAY_SET_STARTER),
  *     front light       = Relay_4 (RELAY_SET_FRONT_LIGHT),
  *     front-wheel lock  = Relay_5 + Relay_6 (RELAY_SET_WHEEL_LOCK, two paralleled relays),
- *     Relay_7 / Relay_8 = spare (always off)        — RELAY_SET_RESERVED.
+ *     headlight washer  = Relay_8 (RELAY_SET_WASHER, timed pulse),
+ *     Relay_7           = spare (always off)        — RELAY_SET_RESERVED.
  *   aztec buggy (aztec, RELAY_WHEEL_LOCK_FITTED = 1):
  *     ignition/ECU line = Relay_1 (RELAY_SET_IGNITION, single relay),
  *     starter           = Relay_2 (RELAY_SET_STARTER),
  *     front light       = Relay_3 (RELAY_SET_FRONT_LIGHT),
  *     lock              = Relay_4 + Relay_5 + Relay_6 switched together (RELAY_SET_WHEEL_LOCK;
  *                         ⚠ PCA9557 IO7|IO3|IO2 = 0x8C, X7/X8/X9; XL9535 P0.3..P0.5 = 0x38),
- *     Relay_7 / Relay_8 = spare (always off)        — RELAY_SET_RESERVED.
+ *     headlight washer  = Relay_8 (RELAY_SET_WASHER, timed pulse),
+ *     Relay_7           = spare (always off)        — RELAY_SET_RESERVED.
+ *
+ * Headlight washer (both vehicles, change add-headlight-washer-relay): requestWasher()
+ * energizes Relay_8 for the pulse length latched at the start (setWasherPulseMs(), RAM;
+ * VehicleController persists it) and update() releases it by itself (washerExpired(),
+ * wrap-safe). Only while the washer is fitted (setWasherFitted(), RAM; persisted by
+ * VehicleController, default off), the board is available, the ignition is ACC or
+ * IGNITION and no crank is armed / running. A new request while running restarts the
+ * pulse. A running pulse ends in the same write as ignition OFF, a crank (arming or
+ * CRANKING), allOff(), an unverified write / the starter escalation, the fitted switch
+ * turned off, or a GCS stop (journal RELAY washer_abort). Recovery never re-asserts it.
  *
  * Web relay test: any single relay (1..8) can be toggled for a wiring check, but only
  * while the ignition is OFF and no function relay is energized (the wheel lock, where
@@ -226,6 +239,53 @@ public:
         return table_ ? relayTableMask(*table_, relayNumber) : (uint8_t)0;
     }
 
+    // ---- Headlight washer (Relay_8, timed pulse) ----
+
+    /**
+     * @brief Start (or restart) a headlight-washer pulse.
+     * @param reason    set to the refusal text when refused ("washer not fitted - enable it
+     *                  in Calibration", "relay board unavailable", "ignition is OFF",
+     *                  "engine start in progress")
+     * @param restarted set true when a running pulse was restarted
+     * @return true when the pulse runs (the write verified)
+     *
+     * Clears every web test relay before the write. The pulse length in force now
+     * (getWasherPulseMs()) is latched for this pulse.
+     */
+    bool requestWasher(const char*& reason, bool& restarted);
+
+    /**
+     * @brief End a running pulse early (journal `washer_abort why=<why>`); no-op when none
+     * runs. Writes the port when the board is available.
+     */
+    void stopWasher(const char* why);
+
+    /** @brief True while a washer pulse runs (false while the board is unavailable) */
+    bool isWasherOn() const { return isAvailable() && washerOn_; }
+
+    /** @brief Remaining time of the running pulse, ms; 0 when none runs */
+    uint32_t getWasherRemainingMs() const;
+
+    /**
+     * @brief Pulse length for the next wash (RAM only); a value outside
+     * WASHER_PULSE_MS_MIN..MAX is replaced by WASHER_PULSE_MS_DEFAULT. A running pulse
+     * keeps the length it started with.
+     */
+    void setWasherPulseMs(uint16_t ms) { washerPulseMs_ = washerPulseMsOrDefault(ms); }
+
+    /** @brief Pulse length for the next wash, ms */
+    uint16_t getWasherPulseMs() const { return washerPulseMs_; }
+
+    /**
+     * @brief Washer fitted switch (RAM only; VehicleController persists it). Off refuses
+     * every wash request and ends a running pulse (`washer_abort why=not_fitted`). The web
+     * relay test ignores it.
+     */
+    void setWasherFitted(bool fitted);
+
+    /** @brief Washer fitted switch in use */
+    bool isWasherFitted() const { return washerFitted_; }
+
     /** @brief True if relays are wired behind the wheel-lock function (RELAY_WHEEL_LOCK_FITTED) */
     static constexpr bool isWheelLockFitted() { return RELAY_WHEEL_LOCK_FITTED != 0; }
 
@@ -324,8 +384,8 @@ public:
     bool saveBoardSetting(RelayBoardSetting setting);
 
     /**
-     * @brief Fail-safe: turn ignition, starter and front light OFF and release every
-     * web test relay. The front-wheel lock (where fitted) deliberately holds its last
+     * @brief Fail-safe: turn ignition, starter, front light and the headlight washer OFF
+     * and release every web test relay. The front-wheel lock (where fitted) deliberately holds its last
      * state; every other relay ends up off.
      */
     void allOff();
@@ -353,6 +413,7 @@ private:
 #if RELAY_WHEEL_LOCK_FITTED
     uint8_t maskWheelLock_;
 #endif
+    uint8_t maskWasher_;
     uint8_t maskReserved_;
 
     uint8_t outputShadow_;   // whole-port shadow; bits per the runtime masks above
@@ -390,6 +451,20 @@ private:
     // Starter time limit (change add-crank-time-limit-setting)
     uint16_t crankMaxMs_;          // configured limit for the next attempt, ms (setCrankMaxMs())
     uint16_t crankLimitMs_;        // limit latched by the running attempt on entering CRANKING
+
+    // Headlight washer (change add-headlight-washer-relay)
+    bool washerOn_;                // a pulse is running (maskWasher_ in the shadow)
+    bool washerFitted_;            // fitted switch (setWasherFitted(), default off)
+    uint32_t washerSince_;         // millis() of the (re)start
+    uint16_t washerLimitMs_;       // pulse length latched at the (re)start
+    uint16_t washerPulseMs_;       // configured length for the next wash (setWasherPulseMs())
+
+    /**
+     * @brief Mark a running pulse ended early and journal `washer_abort why= left_ms=`
+     * (no port write — the caller writes next).
+     * @return true if a pulse was running
+     */
+    bool abortWasher(const char* why);
 
     /** @brief Recompute the shadow byte from the tracked state and write the port */
     void updateRelays();

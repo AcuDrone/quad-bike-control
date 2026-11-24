@@ -88,19 +88,25 @@ constexpr bool relayTableIsPermutation(const uint8_t (&table)[8]) {
 }
 
 /**
- * @brief Function sets (or masks) are valid: ignition, starter and front light non-empty,
- * every set pairwise disjoint, and together with the reserved set covering all eight bits.
- * `wheelLock` is 0 where the lock is not fitted (RELAY_WHEEL_LOCK_FITTED = 0).
+ * @brief Function sets (or masks) are valid: ignition, starter, front light and the
+ * headlight washer non-empty, every set pairwise disjoint, and together with the reserved
+ * set covering all eight bits. `wheelLock` is 0 where the lock is not fitted
+ * (RELAY_WHEEL_LOCK_FITTED = 0).
+ * The washer is mandatory (Relay_8 on both vehicles, change add-headlight-washer-relay).
  */
 constexpr bool relaySetsValid(uint8_t ignition, uint8_t starter, uint8_t frontLight,
-                              uint8_t wheelLock, uint8_t reserved) {
-    return ignition != 0 && starter != 0 && frontLight != 0 &&
+                              uint8_t wheelLock, uint8_t washer, uint8_t reserved) {
+    return ignition != 0 && starter != 0 && frontLight != 0 && washer != 0 &&
            (ignition & starter) == 0 && (ignition & frontLight) == 0 &&
-           (ignition & wheelLock) == 0 && (ignition & reserved) == 0 &&
+           (ignition & wheelLock) == 0 && (ignition & washer) == 0 &&
+           (ignition & reserved) == 0 &&
            (starter & frontLight) == 0 && (starter & wheelLock) == 0 &&
-           (starter & reserved) == 0 && (frontLight & wheelLock) == 0 &&
-           (frontLight & reserved) == 0 && (wheelLock & reserved) == 0 &&
-           (uint8_t)(ignition | starter | frontLight | wheelLock | reserved) == 0xFF;
+           (starter & washer) == 0 && (starter & reserved) == 0 &&
+           (frontLight & wheelLock) == 0 && (frontLight & washer) == 0 &&
+           (frontLight & reserved) == 0 &&
+           (wheelLock & washer) == 0 && (wheelLock & reserved) == 0 &&
+           (washer & reserved) == 0 &&
+           (uint8_t)(ignition | starter | frontLight | wheelLock | washer | reserved) == 0xFF;
 }
 
 /** @brief Function port masks of one board (wheelLock = 0 where not fitted) */
@@ -109,25 +115,28 @@ struct RelayPortMasks {
     uint8_t starter;
     uint8_t frontLight;
     uint8_t wheelLock;
+    uint8_t washer;      // headlight washer pump (Relay_8)
     uint8_t reserved;
 };
 
 /** @brief Map the relay-number sets through `table` */
 constexpr RelayPortMasks relayBuildMasks(const uint8_t (&table)[8], uint8_t ignitionSet,
                                          uint8_t starterSet, uint8_t frontLightSet,
-                                         uint8_t wheelLockSet, uint8_t reservedSet) {
+                                         uint8_t wheelLockSet, uint8_t washerSet,
+                                         uint8_t reservedSet) {
     return RelayPortMasks{
         relayPortMask(table, ignitionSet),
         relayPortMask(table, starterSet),
         relayPortMask(table, frontLightSet),
         relayPortMask(table, wheelLockSet),
+        relayPortMask(table, washerSet),
         relayPortMask(table, reservedSet)
     };
 }
 
 /** @brief Port masks disjoint and OR to 0xFF (same rule as relaySetsValid) */
 constexpr bool relayMasksValid(const RelayPortMasks& m) {
-    return relaySetsValid(m.ignition, m.starter, m.frontLight, m.wheelLock, m.reserved);
+    return relaySetsValid(m.ignition, m.starter, m.frontLight, m.wheelLock, m.washer, m.reserved);
 }
 
 static_assert(relayTableIsPermutation(RELAY_TABLE_PCA9557), "PCA9557 relay table is not a permutation");

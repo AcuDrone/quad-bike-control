@@ -272,6 +272,10 @@ WebPortal::Telemetry TelemetryManager::collectTelemetry() {
     telemetry.wheel_lock_on = vehicleController_.getWheelLock();
     telemetry.wheel_lock_fitted = vehicleController_.isWheelLockFitted();
     telemetry.relay_test = vehicleController_.getRelayTestBits();
+    telemetry.washer_fitted = vehicleController_.isWasherFitted();
+    telemetry.washer_on = vehicleController_.isWasherOn();
+    telemetry.washer_left_ms = vehicleController_.getWasherRemainingMs();
+    telemetry.washer_pulse_ms = vehicleController_.getWasherPulseMs();
 
     // 12 V battery (X10 / GPIO9 sense) — the "ECU voltage" source, ALWAYS (not gated on CAN:
     // the MT05 ECU never answers PID 0x42). Then board I/O expander health.

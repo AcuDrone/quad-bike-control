@@ -796,6 +796,9 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // × 16 B + ≈ 30 B of copied strings ≈ 0.21 KB of memory, ≈ +250 B of JSON — aztec worst case
     // ≈ 9.17 + 0.21 ≈ 9.38 KB, ≈ 0.86 KB under 10240 (size unchanged; an estimate from the slot
     // count, not a measurement — the "[WEB] telemetry JSON peak" console line measures it).
+    // Headlight washer since 1.6.3: washer_fitted / washer_on / washer_left_ms / washer_pulse_ms,
+    // 4 scalar slots (keys by pointer, nothing copied; ≈ 64 B of memory, ≈ 80 B of JSON) — aztec
+    // worst case ≈ 9.38 + 0.06 ≈ 9.45 KB, ≈ 0.79 KB under 10240 (size unchanged; estimate).
     // Static (single caller: the main-loop broadcast) so the larger document is off the stack.
     static StaticJsonDocument<10240> doc;
     doc.clear();
@@ -1011,6 +1014,10 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["wheel_lock_on"] = telemetry.wheel_lock_on;
     doc["wheel_lock_fitted"] = telemetry.wheel_lock_fitted;   // true on aztec (Relay_4+5+6); false → UI shows "not fitted"
     doc["relay_test"] = telemetry.relay_test;   // web relay test, bit0 = Relay_1 … bit7 = Relay_8
+    doc["washer_fitted"] = telemetry.washer_fitted;     // headlight washer fitted switch
+    doc["washer_on"] = telemetry.washer_on;             // pulse running (Relay_8)
+    doc["washer_left_ms"] = telemetry.washer_left_ms;   // remaining pulse time, ms
+    doc["washer_pulse_ms"] = telemetry.washer_pulse_ms; // length of the next wash, ms
 
     // 12 V battery (X10 sense) + board I/O health — emitted unconditionally (independent of
     // CAN / MAVLink status). "ecu_voltage" keeps its key name for the UI; it is the battery.

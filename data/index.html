@@ -1149,6 +1149,24 @@
                 </div>
                 <div id="crank-max-status" style="margin-top: 8px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
             </div>
+            <!-- Headlight washer (Relay_8): fitted switch (NVS washer/fitted, default off) and the
+                 pulse length (NVS washer/pulse_ms, 2-20 s); the wash button lives in Tests -->
+            <div class="card" id="washer-card">
+                <h2 class="card-title"><span data-i18n="card_washer">💦 Headlight washer</span><button type="button" class="help-btn" onclick="openHelp('washer_help', 'card_washer')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
+                <button class="upload-btn" id="washer-fitted-btn" onclick="toggleWasherFitted()" style="background: var(--secondary); width: 100%;">
+                    <span data-i18n="lbl_washer_fitted">Washer fitted</span>: <span id="washer-fitted-status">--</span>
+                </button>
+                <div style="margin-top: 10px;">
+                    <label data-i18n="lbl_washer_pulse" for="washer-pulse-input" style="font-size: 0.8em; color: var(--muted-foreground);">Wash duration</label>
+                    <div style="display: flex; gap: 8px; align-items: center; margin-top: 4px;">
+                        <input type="range" min="2" max="20" step="0.5" value="3" id="washer-pulse-input" style="flex:1; min-width:0; height: 28px;">
+                        <span id="washer-pulse-val" style="color:var(--foreground); min-width:4.5em; text-align:right;">3.0 s</span>
+                    </div>
+                    <div id="washer-pulse-hint" style="margin-top: 4px; font-size: 0.75em; color: var(--muted-foreground);"></div>
+                    <div id="washer-off-note" data-i18n="washer_off_note" style="display: none; margin-top: 4px; font-size: 0.75em; color: var(--muted-foreground);">Washer off — duration not in use</div>
+                </div>
+                <div id="washer-card-status" style="margin-top: 8px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
+            </div>
             <!-- Service brake: Bosch iBooster on CAN (max stroke, apply / release rate, unit state) -->
             <div class="card" id="brake-card">
                 <h2 class="card-title"><span data-i18n="card_brake">🛑 Brake (iBooster)</span><button type="button" class="help-btn" onclick="openHelp('brake_help,brake_help_rates,brake_help_off,brake_help_fault', 'card_brake')" aria-label="Help" data-i18n-title="help_label">i</button></h2>
@@ -1566,6 +1584,15 @@
                     </button>
                 </div>
 
+                <h3 data-i18n="h_washer" style="margin-bottom: 10px;">Headlight washer</h3>
+                <div style="margin-bottom: 20px;">
+                    <button class="upload-btn" id="washer-btn" onclick="washHeadlights()" style="background: var(--secondary);" disabled>
+                        💦 <span data-i18n="lbl_washer_btn">Wash headlights</span> <span id="washer-left"></span>
+                    </button>
+                    <div id="washer-hint" style="margin-top: 4px; font-size: 0.75em; color: var(--muted-foreground);"></div>
+                    <div id="washer-status" style="margin-top: 4px; font-size: 0.8em; color: var(--success); min-height: 1.2em;"></div>
+                </div>
+
                 <h3 data-i18n="h_telemetry" style="margin-bottom: 10px;">Telemetry</h3>
                 <div class="telemetry-grid" style="grid-template-columns: repeat(2, 1fr);">
                     <div class="telemetry-item">
@@ -1901,7 +1928,7 @@
 
                 // Relay test card
                 card_relay_test: '🧪 Relay Test',
-                relay_test_help: 'Wiring check: toggle one relay at a time. <b>Ignition must be OFF</b>, the light off and the wheel lock released (if fitted). Each relay switches off by itself after 30 s (starter: 2 s); any ignition / light / wheel-lock command switches all test relays off. On a grouped relay (quad: ignition, wheel lock; buggy: lock = 4+5+6) each relay is tested on its own — one contact drives the load for up to 30 s.',
+                relay_test_help: 'Wiring check: toggle one relay at a time. <b>Ignition must be OFF</b>, the light off and the wheel lock released (if fitted). Each relay switches off by itself after 30 s (starter: 2 s); any ignition / light / wheel-lock command switches all test relays off. On a grouped relay (quad: ignition, wheel lock; buggy: lock = 4+5+6) each relay is tested on its own — one contact drives the load for up to 30 s. Relay 8 drives the headlight washer pump; it can be tested here even while the washer is switched off in Calibration.',
                 relay_test_relay: 'Relay %s',
                 relay_fn_1: 'ignition',
                 relay_fn_2: 'starter (max 2 s)',
@@ -1910,7 +1937,7 @@
                 relay_fn_5: 'lock (with 4+6)',
                 relay_fn_6: 'lock (with 4+5)',
                 relay_fn_7: 'spare',
-                relay_fn_8: 'spare',
+                relay_fn_8: 'headlight washer',
                 relay_fn_q_1: 'ignition (pair with 2)',
                 relay_fn_q_2: 'ignition (pair with 1)',
                 relay_fn_q_3: 'starter (max 2 s)',
@@ -1918,7 +1945,7 @@
                 relay_fn_q_5: 'wheel lock (pair with 6)',
                 relay_fn_q_6: 'wheel lock (pair with 5)',
                 relay_fn_q_7: 'spare',
-                relay_fn_q_8: 'spare',
+                relay_fn_q_8: 'headlight washer',
                 relay_test_blocked: 'Available only with ignition OFF, light off, wheel lock released (if fitted) and the relay board healthy.',
                 relay_test_board: 'Board: %s',
 
@@ -2033,6 +2060,18 @@
                 // Ignition & lighting card
                 card_ignition: '🔑 Vehicle Ignition & Lighting',
                 card_engine_start: '🚀 Engine start',
+                card_washer: '💦 Headlight washer',
+                h_washer: 'Headlight washer',
+                lbl_washer_btn: 'Wash headlights',
+                washer_left: '%s s',
+                washer_hint_not_fitted: 'Washer not enabled — Calibration → Headlight washer',
+                washer_hint_ign_off: 'Works only with the ignition on',
+                lbl_washer_fitted: 'Washer fitted',
+                lbl_washer_pulse: 'Wash duration',
+                washer_pulse_val: '%s s',
+                washer_pulse_hint: 'One press runs the pump for %s s (a new press restarts it). A change applies from the next wash',
+                washer_off_note: 'Washer off — duration not in use',
+                washer_help: '<b>Washer fitted</b>: turn it on only on a vehicle with the headlight washer pump on relay 8. It is off by default after the update; while it is off the wash button is greyed, every wash request is refused and the function is hidden from the ground station. The relay test (Tests → Relay Test) drives relay 8 either way, so the wiring can be checked before the washer is enabled.<br><b>Wash duration</b>: relay 8 runs the washer pump. One press of <b>Wash headlights</b> (or the ground-station command) gives one pulse of this length, then the pump stops by itself; a new press during a pulse restarts it. It works only with the ignition on (ACC or engine running) and never during an engine start; switching the ignition OFF stops it at once. 2-20 s, default 3 s. A long pulse empties the washer reservoir and loads the battery.',
                 h_ignition_control: 'Ignition Control',
                 ign_OFF: 'OFF',
                 ign_ACC: 'ACC',
@@ -2567,7 +2606,7 @@
 
                 // Throttle calibration card
                 card_relay_test: '🧪 Перевірка реле',
-                relay_test_help: 'Перевірка проводки: вмикайте по одному реле. <b>Запалювання має бути ВИМК</b>, світло вимкнене, блокування колеса відпущене (якщо встановлене). Кожне реле вимикається само через 30 с (стартер: 2 с); будь-яка команда запалювання / світла / блокування колеса вимикає всі тестові реле. Реле з групи (квадроцикл: запалювання, блокування колеса; багі: блокування = 4+5+6) перевіряється окремо — один контакт живить навантаження до 30 с.',
+                relay_test_help: 'Перевірка проводки: вмикайте по одному реле. <b>Запалювання має бути ВИМК</b>, світло вимкнене, блокування колеса відпущене (якщо встановлене). Кожне реле вимикається само через 30 с (стартер: 2 с); будь-яка команда запалювання / світла / блокування колеса вимикає всі тестові реле. Реле з групи (квадроцикл: запалювання, блокування колеса; багі: блокування = 4+5+6) перевіряється окремо — один контакт живить навантаження до 30 с. Реле 8 вмикає насос омивача фар; його можна перевірити тут, навіть коли омивач вимкнено в Калібруванні.',
                 relay_test_relay: 'Реле %s',
                 relay_fn_1: 'запалювання',
                 relay_fn_2: 'стартер (макс. 2 с)',
@@ -2576,7 +2615,7 @@
                 relay_fn_5: 'блокування (з 4+6)',
                 relay_fn_6: 'блокування (з 4+5)',
                 relay_fn_7: 'резерв',
-                relay_fn_8: 'резерв',
+                relay_fn_8: 'омивач фар',
                 relay_fn_q_1: 'запалювання (пара з 2)',
                 relay_fn_q_2: 'запалювання (пара з 1)',
                 relay_fn_q_3: 'стартер (макс. 2 с)',
@@ -2584,7 +2623,7 @@
                 relay_fn_q_5: 'блокування колеса (пара з 6)',
                 relay_fn_q_6: 'блокування колеса (пара з 5)',
                 relay_fn_q_7: 'резерв',
-                relay_fn_q_8: 'резерв',
+                relay_fn_q_8: 'омивач фар',
                 relay_test_blocked: 'Доступно лише при ВИМК запалюванні, вимкненому світлі, відпущеному блокуванні колеса (якщо встановлене) та справній платі реле.',
                 relay_test_board: 'Плата: %s',
 
@@ -2680,6 +2719,18 @@
                 // Ignition & lighting card
                 card_ignition: '🔑 Запалювання та освітлення',
                 card_engine_start: '🚀 Запуск двигуна',
+                card_washer: '💦 Омивач фар',
+                h_washer: 'Омивач фар',
+                lbl_washer_btn: 'Омити фари',
+                washer_left: '%s с',
+                washer_hint_not_fitted: 'Омивач не ввімкнено — Калібрування → «Омивач фар»',
+                washer_hint_ign_off: 'Працює лише з увімкненим запалюванням',
+                lbl_washer_fitted: 'Омивач встановлено',
+                lbl_washer_pulse: 'Тривалість омивання',
+                washer_pulse_val: '%s с',
+                washer_pulse_hint: 'Одне натискання вмикає насос на %s с (нове натискання починає відлік заново). Зміна діє з наступного омивання',
+                washer_off_note: 'Омивач вимкнено — тривалість не діє',
+                washer_help: '<b>Омивач встановлено</b>: вмикайте лише на машині, де насос омивача фар підключено до реле 8. Після оновлення перемикач вимкнений; поки він вимкнений, кнопка омивання сіра, кожне омивання відхиляється, а наземна станція цієї функції не бачить. Тест реле (Тести → Тест реле) вмикає реле 8 будь-коли, тож проводку можна перевірити ще до ввімкнення омивача.<br><b>Тривалість омивання</b>: реле 8 вмикає насос омивача. Одне натискання <b>Омити фари</b> (або команда з наземної станції) дає один імпульс такої тривалості, далі насос вимикається сам; нове натискання під час імпульсу починає його заново. Працює лише з увімкненим запалюванням (ACC або двигун працює) і ніколи під час запуску двигуна; вимкнення запалювання зупиняє його одразу. 2-20 с, типово 3 с. Довгий імпульс спорожнює бачок омивача і навантажує акумулятор.',
                 h_ignition_control: 'Керування запалюванням',
                 ign_OFF: 'ВИМК',
                 ign_ACC: 'ACC',
@@ -3098,6 +3149,7 @@
             updateSteerParkButton(steerParkState);
             renderCrankDwellHint();
             renderCrankMaxHint();
+            renderWasher();
             const boostStatus = document.getElementById('boost-test-status');
             if (boostStatus) boostStatus.textContent = boostTestActive ? t('on') : t('off');
             const dbgBtn = document.getElementById('debug-toggle-btn');
@@ -3224,6 +3276,7 @@
                 wsConnected = false;
                 updateConnectionStatus(false);
                 renderRelayTest();   // no link → relay test toggles disabled
+                renderWasher();      // no link → wash button disabled
                 gdSetActive(false);  // gear-defaults slider / ▶ row lock until Start is pressed again
                 pprMeas.lastTotal = null;   // a reboot restarts the total: wait for a fresh frame
                 pprMeasReset();      // a disconnect (or reboot) drops a running ppr measurement
@@ -3332,6 +3385,20 @@
                     crankMaxStatus(data.success ? data.message : t('error_prefix') + data.message,
                                    data.success ? 'var(--success)' : 'var(--danger)');
                     if (!data.success) crankMaxRevert();
+                }
+                // Headlight washer: the wash reply goes under the Tests button, the fitted switch and
+                // the pulse-length replies into the Calibration card
+                if (data.message && (data.message.startsWith('Headlight washer ON') ||
+                    data.message.startsWith('Headlight washer restarted') ||
+                    data.message.startsWith('Headlight washer refused'))) {
+                    washerStatus(data.success ? data.message : t('error_prefix') + data.message,
+                                 data.success ? 'var(--success)' : 'var(--danger)');
+                } else if (data.message && (data.message.startsWith('Headlight washer fitted') ||
+                    data.message.startsWith('Failed to save the washer') ||
+                    data.message.startsWith('Washer pulse'))) {
+                    washerCardStatus(data.success ? data.message : t('error_prefix') + data.message,
+                                     data.success ? 'var(--success)' : 'var(--danger)');
+                    if (!data.success) washerPulseRevert();
                 }
                 // Service brake card (iBooster); a refused / failed setting puts the thumbs back
                 if (data.message && (data.message.startsWith('Brake max stroke') || data.message.startsWith('Brake apply rate') ||
@@ -3618,6 +3685,7 @@
             updateParkBrakeCard(data);
             updateCrankDwell(data);
             updateCrankMax(data);
+            updateWasher(data);
 
             // Update gear button active state
             updateGearButtons(data.gear);
@@ -5329,6 +5397,108 @@
             wheelLockState = !wheelLockState;
             sendCommand('set_wheel_lock', wheelLockState);
         }
+
+        // ---- Headlight washer (Relay_8, timed pulse; change add-headlight-washer-relay) ----
+        // Tests button `wash_headlights` (no value, no stop button: the pulse ends by itself),
+        // Calibration card: fitted switch `set_washer_fitted` (telemetry `washer_fitted`, no
+        // optimistic update, like the gear-boost switch) and the pulse length
+        // `set_washer_pulse_ms` (slider in seconds 2-20, step 0.5; built exactly like the
+        // max starter time slider: label live on `input`, ONE send on `change`, drag guard).
+        // Telemetry: washer_on / washer_left_ms drive the button highlight and countdown.
+        let washerFitted = false;      // telemetry `washer_fitted` (absent = older firmware = not fitted)
+        let washerOn = false;
+        let washerLeftMs = 0;
+        let washerIgnOff = true;       // telemetry ignition_state === 'OFF'
+        let washerPulseMs = 3000;      // telemetry `washer_pulse_ms` (firmware default until the first frame)
+        let washerPulseDragging = false;
+        function washHeadlights() {
+            if (!wsConnected || !washerFitted) return;
+            sendCommand('wash_headlights');
+        }
+        function toggleWasherFitted() {
+            if (!wsConnected) return;
+            sendCommand('set_washer_fitted', !washerFitted);
+        }
+        function washerStatus(text, color) {
+            const el = document.getElementById('washer-status');
+            if (!el) return;
+            el.textContent = text;
+            el.style.color = color;
+        }
+        function washerCardStatus(text, color) {
+            const el = document.getElementById('washer-card-status');
+            if (!el) return;
+            el.textContent = text;
+            el.style.color = color;
+        }
+        function washerPulseLabel(ms) {
+            const el = document.getElementById('washer-pulse-val');
+            if (el) el.textContent = t('washer_pulse_val', crankDwellSeconds(ms));
+        }
+        function renderWasher() {
+            const btn = document.getElementById('washer-btn');
+            const left = document.getElementById('washer-left');
+            const hint = document.getElementById('washer-hint');
+            if (btn) {
+                const usable = wsConnected && washerFitted;
+                btn.disabled = !usable;
+                btn.style.opacity = usable ? '' : '0.5';
+                btn.style.cursor = usable ? '' : 'not-allowed';
+                btn.style.background = (usable && washerOn)
+                    ? 'color-mix(in srgb, var(--info) 65%, black)' : 'var(--secondary)';
+            }
+            if (left) left.textContent = (washerFitted && washerOn) ? t('washer_left', crankDwellSeconds(washerLeftMs)) : '';
+            if (hint) {
+                hint.textContent = !washerFitted ? t('washer_hint_not_fitted')
+                                 : (washerIgnOff ? t('washer_hint_ign_off') : '');
+            }
+            const fBtn = document.getElementById('washer-fitted-btn');
+            const fStatus = document.getElementById('washer-fitted-status');
+            if (fBtn && fStatus) {
+                fStatus.textContent = washerFitted ? t('on') : t('off');
+                fBtn.style.background = washerFitted ? 'color-mix(in srgb, var(--success) 65%, black)' : 'var(--secondary)';
+            }
+            const note = document.getElementById('washer-off-note');
+            if (note) note.style.display = washerFitted ? 'none' : '';
+            const ph = document.getElementById('washer-pulse-hint');
+            if (ph) ph.textContent = t('washer_pulse_hint', crankDwellSeconds(washerPulseMs));
+            const sl = document.getElementById('washer-pulse-input');
+            washerPulseLabel(washerPulseDragging && sl ? Number(sl.value) * 1000 : washerPulseMs);
+        }
+        function updateWasher(data) {
+            washerFitted = data.washer_fitted === true;
+            washerOn = data.washer_on === true;
+            washerLeftMs = Number.isFinite(data.washer_left_ms) ? data.washer_left_ms : 0;
+            if (data.ignition_state !== undefined) washerIgnOff = data.ignition_state === 'OFF';
+            if (Number.isFinite(data.washer_pulse_ms)) {   // older firmware: the slider keeps 3 s
+                washerPulseMs = data.washer_pulse_ms;
+                const sl = document.getElementById('washer-pulse-input');
+                if (sl && !washerPulseDragging) sl.value = washerPulseMs / 1000;   // browser snaps to the 0.5 s grid
+            }
+            renderWasher();
+        }
+        // Refused / failed command: put the thumb and the label back on the value in use.
+        function washerPulseRevert() {
+            const sl = document.getElementById('washer-pulse-input');
+            if (sl && !washerPulseDragging) sl.value = washerPulseMs / 1000;
+            renderWasher();
+        }
+        (function initWasherPulseSlider() {
+            const sl = document.getElementById('washer-pulse-input');
+            if (!sl) return;
+            sl.addEventListener('pointerdown', () => { washerPulseDragging = true; });
+            sl.addEventListener('pointercancel', () => { washerPulseDragging = false; });
+            // A press-and-release without moving fires no `change`: release the guard anyway.
+            sl.addEventListener('pointerup', () => { setTimeout(() => { washerPulseDragging = false; }, 0); });
+            sl.addEventListener('input', () => {
+                washerPulseDragging = true;   // keyboard drags too
+                washerPulseLabel(Number(sl.value) * 1000);   // label only, nothing is sent while dragging
+            });
+            sl.addEventListener('change', () => {
+                sendCommand('set_washer_pulse_ms', Math.round(Number(sl.value) * 1000));   // one send on release
+                washerPulseDragging = false;
+            });
+        })();
 
         // ---- Relay test (wiring check; firmware gate: ignition OFF, no function relay on) ----
         // Relay labels follow the vehicle. The lock is fitted on BOTH vehicles now, so

@@ -310,8 +310,9 @@ void setup() {
         Debug::printlnFeature(DebugFeature::CAN, "WARNING: CAN controller failed (will continue without vehicle data)");
     }
 
-    // GCS vehicle commands (MAV_CMD_USER_2): the vehicle layer executes them. Capabilities and the
-    // hardware version are fixed at boot (the relay board is detected once, above).
+    // GCS vehicle commands (MAV_CMD_USER_2): the vehicle layer executes them. The hardware version
+    // and capability bits 0-5 are fixed at boot (the relay board is detected once, above); bit6
+    // follows the headlight-washer fitted switch at runtime (handed over in loop(), below).
     mavlinkInterface.setVehicleCommandSink(
         &vehicleController, vehicleController.getVehicleCapsMask(),
         hardwareVersionCode(BOARD_REVISION_CODE, VEHICLE_TYPE_CODE,
@@ -397,6 +398,10 @@ void loop() {
     steerDiag.update();
     loopTimer.mark(PH_DIAG);
 
+    // Capability bit6 (headlight washer) follows the persisted fitted switch: a toggle reaches the
+    // GCS link here (no-op while unchanged; QB_CAPS then goes out on the next report).
+    mavlinkInterface.setVehicleCapsMask(vehicleController.getVehicleCapsMask());
+
     // Report vehicle state back to the MAVLink network (rate-limited internally)
     CANController::VehicleData vd = vehicleController.getVehicleData();
     String gearToStr   = vehicleController.getTargetGearString();  // current step / assumed gear
@@ -416,13 +421,15 @@ void loop() {
     report.failsafe     = (vehicleController.getInputSource() == InputSource::FAILSAFE);
     // bit0 = the lock (aztec: Relay_4+5+6 energized), from the relay controller's commanded state.
     // bit2 = parking brake APPLIED, bit3 = parking brake APPLYING / RELEASING / UNKNOWN (both 0 = RELEASED).
+    // bit4 = headlight washer pulse running.
     {
         const ParkBrakeState pb = vehicleController.getParkBrakeState();
         report.digitalFlags = (vehicleController.getWheelLock()  ? EFI_DIGITAL_FLAG_WHEEL_LOCK  : 0)
                             | (vehicleController.getFrontLight() ? EFI_DIGITAL_FLAG_FRONT_LIGHT : 0)
                             | (pb == ParkBrakeState::APPLIED ? EFI_DIGITAL_FLAG_PARK_BRAKE : 0)
                             | ((pb == ParkBrakeState::APPLYING || pb == ParkBrakeState::RELEASING ||
-                                pb == ParkBrakeState::UNKNOWN) ? EFI_DIGITAL_FLAG_PARK_BRAKE_UNSETTLED : 0);
+                                pb == ParkBrakeState::UNKNOWN) ? EFI_DIGITAL_FLAG_PARK_BRAKE_UNSETTLED : 0)
+                            | (vehicleController.isWasherOn() ? EFI_DIGITAL_FLAG_WASHER : 0);
     }
     report.speedValid   = vehicleController.isVehicleSpeedValid();
     report.speedMs      = vehicleController.getVehicleSpeedMs();

@@ -28,17 +28,24 @@ struct JTok {
 #define RELAY_SET_WHEEL_LOCK_OR_0_ 0
 #endif
 static_assert(relaySetsValid(RELAY_SET_IGNITION, RELAY_SET_STARTER, RELAY_SET_FRONT_LIGHT,
-                             RELAY_SET_WHEEL_LOCK_OR_0_, RELAY_SET_RESERVED),
+                             RELAY_SET_WHEEL_LOCK_OR_0_, RELAY_SET_WASHER, RELAY_SET_RESERVED),
               "relay function sets overlap, are empty or do not cover all eight relays");
+// The headlight washer is Relay_8 alone on both vehicles — Relay_7 (faulty on some boards)
+// must never slip into a function.
+static_assert(RELAY_SET_WASHER == RELAY_N(8), "the headlight washer must be Relay_8 alone");
+static_assert(WASHER_LAW_PULSE_MS_MIN == WASHER_PULSE_MS_MIN &&
+              WASHER_LAW_PULSE_MS_MAX == WASHER_PULSE_MS_MAX &&
+              WASHER_LAW_PULSE_MS_DEFAULT == WASHER_PULSE_MS_DEFAULT,
+              "WasherLaw.h literals disagree with Constants.h");
 static_assert(relayTableIsPermutation(RELAY_TABLE_PCA9557) && relayTableIsPermutation(RELAY_TABLE_XL9535),
               "relay board tables must map relays 1..8 onto all eight port bits");
 static_assert(relayMasksValid(relayBuildMasks(RELAY_TABLE_PCA9557, RELAY_SET_IGNITION, RELAY_SET_STARTER,
                                               RELAY_SET_FRONT_LIGHT, RELAY_SET_WHEEL_LOCK_OR_0_,
-                                              RELAY_SET_RESERVED)),
+                                              RELAY_SET_WASHER, RELAY_SET_RESERVED)),
               "relay masks on the PCA9557 board overlap or leave a gap");
 static_assert(relayMasksValid(relayBuildMasks(RELAY_TABLE_XL9535, RELAY_SET_IGNITION, RELAY_SET_STARTER,
                                               RELAY_SET_FRONT_LIGHT, RELAY_SET_WHEEL_LOCK_OR_0_,
-                                              RELAY_SET_RESERVED)),
+                                              RELAY_SET_WASHER, RELAY_SET_RESERVED)),
               "relay masks on the XL9535 board overlap or leave a gap");
 // Aztec: ignition / starter / light must stay exactly what the bench-verified build used,
 // and the lock (Relay_4+5+6) must land on IO7|IO3|IO2 (X7/X8/X9) — the ⚠ non-1:1 routing —
@@ -47,13 +54,15 @@ static_assert(relayPortMask(RELAY_TABLE_PCA9557, RELAY_SET_IGNITION) == 0x10 &&
               relayPortMask(RELAY_TABLE_PCA9557, RELAY_SET_STARTER) == 0x20 &&
               relayPortMask(RELAY_TABLE_PCA9557, RELAY_SET_FRONT_LIGHT) == 0x40 &&
               relayPortMask(RELAY_TABLE_PCA9557, RELAY_SET_WHEEL_LOCK_OR_0_) == 0x8C &&
-              relayPortMask(RELAY_TABLE_PCA9557, RELAY_SET_RESERVED) == 0x03,
+              relayPortMask(RELAY_TABLE_PCA9557, RELAY_SET_WASHER) == 0x02 &&
+              relayPortMask(RELAY_TABLE_PCA9557, RELAY_SET_RESERVED) == 0x01,
               "aztec PCA9557 relay masks changed");
 static_assert(relayPortMask(RELAY_TABLE_XL9535, RELAY_SET_IGNITION) == 0x01 &&
               relayPortMask(RELAY_TABLE_XL9535, RELAY_SET_STARTER) == 0x02 &&
               relayPortMask(RELAY_TABLE_XL9535, RELAY_SET_FRONT_LIGHT) == 0x04 &&
               relayPortMask(RELAY_TABLE_XL9535, RELAY_SET_WHEEL_LOCK_OR_0_) == 0x38 &&
-              relayPortMask(RELAY_TABLE_XL9535, RELAY_SET_RESERVED) == 0xC0,
+              relayPortMask(RELAY_TABLE_XL9535, RELAY_SET_WASHER) == 0x80 &&
+              relayPortMask(RELAY_TABLE_XL9535, RELAY_SET_RESERVED) == 0x40,
               "aztec XL9535 relay masks changed");
 static_assert(PCA9557_ADDR_RELAYS == RELAY_LAW_PCA9557_ADDR &&
               XL9535_ADDR_MIN == RELAY_LAW_XL9535_ADDR_MIN && XL9535_ADDR_MAX == RELAY_LAW_XL9535_ADDR_MAX &&
@@ -78,6 +87,7 @@ RelayController::RelayController(TwoWire& bus)
 #if RELAY_WHEEL_LOCK_FITTED
       maskWheelLock_(0),
 #endif
+      maskWasher_(0),
       maskReserved_(0),
       outputShadow_(0x00),
       initialized_(false),
@@ -102,7 +112,12 @@ RelayController::RelayController(TwoWire& bus)
       crankArmed_(false),
       precrankDwellMs_(ACC_PRECRANK_DWELL_MS),
       crankMaxMs_(CRANKING_TIMEOUT),
-      crankLimitMs_(CRANKING_TIMEOUT) {
+      crankLimitMs_(CRANKING_TIMEOUT),
+      washerOn_(false),
+      washerFitted_(false),
+      washerSince_(0),
+      washerLimitMs_(WASHER_PULSE_MS_DEFAULT),
+      washerPulseMs_(WASHER_PULSE_MS_DEFAULT) {
 }
 
 RelayBoardSetting RelayController::loadBoardSetting() {
@@ -202,6 +217,7 @@ bool RelayController::begin() {
     ignitionHighSince_ = 0;
     crankArmed_ = false;
     isCranking_ = false;
+    washerOn_ = false;
 
     // 1. Setting (absent / out-of-range → auto)
     bootSetting_ = loadBoardSetting();
@@ -238,7 +254,7 @@ bool RelayController::begin() {
     }
     const RelayPortMasks m = relayBuildMasks(*table_, RELAY_SET_IGNITION, RELAY_SET_STARTER,
                                              RELAY_SET_FRONT_LIGHT, RELAY_SET_WHEEL_LOCK_OR_0_,
-                                             RELAY_SET_RESERVED);
+                                             RELAY_SET_WASHER, RELAY_SET_RESERVED);
     if (!relayMasksValid(m)) {
         // Unreachable while the static_asserts above hold; refuse to drive the port anyway.
         Debug::printlnFeature(DebugFeature::RELAY,
@@ -253,6 +269,7 @@ bool RelayController::begin() {
 #if RELAY_WHEEL_LOCK_FITTED
     maskWheelLock_ = m.wheelLock;
 #endif
+    maskWasher_ = m.washer;
     maskReserved_ = m.reserved;
     port_ = port;
     boardKind_ = d.kind;
@@ -260,9 +277,9 @@ bool RelayController::begin() {
 
     Debug::printfFeature(DebugFeature::RELAY,
         "[RELAY] Relay board: %s @0x%02X (setting %s); masks ign 0x%02X start 0x%02X light 0x%02X "
-        "lock 0x%02X reserved 0x%02X\n",
+        "lock 0x%02X washer 0x%02X reserved 0x%02X\n",
         port_->name(), boardAddr_, relayBoardSettingToken(bootSetting_),
-        maskIgnition_, maskStarter_, maskFrontLight_, m.wheelLock, maskReserved_);
+        maskIgnition_, maskStarter_, maskFrontLight_, m.wheelLock, maskWasher_, maskReserved_);
 
     // 4. Hardware-safe all-off init (output → polarity → config → pin verify).
     initialized_ = true;   // the board is latched from here on, even if the init fails
@@ -343,6 +360,14 @@ void RelayController::setIgnitionState(IgnitionState state) {
             crankArmed_ = false;
         }
 
+        // The headlight washer runs only with the ignition on and never during a crank:
+        // ignition OFF and the starter engaging end it in this same write.
+        if (state == IgnitionState::OFF) {
+            abortWasher("ign_off");
+        } else if (state == IgnitionState::CRANKING) {
+            abortWasher("crank");
+        }
+
         currentIgnitionState_ = state;
         updateRelays();
     }
@@ -364,6 +389,10 @@ void RelayController::requestCrank() {
     }
     crankArmed_ = true;
     Debug::printlnFeature(DebugFeature::RELAY, "[RELAY] Crank armed - waiting for ignition-line pre-crank dwell");
+    // A crank armed ends a washer pulse at once (the pump must not overlap the dwell / crank).
+    if (abortWasher("crank")) {
+        updateRelays();
+    }
 }
 
 void RelayController::setFrontLight(bool on) {
@@ -431,6 +460,7 @@ void RelayController::allOff() {
     isCranking_ = false;
     ignitionHighSince_ = 0;      // OFF resets the pre-crank dwell
     crankArmed_ = false;   // abort any pending crank
+    abortWasher("all_off");
     clearRelayTests("fail-safe all-off");
 
     if (!initialized_) {
@@ -451,7 +481,9 @@ void RelayController::update(uint16_t engineRpm) {
     if (faulted_) {
         // writePort() already dropped the test bits when the fault was raised; this
         // keeps it so if anything set one since.
-        if (clearRelayTests("relay expander faulted")) {
+        const bool testsCleared = clearRelayTests("relay expander faulted");
+        const bool washerCleared = abortWasher("fault");
+        if (testsCleared || washerCleared) {
             outputShadow_ = computeShadow();
         }
         // While the starter escalation is latched the shadow is already all-off.
@@ -477,6 +509,14 @@ void RelayController::update(uint16_t engineRpm) {
 
     // Web relay test auto-off (RELAY_TEST_TIMEOUT_MS, starter RELAY_TEST_STARTER_MAX_MS).
     expireRelayTests();
+
+    // Headlight washer pulse end — before the crank block, whose early returns must not skip it.
+    if (washerOn_ && washerExpired(washerSince_, millis(), washerLimitMs_)) {
+        washerOn_ = false;
+        Debug::printfFeature(DebugFeature::RELAY, "[RELAY] Headlight washer OFF after %u ms\n",
+                             (unsigned)washerLimitMs_);
+        updateRelays();
+    }
 
     // Fire a pending (armed) crank once the ignition-line pre-crank dwell is satisfied.
     if (crankArmed_ && !isCranking_) {
@@ -538,6 +578,7 @@ uint8_t RelayController::computeShadow() const {
 #if RELAY_WHEEL_LOCK_FITTED
     shadow = withMask(shadow, maskWheelLock_,  wheelLockOn_);
 #endif
+    shadow = withMask(shadow, maskWasher_,     washerOn_);             // headlight washer pulse
     shadow &= (uint8_t)~maskReserved_;                                 // belt and braces
     shadow |= testMask_;                                               // web relay test (ignition OFF only)
     return shadow;
@@ -711,7 +752,10 @@ bool RelayController::writePort(uint8_t value, uint8_t attempts) {
     // Web test relays go off immediately on a fault: drop them from the shadow and,
     // unless the starter escalation below already forces 0x00, push the reduced byte
     // once (update() keeps retrying it while faulted).
-    if (clearRelayTests("relay port write did not verify")) {
+    // The headlight washer goes off with them (it is never resumed by a recovery).
+    const bool testsCleared = clearRelayTests("relay port write did not verify");
+    const bool washerCleared = abortWasher("fault");
+    if (testsCleared || washerCleared) {
         outputShadow_ = computeShadow();
         if (!starterWasSet) {
             port_->writeOutputs(outputShadow_);
@@ -736,6 +780,7 @@ void RelayController::escalateStarter() {
     allOffEscalation_ = true;
     starterInhibit_ = true;
     clearRelayTests("starter escalation");
+    abortWasher("fault");
     outputShadow_ = 0x00;
     forceAllOffWrite();
     currentIgnitionState_ = IgnitionState::OFF;
@@ -790,5 +835,84 @@ void RelayController::forceAllOffWrite() {
     // Best effort, single transaction — the retry loop lives in update().
     if (port_ != nullptr && !initPending_) {
         port_->writeOutputs(0x00);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Headlight washer (Relay_8, timed pulse) — change add-headlight-washer-relay
+// ---------------------------------------------------------------------------
+
+bool RelayController::abortWasher(const char* why) {
+    if (!washerOn_) {
+        return false;
+    }
+    const uint32_t left = washerRemainingMs(washerSince_, millis(), washerLimitMs_);
+    washerOn_ = false;
+    Debug::printfFeature(DebugFeature::RELAY, "[RELAY] Headlight washer aborted (%s, %lu ms left)\n",
+                         why, (unsigned long)left);
+    EventJournal::log(JSrc::RELAY, JLvl::I, "washer_abort", "why=%s left_ms=%lu",
+                      JTok(why).s, (unsigned long)left);
+    return true;
+}
+
+bool RelayController::requestWasher(const char*& reason, bool& restarted) {
+    reason = nullptr;
+    restarted = false;
+    const WasherVerdict v = washerStartDecide(washerFitted_, isAvailable() && maskWasher_ != 0,
+                                              (uint8_t)currentIgnitionState_, crankArmed_, isCranking_);
+    switch (v) {
+        case WasherVerdict::REFUSED_NOT_FITTED:   reason = "washer not fitted - enable it in Calibration"; break;
+        case WasherVerdict::REFUSED_UNAVAILABLE:  reason = "relay board unavailable"; break;
+        case WasherVerdict::REFUSED_IGNITION_OFF: reason = "ignition is OFF"; break;
+        case WasherVerdict::REFUSED_STARTING:     reason = "engine start in progress"; break;
+        case WasherVerdict::START:
+        default:                                  break;
+    }
+    if (reason != nullptr) {
+        Debug::printfFeature(DebugFeature::RELAY, "[RELAY] Headlight washer refused — %s\n", reason);
+        return false;
+    }
+
+    // Defensive: the relay test can only be on with the ignition OFF.
+    clearRelayTests("headlight washer takes over");
+    restarted = washerOn_;
+    washerOn_ = true;
+    washerSince_ = millis();
+    washerLimitMs_ = washerPulseMs_;   // latched: a change mid-pulse applies from the next wash
+    Debug::printfFeature(DebugFeature::RELAY, "[RELAY] Headlight washer ON for %u ms%s\n",
+                         (unsigned)washerLimitMs_, restarted ? " (restarted)" : "");
+    updateRelays();
+    if (!isAvailable()) {
+        // The write did not verify: writePort() already marked the washer off.
+        reason = "relay board unavailable";
+        return false;
+    }
+    return true;
+}
+
+void RelayController::stopWasher(const char* why) {
+    if (!abortWasher(why)) {
+        return;
+    }
+    if (initialized_) {
+        updateRelays();
+    }
+}
+
+uint32_t RelayController::getWasherRemainingMs() const {
+    if (!isWasherOn()) {
+        return 0;
+    }
+    return washerRemainingMs(washerSince_, millis(), washerLimitMs_);
+}
+
+void RelayController::setWasherFitted(bool fitted) {
+    if (washerFitted_ == fitted) {
+        return;
+    }
+    washerFitted_ = fitted;
+    Debug::printfFeature(DebugFeature::RELAY, "[RELAY] Headlight washer fitted: %s\n", fitted ? "ON" : "OFF");
+    if (!fitted) {
+        stopWasher("not_fitted");
     }
 }

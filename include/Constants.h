@@ -237,11 +237,12 @@ static_assert(GEAR_CODE_LOW != 0b000 && GEAR_CODE_HIGH != 0b000 && GEAR_CODE_NEU
 //
 // AZTEC BUGGY assignment (this branch). The quad bike's assignment — ignition on the
 // paralleled pair Relay_1+Relay_2, starter Relay_3, light Relay_4, front-wheel lock on
-// Relay_5+Relay_6, spare Relay_7/8 — lives on master; the aztec harness is wired
-// differently. Every function is a SET (not a single relay), so the aztec lock — three
-// relays switched together — needs no driver change.
+// Relay_5+Relay_6, headlight washer Relay_8, spare Relay_7 — lives on master; the aztec
+// harness is wired differently. Every function is a SET (not a single relay), so the aztec
+// lock — three relays switched together — needs no driver change.
 // Resulting masks — PCA9557 / XL9535: ignition 0x10 / 0x01, starter 0x20 / 0x02,
-// front light 0x40 / 0x04, lock 0x8C / 0x38, reserved 0x03 / 0xC0.
+// front light 0x40 / 0x04, lock 0x8C / 0x38, headlight washer 0x02 / 0x80,
+// reserved 0x01 / 0x40.
 #define RELAY_SET_IGNITION     RELAY_N(1)  // Relay_1 (PCA9557 IO4, X4 / XL9535 P0.0) — ignition/ECU line (single relay)
 #define RELAY_SET_STARTER      RELAY_N(2)  // Relay_2 (PCA9557 IO5, X5 / XL9535 P0.1) — starter solenoid
 #define RELAY_SET_FRONT_LIGHT  RELAY_N(3)  // Relay_3 (PCA9557 IO6, X6 / XL9535 P0.2) — front light
@@ -251,10 +252,13 @@ static_assert(GEAR_CODE_LOW != 0b000 && GEAR_CODE_HIGH != 0b000 && GEAR_CODE_NEU
 // until 1.5.33, no RC channel since 1.5.34).
 //   ⚠ On the PCA9557 board these are IO7 / IO3 / IO2 (X7 / X8 / X9) — NOT IO3..IO5.
 #define RELAY_SET_WHEEL_LOCK   (RELAY_N(4) | RELAY_N(5) | RELAY_N(6))  // PCA9557 IO7|IO3|IO2 = 0x8C, X7/X8/X9 / XL9535 P0.3..P0.5 = 0x38
-// Relay_7 and Relay_8 are spare. Outside the web relay test (below) a reserved relay is
-// never set by the driver — every port write leaves those bits 0. Connectors X4..X11 here
-// are the PCA9557 RELAY BOARD's connectors, not the main board's X4/X5 Hall headers.
-#define RELAY_SET_RESERVED     (RELAY_N(7) | RELAY_N(8))
+#define RELAY_SET_WASHER       RELAY_N(8)  // Relay_8 (PCA9557 IO1, X11 / XL9535 P0.7) — headlight washer pump, timed pulse (both vehicles)
+// Relay_7 is spare: outside the web relay test (below) a reserved relay is never set by
+// the driver — every port write leaves that bit 0. Connectors X4..X11 here are the
+// PCA9557 RELAY BOARD's connectors, not the main board's X4/X5 Hall headers.
+// Relay_7 stays unused — faulty on some boards (likely PCA9557 IO0 = the chip's only
+// open-drain output; not verified).
+#define RELAY_SET_RESERVED     RELAY_N(7)  // Relay_7 — spare
 
 // Web relay test (bench wiring check). Any of the eight relays can be toggled from the
 // web UI, but ONLY while the ignition is OFF and no real function relay is energized;
@@ -286,6 +290,20 @@ static_assert(GEAR_CODE_LOW != 0b000 && GEAR_CODE_HIGH != 0b000 && GEAR_CODE_NEU
 // uint8: 0 = auto (default, also for an absent or out-of-range value), 1 = pca9557, 2 = xl9535.
 #define RELAY_BOARD_NVS_NS         "relay"
 #define RELAY_BOARD_NVS_KEY        "board"
+
+// Headlight washer ("омивач фар", Relay_8, change add-headlight-washer-relay). One wash =
+// Relay_8 on for the pulse length, then RelayController releases it by itself. Only with
+// the ignition on (ACC / IGNITION) and never during an engine start. Both settings are
+// per vehicle in NVS namespace "washer", owned by VehicleController:
+//   pulse_ms — uint16 ms, 2000..20000, missing = 3000;
+//   fitted   — bool, missing = false (washer off until the operator enables it).
+// The pulse literals MUST match include/WasherLaw.h (static_assert in RelayController.cpp).
+#define WASHER_PULSE_MS_MIN        2000   // ms
+#define WASHER_PULSE_MS_MAX        20000  // ms
+#define WASHER_PULSE_MS_DEFAULT    3000   // ms
+#define WASHER_NVS_NAMESPACE       "washer"
+#define WASHER_PULSE_NVS_KEY       "pulse_ms"  // uint16, ms
+#define WASHER_FITTED_NVS_KEY      "fitted"    // bool
 
 // ============================================================================
 // 12 V BATTERY SENSE (X10 / GPIO9 — aztec: no Buck-Boost board fitted)
@@ -449,8 +467,10 @@ struct ServoChannelConfig {
 //   3 headlight (OFF 0, ON 1)           caps bit3
 //   4 diff lock (OFF 0, ON 1)           caps bit4
 //   5 handbrake (OFF 0, ON 1)           caps bit5 — aztec only, never on the quad bike
+//   6 headlight washer (stop 0, wash 1) caps bit6 — only while the washer fitted switch is on
 // TEMPORARILY_REJECTED reasons in result_param2: 1 engine not running, 2 speed > 1.4 m/s,
-// 3 fail-safe / not under MAVLink control, 4 speed > 3 km/h (handbrake apply). The decisions
+// 3 fail-safe / not under MAVLink control, 4 speed > 3 km/h (handbrake apply), 5 ignition
+// not on / engine start in progress (headlight washer). The decisions
 // live in include/VehicleCommandLaw.h (its literals mirror these).
 #define VCMD_PROTOCOL_VERSION     1
 #define VCMD_CAPS_TX_MS           10000  // ms between QB_CAPS NAMED_VALUE_INT broadcasts
@@ -460,6 +480,7 @@ struct ServoChannelConfig {
 #define VCMD_CAP_LIGHT            0x08
 #define VCMD_CAP_LOCK             0x10
 #define VCMD_CAP_HANDBRAKE        0x20
+#define VCMD_CAP_WASHER           0x40   // runtime: set only while the washer fitted switch is on
 // RC channels outside this band (incl. 0 = output disabled) are "absent": no change of state.
 #define RC_CHANNEL_VALID_MIN_US   880
 #define RC_CHANNEL_VALID_MAX_US   2160
@@ -514,11 +535,13 @@ struct ServoChannelConfig {
 
 // Digital output states reported back to the GCS as a bitmask carried in
 // EFI_STATUS.pt_compensation (float). MUST stay in sync with the MP plugin decode.
-// Value range 0–15; bit4+ reserved for future digital outputs.
+// bits 2–3 = buggy parking brake (never reused; always 0 on the quad bike);
+// bit5+ reserved for future digital outputs.
 #define EFI_DIGITAL_FLAG_WHEEL_LOCK  0x01  // bit0 — lock engaged (aztec: Relay_4+5+6 energized)
 #define EFI_DIGITAL_FLAG_FRONT_LIGHT 0x02  // bit1 — front light on
 #define EFI_DIGITAL_FLAG_PARK_BRAKE  0x04  // bit2 — parking brake APPLIED (aztec)
 #define EFI_DIGITAL_FLAG_PARK_BRAKE_UNSETTLED 0x08  // bit3 — parking brake APPLYING / RELEASING / UNKNOWN; bits 2+3 clear = RELEASED
+#define EFI_DIGITAL_FLAG_WASHER      0x10  // bit4 — headlight washer pulse running (both vehicles)
 
 // ============================================================================
 // SERVO CONFIGURATION
@@ -1263,7 +1286,7 @@ enum class InputSource {
 // Firmware version string (semantic versioning: MAJOR.MINOR.PATCH)
 // Update this constant when releasing new firmware versions, and add a matching
 // entry to include/Changelog.h — the web UI shows both.
-#define FIRMWARE_VERSION "1.6.2"
+#define FIRMWARE_VERSION "1.6.3"
 
 // Hardware this build targets. One value per hardware branch ("Control_v0" on
 // master, "DevKitC-1" on old-board). Reported next to the version in telemetry
