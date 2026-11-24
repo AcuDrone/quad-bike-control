@@ -157,8 +157,7 @@ table (masks shown for the PCA9557 / XL9535 board):
   (see "Headlight Washer Pulse");
 - Relay_7 spare (`RELAY_SET_RESERVED`; `0b00000001` / `0b01000000`), never used by a function.
 
-The front-wheel lock SHALL be fitted (`RELAY_WHEEL_LOCK_FITTED` = 1). It replaces, for this build
-only, the aztec buggy's "Front-Wheel Lock Not Fitted" behaviour. It SHALL be driven by the web
+The front-wheel lock SHALL be fitted (`RELAY_WHEEL_LOCK_FITTED` = 1). It SHALL be driven by the web
 `set_wheel_lock` command and the GCS lock command only, never by an RC / MAVLink servo channel (see
 "Lock Not Driven by an RC Channel").
 

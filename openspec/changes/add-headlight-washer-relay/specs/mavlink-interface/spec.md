@@ -27,7 +27,7 @@ with the other flags where the report is built (`src/main.cpp`) and sent with th
 ## MODIFIED Requirements
 ### Requirement: Relay Controller for Ignition and Lights
 The system SHALL provide a `RelayController` class to manage relay outputs for ignition
-states, front light control and the headlight-washer pulse, driven by commands decoded from the MAVLink
+states, front light control, the lock and the headlight-washer pulse, driven by commands decoded from the MAVLink
 interface or the web portal. The relays SHALL be driven through the external relay board's expander
 — the PCA9557 relay board at `0x1F` or the XL9535-K8V5 relay board at `0x20`..`0x27`, selected once
 at boot (see `gpio-expander` "Relay Board Selection and Detection") — rather than through direct
@@ -38,20 +38,21 @@ The PCA9557 relay board's IO routing is NOT 1:1 with the relay numbers (`Relay_1
 Relay_2=IO5, Relay_3=IO6, Relay_4=IO7, Relay_5=IO3, Relay_6=IO2, Relay_7=IO0, Relay_8=IO1`,
 per the `Relay.PrjPcb` netlist); the XL9535 board maps Relay_N to P0.(N-1). Each function is defined
 in `Constants.h` as a relay-number set and addressed at runtime as a whole-port MASK built from the
-active board's table. Aztec buggy assignment (no relay is paired; masks shown for the PCA9557 /
-XL9535 board):
+active board's table. Aztec buggy assignment (masks shown for the PCA9557 / XL9535 board):
 
 | Function | Set constant | PCA9557 mask | XL9535 mask | Relays |
 |----------|--------------|--------------|-------------|--------|
 | Ignition / ECU line | `RELAY_SET_IGNITION` | `0b00010000` | `0b00000001` | Relay_1 |
 | Starter | `RELAY_SET_STARTER` | `0b00100000` | `0b00000010` | Relay_2 |
 | Front light | `RELAY_SET_FRONT_LIGHT` | `0b01000000` | `0b00000100` | Relay_3 |
+| Lock | `RELAY_SET_WHEEL_LOCK` | `0b10001100` | `0b00111000` | Relay_4 + Relay_5 + Relay_6, switched together |
 | Headlight washer | `RELAY_SET_WASHER` | `0b00000010` | `0b10000000` | Relay_8 — timed pulse (see `vehicle-systems` "Headlight Washer Pulse") |
-| Reserved | `RELAY_SET_RESERVED` | `0b10001101` | `0b01111000` | Relay_4..Relay_6 — three locks specified in a later change; Relay_7 — spare, never used by a function; off except in the web relay test |
+| Reserved | `RELAY_SET_RESERVED` | `0b00000001` | `0b01000000` | Relay_7 — spare, never used by a function; off except in the web relay test |
 
-The front-wheel lock is not fitted on the aztec buggy. The `EFI_STATUS` digital-output bitmask
-layout SHALL be unchanged except for the new bit4 `EFI_DIGITAL_FLAG_WASHER` (see "Headlight Washer
-State in the EFI_STATUS Digital-Output Bitmask"). MAVLink servo channel 7 SHALL NOT drive the lock on any build (see
+The lock is fitted on the aztec buggy (`RELAY_WHEEL_LOCK_FITTED = 1`). The `EFI_STATUS`
+digital-output bitmask layout SHALL be unchanged except for the new bit4 `EFI_DIGITAL_FLAG_WASHER`
+(see "Headlight Washer State in the EFI_STATUS Digital-Output Bitmask"), and its bit0 (`EFI_DIGITAL_FLAG_WHEEL_LOCK`) SHALL
+report the lock. MAVLink servo channel 7 SHALL NOT drive the lock on any build (see
 `vehicle-systems` "Lock Not Driven by an RC Channel"); the lock is requested only by the web
 `set_wheel_lock` command and the GCS lock command.
 
@@ -61,7 +62,7 @@ State in the EFI_STATUS Digital-Output Bitmask"). MAVLink servo channel 7 SHALL 
   and its eight relay pins configured as outputs by `initAllOff()` (output `0x00` before
   configuration)
 - **AND** the pins SHALL read back `0x00` (all relays OFF)
-- **AND** internal state tracking is initialized to OFF / light off
+- **AND** internal state tracking is initialized to OFF / light off / lock released
 - **AND** true is returned if initialization succeeds, false if detection fails or is ambiguous, or the
   all-off state does not verify
 
@@ -84,26 +85,29 @@ State in the EFI_STATUS Digital-Output Bitmask"). MAVLink servo channel 7 SHALL 
 
 #### Scenario: Control front-wheel lock
 - **WHEN** a web or GCS lock request calls `setWheelLock(true)`
-- **THEN** `setWheelLock()` SHALL return `false` and no port write SHALL be made
-- **AND** the rejection SHALL be logged once per boot, not on every control loop
-- **AND** `getWheelLock()` SHALL return `false`
-- **AND** bit0 (`EFI_DIGITAL_FLAG_WHEEL_LOCK`) of the `EFI_STATUS` digital-output bitmask SHALL be 0
+- **THEN** `setWheelLock(true)` SHALL set the whole lock mask (Relay_4, Relay_5 and Relay_6) HIGH in
+  one verified whole-port write and return `true`
+- **AND** `getWheelLock()` SHALL return `true`
+- **AND** bit0 (`EFI_DIGITAL_FLAG_WHEEL_LOCK`) of the `EFI_STATUS` digital-output bitmask SHALL be 1
+- **AND WHEN** a web or GCS lock release calls `setWheelLock(false)`
+- **THEN** the lock mask SHALL be set LOW, `getWheelLock()` SHALL return `false` and bit0 SHALL be 0
+- **AND** a request for the state already in force SHALL return `true` without rewriting the port
 
 #### Scenario: Spare relays are never energized
 - **WHEN** any relay state changes through a MAVLink- or web-decoded vehicle function
-- **THEN** every reserved bit — Relay_4, Relay_5, Relay_6 and Relay_7, at the active board's
-  port bits — SHALL be written LOW unless the web relay test (ignition OFF only)
-  energizes that relay
+- **THEN** every reserved bit — Relay_7, at the active board's port bits — SHALL be
+  written LOW unless the web relay test (ignition OFF only) energizes that relay
 - **AND** Relay_8 SHALL be written HIGH only while a headlight-washer pulse runs (or the web relay test
   energizes it)
-- **AND** a MAVLink ignition command that leaves `OFF`, a front-light ON or a washer start SHALL clear
-  every web test relay first
+- **AND** a MAVLink ignition command that leaves `OFF`, a front-light ON, a LOCK or a washer start SHALL
+  clear every web test relay first
 
 #### Scenario: Fail-safe all relays off
 - **WHEN** `allOff()` is called (fail-safe trigger)
 - **THEN** the ignition mask, the starter mask, the front-light mask and the washer mask are set LOW
 - **AND** internal state is reset to safe defaults (OFF, lights off, no washer pulse)
-- **AND** every web test relay is released, so all eight relays are LOW
+- **AND** the lock mask SHALL hold its last commanded state
+- **AND** every web test relay is released, so every relay outside the lock mask is LOW
 - **AND** the fail-safe write is verified by pin read-back like any other relay write
 
 #### Scenario: Relay commands are no-ops when the expander is unavailable
@@ -277,3 +281,40 @@ unknown functions SHALL keep answering `UNSUPPORTED`.
   headlight washer takes bit4 (`0x10`), bits 2–3 being reserved for the buggy's parking brake on
   every build
 
+### Requirement: Parking Brake State in the EFI_STATUS Digital-Output Bitmask
+The `EFI_STATUS.pt_compensation` digital-output bitmask SHALL report the aztec parking-brake state
+in two new bits, next to bit0 `EFI_DIGITAL_FLAG_WHEEL_LOCK` and bit1 `EFI_DIGITAL_FLAG_FRONT_LIGHT`:
+- bit2 `EFI_DIGITAL_FLAG_PARK_BRAKE` (0x04) SHALL be set when the state is `APPLIED`;
+- bit3 `EFI_DIGITAL_FLAG_PARK_BRAKE_UNSETTLED` (0x08) SHALL be set when the state is `APPLYING`,
+  `RELEASING` or `UNKNOWN`.
+
+Both bits clear SHALL mean `RELEASED`. Bits 0 and 1 SHALL keep their meaning, bit4 SHALL be the
+headlight washer (see "Headlight Washer State in the EFI_STATUS Digital-Output Bitmask"), and bits
+5–7 SHALL stay 0. The bitmask SHALL be assembled with the other flags in `src/main.cpp`, and
+`MAVLINK_SETUP.md` SHALL document the bits and the value range 0–31 (0–15 while no washer pulse
+runs).
+
+#### Scenario: Applied
+- **WHEN** the park brake is `APPLIED`, the lock is released, the light is off and no washer pulse
+  runs
+- **THEN** `pt_compensation` SHALL be 4.0
+
+#### Scenario: Running or unknown
+- **WHEN** the park brake is `APPLYING`, `RELEASING` or `UNKNOWN`
+- **THEN** bit3 SHALL be 1 and bit2 SHALL be 0
+
+#### Scenario: Throttle passing during a release
+- **WHEN** a release run has passed its throttle release point and the actuator is still running
+- **THEN** bit3 SHALL still be 1 and bit2 SHALL be 0, because the state is `RELEASING` until the
+  run ends
+
+#### Scenario: Released
+- **WHEN** the park brake is `RELEASED`
+- **THEN** bits 2 and 3 SHALL both be 0
+
+#### Scenario: Existing bits unchanged
+- **WHEN** the lock is engaged and the park brake is `APPLIED`
+- **THEN** bit0 and bit2 SHALL both be 1 (`pt_compensation` = 5.0 with the light off and no washer
+  pulse)
+- **AND WHEN** a washer pulse then runs
+- **THEN** bit4 SHALL also be 1 (`pt_compensation` = 21.0) and bits 0–3 SHALL be unchanged
