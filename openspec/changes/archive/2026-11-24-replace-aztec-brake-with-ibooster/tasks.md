@@ -223,7 +223,7 @@ until 9.6.
   QGC; replug → "Brake: OK"; plug / unplug every 1 s for 20 s → at most one brake text per 5 s.
 
 ## 10. Archive
-- [ ] 10.1 Archive after `add-brake-tuning-card`, `add-aztec-parking-brake`,
+- [x] 10.1 Archive after `add-brake-tuning-card`, `add-aztec-parking-brake`,
   `repurpose-x10-battery-sense`, `add-park-brake-release-by-service-brake`,
   `add-event-journal-and-link-recovery` and `move-can-rx-to-interrupt`, once §9 passes;
   `openspec validate --strict` after archiving.

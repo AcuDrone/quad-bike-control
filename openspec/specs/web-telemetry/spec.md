@@ -157,32 +157,6 @@ The telemetry broadcast SHALL include steering-motor health data sourced from th
 - **AND** SHALL show a fault / driver-ok indicator (e.g. green when `steer_driver_ok` is true and no fault, red on fault or driver down)
 - **AND** all new UI labels SHALL have i18n keys present in both the `en` and `uk` dictionaries with maintained parity
 
-### Requirement: 24V Rail Telemetry
-The system SHALL include the 24V boost rail state in the telemetry broadcast so the rail powering
-the steering VESC, Jetson, Starlink and cameras is observable from the web interface.
-
-#### Scenario: Collect rail data
-- **WHEN** telemetry collection is triggered
-- **THEN** the latest averaged 24V rail voltage SHALL be collected
-- **AND** the commanded boost enable state SHALL be collected
-- **AND** the low-rail warning flag SHALL be collected
-
-#### Scenario: Format rail data as JSON
-- **WHEN** telemetry data is formatted as JSON
-- **THEN** `"rail_24v"` SHALL be included as a float with 1 decimal place
-- **AND** `"boost_on"` SHALL be included as a boolean
-- **AND** `"rail_low"` SHALL be included as a boolean
-- **AND** these fields SHALL be emitted unconditionally, independent of CAN or MAVLink status
-
-#### Scenario: Display rail voltage on the web interface
-- **WHEN** a telemetry message with `rail_24v` is received
-- **THEN** the rail voltage SHALL be displayed in volts with 1 decimal place
-- **AND** the reading SHALL be colour-coded: normal when at or above the low threshold, warning when
-  `rail_low` is true
-- **AND** the boost enable state SHALL be shown alongside it, so a deliberately disabled boost is
-  distinguishable from a failed rail
-- **AND** labels SHALL have i18n keys present in both the `en` and `uk` dictionaries
-
 ### Requirement: Board I/O Health Telemetry
 The system SHALL report the health of the two I2C port expanders in telemetry, because the gear
 interlock, the brake endstop and the ignition/starter path now depend on them.
@@ -321,41 +295,43 @@ serialisation.
 - **AND** every label SHALL be present in both the English and the Ukrainian dictionary
 
 ### Requirement: ECU Electrical and Air Telemetry
-The system SHALL include control module voltage, intake air temperature and calculated engine load
-in the CAN vehicle-data telemetry, and the web interface SHALL display them in the CAN telemetry
-card, so operators can see charging-system health, intake air conditions and the ECU's own load
-estimate alongside the other engine parameters.
+The system SHALL include intake air temperature and calculated engine load in the CAN vehicle-data
+telemetry, and the web interface SHALL display them in the CAN telemetry card, so operators can see
+intake air conditions and the ECU's own load estimate alongside the other engine parameters. The
+`ecu_voltage` field is no longer a CAN value: it carries the 12 V battery measured on X10 (see
+"12 V Battery Telemetry") and is emitted outside the CAN-gated block.
 
 #### Scenario: Include ECU voltage, intake temperature and engine load in telemetry JSON
 - **WHEN** a telemetry update is broadcast
 - **AND** CAN status is "connected"
-- **THEN** the telemetry JSON SHALL include an `ecu_voltage` field carrying the control module
-  supply voltage in volts with two decimal places
-- **AND** SHALL include an `intake_temp` field carrying the intake air temperature in °C
+- **THEN** the telemetry JSON SHALL include an `intake_temp` field carrying the intake air
+  temperature in °C
 - **AND** SHALL include an `engine_load` field carrying the calculated engine load as a percentage
   (0–100)
 - **WHEN** CAN status is not "connected"
-- **THEN** all three fields SHALL be omitted alongside the other CAN vehicle-data fields, rather
-  than being emitted as zeros
+- **THEN** both fields SHALL be omitted alongside the other CAN vehicle-data fields, rather than
+  being emitted as zeros
+- **AND** `ecu_voltage` SHALL NOT be part of the CAN-gated block
 
 #### Scenario: Populate the fields from CAN vehicle data
 - **WHEN** telemetry collection is triggered
 - **AND** the CAN `VehicleData` is valid
-- **THEN** the values SHALL be copied from the most recent `VehicleData` module voltage, intake
-  temperature and engine load readings
+- **THEN** the values SHALL be copied from the most recent `VehicleData` intake temperature and
+  engine load readings
 - **WHEN** the CAN `VehicleData` is not valid
 - **THEN** the fields SHALL be reset to their zero defaults and the CAN-gated block SHALL be
   omitted from the payload
 
 #### Scenario: Display the new values in the CAN telemetry card
-- **WHEN** a telemetry message containing `ecu_voltage`, `intake_temp` and `engine_load` is
-  received
-- **THEN** the CAN telemetry card SHALL display module voltage in volts, intake air temperature in
-  °C, and engine load as a percentage
+- **WHEN** a telemetry message containing `intake_temp` and `engine_load` is received
+- **THEN** the CAN telemetry card SHALL display intake air temperature in °C and engine load as a
+  percentage
 - **AND** the values SHALL update in real time as new telemetry arrives
+- **AND** the CAN card SHALL NOT show a module voltage tile (the battery tile lives in the
+  ignition card)
 - **WHEN** `can_status` is not "connected"
-- **THEN** the three readouts SHALL show a placeholder (e.g. `-- V`, `--°C`, `--%`) rather than a
-  stale or misleading value
+- **THEN** both readouts SHALL show a placeholder (e.g. `--°C`, `--%`) rather than a stale or
+  misleading value
 
 #### Scenario: New UI labels have full i18n parity
 - **WHEN** the new CAN-card labels are added to the web UI
@@ -368,8 +344,8 @@ estimate alongside the other engine parameters.
 - **THEN** the serialized JSON document SHALL remain within the configured
   `StaticJsonDocument` capacity, including the peak case where the transient ECU probe object is
   also present
-- **AND** the steady-state payload growth SHALL be bounded by the three scalar fields (no arrays
-  or nested objects are introduced)
+- **AND** the steady-state payload growth SHALL be bounded by scalar fields (no arrays or nested
+  objects are introduced)
 - **AND** the 5 Hz broadcast cadence SHALL be unaffected
 
 ### Requirement: Odometer and Trip Telemetry
@@ -617,19 +593,22 @@ hidden when no problem is active.
   valid VESC data
 
 #### Scenario: Low 12 V ECU voltage
-- **WHEN** a frame has `can_status` equal to `connected` and `ecu_voltage_low` true
+- **WHEN** a frame has `bat_v_valid` true and `ecu_voltage_low` true, whatever `can_status` is
 - **THEN** the box SHALL list "Напруга 12 В низька (xx.x В)" / "12 V voltage low (xx.x V)" with the
   value of `ecu_voltage`, in the warning colour
+- **WHEN** `bat_v_valid` is false
+- **THEN** no 12 V voltage line SHALL be listed
 
 #### Scenario: No ECU link
 - **WHEN** a frame has `can_status` not equal to `connected`
 - **THEN** the box SHALL list "Немає зв'язку з ЕБК" / "No ECU link" in the warning colour
-- **AND** no 12 V voltage line SHALL be listed
+- **AND** the 12 V voltage line SHALL still be listed when its own condition holds, because the
+  battery is measured by the board, not by the ECU
 
 #### Scenario: Board boost rail not used
-- **WHEN** a frame has `rail_low` true
-- **THEN** the attention box SHALL NOT list it; `rail_24v` / `rail_low` remain shown only where
-  they are today
+- **WHEN** a telemetry frame is received
+- **THEN** there SHALL be no boost rail line in the attention box: `rail_24v` / `rail_low` are no
+  longer emitted (aztec has no boost board)
 
 #### Scenario: Lines are localized text
 - **WHEN** any line is listed
@@ -647,8 +626,9 @@ hidden when no problem is active.
 The telemetry broadcast SHALL include the steering VESC's measured input voltage and a low-voltage
 flag computed in the firmware against the compile-time constant `STEER_VIN_LOW_V` (default 21.5 V,
 chosen to suit both a 6s NMC and a 7s LiFePO4 steering pack and adjustable per build), and SHALL
-include a 12 V low-voltage flag computed against `ECU_VOLTAGE_LOW_V` (default 12.0 V, lead-acid starter battery), so the web
-page never needs a copy of either threshold.
+include a 12 V low-voltage flag computed by the X10 battery sense against `BAT12_LOW_V` /
+`BAT12_LOW_CLEAR_V` (11.8 V / 12.1 V hysteresis, lead-acid starter battery), so the web page never
+needs a copy of either threshold.
 
 #### Scenario: Include the VESC input voltage
 - **WHEN** telemetry data is formatted as JSON
@@ -658,11 +638,10 @@ page never needs a copy of either threshold.
   is below `STEER_VIN_LOW_V`
 
 #### Scenario: Include the 12 V low flag
-- **WHEN** telemetry data is formatted as JSON and CAN status is "connected"
-- **THEN** it SHALL include `ecu_voltage_low`, true when the ECU module voltage is below
-  `ECU_VOLTAGE_LOW_V`
-- **WHEN** CAN status is not "connected"
-- **THEN** `ecu_voltage_low` SHALL be omitted along with the other CAN vehicle-data fields
+- **WHEN** telemetry data is formatted as JSON, whatever the CAN status
+- **THEN** it SHALL include `ecu_voltage_low`, the battery sense's low flag (set below
+  `BAT12_LOW_V`, cleared above `BAT12_LOW_CLEAR_V`, suppressed while cranking), false while
+  `bat_v_valid` is false
 
 #### Scenario: Show the VESC voltage tile
 - **WHEN** the "Кермо: стан" card renders a telemetry frame
@@ -672,7 +651,8 @@ page never needs a copy of either threshold.
 
 #### Scenario: Thresholds are firmware constants
 - **WHEN** the firmware is built
-- **THEN** `STEER_VIN_LOW_V` and `ECU_VOLTAGE_LOW_V` SHALL be defined in `include/Constants.h`
+- **THEN** `STEER_VIN_LOW_V`, `BAT12_LOW_V` and `BAT12_LOW_CLEAR_V` SHALL be defined in
+  `include/Constants.h`
 - **AND** `data/index.html` SHALL NOT contain either threshold value
 
 ### Requirement: Speed State Card
@@ -950,4 +930,120 @@ The telemetry broadcast SHALL report how the CAN task receives (interrupt or pol
 - **WHEN** `can_int` is `dead` or a counter is non-zero
 - **THEN** the diagnostics attention summary SHALL NOT change, because reception continues on the polling fallback and real harm already surfaces as a steering-sensor fault
 - **AND** no control for these values SHALL be added to the Calibration section
+
+### Requirement: 12 V Battery Telemetry
+The telemetry broadcast SHALL include the 12 V battery measured on X10 / GPIO9, unconditionally
+(independent of CAN and MAVLink status), and the web interface SHALL show it in a "АКБ 12 В" /
+"12 V battery" tile in the ignition card.
+
+#### Scenario: Format battery data as JSON
+- **WHEN** telemetry data is formatted as JSON
+- **THEN** `"ecu_voltage"` SHALL carry the calibrated battery voltage in volts with two decimals
+  (the key name is kept for the UI)
+- **AND** `"ecu_voltage_low"` SHALL carry the low flag as a boolean
+- **AND** `"bat_v_raw"` SHALL carry the voltage before calibration (V, two decimals), `"bat_v_cal"`
+  the calibration factor (four decimals) and `"bat_v_valid"` whether a battery is seen on X10
+- **AND** these fields SHALL be emitted whatever `can_status` is
+- **AND** `"rail_24v"`, `"boost_on"` and `"rail_low"` SHALL NOT be emitted
+
+#### Scenario: Show the battery tile
+- **WHEN** a telemetry frame with `bat_v_valid` true is received
+- **THEN** the tile SHALL show `ecu_voltage` in volts, in the warning colour while `ecu_voltage_low`
+  is true and the success colour otherwise
+- **AND** a small line SHALL show "raw X.XX V × cal 1.000" from `bat_v_raw` and `bat_v_cal`
+- **WHEN** `bat_v_valid` is false
+- **THEN** the tile SHALL read "не підключено" / "not connected"
+- **AND** every label SHALL have i18n keys in both the `en` and `uk` dictionaries
+
+#### Scenario: No boost rail UI
+- **WHEN** the web page is loaded
+- **THEN** it SHALL NOT show a 24 V boost rail button or a 24 V rail tile
+
+### Requirement: Parking Brake Telemetry
+The telemetry stream on the aztec buggy SHALL report the parking-brake state, the run progress, the
+throttle hold and the parking-brake settings in use.
+
+#### Scenario: Report the state
+- **WHEN** a telemetry frame is produced
+- **THEN** it SHALL include `pbrake_state`, one of `"unknown"`, `"released"`, `"applied"`,
+  `"applying"` or `"releasing"`
+- **AND** `pbrake_remaining_ms` SHALL be the time left in the current run (including the 200 ms
+  reverse dwell and the 500 ms margin), and 0 when no run is in progress
+
+#### Scenario: Report the throttle hold
+- **WHEN** a telemetry frame is produced
+- **THEN** it SHALL include `pbrake_thr_hold`, true while the park brake is holding the operator
+  throttle at idle: target gear L, H or R, and the state is `APPLIED`, `APPLYING`, `UNKNOWN`, or
+  `RELEASING` before the throttle release point
+- **AND** `pbrake_thr_hold` SHALL be false in the part of a release run after the release point,
+  while `pbrake_state` is still `"releasing"`
+
+#### Scenario: Report why a throttle press did not release
+- **WHEN** a telemetry frame is produced
+- **THEN** it SHALL include `pbrake_da_wait`:
+  - `"ign_off"` while the state is `APPLIED` or `UNKNOWN`, the target gear is L, H or R and the
+    ignition is `OFF`;
+  - `"rearm"` while the state is `APPLIED` or `UNKNOWN`, the target gear is L, H or R, the ignition
+    is on, the demand is above 10 % and the drive-away latch is not armed;
+  - `"none"` otherwise
+
+#### Scenario: Report the settings
+- **WHEN** a telemetry frame is produced
+- **THEN** it SHALL include `pbrake_travel_ms` (whole ms), `pbrake_thr_pass_pct` (whole %) and
+  `pbrake_invert` (bool), the values in use
+
+#### Scenario: Telemetry document capacity
+- **WHEN** the seven keys are added
+- **THEN** the worst-case aztec telemetry document SHALL still fit `StaticJsonDocument<9216>` with
+  headroom
+- **AND** `pbrake_state` and `pbrake_da_wait` SHALL be serialised from string literals, not copied
+  `String`s
+- **AND** the capacity comment SHALL be updated
+
+### Requirement: Service Brake Telemetry
+The telemetry stream SHALL report the service brake's command, its measured position, the unit state
+and the brake settings in use.
+
+#### Scenario: Keys
+- **WHEN** a telemetry frame is produced
+- **THEN** it SHALL include `brake_pct` (measured rod as % of the maximum stroke, 0–100, 0 when not
+  available), `brake_target_pct` (commanded), `brake_rod_mm` (two decimals, `null` when unknown),
+  `brake_state` (`asleep`, `starting`, `ready`, `braking`, `releasing`, `lost`, `fault`), `ib_st`,
+  `ib_is`, `ib_drv` (the unit's status, internal state and driver_brake_apply, `null` when unknown),
+  `ib_partner` (bool), `ib_runout` (bar), `brake_max_mm`, `brake_apply_mlps`, `brake_release_mlps`,
+  `ib_tx_miss`, `ib_gap_max_ms` and `ib_faults` (session values)
+- **AND** it SHALL NOT include `brake_travel_ms`, `brake_hold_pwm` or `brake_released`
+
+#### Scenario: Telemetry document capacity
+- **WHEN** the keys are added
+- **THEN** the worst-case telemetry document SHALL still fit the aztec `StaticJsonDocument<10240>`
+  (grown from 9216 in 1.5.36) with headroom, and the capacity comment SHALL be updated
+
+### Requirement: Service Brake Display and Attention
+The web UI SHALL show the service brake's availability wherever the brake is shown, and SHALL raise
+it in the Diagnostics attention summary when it is unavailable with the ignition on.
+
+#### Scenario: Brake tile
+- **WHEN** the brake state is `ready`, `braking` or `releasing`
+- **THEN** the "Гальмо" / "Brake" tile SHALL show the measured percentage and the rod in mm
+- **WHEN** the state is `asleep`
+- **THEN** the tile SHALL show "спить (запалювання вимкнено)" / "asleep (ignition off)" in the muted
+  colour
+- **WHEN** the state is `starting`, `lost` or `fault`
+- **THEN** the tile SHALL show the state in words in the warning (`starting`) or danger (`lost`,
+  `fault`) colour
+
+#### Scenario: Attention items
+- **WHEN** the state is `fault` or `lost`
+- **THEN** the attention summary SHALL list a danger item naming the state and the action
+  ("ignition off and on; if that does not help, remove the iBooster's power")
+- **WHEN** the state has been `starting` for more than 20 s
+- **THEN** a warning item SHALL be listed
+- **AND** `asleep` SHALL NOT be an attention item
+
+#### Scenario: Tests brake slider
+- **WHEN** the Tests section brake slider is shown
+- **THEN** the brake state SHALL be shown next to its value
+- **AND** a web brake command while the brake is unavailable SHALL be accepted as a target and
+  answered with a reply that says the brake is unavailable
 

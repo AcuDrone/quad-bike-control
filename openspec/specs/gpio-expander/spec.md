@@ -87,7 +87,7 @@ Registers: `0x00` input port, `0x01` output port, `0x02` polarity inversion, `0x
 ### Requirement: Opto-Isolated Input Expander
 The system SHALL read the eight 5V opto-isolated (PC817) digital inputs through the on-board PCA9557
 U10 at address `0x1A` on `Wire1` (I2C2 — scan-verified; the schematic's port names implied I2C1),
-replacing direct GPIO reads for the gear selector and the brake limit sensor.
+replacing direct GPIO reads for the gear selector.
 
 Input assignment (aztec buggy; the quad bike's one-hot four-line gear assignment is kept on
 `master`):
@@ -98,12 +98,10 @@ Input assignment (aztec buggy; the quad bike's one-hot four-line gear assignment
 | 1 | X16 | Gear code bit B — middle (engaged = HIGH) |
 | 6 | X16 | Gear code bit C — right / LSB (engaged = HIGH) |
 | 7 | X16 | Not wired on aztec — SHALL be ignored |
-| 4 | X17 | Brake limit sensor ("released" endstop) |
-| 2, 3, 5 | X17 | Spare — no firmware function |
+| 2, 3, 4, 5 | X17 | Spare — no firmware function (bit 4, In5, was the brake endstop until the iBooster) |
 
 The gear code SHALL be formed from the raw levels of bits 0, 1 and 6 in the order `[bit0 bit1 bit6]`,
-i.e. `(bit0 << 2) | (bit1 << 1) | bit6`. `BOARD_INPUT_ACTIVE_LOW` SHALL NOT be applied to the gear
-code bits.
+i.e. `(bit0 << 2) | (bit1 << 1) | bit6`. No polarity inversion SHALL be applied to the gear code bits.
 
 #### Scenario: Initialize the input expander
 - **WHEN** `BoardInputs::begin()` is called with the `Wire1` bus
@@ -113,16 +111,17 @@ code bits.
 - **AND** `false` SHALL be returned with an error logged if it does not
 
 #### Scenario: Consumers read a cached snapshot, never the bus
-- **WHEN** `TransmissionController::getPhysicalGear()` or `VehicleController::isBrakeReleased()`
-  needs an input state
+- **WHEN** `TransmissionController::getPhysicalGear()` needs an input state
 - **THEN** it SHALL read the published snapshot from `BoardInputs`
 - **AND** it SHALL NOT issue an I2C transaction of its own
-- **AND** no `digitalRead()` of a gear or brake-sensor pin SHALL remain in the firmware
+- **AND** no `digitalRead()` of a gear pin SHALL remain in the firmware
 
 #### Scenario: Snapshot exposes gear and brake state with validity
 - **WHEN** `getSnapshot()` is called
-- **THEN** it SHALL return the undecoded 3-bit gear code (0..7), the brake-released state, a `valid`
-  flag, and the age in milliseconds of the last successful read
+- **THEN** it SHALL return the undecoded 3-bit gear code (0..7), a `valid` flag, and the age in
+  milliseconds of the last successful read
+- **AND** it SHALL NOT carry a brake state any more (the brake-released field is removed with the
+  endstop)
 - **AND** `BoardInputs` SHALL NOT decode the code into a gear
 
 #### Scenario: Gear code extraction
@@ -168,8 +167,7 @@ indistinguishable from real input states.
 - **AND** no reboot or manual intervention SHALL be required
 
 #### Scenario: Polling rate satisfies the consumers
-- **WHEN** the brake overrun logic (`BRAKE_SENSOR_OVERRUN_TIME`, 1000 ms) and the gear read cache
-  (`TRANS_GEAR_READ_INTERVAL_MS`, 100 ms) consume the snapshot
+- **WHEN** the gear read cache (`TRANS_GEAR_READ_INTERVAL_MS`, 100 ms) consumes the snapshot
 - **THEN** the 25 ms poll interval SHALL provide at least one fresh sample per consumer window
 - **AND** the gear read's retry-on-ambiguous-result behavior SHALL be satisfied by consuming
   successive snapshots rather than issuing back-to-back I2C reads

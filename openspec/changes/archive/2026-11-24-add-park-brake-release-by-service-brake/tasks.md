@@ -5,7 +5,7 @@
 - [ ] 0.3 Q2 answered: is the X7 service-brake actuator powered with the ignition OFF? Confirm with
   the owner, or measure at X7 with the ignition OFF. If it is not, add "ignition relay not OFF" to
   the trigger (design A2) and to the `vehicle-systems` delta.
-- [ ] 0.4 Archive `add-aztec-parking-brake` first. Then turn this change's `vehicle-systems` delta
+- [x] 0.4 Archive `add-aztec-parking-brake` first. Then turn this change's `vehicle-systems` delta
   into ADDED + a MODIFIED "Aztec Parking Brake Actuator", in which the scenario "Service brake
   independent" reads: "a service brake command SHALL NOT change the park-brake state, except through
   the requirement Parking Brake Release by Service-Brake Press".

@@ -129,7 +129,7 @@ commanded by the controller, the reported value SHALL be unambiguous as to which
 - **WHEN** the engine-telemetry interval elapses (default 5 Hz)
 - **THEN** a single `EFI_STATUS` message is sent from this component carrying engine RPM, coolant
   temperature, intake air temperature, manifold absolute pressure, ECU calculated engine load,
-  measured and commanded throttle, module supply voltage, both gear values, the total odometer, the
+  measured and commanded throttle, the 12 V battery voltage, both gear values, the total odometer, the
   trip distance, the total engine hour meter, the trip engine hours, the digital-output bitmask and
   a health flag
 - **AND** all of those values SHALL be carried in distinct fields of that one message, rather than
@@ -145,8 +145,11 @@ commanded by the controller, the reported value SHALL be unambiguous as to which
 - **AND** CAN `VehicleData` is valid
 - **THEN** the `EFI_STATUS` message SHALL carry the intake air temperature (OBD-II PID `0x0F`) in the
   `intake_manifold_temperature` field, in °C
-- **AND** SHALL carry the control module supply voltage (OBD-II PID `0x42`) in the
-  `ignition_voltage` field, in volts
+- **WHEN** the engine-telemetry interval elapses, whatever the CAN health
+- **THEN** the `ignition_voltage` field SHALL carry the calibrated 12 V battery voltage measured on
+  X10 / GPIO9, in volts, while the battery sense is valid (a battery is seen on X10), and `NaN`
+  otherwise
+- **AND** it SHALL NOT be sourced from OBD-II PID `0x42`, which the Delphi MT05 ECU never answers
 
 #### Scenario: Report manifold pressure and ECU engine load in EFI_STATUS
 - **WHEN** the engine-telemetry interval elapses
@@ -263,7 +266,8 @@ commanded by the controller, the reported value SHALL be unambiguous as to which
 - **THEN** the `rpm`, `cylinder_head_temperature`, `intake_manifold_temperature`,
   `intake_manifold_pressure` and `ignition_voltage` fields SHALL continue to carry the quantities
   they already carried — engine RPM, coolant temperature, intake air temperature, manifold absolute
-  pressure and control module supply voltage respectively
+  pressure and the 12 V supply voltage respectively (the latter now measured by the board on X10
+  rather than requested from the ECU)
 - **AND** the `pt_compensation` field SHALL continue to carry the digital-output bitmask
 - **AND** the ONLY assignments that move SHALL be the gear value, which vacates `engine_load` for
   `fuel_consumed` (assumed gear) and `fuel_flow` (physically sensed gear), and the ECU-measured
@@ -358,8 +362,10 @@ commanded by the controller, the reported value SHALL be unambiguous as to which
 - **THEN** engine-telemetry messages are either skipped or marked unhealthy
 - **AND** `HEARTBEAT` continues to be sent for link liveness
 - **AND** the `rpm`, `cylinder_head_temperature`, `intake_manifold_temperature`,
-  `intake_manifold_pressure`, `engine_load`, `throttle_position` and `ignition_voltage` fields SHALL
-  ALL be reported as `NaN`, so a ground station shows "no data" rather than misleading zeros
+  `intake_manifold_pressure`, `engine_load` and `throttle_position` fields SHALL ALL be reported as
+  `NaN`, so a ground station shows "no data" rather than misleading zeros
+- **AND** `ignition_voltage` SHALL NOT depend on CAN health: it follows the battery sense's own
+  validity (calibrated volts while a battery is seen on X10, `NaN` otherwise)
 - **AND** the `fuel_consumed` (assumed gear), `throttle_out` (commanded throttle),
   `pt_compensation` (digital-output bitmask), `barometric_pressure` (odometer), `fuel_pressure`
   (trip distance), `spark_dwell_time` (total engine hours) and `injection_time` (trip engine hours)
@@ -853,8 +859,8 @@ input.
   centre, matching the sign convention of the steering-percent accessor
 - **AND** `STEER_A` SHALL carry the VESC's average MOTOR current in amperes, which is the steering
   load and stall diagnostic; the VESC's average INPUT current SHALL NOT be reported under this name
-- **AND** `VESC_V` SHALL carry the input voltage measured by the VESC itself — the 24 V boost rail
-  that powers the steering driver — in volts
+- **AND** `VESC_V` SHALL carry the input voltage measured by the VESC itself — the 24 V VESC supply
+  (the 7s LiFePO4 pack on aztec) that powers the steering driver — in volts
 - **AND** `VESC_TEMP` SHALL carry the VESC's power-stage (FET) temperature in degrees Celsius
 - **AND** `VESC_OK` SHALL carry the steering driver's link health as `1.0` or `0.0`
 - **AND** `STEER_SCA` SHALL carry the steering speed-scale the vehicle layer is applying to
@@ -950,9 +956,8 @@ input.
 
 #### Scenario: The reported voltage is not the ECU module voltage
 - **WHEN** both `VESC_V` and `EFI_STATUS` are sent in the same interval tick
-- **THEN** `VESC_V` SHALL be the VESC-measured steering supply rail
-- **AND** `EFI_STATUS.ignition_voltage` SHALL remain the ECU control module supply voltage
-  (OBD-II PID `0x42`)
+- **THEN** `VESC_V` SHALL be the VESC-measured steering supply
+- **AND** `EFI_STATUS.ignition_voltage` SHALL be the 12 V battery voltage measured on X10 / GPIO9
 - **AND** the two SHALL NOT be treated as the same measurement, because they are different physical
   quantities on different rails
 
@@ -1269,4 +1274,69 @@ unknown functions SHALL keep answering `UNSUPPORTED`.
 - **WHEN** a seventh function is added in a later firmware
 - **THEN** it SHALL use `param1` 6 and capability bit6
 - **AND** the protocol version SHALL stay 1
+
+### Requirement: Parking Brake State in the EFI_STATUS Digital-Output Bitmask
+The `EFI_STATUS.pt_compensation` digital-output bitmask SHALL report the aztec parking-brake state
+in two new bits, next to bit0 `EFI_DIGITAL_FLAG_WHEEL_LOCK` and bit1 `EFI_DIGITAL_FLAG_FRONT_LIGHT`:
+- bit2 `EFI_DIGITAL_FLAG_PARK_BRAKE` (0x04) SHALL be set when the state is `APPLIED`;
+- bit3 `EFI_DIGITAL_FLAG_PARK_BRAKE_UNSETTLED` (0x08) SHALL be set when the state is `APPLYING`,
+  `RELEASING` or `UNKNOWN`.
+
+Both bits clear SHALL mean `RELEASED`. Bits 0 and 1 SHALL keep their meaning, and bits 4–7 SHALL
+stay 0. The bitmask SHALL be assembled with the other flags in `src/main.cpp`, and
+`MAVLINK_SETUP.md` SHALL document the new bits and the value range 0–15.
+
+#### Scenario: Applied
+- **WHEN** the park brake is `APPLIED`, the lock is released and the light is off
+- **THEN** `pt_compensation` SHALL be 4.0
+
+#### Scenario: Running or unknown
+- **WHEN** the park brake is `APPLYING`, `RELEASING` or `UNKNOWN`
+- **THEN** bit3 SHALL be 1 and bit2 SHALL be 0
+
+#### Scenario: Throttle passing during a release
+- **WHEN** a release run has passed its throttle release point and the actuator is still running
+- **THEN** bit3 SHALL still be 1 and bit2 SHALL be 0, because the state is `RELEASING` until the
+  run ends
+
+#### Scenario: Released
+- **WHEN** the park brake is `RELEASED`
+- **THEN** bits 2 and 3 SHALL both be 0
+
+#### Scenario: Existing bits unchanged
+- **WHEN** the lock is engaged and the park brake is `APPLIED`
+- **THEN** bit0 and bit2 SHALL both be 1 (`pt_compensation` = 5.0 with the light off)
+
+### Requirement: Service Brake Status Text
+On the aztec buggy the MAVLink interface SHALL tell the ground station when the iBooster service
+brake is lost, in fault, or back to normal, using `STATUSTEXT` through the shared
+`MAVLINK_STATUSTEXT_MIN_MS` limiter and a brake-specific hold-off `IB_STATUSTEXT_MIN_MS` (5 s). No
+other MAVLink message, parameter or field SHALL change.
+
+#### Scenario: Brake lost
+- **WHEN** the brake state enters `LOST`
+- **THEN** a `STATUSTEXT` with `MAV_SEVERITY_WARNING` and the text "Brake: LOST (no iBooster)" SHALL
+  be sent
+
+#### Scenario: Brake fault
+- **WHEN** the brake state enters `FAULT`
+- **THEN** a `STATUSTEXT` with `MAV_SEVERITY_WARNING` and the text "Brake: FAULT (iBooster)" SHALL be
+  sent
+
+#### Scenario: Brake recovered
+- **WHEN** the brake state becomes `READY` after a `LOST` or `FAULT` text was sent
+- **THEN** a `STATUSTEXT` with `MAV_SEVERITY_INFO` and the text "Brake: OK" SHALL be sent once
+
+#### Scenario: Normal transitions are silent
+- **WHEN** the brake state changes between `ASLEEP`, `STARTING`, `READY`, `BRAKING` and `RELEASING`
+  without a preceding announced `LOST` or `FAULT`
+- **THEN** no brake `STATUSTEXT` SHALL be sent
+
+#### Scenario: Flapping unit cannot flood the link
+- **WHEN** the brake state changes again less than `IB_STATUSTEXT_MIN_MS` (5 s) after the last brake
+  `STATUSTEXT`
+- **THEN** no text SHALL be sent before the hold-off ends; the change SHALL replace any pending brake
+  text, so at most one brake text is sent per 5 s and the last one sent describes the current state
+- **AND** a pending recovery that cancels a still-unsent `LOST` or `FAULT` text SHALL send nothing
+- **AND** a text held back by the shared limiter SHALL stay pending, not be lost
 

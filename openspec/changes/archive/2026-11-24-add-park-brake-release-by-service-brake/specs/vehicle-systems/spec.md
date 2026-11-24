@@ -102,3 +102,77 @@ governor SHALL behave exactly as before.
 - **WHEN** a release started by the service brake runs with the target gear L
 - **THEN** the operator throttle SHALL be held at idle up to the throttle release point, exactly as
   for any release run
+
+## MODIFIED Requirements
+### Requirement: Aztec Parking Brake Actuator
+The aztec buggy SHALL drive its parking-brake actuator through a second `BTS7960Controller` on
+connector X6: `PIN_PARK_BRAKE_LPWM` = GPIO4 (X6 pin 2) and `PIN_PARK_BRAKE_RPWM` = GPIO5 (X6 pin 3).
+The actuator is self-locking and has built-in limit switches. The firmware has no position
+feedback and SHALL end each movement by time.
+
+A movement ("run") SHALL drive `PARK_BRAKE_DRIVE_DUTY` (255) in the commanded direction for the
+configured travel time plus `PARK_BRAKE_TRAVEL_MARGIN_MS` (500 ms). It SHALL then stop the bridge
+(both PWM 0) with no hold drive.
+
+The park-brake state SHALL be one of `UNKNOWN`, `RELEASED`, `APPLIED`, `APPLYING` and `RELEASING`.
+Commands SHALL enter through one source-agnostic function,
+`VehicleController::commandParkBrake(request, source)`, which returns a result code. The web is
+its only caller in this change, and a later GCS path SHALL be able to call it unchanged.
+
+The park brake SHALL be applied only by an explicit operator command. It SHALL NOT be applied
+automatically on RC or link loss, on fail-safe, on ignition off, at boot, or for any other reason.
+The actuator's motor supply is on the permanent battery feed, so commands SHALL NOT be gated by
+input source, ignition state or web control. They SHALL be refused
+with "Park brake driver not available" only when the X6 driver failed to initialise.
+
+The park brake SHALL be independent of the X7 service brake: separate driver, state and commands.
+
+#### Scenario: Apply run
+- **WHEN** an APPLY command is accepted while the state is `RELEASED`, `UNKNOWN` or `APPLIED`
+- **THEN** the state SHALL become `APPLYING` and the bridge SHALL drive the apply direction at duty
+  255
+- **AND** after the travel time plus 500 ms the bridge SHALL be stopped and the state SHALL become
+  `APPLIED`
+- **AND** no PWM SHALL be applied to X6 while the state is `APPLIED`
+
+#### Scenario: Release run
+- **WHEN** a RELEASE command is accepted while the state is `APPLIED`, `UNKNOWN` or `RELEASED`
+- **THEN** the state SHALL become `RELEASING`, the bridge SHALL drive the release direction at duty
+  255 for the travel time plus 500 ms, then stop
+- **AND** the state SHALL become `RELEASED`
+
+#### Scenario: Release is always allowed
+- **WHEN** a RELEASE command arrives at any vehicle speed, from any input source, with any ignition
+  state, or during fail-safe
+- **THEN** it SHALL be accepted, unless the X6 driver failed to initialise
+
+#### Scenario: Repeated command during a run
+- **WHEN** an APPLY arrives while `APPLYING`, or a RELEASE arrives while `RELEASING`
+- **THEN** the run SHALL continue unchanged and its timer SHALL NOT be restarted
+- **AND** the web reply SHALL be "Park brake already applying" or "Park brake already releasing"
+
+#### Scenario: Opposite command during a run
+- **WHEN** a RELEASE arrives while `APPLYING`, or an accepted APPLY arrives while `RELEASING`
+- **THEN** the bridge SHALL be stopped and held at zero duty for `PARK_BRAKE_REVERSE_DWELL_MS`
+  (200 ms)
+- **AND** a full run (travel time plus 500 ms) SHALL then be driven in the new direction
+- **AND** the state SHALL become the new moving state as soon as the command is accepted
+
+#### Scenario: No automatic apply
+- **WHEN** the MAVLink link is lost, the input source becomes FAILSAFE, the ignition is switched
+  OFF, or the firmware boots
+- **THEN** the park brake SHALL NOT be applied and the X6 bridge SHALL NOT be driven by that event
+
+#### Scenario: Fail-safe does not interrupt a run
+- **WHEN** the input source becomes FAILSAFE while a run is in progress
+- **THEN** the run SHALL continue to its end and the state SHALL settle as for any run
+
+#### Scenario: Service brake independent
+- **WHEN** the park brake is commanded, running or settled
+- **THEN** the X7 service brake target, estimate, hold drive and telemetry SHALL be unaffected
+- **AND** a service brake command SHALL NOT change the park-brake state, except through the
+  requirement Parking Brake Release by Service-Brake Press
+
+#### Scenario: Driver unavailable
+- **WHEN** the X6 `BTS7960Controller::begin()` failed at boot and any park-brake command arrives
+- **THEN** it SHALL be refused with "Park brake driver not available" and the state SHALL NOT change

@@ -256,45 +256,6 @@ The system SHALL allow the user to view and update the default transmission serv
 - **THEN** the current transmission servo position in percent (from `hall_position` telemetry; formerly an encoder count) SHALL be visible adjacent to the gear buttons
 - **AND** it SHALL update in real time
 
-### Requirement: 24V Boost Rail Control via Web Interface
-The web portal SHALL provide a guarded control for the 24V boost rail, following the same command
-pattern as the existing front light and wheel lock controls, so the rail can be power-cycled on the
-bench without removing steering authority from a live vehicle.
-
-#### Scenario: Send a boost command
-- **WHEN** the operator toggles the 24V boost control in the web UI
-- **THEN** a `set_boost` command with a boolean value SHALL be sent over the WebSocket
-- **AND** it SHALL be parsed into `WebPortal::WebCommand` and dispatched by
-  `VehicleController::processWebCommand` in the same manner as `set_light` and `set_wheel_lock`
-- **AND** it SHALL be accepted regardless of the active input source (MAVLINK / WEB / FAILSAFE)
-
-#### Scenario: Enable the boost rail
-- **WHEN** a `set_boost` command with value `true` is received
-- **THEN** `PIN_BOOST_EN` SHALL be driven HIGH
-- **AND** the startup grace period for the low-rail warning SHALL be restarted
-- **AND** a success response SHALL be sent to the client
-- **AND** enabling SHALL always be permitted
-
-#### Scenario: Refuse to disable the boost while ignition is not OFF
-- **WHEN** a `set_boost` command with value `false` is received
-- **AND** the reported ignition state is not `OFF`
-- **THEN** the command SHALL be rejected and `PIN_BOOST_EN` SHALL remain HIGH
-- **AND** an error response SHALL be sent to the client explaining that the rail powers the steering
-  driver and that ignition must be OFF first
-- **AND** the refusal SHALL be logged
-
-#### Scenario: Disable the boost when ignition is OFF
-- **WHEN** a `set_boost` command with value `false` is received
-- **AND** the reported ignition state is `OFF`
-- **THEN** `PIN_BOOST_EN` SHALL be driven LOW
-- **AND** the low-rail warning SHALL be suppressed while the boost is commanded off
-- **AND** a success response SHALL be sent to the client
-
-#### Scenario: Reflect boost state in the UI
-- **WHEN** telemetry reporting `boost_on` is received
-- **THEN** the boost control SHALL reflect the actual commanded state rather than the last click
-- **AND** its label SHALL have i18n keys present in both the `en` and `uk` dictionaries
-
 ### Requirement: ECU Capability Probe Command via Web Interface
 The system SHALL accept a `can_probe` command from the web interface to trigger a one-shot ECU
 capability probe, and SHALL surface the probe's progress and outcome back to the web client.
@@ -962,4 +923,224 @@ are refresh, download, clear and the journal's flash-write switch.
 - **THEN** the help modal SHALL explain what is journaled, the flash-write switch (off by default,
   RAM only while off), the line format, and that `uploadfs` or a filesystem update erases the
   journal, in the active language
+
+### Requirement: 12 V Battery Calibration via Web Interface
+The web portal SHALL let the operator calibrate the 12 V battery sense against a multimeter: the
+operator types the measured voltage and the firmware computes, validates, stores and applies the
+correction factor.
+
+#### Scenario: Calibrate from a multimeter reading
+- **WHEN** the operator enters the measured battery voltage (number input, step 0.01) and presses
+  "Калібрувати" / "Calibrate"
+- **THEN** a `cal_bat_v` command SHALL be sent with `value` = the measured volts
+- **AND** the firmware SHALL compute `cal = measured / raw` from the CURRENT averaged raw reading
+- **AND** SHALL accept it only when the measured value is within 8.0–16.0 V, the raw reading is
+  above 5 V (a battery is connected) and the factor is within 0.80–1.20
+- **AND** on acceptance SHALL persist the factor to NVS (`BAT12_CAL_NVS_NS` "bat12", key "cal")
+  BEFORE applying it, apply it immediately and reply with the new factor and the corrected voltage
+- **AND** on any refusal or a failed NVS write SHALL keep the previous factor and reply with an error
+  stating the reason
+- **AND** the command SHALL be accepted regardless of the active input source
+
+#### Scenario: Reset the calibration
+- **WHEN** the operator presses "Скинути" / "Reset"
+- **THEN** a `reset_bat_v_cal` command SHALL be sent and the firmware SHALL store and apply a factor
+  of 1.0
+
+#### Scenario: Load the calibration at boot
+- **WHEN** the firmware boots
+- **THEN** the stored factor SHALL be loaded; an absent, NaN or out-of-range (0.80–1.20) value SHALL
+  be ignored and 1.0 used, without rewriting NVS
+
+#### Scenario: Boost command on a vehicle without a boost board
+- **WHEN** a `set_boost` command is received
+- **THEN** it SHALL be recognised (not "unknown command"), SHALL NOT change any output, and SHALL be
+  answered and logged as "boost rail not fitted"
+
+### Requirement: Parking Brake Card
+The web portal SHALL provide a card "🅿️ Стоянкове гальмо" / "🅿️ Parking brake" in the Tests
+section, placed after the "Vehicle Ignition & Lighting" card, to apply and release the aztec parking
+brake, show its state, and set its travel time and drive direction.
+
+Its commands are `park_brake` (`value` `"apply"` or `"release"`), `set_park_brake_travel_ms`
+(`value` ms), `set_park_brake_thr_pass_pct` (`value` %) and `set_park_brake_invert` (`value`
+bool). They SHALL be routed through
+`WebPortal::WebCommand` → `VehicleController::processWebCommand` → `commandParkBrake()` or the
+setting setters. They SHALL be accepted regardless of the active input source and of web control,
+like `set_wheel_lock`.
+
+The card SHALL be hidden when telemetry carries no `pbrake_state` field.
+
+#### Scenario: Apply with two-press confirmation
+- **WHEN** the operator presses "Затягнути" / "Apply"
+- **THEN** nothing SHALL be sent on the first press
+- **AND** the button SHALL be armed through the shared two-press confirmation helper, with the
+  label "Підтвердити затягування" / "Confirm apply"
+- **AND** the card status line SHALL show the warning "Стоянкове гальмо буде затягнуто. Газ на
+  передачі — лише холостий." / "The parking brake will be applied. Throttle in gear stays at idle."
+- **AND** a second press within 5 s SHALL send `{"cmd":"park_brake","value":"apply"}`
+
+#### Scenario: Release with two-press confirmation
+- **WHEN** the operator presses "Відпустити" / "Release" twice within 5 s
+- **THEN** the first press SHALL arm the button with the label "Підтвердити відпускання" / "Confirm
+  release" and the warning "Стоянкове гальмо буде відпущено — на схилі багі може покотитися." / "The
+  parking brake will be released — on a slope the buggy may roll."
+- **AND** the second press SHALL send `{"cmd":"park_brake","value":"release"}`
+
+#### Scenario: Command replies
+- **WHEN** a `park_brake` command is processed
+- **THEN** the reply SHALL be one of:
+  - "Park brake applying" or "Park brake applying (speed unknown)";
+  - "Park brake releasing", with a " (state not saved)" suffix when the moving state was not saved;
+  - "Park brake reversing to apply" or "Park brake reversing to release";
+  - "Park brake already applying" or "Park brake already releasing";
+  - "Park brake apply refused: moving at N.N km/h (max 3.0)";
+  - "Failed to save the park brake state — apply refused";
+  - "Park brake driver not available";
+  - "Park brake: unknown request" for a value other than `"apply"` or `"release"`.
+- **AND** the reply SHALL be shown in the card's status line, in the danger colour for a failure
+
+#### Scenario: State display
+- **WHEN** telemetry arrives
+- **THEN** the card SHALL show the state from `pbrake_state` in the current language:
+  - "Відпущено" / "Released";
+  - "Затягнуто" / "Applied";
+  - "Затягується…" / "Applying…";
+  - "Відпускається…" / "Releasing…";
+  - "Невідомо" / "Unknown".
+- **AND** while a run is in progress it SHALL show the remaining time from `pbrake_remaining_ms` in
+  whole seconds
+- **AND** while `pbrake_thr_hold` is true it SHALL show "Газ утримується на холостому" / "Throttle
+  held at idle"
+- **AND** while a release run is in progress and `pbrake_thr_hold` is false, it SHALL show "Газ
+  пропускається, гальмо ще відпускається" / "Throttle passing, brake still releasing"
+- **AND** when `pbrake_da_wait` is `"ign_off"` it SHALL show "Запалювання вимкнено — газ не
+  відпускає стоянкове гальмо" / "Ignition off — throttle does not release the parking brake"
+- **AND** when `pbrake_da_wait` is `"rearm"` it SHALL show "Відпустіть газ нижче 10 % і натисніть
+  знову" / "Drop the throttle below 10 % and press again"
+- **AND** the Apply and Release buttons SHALL stay enabled during a run
+
+#### Scenario: Set the travel time
+- **WHEN** the operator drags the travel time slider (range input 1000–5000 ms, step 100, default
+  2000) and releases it
+- **THEN** the value label SHALL show "N мс" / "N ms" live while dragging, and nothing SHALL be sent
+  before the release
+- **AND** on release (`change`) one `set_park_brake_travel_ms` command SHALL be sent
+- **AND** the firmware SHALL round it to a whole ms, validate 1000–5000, persist, apply, and reply
+  "Park brake travel time set to N ms"
+- **AND** an out-of-range value SHALL be answered "Park brake travel time out of range (1000-5000 ms)"
+- **AND** telemetry SHALL NOT move the slider while it is being dragged
+
+#### Scenario: Set the throttle release point
+- **WHEN** the operator drags the throttle release point slider (range input 20–100 %, step 5,
+  default 50) and releases it
+- **THEN** the value label SHALL show "N %" together with the matching time "≈ M мс" / "≈ M ms"
+  (N % of the travel time in use, or "до кінця ходу" / "until the run ends" at 100 %) live while
+  dragging, and nothing SHALL be sent before the release
+- **AND** on release (`change`) one `set_park_brake_thr_pass_pct` command SHALL be sent
+- **AND** the firmware SHALL round it to a whole number, validate 20–100, persist, apply, and reply
+  "Park brake throttle release point set to N %"
+- **AND** an out-of-range value SHALL be answered "Park brake throttle release point out of range
+  (20-100 %)"
+- **AND** telemetry SHALL NOT move the slider while it is being dragged
+
+#### Scenario: Change the direction
+- **WHEN** the operator presses the direction toggle ("Напрямок: звичайний / інвертований" /
+  "Direction: normal / inverted") twice within 5 s
+- **THEN** the first press SHALL arm it with the warning "Напрямок зміниться, стан стане
+  «невідомо»." / "The direction will change and the state becomes unknown."
+- **AND** the second press SHALL send `set_park_brake_invert` with the inverted value
+- **AND** the firmware SHALL reply "Park brake direction inverted — state unknown" or "Park brake
+  direction normal — state unknown", or "Park brake direction change refused: actuator moving"
+  during a run
+
+#### Scenario: Save failure for a setting
+- **WHEN** the NVS write fails for `set_park_brake_travel_ms`, `set_park_brake_thr_pass_pct` or
+  `set_park_brake_invert`
+- **THEN** the firmware SHALL reply "Failed to save the park brake setting" and keep the value in
+  use unchanged
+
+#### Scenario: No connection to the board
+- **WHEN** the operator presses any park-brake control while the WebSocket is not open
+- **THEN** nothing SHALL be sent, no button SHALL be armed, and the card's status line SHALL show
+  «Немає з'єднання з платою» / "No connection to the board" in the danger colour
+
+#### Scenario: Help text
+- **WHEN** the operator opens the card's ⓘ help
+- **THEN** it SHALL explain, in uk and en:
+  - apply only by command, refused above 3 km/h;
+  - the drive-away release above 10 % throttle in L/H/R with the ignition on (a new press is needed
+    if the throttle was already up), and no release in N or with the ignition off;
+  - the throttle release point: idle is held for that share of the travel time, then the throttle
+    ramps up while the brake finishes releasing (anti roll-back on a slope; 100 % = hold until the
+    end);
+  - the end of travel by time;
+  - the state after a power loss mid-run ("Невідомо" / "Unknown");
+  - the bench procedure: with the rear wheels free, press Release from "Unknown". If the cable
+    tightens, change the direction and press Release again. Then time a full travel each way and
+    set the longer one.
+- **AND** Ukrainian text SHALL call the vehicle "багі"
+
+### Requirement: Parking Brake Card Service-Brake Release Help
+The help (ⓘ) of the Parking brake card ("🅿️ Стоянкове гальмо" / "🅿️ Parking brake") SHALL state, in
+uk and en, that:
+- pressing the service brake (RC handset, GCS joystick or the web Brake control) releases an applied
+  parking brake once the service brake reports that it has reached the pressed position;
+- with the ignition off (the iBooster asleep), or with the service brake unavailable, a press
+  releases the parking brake at once while the service brake does **not** hold: the buggy ("багі")
+  is then held by nothing;
+- this includes the **automatic brake on RC loss**: the parking brake then releases, and when the
+  automatic brake ends (15 s by default) the buggy ("багі") is held by nothing;
+- a brake already held when the parking brake is applied does not release it; let go and press again.
+
+The card SHALL get no new setting, switch or status line for this feature.
+
+#### Scenario: Help text present
+- **WHEN** the operator opens the Parking brake card's help
+- **THEN** it SHALL contain the service-brake release rule, the no-brake warning for an unavailable
+  service brake and the RC-loss warning in the current language
+
+#### Scenario: No new controls
+- **WHEN** the card is rendered
+- **THEN** it SHALL show the same controls and status lines as before, apart from the help text
+
+### Requirement: Service Brake Card
+The web portal SHALL provide, in the Calibration section, a card "🛑 Гальмо (iBooster)" / "🛑 Brake
+(iBooster)" in place of the former brake tuning card, to set the maximum stroke, the apply rate and
+the release rate, and to show the unit's state. Its commands SHALL be routed through
+`WebPortal::WebCommand` → `VehicleController::processWebCommand`, SHALL be accepted regardless of the
+active input source, and SHALL persist before applying.
+
+#### Scenario: Sliders send on release
+- **WHEN** the operator drags one of the sliders — maximum stroke 2.0–16.0 mm step 0.5, apply rate
+  1–40 ml/s step 1, release rate 1–40 ml/s step 1, defaults 16.0 mm / 8 / 8 — and releases it
+- **THEN** the value label SHALL follow live while dragging and no command SHALL be sent before the
+  release
+- **AND** on release one command SHALL be sent: `set_brake_max_mm`, `set_brake_apply_rate` or
+  `set_brake_release_rate`
+- **AND** the firmware SHALL validate, persist, apply and answer "Brake max stroke set to N mm",
+  "Brake apply rate set to N ml/s" or "Brake release rate set to N ml/s"
+- **AND** an out-of-range value (for the maximum stroke also one off the 0.5 mm grid) SHALL be
+  answered "Brake … out of range (…)" and a failed write
+  "Failed to save the brake setting"
+
+#### Scenario: Refused while braking
+- **WHEN** a setting arrives while a brake request is active
+- **THEN** the firmware SHALL answer "Brake settings: not while braking" and change nothing
+
+#### Scenario: Status lines
+- **WHEN** telemetry arrives
+- **THEN** the card SHALL show the brake state in words, the unit's status / internal state /
+  driver_brake_apply numbers, the rod position in mm, whether the unit sees our frames and the
+  available pressure in bar
+- **AND** the sliders SHALL show the values in use unless being dragged
+
+#### Scenario: Help and translations
+- **WHEN** the operator opens the card help (ⓘ)
+- **THEN** it SHALL explain that 100 % brake is the maximum stroke, that the rates limit how fast the
+  rod moves when applying and releasing, that there is no service brake with the ignition off or on
+  fail-safe, and what to do on a fault (ignition off and on; if that does not help, remove the
+  iBooster's power)
+- **AND** every new label, hint, message and help text SHALL be present in both the English and the
+  Ukrainian dictionary, the Ukrainian text calling the vehicle "багі"
 

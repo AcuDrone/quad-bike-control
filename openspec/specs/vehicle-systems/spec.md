@@ -219,41 +219,6 @@ The transmission control system SHALL enforce the physical gear sequence `[R, N,
 - **WHEN** the gear code differs from the last logged code
 - **THEN** a TRANSMISSION debug line `[TRANS] gear code=0bXYZ -> <L|H|N|R|UNKNOWN>` SHALL be logged
 
-### Requirement: Brake Control System
-The system SHALL control braking force through a linear actuator-driven brake mechanism. The
-"fully released" endstop SHALL be read from the opto-isolated brake limit sensor (In5) through the
-input expander rather than from a dedicated GPIO.
-
-#### Scenario: Set brake position by percentage
-- **WHEN** BrakeSystem.setPosition() is called with value from 0 to 100
-- **THEN** brake actuator extends proportionally
-- **AND** 0% maps to fully released brakes
-- **AND** 100% maps to maximum braking force
-
-#### Scenario: Release brakes
-- **WHEN** BrakeSystem.release() is called
-- **THEN** brake actuator retracts to 0% position
-- **AND** brakes are confirmed released
-
-#### Scenario: Detect the released endstop via the input expander
-- **WHEN** `VehicleController::isBrakeReleased()` is called
-- **THEN** it SHALL read the brake limit sensor state (In5) from the `BoardInputs` snapshot
-- **AND** it SHALL NOT perform a `digitalRead()` or issue its own I2C transaction
-- **AND** the added latency (up to `BOARD_INPUT_POLL_MS`, 25 ms) SHALL be acceptable against the
-  `BRAKE_SENSOR_OVERRUN_TIME` (1000 ms) overrun window
-
-#### Scenario: Emergency braking
-- **WHEN** BrakeSystem.emergencyStop() is called
-- **THEN** brakes are immediately applied to 100%
-- **AND** throttle is forced to idle
-- **AND** transmission remains in current gear
-- **AND** emergency braking SHALL NOT depend on the input expander being healthy
-
-#### Scenario: Brake hold on startup
-- **WHEN** system powers on or resets
-- **THEN** brakes are automatically applied to 30% (parking brake)
-- **AND** brakes remain engaged until explicitly released by user command
-
 ### Requirement: Vehicle State Coordination
 The system SHALL coordinate vehicle systems to ensure safe operation.
 
@@ -591,50 +556,10 @@ The system SHALL use a PID controller to regulate engine RPM to a configurable t
 **Then** the PID SHALL NOT activate (engine not running — boosting throttle is unsafe)
 **And** the throttle SHALL remain at idle
 
-### Requirement: 24V Boost Rail Control and Monitoring
-The system SHALL enable the external 12V→24V boost converter at boot and SHALL monitor the resulting
-rail voltage, because that rail powers the steering VESC, the Jetson, Starlink and the cameras.
-
-#### Scenario: Enable the boost rail at boot
-- **WHEN** `setup()` begins
-- **THEN** `PIN_BOOST_EN` (GPIO46) SHALL be configured as an output and driven HIGH as the first
-  hardware action, before any subsystem initialization
-- **AND** the enable SHALL occur before the steering VESC UART is initialized, since the VESC is
-  powered from this rail
-- **AND** the board's 100K pulldown on GPIO46 SHALL keep the rail off through reset, so no enable
-  glitch occurs during boot
-
-#### Scenario: Sample the rail voltage
-- **WHEN** `RAIL_SAMPLE_INTERVAL_MS` (500 ms) elapses
-- **THEN** `PIN_ADC_24V` (GPIO9, ADC1) SHALL be sampled and averaged over 8 readings
-- **AND** the rail voltage SHALL be computed as `Vadc × RAIL_24V_DIVIDER_RATIO` (9.33, from the
-  board's 200K/24K divider)
-- **AND** the result SHALL be published to telemetry
-- **AND** sampling SHALL NOT block the control loop
-
-#### Scenario: Warn on a low rail
-- **WHEN** the computed rail voltage is below `RAIL_24V_LOW_THRESHOLD` (21.0 V)
-- **AND** more than `BOOST_STARTUP_GRACE_MS` (1000 ms) has elapsed since the boost was enabled
-- **THEN** a low-rail warning flag SHALL be raised and published in telemetry
-- **AND** a rate-limited warning SHALL be logged
-- **AND** the system SHALL NOT automatically disable any subsystem — dropping the rail would remove
-  steering authority
-
-#### Scenario: Suppress warnings during startup ramp
-- **WHEN** the boost has been enabled for less than `BOOST_STARTUP_GRACE_MS`
-- **THEN** the low-rail warning SHALL be suppressed while the converter ramps
-- **AND** the measured voltage SHALL still be reported in telemetry
-
-#### Scenario: Report boost enable state
-- **WHEN** telemetry is collected
-- **THEN** the commanded boost enable state SHALL be reported alongside the measured rail voltage
-- **AND** an enabled boost reporting a rail well below threshold SHALL be distinguishable from a
-  deliberately disabled boost
-
 ### Requirement: Degraded Operation on Board I/O Fault
 The system SHALL define safe, observable degraded behavior when the opto-input expander or the
-relay expander becomes unavailable, since the gear interlock and the ignition/starter path now
-depend on I2C.
+relay expander becomes unavailable, since the gear interlock and the ignition/starter path depend on
+I2C. The service brake SHALL NOT depend on the opto-input expander.
 
 #### Scenario: Gear inputs unavailable
 - **WHEN** the opto-input snapshot is invalid (stale beyond `BOARD_INPUT_STALE_MS`)
@@ -647,16 +572,17 @@ depend on I2C.
 
 #### Scenario: Brake limit sensor unavailable
 - **WHEN** the opto-input snapshot is invalid
-- **THEN** `VehicleController::isBrakeReleased()` SHALL return `false` ("not confirmed released")
-- **AND** brake retraction SHALL remain bounded by `BRAKE_SENSOR_OVERRUN_TIME` and
-  `BRAKE_FULL_TRAVEL_TIME` exactly as when the endstop has not yet been reached
-- **AND** the system SHALL NOT report the brake as released on the basis of a failed read
+- **THEN** nothing about the service brake SHALL change: there is no brake limit sensor any more and
+  the iBooster uses no opto input
+- **AND** the system SHALL NOT report any brake state on the basis of the input expander
 
 #### Scenario: Relay expander unavailable
 - **WHEN** the relay expander failed to initialize or is faulted
 - **THEN** ignition, starter, front light and wheel lock commands SHALL become logging no-ops
 - **AND** the reported ignition state SHALL be `OFF`
-- **AND** steering, throttle, brake, MAVLink and web telemetry SHALL continue to operate
+- **AND** steering, throttle, MAVLink and web telemetry SHALL continue to operate
+- **AND** the service brake SHALL keep sending its frames for as long as the unit is still heard on
+  the bus, so a relay that physically stays on does not make the firmware drop an active brake
 - **AND** the fault SHALL be visible in telemetry
 
 #### Scenario: Faults recover without a reboot
@@ -1748,4 +1674,761 @@ journal. The instrumentation SHALL NOT change the order or behavior of the phase
 - **WHEN** free heap falls below `JOURNAL_HEAP_WARN_BYTES` (40 KB)
 - **THEN** `SYS W heap_low free=<bytes> min=<bytes>` SHALL be journaled once
 - **AND** `SYS I heap_ok` SHALL be journaled when free heap rises 8 KB above the threshold
+
+### Requirement: 12 V Battery Sense on X10
+On aztec (no Buck-Boost board fitted) the system SHALL measure the 12 V lead-acid battery wired to
+X10 pin 3 through the on-board 200K/24K divider to GPIO9 (`PIN_ADC_24V`, ADC1), apply a user
+calibration factor, and use the result as the vehicle's 12 V / "ECU voltage" measurement. The math
+SHALL live in a pure header (`include/BatteryVoltage.h`) covered by native unit tests.
+
+#### Scenario: GPIO46 unchanged
+- **WHEN** `setup()` begins
+- **THEN** `PIN_BOOST_EN` (GPIO46) SHALL still be configured as an output and driven HIGH as the
+  first hardware action, exactly as before (harmless with nothing on X10 pin 1)
+
+#### Scenario: Sample the battery
+- **WHEN** `BAT12_SAMPLE_INTERVAL_MS` (500 ms) elapses
+- **THEN** GPIO9 SHALL be sampled with 11 dB attenuation and averaged over 8 readings
+- **AND** the raw voltage SHALL be `Vadc × BAT12_DIVIDER_RATIO` (9.33) and the reported voltage
+  `raw × cal`
+- **AND** sampling SHALL NOT block the control loop
+
+#### Scenario: Nothing connected
+- **WHEN** the raw voltage is at or below `BAT12_PRESENT_MIN_V` (5 V)
+- **THEN** the battery sense SHALL be reported invalid and no low warning SHALL be raised
+
+#### Scenario: Low battery with hysteresis
+- **WHEN** the calibrated voltage falls below `BAT12_LOW_V` (11.8 V)
+- **THEN** the low flag SHALL be set and a rate-limited warning logged
+- **AND** it SHALL clear only once the voltage rises above `BAT12_LOW_CLEAR_V` (12.1 V)
+- **AND** no subsystem SHALL be disabled automatically (warning only)
+
+#### Scenario: Cranking sag suppressed
+- **WHEN** the starter relay is energized (crank or relay test), and for `BAT12_CRANK_HOLDOFF_MS`
+  (2 s) after it releases
+- **THEN** the low flag SHALL be suppressed while the voltage is still measured and reported
+
+### Requirement: Aztec Parking Brake Actuator
+The aztec buggy SHALL drive its parking-brake actuator through a second `BTS7960Controller` on
+connector X6: `PIN_PARK_BRAKE_LPWM` = GPIO4 (X6 pin 2) and `PIN_PARK_BRAKE_RPWM` = GPIO5 (X6 pin 3).
+The actuator is self-locking and has built-in limit switches. The firmware has no position
+feedback and SHALL end each movement by time.
+
+A movement ("run") SHALL drive `PARK_BRAKE_DRIVE_DUTY` (255) in the commanded direction for the
+configured travel time plus `PARK_BRAKE_TRAVEL_MARGIN_MS` (500 ms). It SHALL then stop the bridge
+(both PWM 0) with no hold drive.
+
+The park-brake state SHALL be one of `UNKNOWN`, `RELEASED`, `APPLIED`, `APPLYING` and `RELEASING`.
+Commands SHALL enter through one source-agnostic function,
+`VehicleController::commandParkBrake(request, source)`, which returns a result code. The web is
+its only caller in this change, and a later GCS path SHALL be able to call it unchanged.
+
+The park brake SHALL be applied only by an explicit operator command. It SHALL NOT be applied
+automatically on RC or link loss, on fail-safe, on ignition off, at boot, or for any other reason.
+The actuator's motor supply is on the permanent battery feed, so commands SHALL NOT be gated by
+input source, ignition state or web control. They SHALL be refused
+with "Park brake driver not available" only when the X6 driver failed to initialise.
+
+The park brake SHALL be independent of the X7 service brake: separate driver, state and commands.
+
+#### Scenario: Apply run
+- **WHEN** an APPLY command is accepted while the state is `RELEASED`, `UNKNOWN` or `APPLIED`
+- **THEN** the state SHALL become `APPLYING` and the bridge SHALL drive the apply direction at duty
+  255
+- **AND** after the travel time plus 500 ms the bridge SHALL be stopped and the state SHALL become
+  `APPLIED`
+- **AND** no PWM SHALL be applied to X6 while the state is `APPLIED`
+
+#### Scenario: Release run
+- **WHEN** a RELEASE command is accepted while the state is `APPLIED`, `UNKNOWN` or `RELEASED`
+- **THEN** the state SHALL become `RELEASING`, the bridge SHALL drive the release direction at duty
+  255 for the travel time plus 500 ms, then stop
+- **AND** the state SHALL become `RELEASED`
+
+#### Scenario: Release is always allowed
+- **WHEN** a RELEASE command arrives at any vehicle speed, from any input source, with any ignition
+  state, or during fail-safe
+- **THEN** it SHALL be accepted, unless the X6 driver failed to initialise
+
+#### Scenario: Repeated command during a run
+- **WHEN** an APPLY arrives while `APPLYING`, or a RELEASE arrives while `RELEASING`
+- **THEN** the run SHALL continue unchanged and its timer SHALL NOT be restarted
+- **AND** the web reply SHALL be "Park brake already applying" or "Park brake already releasing"
+
+#### Scenario: Opposite command during a run
+- **WHEN** a RELEASE arrives while `APPLYING`, or an accepted APPLY arrives while `RELEASING`
+- **THEN** the bridge SHALL be stopped and held at zero duty for `PARK_BRAKE_REVERSE_DWELL_MS`
+  (200 ms)
+- **AND** a full run (travel time plus 500 ms) SHALL then be driven in the new direction
+- **AND** the state SHALL become the new moving state as soon as the command is accepted
+
+#### Scenario: No automatic apply
+- **WHEN** the MAVLink link is lost, the input source becomes FAILSAFE, the ignition is switched
+  OFF, or the firmware boots
+- **THEN** the park brake SHALL NOT be applied and the X6 bridge SHALL NOT be driven by that event
+
+#### Scenario: Fail-safe does not interrupt a run
+- **WHEN** the input source becomes FAILSAFE while a run is in progress
+- **THEN** the run SHALL continue to its end and the state SHALL settle as for any run
+
+#### Scenario: Service brake independent
+- **WHEN** the park brake is commanded, running or settled
+- **THEN** the X7 service brake target, estimate, hold drive and telemetry SHALL be unaffected
+- **AND** a service brake command SHALL NOT change the park-brake state, except through the
+  requirement Parking Brake Release by Service-Brake Press
+
+#### Scenario: Driver unavailable
+- **WHEN** the X6 `BTS7960Controller::begin()` failed at boot and any park-brake command arrives
+- **THEN** it SHALL be refused with "Park brake driver not available" and the state SHALL NOT change
+
+### Requirement: Parking Brake Apply Speed Interlock
+An APPLY SHALL be refused while the vehicle moves faster than `PARK_BRAKE_APPLY_MAX_SPEED_MS`
+(0.833 m/s = 3 km/h). The speed SHALL be read from the hall speed sensor when its reading is valid
+or latched suspicious, the same trust rule as the gear-change speed interlock. The CAN speed field
+SHALL NOT be used.
+
+#### Scenario: Apply refused while moving
+- **WHEN** an APPLY command arrives and the trusted speed is above 0.833 m/s
+- **THEN** it SHALL be refused, the state SHALL NOT change and a running release SHALL continue
+- **AND** the web reply SHALL be a failure "Park brake apply refused: moving at N.N km/h (max 3.0)"
+- **AND** the refusal SHALL be logged under the `BRAKE` debug feature
+
+#### Scenario: Apply accepted at standstill
+- **WHEN** an APPLY command arrives and the trusted speed is at or below 0.833 m/s
+- **THEN** it SHALL be accepted and the reply SHALL be "Park brake applying"
+
+#### Scenario: Speed sensor not yet pulsed
+- **WHEN** an APPLY command arrives and the speed sensor has not pulsed since boot (not valid and not
+  suspicious)
+- **THEN** the APPLY SHALL be accepted and the reply SHALL be "Park brake applying (speed unknown)"
+
+### Requirement: Parking Brake Drive-Away Release and Throttle Hold
+The operator throttle is the web demand or the MAVLink throttle channel (manual or autopilot)
+after the existing gear clip. "Ignition on" SHALL mean that the firmware's commanded ignition-relay
+state, `RelayController::getIgnitionState()`, is not `OFF` (ACC, IGNITION or CRANKING: the state
+in which `RELAY_SET_IGNITION` is energized). It SHALL NOT be derived from engine RPM.
+
+**Throttle hold.** While the transmission target gear is L, H or R, the operator throttle SHALL be
+held at idle when the park brake is:
+- `APPLIED`, `APPLYING` or `UNKNOWN`; or
+- `RELEASING`, until the throttle release point has elapsed.
+
+The throttle release point is `thr_pass_pct` % of `travel_ms`, counted from the start of the
+release drive (after any reverse dwell). With 100 % the hold SHALL last until the run ends, margin
+included. From the release point on, the operator throttle SHALL pass through the speed limiter and
+the opening slew from idle while the actuator finishes its run. This SHALL apply to every RELEASING
+run, whatever started it and whatever the starting state.
+
+**Drive-away.** The firmware SHALL start a RELEASE ("drive-away") when all of these hold:
+- the park brake is `APPLIED` or `UNKNOWN`;
+- the ignition is on;
+- the target gear is L, H or R and no gear change is in progress;
+- the throttle demand rises above `PARK_BRAKE_DRIVE_AWAY_THROTTLE_PCT` (10 %), with no dwell or
+  debounce.
+
+The demand SHALL have been at or below 10 % while the brake was `APPLIED` or `UNKNOWN` and the
+ignition was on, since the last release started (rising edge).
+
+The drive-away release SHALL NOT depend on engine start or engine RPM. In N, and while the target
+gear is UNKNOWN, throttle SHALL neither be held by the park brake nor release it. A release run
+SHALL complete once started, even if the throttle drops. There SHALL be no automatic re-apply.
+
+#### Scenario: Drive away in gear with the default release point
+- **WHEN** the park brake is `APPLIED`, the ignition is on, the target gear is L, the travel time is
+  2000 ms, the release point is 50 %, and the operator raises the throttle from 0 % to 30 %
+- **THEN** a release run SHALL start at once
+- **AND** the throttle servo SHALL stay at idle for the first 1000 ms of the release drive
+- **AND** from 1000 ms the 30 % demand SHALL pass through the speed limiter and the opening slew,
+  rising from idle, while the actuator keeps releasing
+- **AND** the run SHALL end and the state SHALL become `RELEASED` at 2500 ms
+
+#### Scenario: Release point 100 %
+- **WHEN** the release point is 100 % and a release run is in progress in gear
+- **THEN** the throttle SHALL stay at idle until the run ends (travel time plus 500 ms) and the
+  state is `RELEASED`
+
+#### Scenario: Operator Release uses the same release point
+- **WHEN** the operator presses Release while the brake is `APPLIED` or `UNKNOWN` and the target
+  gear is H
+- **THEN** the throttle SHALL be held at idle until the release point and pass from then on, exactly
+  as for a drive-away release
+
+#### Scenario: Apply after the throttle was passed
+- **WHEN** a release run has passed its release point (throttle passing) and an APPLY is accepted
+- **THEN** the run SHALL reverse (state `APPLYING`)
+- **AND** the operator throttle SHALL be put back to idle at once
+
+#### Scenario: Throttle dropped during a release
+- **WHEN** the operator drops the throttle to 0 % during a release run
+- **THEN** the run SHALL complete and the state SHALL become `RELEASED`
+- **AND** the park brake SHALL NOT be re-applied
+
+#### Scenario: Throttle held at or below the threshold
+- **WHEN** the park brake is `APPLIED`, the target gear is H and the demand is 8 %
+- **THEN** the throttle servo SHALL stay at idle and no release SHALL start
+
+#### Scenario: Ignition off
+- **WHEN** the park brake is `APPLIED`, the commanded ignition state is `OFF`, the target gear is L
+  and the demand rises from 0 % to 30 %
+- **THEN** no release SHALL start, the brake SHALL stay applied and the throttle SHALL stay at idle
+- **AND** telemetry `pbrake_da_wait` SHALL be `"ign_off"`
+- **AND** an explicit operator Release SHALL still be accepted
+
+#### Scenario: ACC, IGNITION and CRANKING all count as ignition on
+- **WHEN** the park brake is `APPLIED`, the target gear is L, the drive-away latch is armed, and the
+  commanded ignition state is `ACC`, `IGNITION` or `CRANKING`
+- **AND** the demand rises from 0 % to 30 %
+- **THEN** a release run SHALL start in each of the three states
+- **AND** only the state `OFF` (including `OFF` reported because the relay board is unavailable)
+  SHALL block the drive-away release
+
+#### Scenario: Ignition switched on with the throttle already up
+- **WHEN** the park brake is `APPLIED`, the target gear is L, the demand is held at 30 % and the
+  ignition is switched from `OFF` to `ACC` or `IGNITION`
+- **THEN** no release SHALL start
+- **AND** `pbrake_da_wait` SHALL be `"rearm"`
+- **AND** a release SHALL start only after the demand has dropped to 10 % or below and risen above
+  10 % again with the ignition on
+
+#### Scenario: Revving in neutral
+- **WHEN** the park brake is `APPLIED` and the target gear is N
+- **THEN** throttle SHALL NOT start a release and SHALL NOT be held by the park brake
+- **AND** the existing neutral clip (`TRANS_UNKNOWN_GEAR_THROTTLE_MAX`) SHALL still apply
+
+#### Scenario: Unknown state behaves as possibly applied
+- **WHEN** the state is `UNKNOWN`, the ignition is on and the target gear is R
+- **THEN** the throttle SHALL be held at idle
+- **AND** a rising demand above 10 % SHALL start a release with the same release point, which
+  settles the state as `RELEASED`
+
+#### Scenario: Held throttle does not re-release after an apply
+- **WHEN** the operator applies the park brake while the demand is already above 10 % in gear and
+  stays there
+- **THEN** no drive-away release SHALL start when the apply completes, and the throttle SHALL stay
+  at idle
+- **AND** `pbrake_da_wait` SHALL be `"rearm"`
+- **AND** a release SHALL start only after the demand has dropped to 10 % or below and risen above
+  10 % again
+
+#### Scenario: Gear change keeps its own throttle ownership
+- **WHEN** a gear change runs (boost PID or shift idle hold) while the park brake is applied
+- **THEN** the gear change SHALL own the throttle exactly as without the park brake
+- **AND** the park-brake hold SHALL act on the operator throttle path only
+
+#### Scenario: Web throttle reply while held
+- **WHEN** a web `set_throttle` command is accepted while the park-brake hold is active
+- **THEN** the reply SHALL be a success "Throttle set — held at idle until the park brake is released"
+- **AND** with the ignition off it SHALL be "Throttle set — held at idle: ignition off, the park
+  brake stays applied"
+
+### Requirement: Parking Brake State Persistence
+The park-brake state SHALL be persisted in the NVS namespace `"pbrake"`, key `state` (uint8:
+0 unknown, 1 released, 2 applied, 3 applying, 4 releasing). It SHALL be written as the moving value
+before a run drives the bridge, and as the settled value after the bridge stops.
+
+At boot a stored 1 or 2 SHALL restore `RELEASED` or `APPLIED`. Any other stored value, including a
+missing key, SHALL give `UNKNOWN`; it SHALL be logged and not rewritten. The firmware SHALL NOT
+drive the actuator at boot.
+
+#### Scenario: State survives a reboot
+- **WHEN** the park brake was `APPLIED` and the board reboots
+- **THEN** the state SHALL be `APPLIED` after boot and the X6 bridge SHALL stay at zero duty
+
+#### Scenario: Power loss mid-run
+- **WHEN** power is lost, the board resets or an OTA reboot happens during a run
+- **THEN** the state after boot SHALL be `UNKNOWN`, not `APPLIED` or `RELEASED`
+
+#### Scenario: First boot
+- **WHEN** the namespace `"pbrake"` has no `state` key
+- **THEN** the state SHALL be `UNKNOWN` until a run completes
+
+#### Scenario: Save failure at run start
+- **WHEN** writing the moving state fails as an APPLY starts
+- **THEN** the APPLY SHALL be refused with "Failed to save the park brake state — apply refused" and
+  the bridge SHALL NOT be driven
+- **WHEN** writing the moving state fails as a RELEASE starts
+- **THEN** the release SHALL run and the reply SHALL end with "(state not saved)"
+
+### Requirement: Configurable Parking Brake Travel Time, Throttle Release Point and Direction
+The parking-brake travel time, throttle release point and drive direction SHALL be persisted in the
+NVS namespace `"pbrake"`:
+- `travel_ms`: uint16, 1000–5000 ms, default 2000 ms;
+- `thr_pass`: uint8, the throttle release point in % of `travel_ms`, 20–100, default 50;
+- `invert`: uint8 0/1, default 0.
+
+With `invert` = 0, APPLY SHALL drive RPWM (GPIO5) and RELEASE SHALL drive LPWM (GPIO4); `invert` =
+1 SHALL swap them. A missing key SHALL read as the default. A stored out-of-range travel time
+or release point SHALL be logged and ignored, and not rewritten. Changes SHALL be persisted first,
+then applied. A new travel time SHALL take effect from the next run. A new release point SHALL take
+effect from the next release run.
+
+#### Scenario: Set the travel time
+- **WHEN** a travel time of 3200 ms is set
+- **THEN** it SHALL be persisted and the next run SHALL last 3700 ms
+- **AND** a run already in progress SHALL keep its duration
+
+#### Scenario: Travel time out of range
+- **WHEN** a travel time below 1000 ms or above 5000 ms is set
+- **THEN** it SHALL be refused and the value in use SHALL NOT change
+
+#### Scenario: Set the throttle release point
+- **WHEN** a release point of 70 % is set with a travel time of 2000 ms
+- **THEN** it SHALL be persisted, and in the next release run the throttle SHALL be held for 1400 ms
+  of the release drive
+
+#### Scenario: Throttle release point out of range
+- **WHEN** a release point below 20 % or above 100 % is set
+- **THEN** it SHALL be refused and the value in use SHALL NOT change
+
+#### Scenario: Invert the direction
+- **WHEN** the direction setting is changed while no run is in progress
+- **THEN** `invert` SHALL be persisted
+- **AND** the state SHALL be set to and persisted as `UNKNOWN`
+
+#### Scenario: Invert refused during a run
+- **WHEN** the direction setting is changed while `APPLYING` or `RELEASING`
+- **THEN** it SHALL be refused with "Park brake direction change refused: actuator moving"
+
+### Requirement: Parking Brake Release by Service-Brake Press
+On the aztec buggy, a new operator service-brake press SHALL start a parking-brake RELEASE run while
+the park brake is `APPLIED` or `UNKNOWN`: while the service brake is available, once it reports that
+it has reached the pressed position; while it is not available, at once. For this one trigger, this requirement takes precedence over the rule that a
+service brake command does not change the park-brake state.
+
+By owner decision of 2026-11-17 this trigger has **no protection** against an automatic brake: a
+brake commanded on servo channel 2 by any sender (RC handset, GCS joystick, the BlueOS Copilot's
+automatic fail-safe brake, an autopilot mode) and a web brake command all count.
+
+**Input.** The trigger SHALL use the commanded service-brake target as `applyBrake()` sets it (below
+5 % it is 0, above 100 % it is 100 %), the service brake's `available` indication (see "Service Brake
+Abstraction") and its `reached` indication (see "iBooster Rod Control"). A **press** is that target changing from 0 to a value above 0 while the input source is
+`MAVLINK` or `WEB`.
+
+**Rising edge.** The firmware SHALL sample the target on every control loop in every park-brake
+state, so that:
+- a target that is already non-zero when the park brake becomes `APPLIED` is not a press;
+- a change from one non-zero value to another is not a press;
+- under the `FAILSAFE` input source no press SHALL be detected, and the target frozen there SHALL NOT
+  count as a press when a live source returns;
+- on any input-source change the sample SHALL be re-seeded with the current target, so a takeover
+  (MAVLINK ↔ WEB, or from or to `FAILSAFE`) never produces a press by itself.
+
+**Hand-over.** After a press the release SHALL start on the first loop in which the service brake
+reports `reached` or is not `available`. While the service brake is not available (ignition OFF,
+unit asleep, starting, lost or in fault) the release therefore starts on the loop of the press. The
+wait SHALL be cancelled, with no release, when the target returns to 0, the input source changes,
+the park-brake state is no longer `APPLIED` or `UNKNOWN`, or the service brake is available but
+reports that its rod does not move ("no move", see "iBooster Rod Control"). A further release then
+needs a new press.
+
+By owner decision of 2026-11-23 a press releases the parking brake also while the service brake is
+not acting; the buggy can then be held by neither brake.
+
+**Release semantics.**
+- The release SHALL be the same RELEASE request as the drive-away release.
+- Every existing RELEASING rule SHALL apply unchanged: the throttle hold in L/H/R up to the throttle
+  release point, completion of the run if the service brake is let go, and no automatic re-apply.
+- A service-brake press SHALL NOT apply the parking brake, and SHALL have no park-brake effect while
+  the state is `RELEASED`, `RELEASING` or `APPLYING`.
+- The trigger SHALL NOT depend on the gear, the ignition state, the flight mode or any autopilot
+  status.
+- The firmware SHALL NOT move or hold the service brake for this feature.
+
+The drive-away release, the explicit web and GCS commands, the apply speed interlock and the speed
+governor SHALL behave exactly as before.
+
+#### Scenario: RC press releases after the hand-over
+- **WHEN** the park brake is `APPLIED`, the source is `MAVLINK`, the ignition is on, the service
+  brake is `READY` and released
+- **AND** the operator presses the service brake to 50 % and holds it
+- **THEN** the release run SHALL start on the first loop in which the service brake reports
+  `reached`
+- **AND** the state SHALL become `RELEASING`
+
+#### Scenario: Release from UNKNOWN
+- **WHEN** the park-brake state is `UNKNOWN` and a press completes its hand-over
+- **THEN** a release run SHALL start and settle the state as `RELEASED`
+
+#### Scenario: Web press releases
+- **WHEN** the park brake is `APPLIED`, the source is `WEB`, the target is 0 and the operator sends a
+  web brake of 80 %
+- **THEN** a release run SHALL start once the service brake reports `reached`
+
+#### Scenario: Automatic fail-safe brake releases (accepted)
+- **WHEN** the park brake is `APPLIED`, the source is `MAVLINK`, and channel 2 goes from 1500 µs to
+  1400 µs (25 %) because the Copilot brakes after an RC loss
+- **THEN** a release run SHALL start once the service brake reports `reached`
+
+#### Scenario: Brake held when the parking brake is applied
+- **WHEN** the service brake target is 60 %, the park brake is applied from the web and becomes
+  `APPLIED`, and the target stays at 60 %
+- **THEN** no release SHALL start
+- **AND** after the target goes to 0 and then to a non-zero value, a release SHALL start after the
+  hand-over
+
+#### Scenario: Frozen target under the firmware fail-safe
+- **WHEN** the input source is `FAILSAFE` with a non-zero brake target left from before, and later
+  `MAVLINK` returns with the same value
+- **THEN** no release SHALL start
+
+#### Scenario: Takeover with an inherited target
+- **WHEN** web control is engaged while the MAVLink brake target is 80 %, and the web then sends 80 %
+- **THEN** no release SHALL start
+- **AND** a web brake of 0 followed by a non-zero web brake SHALL start a release after the hand-over
+
+#### Scenario: Press dropped before the hand-over
+- **WHEN** a press is pending and the target returns to 0 before the service brake reports `reached`
+- **THEN** no release SHALL start
+- **AND** the next press SHALL start a new hand-over
+
+#### Scenario: Service brake let go mid-release
+- **WHEN** a release started by the service brake is running and the operator lets go of the service
+  brake
+- **THEN** the run SHALL complete and the state SHALL become `RELEASED`
+- **AND** the park brake SHALL NOT be re-applied
+
+#### Scenario: No apply and no effect when not applied
+- **WHEN** the park brake is `RELEASED`, `RELEASING` or `APPLYING` and the operator presses the
+  service brake
+- **THEN** the park-brake state and run SHALL NOT change
+
+#### Scenario: Press releases while the service brake is unavailable (accepted)
+- **WHEN** the park brake is `APPLIED`, the iBooster is `ASLEEP`, `STARTING`, `LOST` or in `FAULT`,
+  and the operator presses the service brake
+- **THEN** a release run SHALL start on the loop of the press
+- **AND** the service brake SHALL NOT act, so the buggy is held by neither brake (owner decision)
+
+#### Scenario: Service brake ready but its rod does not move
+- **WHEN** a press is pending, the service brake is available, and it reports "no move" (accepted,
+  pushing, rod not moved 0.3 mm for 3 s)
+- **THEN** the wait SHALL be cancelled with no release, `BRAKE W pbrake_handover_cancel why=no_move`
+  SHALL be journaled, and the parking brake SHALL stay applied until the Release command or a new
+  press
+
+#### Scenario: Unit becomes unavailable during the hand-over
+- **WHEN** a press is pending, waiting for `reached`, and the service brake becomes unavailable
+- **THEN** the release run SHALL start on that loop
+
+#### Scenario: Any gear, any ignition
+- **WHEN** the park brake is `APPLIED`, the target gear is N, the ignition relay is `OFF`, and a press
+  occurs
+- **THEN** a release run SHALL start (the service brake is asleep, so there is no hand-over wait)
+
+#### Scenario: Throttle hold unchanged
+- **WHEN** a release started by the service brake runs with the target gear L
+- **THEN** the operator throttle SHALL be held at idle up to the throttle release point, exactly as
+  for any release run
+
+### Requirement: Service Brake Control
+On the aztec buggy the service brake SHALL be a Bosch iBooster Gen2 commanded over the shared CAN
+bus (see "Bosch iBooster Gen2 Service Brake Unit", "iBooster Unit State Machine" and "iBooster Rod
+Control"). There SHALL be no other service-brake actuator: no BTS7960 brake drive, no open-loop
+position estimate, no hold drive and no "released" endstop input. The brake command SHALL be a
+percentage from 0 to 100 set through `applyBrake()`, which SHALL keep its clamp: below 5 % becomes
+0, above 100 % becomes 100 %. The applied brake SHALL be the rod position reported by the unit.
+
+#### Scenario: Set brake by percentage
+- **WHEN** `applyBrake()` is called with a value from 5 to 100
+- **THEN** the service brake target SHALL become that percentage of the configured maximum stroke
+- **AND** 0 % SHALL mean released and 100 % the configured maximum stroke
+
+#### Scenario: Dead zone kept
+- **WHEN** `applyBrake()` is called with 3 %
+- **THEN** the target SHALL be 0 and no brake request SHALL be sent
+
+#### Scenario: Release
+- **WHEN** the target goes from a non-zero value to 0
+- **THEN** the rod SHALL be returned under control and the brake request SHALL then be cleared, as
+  "iBooster Rod Control" describes
+
+#### Scenario: Applied brake is measured
+- **WHEN** the unit reports its rod position
+- **THEN** the applied brake percentage SHALL be that position as a percentage of the configured
+  maximum stroke, 0–100
+- **AND** while the unit is not available the applied percentage SHALL be reported as 0 together with
+  the brake state
+
+#### Scenario: No brake action at power-on
+- **WHEN** the system powers on or resets
+- **THEN** no brake request SHALL be sent until a brake target above 0 is commanded and the unit is
+  ready
+- **AND** no parking or start-up brake SHALL be applied by the service brake
+
+### Requirement: Service Brake Abstraction
+The firmware SHALL talk to the service brake only through one interface (`IServiceBrake`), used from
+the main loop: set a percent target; read the target, the applied percentage, `reached`,
+`available`, `requestActive` and the brake state. The iBooster implementation SHALL sit behind it.
+`VehicleController` SHALL NOT hold a motor driver for the service brake.
+
+#### Scenario: Commanded and applied are separate
+- **WHEN** a target of 50 % is set and the rod has not moved yet
+- **THEN** the target SHALL read 50 % and the applied percentage SHALL read the measured position
+
+#### Scenario: Throttle paths keep using the command
+- **WHEN** the speed governor, the speed limiter or the throttle opening slew asks whether a brake is
+  commanded
+- **THEN** the answer SHALL be "commanded target above 0", whatever the unit's state
+- **AND** a brake commanded while the unit is unavailable SHALL still close the throttle as before
+
+#### Scenario: Availability
+- **WHEN** the brake state is `READY`, `BRAKING` or `RELEASING`
+- **THEN** `available` SHALL be true, and false in every other state
+- **AND** `requestActive` SHALL be true exactly in `BRAKING` and `RELEASING`
+
+### Requirement: iBooster Unit State Machine
+The service brake SHALL track the unit in the states `ASLEEP`, `STARTING`, `READY`, `BRAKING`,
+`RELEASING`, `LOST` and `FAULT`, stepped once per 10 ms slot in the CAN task by a pure law
+(`include/IboosterLaw.h`), using the newest valid `0x39D`, `0x38E` and `0x38F` frames. No brake
+request SHALL be sent in `ASLEEP`, `STARTING`, `LOST` or `FAULT`.
+
+#### Scenario: Asleep with the ignition off
+- **WHEN** the ignition state is `OFF` and no valid unit frame has arrived for `IB_SILENT_MS`
+  (500 ms)
+- **THEN** the state SHALL be `ASLEEP` and no frame SHALL be sent to the unit
+
+#### Scenario: Start-up
+- **WHEN** the ignition leaves `OFF`, or a valid unit frame arrives while `ASLEEP`
+- **THEN** the state SHALL be `STARTING` and idle frames SHALL be sent every 10 ms
+- **AND** the state SHALL become `READY` when a `0x39D` no older than `IB_STATUS_STALE_MS` (250 ms)
+  shows status 5 or 6 with driver_brake_apply other than 3, and `0x38F` byte 4 is `0x40`
+- **AND** if `READY` is not reached within `IB_START_TIMEOUT_MS` (20 s) the event SHALL be journaled
+  once and the state SHALL stay `STARTING`
+
+#### Scenario: The unit's own actuation cycle is not a fault
+- **WHEN** the unit reports status 6 with internal state 5 (its periodic self-cycle, or `to_idle`
+  after a release) and no other fault sign
+- **THEN** the state SHALL stay `READY`
+
+#### Scenario: Unit lost
+- **WHEN** frames are being sent, the ignition is reported on, the state is `READY`, `BRAKING` or
+  `RELEASING`, and the newest valid `0x39D` is older than 250 ms
+- **THEN** the state SHALL become `LOST`, the request SHALL be cleared and idle frames SHALL continue
+- **AND** when valid frames return the state SHALL go through `STARTING` to `READY` again
+
+#### Scenario: Unit going to sleep with the ignition reported OFF
+- **WHEN** the ignition is reported `OFF` and the unit, heard until now, falls silent
+- **THEN** the state SHALL NOT become `LOST`; frames SHALL continue until 500 ms of silence and the
+  state SHALL then become `ASLEEP`
+- **AND** while the newest `0x39D` is older than 250 ms no new request SHALL start
+
+#### Scenario: Unit no longer ready
+- **WHEN** a fresh `0x39D` shows no fault sign but the `READY` condition is gone (status other than 5
+  or 6, or `0x38F` byte 4 not `0x40`) while `READY`, or a status other than 5 or 6 while `BRAKING` or
+  `RELEASING`
+- **THEN** the state SHALL become `STARTING` and the request SHALL be cleared
+
+#### Scenario: Unit fault
+- **WHEN** a fresh `0x39D` shows status 2 (failure) or driver_brake_apply 3 (fault)
+- **THEN** the state SHALL become `FAULT`, the request SHALL be cleared at once and idle frames SHALL
+  continue
+- **AND** the state SHALL leave `FAULT` only when the unit itself reports the `READY` condition again
+- **AND** a `FAULT` lasting `IB_FAULT_PERSIST_MS` (20 s) SHALL be journaled once as latched
+
+#### Scenario: Cranking dip
+- **WHEN** a `LOST` or `FAULT` starts while the ignition is `CRANKING` or within `IB_CRANK_GRACE_MS`
+  (3 s) after it
+- **THEN** the state machine SHALL behave as at any other time
+- **AND** the event SHALL be journaled at level `W` with `crank=1`, not at level `E`
+
+#### Scenario: Brake commanded while not available
+- **WHEN** the target is above 0 and the state is `STARTING`, `LOST` or `FAULT`
+- **THEN** no request SHALL be sent and the target SHALL be kept
+- **AND** when the state becomes `READY` with the target still above 0, the state SHALL become
+  `BRAKING`
+
+#### Scenario: Ignition switched off and on again
+- **WHEN** the ignition goes from `OFF` back to on while the state is `READY`, `BRAKING`,
+  `RELEASING` or `LOST` (the unit lost its Wake meanwhile, however briefly)
+- **THEN** the state SHALL become `STARTING` (silent, no `LOST`), any request SHALL be cleared
+- **AND** `READY` SHALL then need `0x39D` and `0x38F` frames that arrived after the ignition edge
+
+#### Scenario: Request not accepted
+- **WHEN** the request has been set for `IB_ACCEPT_TIMEOUT_MS` (1000 ms) and `0x39D` internal state
+  is not 3 (external request)
+- **THEN** a unit drop SHALL be counted and journaled, and the request SHALL be kept
+
+### Requirement: iBooster Rod Control
+In `BRAKING` and `RELEASING` the CAN task SHALL close a proportional loop on the `0x39D` rod position
+every 10 ms slot and send the result as the `0x38C` flow, with the external-request bits set.
+
+#### Scenario: Rod target
+- **WHEN** the brake target is P % and the configured maximum stroke is M mm
+- **THEN** the rod target SHALL be P / 100 × M mm, never above `IB_ROD_CEIL_MM` (16.0 mm)
+
+#### Scenario: Flow from the rod error
+- **WHEN** the rod error (target − rod) is E mm
+- **THEN** the flow SHALL be `IB_ROD_KP` (250 flow units per mm) × E, 0 inside the deadband
+  `IB_ROD_DEADBAND_MM` (0.05 mm), limited to + apply rate and − release rate (ml/s × 128 units)
+- **AND** the flow word SHALL be `0x7E00` + flow and SHALL always stay within `0x6A00…0x9200`
+
+#### Scenario: Old rod sample
+- **WHEN** a request is set and the newest valid `0x39D` is older than `IB_ROD_HOLD_MS` (100 ms) but
+  not yet stale (250 ms)
+- **THEN** the flow SHALL be 0 (the rod holds) until a newer `0x39D` arrives; the loop SHALL never
+  drive the rod from an old position
+
+#### Scenario: Controlled release
+- **WHEN** the target becomes 0 while `BRAKING`
+- **THEN** the state SHALL become `RELEASING`, the request SHALL stay set and the rod SHALL be
+  returned at no more than the release rate
+- **AND** when the rod is at or below `IB_RELEASE_HANDOFF_MM` (1.0 mm) the request SHALL be cleared
+  and the state SHALL become `READY`
+- **AND** the release time budget SHALL be 1 s + twice the nominal return time from the rod position
+  at `RELEASING` entry to 1.0 mm at the release rate (≈ 1.9 mm/s per ml/s), at least
+  `IB_RELEASE_TIMEOUT_MS` (3 s) and at most `IB_RELEASE_MAX_MS` (30 s; also when the entry rod is
+  unknown)
+- **AND** past the budget the request SHALL be cleared, and `release_slow` journaled, only once the
+  rod has stopped coming down (less than 0.1 mm in the last 1 s), or at the 30 s cap; while it still
+  comes down the request SHALL be kept
+
+#### Scenario: Re-press during release
+- **WHEN** a target above 0 is commanded while `RELEASING` and the newest `0x39D` is fresh
+- **THEN** the state SHALL become `BRAKING` with the new target
+- **AND** with a stale `0x39D` (ignition reported OFF, unit going quiet) the state SHALL stay
+  `RELEASING`
+
+#### Scenario: Re-command after a gap
+- **WHEN** the unit released by itself after a frame gap and accepted the still-set request again
+- **THEN** the loop SHALL drive the rod back to the target with no operator action
+
+#### Scenario: Reached
+- **WHEN** the state is `BRAKING`, the unit reports internal state 3, and either the rod is within
+  `IB_REACHED_TOL_MM` (0.2 mm) of the target, or — only after the rod has advanced `IB_ARM_MM`
+  (0.3 mm) from its first position in this `BRAKING` episode, because the unit first takes up
+  ~2 mm of free travel with the output rod standing still — the flow is positive and the rod has
+  advanced less than 0.05 mm in `IB_STALL_MS` (300 ms), or `0x38F` byte 3 is 0
+- **THEN** `reached` SHALL be true
+- **AND** in every other state `reached` SHALL be false
+- **AND** `reached` SHALL refer to the target currently commanded: a result computed for an earlier
+  target SHALL NOT be reported
+
+#### Scenario: Rod does not move
+- **WHEN** the state is `BRAKING`, the unit reports internal state 3, the flow is positive and the
+  rod has not advanced 0.3 mm for `IB_NO_MOVE_MS` (3 s)
+- **THEN** "no move" SHALL be reported (journal `BRAKE W no_move`, once per episode), `reached` SHALL
+  stay false and the request SHALL be kept
+- **AND** "no move" SHALL clear as soon as the rod moves 0.3 mm
+
+#### Scenario: Vehicle speed to the unit
+- **WHEN** the frames are built
+- **THEN** `0x38B` byte 2 SHALL be round(speed km/h / 0.4), clamped to 0–255, from the wheel speed
+  floored as required by "iBooster Vehicle Speed Floor"
+- **AND** the "faulty" speed qualifier (`0x80`) SHALL never be sent
+
+### Requirement: Service Brake Settings
+The maximum stroke, the apply rate and the release rate SHALL be persisted, operator-set, per-vehicle
+values in the NVS namespace `brake`: `max_mm10` (0.1 mm, 2.0–16.0 mm, default 16.0 — the full
+external-request stroke), `apply_mlps` (1–40 ml/s, default 8) and `release_mlps` (1–40 ml/s,
+default 8). The former keys `travel_ms` and
+`hold_pwm` SHALL be removed once at boot and never read.
+
+#### Scenario: Defaults
+- **WHEN** the system starts without stored values
+- **THEN** the maximum stroke SHALL be 16.0 mm and both rates 8 ml/s
+- **AND** a 100 % brake SHALL then command a rod target of 16.0 mm
+
+#### Scenario: Invalid stored value
+- **WHEN** a stored value is outside its range
+- **THEN** it SHALL be ignored and logged, the default SHALL be used and the stored value SHALL NOT be
+  rewritten
+
+#### Scenario: Change applied
+- **WHEN** a valid value is set and no brake request is active
+- **THEN** it SHALL be persisted first and, once the write succeeded, used from the next slot
+- **AND** the maximum stroke SHALL be accepted only on the 0.5 mm grid (2.0, 2.5, … 16.0 mm); a value
+  off the grid is answered as out of range
+- **AND** if the write fails the value in use SHALL stay unchanged
+
+#### Scenario: Refused while braking
+- **WHEN** a setting is sent while a brake request is active
+- **THEN** it SHALL be refused, and neither the stored nor the in-use value SHALL change
+
+#### Scenario: Old keys removed
+- **WHEN** the system starts and `brake`/`travel_ms` or `brake`/`hold_pwm` exist
+- **THEN** they SHALL be removed before the CAN bus is started
+
+### Requirement: Service Brake With the Ignition OFF and Under Fail-Safe
+The iBooster SHALL be woken only by the ACC / ignition line (Relay_1). This change SHALL NOT alter
+the fail-safe. Both consequences are accepted by the owner and SHALL be stated in the operator
+documentation: with the ignition `OFF` there is no service brake, and on fail-safe the brake drops
+when `allOff()` opens the ignition relay.
+
+#### Scenario: Fail-safe with a held brake
+- **WHEN** the input source becomes `FAILSAFE` while the brake target is 40 %
+- **THEN** the fail-safe SHALL do exactly what it did before this change (steering centre, throttle
+  idle, transmission stop, `allOff()`, odometer and hours persisted) and SHALL add no brake action
+- **AND** the brake target SHALL stay frozen at 40 %
+- **AND** once the unit has gone silent the state SHALL become `ASLEEP` and no frames SHALL be sent
+
+#### Scenario: Ignition off
+- **WHEN** the ignition is switched `OFF` by any path
+- **THEN** the service brake SHALL be reported unavailable (`ASLEEP`) once the unit is silent
+- **AND** no brake request SHALL be attempted
+
+#### Scenario: Main loop stalls
+- **WHEN** the CAN task has received no brake command from the main loop for `IB_CMD_STALE_MS`
+  (500 ms)
+- **THEN** the task SHALL keep the last rod target and vehicle-speed byte and keep sending frames
+- **AND** the episode and its length SHALL be journaled when the main loop runs again
+
+### Requirement: Flash Writes During a Service-Brake Request
+While a brake request is active (`BRAKING` or `RELEASING`) the firmware SHALL keep flash writes away
+from the 10 ms frame schedule where it can, because a flash erase stalls the CAN task.
+
+#### Scenario: Periodic saves deferred
+- **WHEN** the odometer (every 1 km) or the engine-hour meter (every 600 s) is due to save while a
+  request is active
+- **THEN** the save SHALL be postponed and SHALL run on the first update after the request ends,
+  moving or not (the due check runs on every update)
+- **AND** the postponement SHALL last no longer than the request; a request ends with the brake
+  release, with the ignition OFF (the unit sleeps; the ignition-OFF save runs) or on fail-safe
+  (whose save runs at once, during the request)
+- **AND** the fail-safe and explicit saves SHALL be unchanged
+
+#### Scenario: Operator writes not deferred
+- **WHEN** a gear change, a park-brake run or a setting on another card writes NVS while a request
+  is active
+- **THEN** the write SHALL happen as before
+
+#### Scenario: Brake settings refused
+- **WHEN** a brake setting is sent while a request is active
+- **THEN** it SHALL be refused without a flash write
+
+### Requirement: iBooster Vehicle Speed Floor
+On aztec, the vehicle-speed byte sent to the iBooster (`0x38B` byte 2) SHALL be round(v / 0.4),
+clamped to 0–255, where v = max(true wheel speed in km/h, `IB_LAW_SPEED_FLOOR_KMH` = 2.0 km/h). An
+invalid, NaN or non-positive wheel speed SHALL give the floor (5 counts), never 0. The floor SHALL be
+applied in `ibSpeedByte()` (`include/IboosterLaw.h`), the single place the byte is computed, and SHALL
+apply to every `0x38B` frame the firmware sends, with or without a brake request. The floored value
+SHALL NOT be used anywhere else: the speed limiter, the speed governor, telemetry, MAVLink and the web
+page SHALL keep the true speed. This requirement supersedes the "0 while it is invalid" clause of the
+scenario "Vehicle speed to the unit" in "iBooster Rod Control". `0x38B` byte 1 (the request /
+speed-qualifier bits, `0x40` only with a request), byte 3 (`0x05`), `0x38C` and `0x38D` SHALL stay
+unchanged.
+
+#### Scenario: Standing still
+- **WHEN** the wheel speed is valid and 0, or valid and below 2 km/h (e.g. 1 km/h)
+- **THEN** `0x38B` byte 2 SHALL be 5
+
+#### Scenario: Speed sensor invalid
+- **WHEN** the wheel speed is invalid, NaN or negative, at any true vehicle speed
+- **THEN** `0x38B` byte 2 SHALL be 5
+
+#### Scenario: At and above the floor
+- **WHEN** the wheel speed is valid and exactly 2 km/h, 3 km/h or 40 km/h
+- **THEN** `0x38B` byte 2 SHALL be 5, 8 and 100 respectively
+
+#### Scenario: Clamp
+- **WHEN** the wheel speed is valid and 102 km/h or more, or infinite
+- **THEN** `0x38B` byte 2 SHALL be 255
+
+#### Scenario: Rest of the firmware unaffected
+- **WHEN** the buggy stands still with a valid speed of 0, or the speed sensor is invalid
+- **THEN** the speed limiter, the governor, telemetry, MAVLink and the web page SHALL see the true
+  speed (0, or invalid), not 2 km/h
+
+#### Scenario: Qualifier bits unchanged
+- **WHEN** frames are sent without a brake request
+- **THEN** `0x38B` byte 1 SHALL carry no `0x40` (speed qualifier 0) as in firmware 1.6.0, the speed
+  byte still floored; whether the unit uses the speed byte from such frames is not known
 

@@ -1,6 +1,6 @@
 ## 0. Preconditions
 - [x] 0.1 Proposal approved by the owner. The open questions were answered on 2026-11-12 and are folded into design.md (D11) and the specs.
-- [ ] 0.2 `repurpose-x10-battery-sense` archived before this change (this change's `vehicle-actuators` "Hardware Configuration" delta is based on its text); note in `move-aztec-vesc-to-can` that its "Hardware Configuration" delta must be rebased onto this change's text.
+- [x] 0.2 `repurpose-x10-battery-sense` archived before this change (this change's `vehicle-actuators` "Hardware Configuration" delta is based on its text); note in `move-aztec-vesc-to-can` that its "Hardware Configuration" delta must be rebased onto this change's text.
 - [x] 0.3 Work on branch `aztec` only; do NOT cherry-pick into `master` (X6 is the quad's steering VESC).
 
 ## 1. Constants and pure law

@@ -3,24 +3,26 @@
 The system SHALL interface with vehicle CAN bus using MCP2515 SPI controller to read standard OBD-II diagnostic data using a non-blocking state machine.
 The RPM poll interval SHALL be adjustable at runtime via `setRPMPollInterval(uint32_t ms)` to allow higher-frequency polling during gear changes.
 The active poll table SHALL contain six PIDs: engine RPM (`0x0C`) in the fast class, and coolant temperature (`0x05`), throttle position (`0x11`), manifold absolute pressure (`0x0B`), intake air temperature (`0x0F`) and calculated engine load (`0x04`) in the `CAN_POLL_INTERVAL_TEMP` class. Control module voltage (`0x42`) SHALL NOT be polled, because the Delphi MT05 ECU never answers it; the 12 V supply is measured by the board on X10 instead. Exactly one OBD-II request SHALL be in flight at any time, and the RPM poll cadence SHALL remain unchanged by the additional PIDs.
+The OBD-II state machine SHALL run in the main loop and SHALL receive its replies from the CAN receive queue and send its requests through the queued CAN transmit, never by accessing the MCP2515 directly.
 
 #### Scenario: Initialize MCP2515 on startup
 **Given** the ESP32 is powered on
 **When** `CANController::begin()` is called with SPI pins
-**Then** the MCP2515 shall be initialized at 500 kbps
+**Then** the CAN task SHALL be created and SHALL initialize the MCP2515 at 500 kbps
 **And** SPI communication shall be verified
 **And** the PID scheduling table shall be initialized with polling intervals (RPM: `CAN_POLL_INTERVAL_RPM` ms; coolant, throttle position, MAP, intake air temperature and engine load: `CAN_POLL_INTERVAL_TEMP` ms)
 **And** the state machine shall be set to IDLE
-**And** return `true` if successful, `false` otherwise
+**And** `begin()` SHALL wait for the result of that first initialization for at most `CAN_BOOT_INIT_WAIT_MS` (1000 ms) and return `true` if it succeeded, `false` otherwise
+**And** a `false` result SHALL NOT stop later initialization attempts (see "MCP2515 Initialization Retry")
 
 #### Scenario: Non-blocking OBD-II polling via state machine
 **Given** the CAN controller is initialized
 **When** `update()` is called
-**Then** if state is IDLE and a PID is due for polling, an OBD-II request SHALL be sent and state transitions to WAITING_RESPONSE
-**And** if state is WAITING_RESPONSE, a single non-blocking `checkReceive()` SHALL be performed
+**Then** if state is IDLE and a PID is due for polling, an OBD-II request SHALL be queued for transmission and state transitions to WAITING_RESPONSE
+**And** if state is WAITING_RESPONSE, the frames taken from the receive queue in this call SHALL be checked for a matching response
 **And** if a matching response is available, it SHALL be parsed and stored, and state transitions to IDLE
 **And** if the response timeout (200ms) elapses, the request SHALL be marked as failed and state transitions to IDLE
-**And** `update()` SHALL return immediately without blocking the main loop
+**And** `update()` SHALL return immediately without blocking the main loop, and SHALL NOT access the MCP2515 over SPI
 
 #### Scenario: Read engine RPM via OBD-II PID 0x0C
 **Given** the CAN controller is initialized

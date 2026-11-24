@@ -6,7 +6,7 @@ TBD - created by archiving change add-can-controller-class. Update Purpose after
 ### Requirement: CAN Controller OBD-II Data Reading
 The system SHALL interface with vehicle CAN bus using MCP2515 SPI controller to read standard OBD-II diagnostic data using a non-blocking state machine.
 The RPM poll interval SHALL be adjustable at runtime via `setRPMPollInterval(uint32_t ms)` to allow higher-frequency polling during gear changes.
-The active poll table SHALL contain seven PIDs: engine RPM (`0x0C`) in the fast class, and coolant temperature (`0x05`), throttle position (`0x11`), manifold absolute pressure (`0x0B`), control module voltage (`0x42`), intake air temperature (`0x0F`) and calculated engine load (`0x04`) in the `CAN_POLL_INTERVAL_TEMP` class. Exactly one OBD-II request SHALL be in flight at any time, and the RPM poll cadence SHALL remain unchanged by the additional PIDs.
+The active poll table SHALL contain six PIDs: engine RPM (`0x0C`) in the fast class, and coolant temperature (`0x05`), throttle position (`0x11`), manifold absolute pressure (`0x0B`), intake air temperature (`0x0F`) and calculated engine load (`0x04`) in the `CAN_POLL_INTERVAL_TEMP` class. Control module voltage (`0x42`) SHALL NOT be polled, because the Delphi MT05 ECU never answers it; the 12 V supply is measured by the board on X10 instead. Exactly one OBD-II request SHALL be in flight at any time, and the RPM poll cadence SHALL remain unchanged by the additional PIDs.
 The OBD-II state machine SHALL run in the main loop and SHALL receive its replies from the CAN receive queue and send its requests through the queued CAN transmit, never by accessing the MCP2515 directly.
 
 #### Scenario: Initialize MCP2515 on startup
@@ -14,7 +14,7 @@ The OBD-II state machine SHALL run in the main loop and SHALL receive its replie
 **When** `CANController::begin()` is called with SPI pins
 **Then** the CAN task SHALL be created and SHALL initialize the MCP2515 at 500 kbps
 **And** SPI communication shall be verified
-**And** the PID scheduling table shall be initialized with polling intervals (RPM: `CAN_POLL_INTERVAL_RPM` ms; coolant, throttle position, MAP, module voltage, intake air temperature and engine load: `CAN_POLL_INTERVAL_TEMP` ms)
+**And** the PID scheduling table shall be initialized with polling intervals (RPM: `CAN_POLL_INTERVAL_RPM` ms; coolant, throttle position, MAP, intake air temperature and engine load: `CAN_POLL_INTERVAL_TEMP` ms)
 **And** the state machine shall be set to IDLE
 **And** `begin()` SHALL wait for the result of that first initialization for at most `CAN_BOOT_INIT_WAIT_MS` (1000 ms) and return `true` if it succeeded, `false` otherwise
 **And** a `false` result SHALL NOT stop later initialization attempts (see "MCP2515 Initialization Retry")
@@ -60,12 +60,10 @@ The OBD-II state machine SHALL run in the main loop and SHALL receive its replie
 **And** the value shall be stored in `VehicleData.mapKpa`
 
 #### Scenario: Read control module voltage via OBD-II PID 0x42
-**Given** the CAN controller is initialized
-**When** the module voltage PID becomes due (`CAN_POLL_INTERVAL_TEMP`, 2000ms interval) and is selected by the scheduler
-**Then** an OBD-II Mode 01 request for PID 0x42 shall be sent
-**And** the response shall be parsed to extract the control module supply voltage
-**And** the raw value `((A*256)+B)` SHALL be stored verbatim as millivolts in `VehicleData.moduleVoltageMv`
-**And** consumers SHALL convert to volts as `((A*256)+B)/1000` (0.000–65.535 V) at the presentation edge
+**Given** the Delphi MT05 ECU never answers OBD-II PID 0x42
+**When** the poll table is constructed
+**Then** PID 0x42 SHALL NOT be present in the poll table and `VehicleData` SHALL carry no module voltage field
+**And** PID 0x42 SHALL remain in the on-demand ECU capability probe candidate list, decoded as `((A*256)+B)/1000` V
 
 #### Scenario: Read intake air temperature via OBD-II PID 0x0F
 **Given** the CAN controller is initialized
@@ -89,7 +87,7 @@ The OBD-II state machine SHALL run in the main loop and SHALL receive its replie
 **And** PIDs that the probe reported as supported but that have no consumer (for example `0x0E` timing advance, `0x14` O2 sensor B1S1, and the fuel-trim PIDs) SHALL also be omitted, to keep the request budget small
 
 #### Scenario: Additional PIDs do not disturb the RPM poll cadence
-**Given** the poll table contains seven PIDs with RPM in the fast class and six PIDs at `CAN_POLL_INTERVAL_TEMP`
+**Given** the poll table contains six PIDs with RPM in the fast class and five PIDs at `CAN_POLL_INTERVAL_TEMP`
 **When** the scheduler runs in steady state
 **Then** the RPM PID SHALL continue to be polled at its configured interval (`CAN_POLL_INTERVAL_RPM`, or `CAN_POLL_INTERVAL_RPM_BOOST` during a gear change)
 **And** an RPM request SHALL be delayed by at most one in-flight transaction (bounded by the 200 ms response timeout)
@@ -361,12 +359,16 @@ duration so that engine RPM does not become stale during the probe.
   console via `Debug::printfFeature(DebugFeature::CAN, ...)`
 
 ### Requirement: Shared-Bus Steering Angle Frame Reception
-The MCP2515 SHALL accept the Bosch LWS steering-angle frame (`0x305`) through its own receive buffer alongside the OBD-II response window, so that the 100 Hz angle stream and engine replies on the one shared bus do not evict each other.
+The MCP2515 SHALL accept the Bosch LWS steering-angle frame (`0x305`) and the three Bosch iBooster
+status frames (`0x38E`, `0x38F`, `0x39D`) through receive buffer RXB1, and the OBD-II response window
+through RXB0, so that the 100 Hz angle stream, the brake status and the engine replies on the one
+shared bus do not evict each other.
 
 #### Scenario: Two acceptance paths
 - **WHEN** the receive filters are applied (at `begin()` and after any re-initialization)
 - **THEN** RXB0 SHALL use mask `0x7F8` with filters 0 and 1 = `0x7E8` (OBD-II replies `0x7E8`–`0x7EF`)
-- **AND** RXB1 SHALL use mask `0x7FF` with filters 2–5 = `0x305` (steering angle only)
+- **AND** RXB1 SHALL use mask `0x7FF` with filter 2 = `0x305`, filter 3 = `0x38E`, filter 4 =
+  `0x38F` and filter 5 = `0x39D` (exact matches)
 - **AND** extended-ID frames SHALL match no filter
 - **AND** RXB0-to-RXB1 rollover SHALL stay enabled so an OBD-II reply arriving while RXB0 is full is not lost
 
@@ -375,9 +377,15 @@ The MCP2515 SHALL accept the Bosch LWS steering-angle frame (`0x305`) through it
 - **THEN** the loss SHALL NOT be treated as a CAN error, because every frame carries the absolute angle
 - **AND** only the steering-angle frame timeout SHALL turn missing frames into a steering sensor fault
 
+#### Scenario: Lost brake status frames are tolerated
+- **WHEN** single `0x38E`, `0x38F` or `0x39D` frames are lost
+- **THEN** the loss SHALL NOT be treated as a CAN error
+- **AND** only the `0x39D` staleness limit (250 ms) SHALL turn missing frames into a lost brake unit
+
 #### Scenario: OBD-II polling unaffected
-- **WHEN** the steering-angle sensor transmits at 100 Hz on the shared bus
-- **THEN** the RPM poll cadence (`CAN_POLL_INTERVAL_RPM`, and `CAN_POLL_INTERVAL_RPM_BOOST` during a gear change) and the other PIDs SHALL be polled as without the sensor
+- **WHEN** the steering-angle sensor transmits at 100 Hz and the iBooster at 175 frames/s on the
+  shared bus
+- **THEN** the RPM poll cadence (`CAN_POLL_INTERVAL_RPM`, and `CAN_POLL_INTERVAL_RPM_BOOST` during a gear change) and the other PIDs SHALL be polled as without them
 
 ### Requirement: Steering Sensor Zero-Set Sequence
 The CAN controller SHALL provide a non-blocking sequence that sets the Bosch LWS sensor's zero at the current position while keeping its output ID `0x305`, pausing OBD-II polling for its duration. It SHALL be the only code that transmits on ID `0x7C0`, and it SHALL transmit only the two fixed payloads below.
@@ -610,7 +618,11 @@ A dedicated FreeRTOS task (`can_io`) SHALL be the only code that accesses the MC
 - **THEN** it SHALL NOT perform SPI transfers or call the MCP2515 library, and SHALL NOT wait for the task
 
 ### Requirement: CAN Receive Queue
-Received frames SHALL pass from the CAN task to the main loop through a bounded ring of `CAN_RX_RING` (64) frames, each holding the ID in the `readMsgBuf()` encoding (bit 31 extended, bit 30 remote), the DLC and up to 8 data bytes.
+Received frames SHALL pass from the CAN task to the main loop through a bounded ring of `CAN_RX_RING`
+(64) frames, each holding the ID in the `readMsgBuf()` encoding (bit 31 extended, bit 30 remote), the
+DLC and up to 8 data bytes. The exception SHALL be the iBooster status frames (`0x38E`, `0x38F`,
+`0x39D`): they SHALL be consumed by the CAN task's brake client and SHALL enter the ring only while the
+CAN sniffer window is open.
 
 #### Scenario: Ring full
 - **WHEN** the task has a frame and the ring is full
@@ -622,12 +634,20 @@ Received frames SHALL pass from the CAN task to the main loop through a bounded 
 - **THEN** steering-angle frames SHALL be handed to the LWS decoder with the main-loop time of dispatch
 - **AND** the LWS decoder, the OBD-II and probe state machines, the sniffer table and the CAN watchdogs SHALL run only in the main loop
 
+#### Scenario: Brake frames stay in the task
+- **WHEN** the task reads a `0x38E`, `0x38F` or `0x39D` frame and the sniffer window is closed
+- **THEN** the frame SHALL be decoded by the brake client in the task and SHALL NOT be put in the ring
+- **AND** while the sniffer window is open the frame SHALL be both decoded and put in the ring
+
 #### Scenario: Extended frames pass through
 - **WHEN** a frame with an extended ID is accepted by the acceptance filters
 - **THEN** it SHALL reach the main loop with bit 31 of its ID set
 
 ### Requirement: Queued CAN Transmit
-Every frame the firmware sends on the CAN bus SHALL be queued by the main loop in a transmit ring of `CAN_TX_RING` (8) frames and loaded into the MCP2515 by the CAN task, without any busy-wait in the main loop. General frames SHALL use transmit buffer TXB0 only, in FIFO order; TXB1 and TXB2 SHALL NOT be used by this change.
+Every frame the main loop sends on the CAN bus SHALL be queued in a transmit ring of `CAN_TX_RING` (8)
+frames and loaded into the MCP2515 by the CAN task, without any busy-wait in the main loop. General
+frames SHALL use transmit buffer TXB0 only, in FIFO order, at TXP 1. TXB1 and TXB2 SHALL be used only
+by the CAN task's periodic iBooster schedule (see "iBooster Periodic Frames").
 
 #### Scenario: Queue a frame
 - **WHEN** the main loop queues a frame
@@ -664,6 +684,10 @@ Every frame the firmware sends on the CAN bus SHALL be queued by the main loop i
 - **WHEN** an OBD-II request cannot be queued
 - **THEN** the PID SHALL be rescheduled and its retry counter incremented, as for any send failure
 - **AND** a request that was queued but never sent SHALL be handled by the 200 ms response timeout
+
+#### Scenario: General frames never delay the brake frames
+- **WHEN** a general frame is retransmitting in TXB0 while brake frames are loaded
+- **THEN** the brake frames SHALL leave first, because TXB1 / TXB2 have a higher TXP
 
 ### Requirement: MCP2515 Initialization Retry
 A failed MCP2515 initialization at boot, or a re-initialization sequence that failed all its attempts, SHALL NOT leave the CAN bus down until a reboot or a later watchdog trigger. While the chip is down the CAN task SHALL retry the initialization every `CAN_INIT_RETRY_MS` (5 s) after the last attempt of any kind, until it succeeds; a command from the main loop SHALL take precedence over a retry.
@@ -704,4 +728,143 @@ The CAN controller SHALL count and report the health of the CAN task, its queues
 #### Scenario: Console lines kept
 - **WHEN** RX overflows occur or the health log interval elapses without valid data
 - **THEN** the existing rate-limited `[CAN] RX overflow` and `[CAN] health:` lines SHALL still be printed, from the task's counters and snapshot, in every controller mode
+
+### Requirement: iBooster Periodic Frames
+While frames to the iBooster are enabled (see "iBooster Unit State Machine"), the CAN task SHALL
+send `0x38B` (DLC 4), `0x38C` (DLC 4) and `0x38D` (DLC 7) once per `IB_SLOT_MS` (10 ms) slot, built by
+`include/IboosterProto.h` exactly as on the bench: byte 0 = CRC-8 SAE J1850 (polynomial `0x1D`, init
+`0xFF`, xorout `0xFF`) over bytes 1..end; the low nibble of byte 1 = one 4-bit counter shared by the
+three frames of a slot and incremented in every slot whose frames are sent.
+
+#### Scenario: Frame content
+- **WHEN** a slot is built
+- **THEN** `0x38B` SHALL be `[CRC] [Q|cnt] [speed] 05`, `0x38C` SHALL be `[CRC] [Q|cnt] [flow_lo]
+  [flow_hi]` and `0x38D` SHALL be `[CRC] [cnt] 00 00 00 50 47`
+- **AND** Q SHALL be `0x40` while the brake request is set and `0x00` otherwise; `0x80` SHALL never
+  be set
+- **AND** the flow SHALL be `0x7E00` whenever the request is not set
+
+#### Scenario: Reproduces the reference trace
+- **WHEN** the builder is given counter n (0–15), the request, flow `0x8300` and speed 0
+- **THEN** the three frames SHALL equal the 48 frames of the reference trace byte for byte
+
+#### Scenario: Buffers and order
+- **WHEN** a slot starts
+- **THEN** a brake buffer whose TXREQ is still set from the previous slot SHALL be aborted alone (its
+  own TXREQ cleared) and counted as a transmit miss
+- **AND** `0x38D` SHALL be loaded into TXB2 (TXP 3) and `0x38C` into TXB1 (TXP 2) and both requested
+- **AND** `0x38B` SHALL be loaded into TXB1 on the first task cycle that finds it free, the task
+  waiting at most one tick between checks while it is pending
+- **AND** the TXP bits SHALL be written again after every (re-)initialization
+- **AND** CANINTE SHALL stay as the initialization sets it
+
+#### Scenario: Slot timing
+- **WHEN** the task waits
+- **THEN** its wait SHALL end no later than the next slot
+- **AND** a late slot SHALL be sent once, without a catch-up burst, and the gap between two sent
+  slots SHALL be measured
+
+#### Scenario: Across a re-initialization or filter switch
+- **WHEN** the CAN task starts any command (re-initialization, filter switch)
+- **THEN** it SHALL first clear TXREQ on TXB1 and TXB2 as well as TXB0, each buffer alone, and count
+  the aborted brake frames as transmit misses
+- **AND** no brake frame SHALL be loaded until the command has ended and, on success, the TXP bits
+  have been written again
+- **AND** the next slot SHALL carry frames built from the current command; no brake frame SHALL be
+  kept from before the command
+- **AND** the brake SHALL be re-commanded by the rod loop with no operator action if the unit dropped
+  the request during the gap
+
+#### Scenario: Nothing sent while asleep
+- **WHEN** the brake state is `ASLEEP`, the chip is down, or a re-initialization is running
+- **THEN** no brake frame SHALL be loaded
+
+### Requirement: iBooster Frame Reception
+The CAN task SHALL check and decode `0x38E`, `0x38F` and `0x39D` as they are drained from the chip,
+and SHALL publish the result to the main loop as one snapshot record.
+
+#### Scenario: Checksums
+- **WHEN** a `0x38E` or `0x38F` frame arrives
+- **THEN** its byte 0 SHALL be checked as CRC-8 SAE J1850 over bytes 1..end
+- **WHEN** a `0x39D` frame arrives
+- **THEN** its byte 0 SHALL be checked as (`0x03` + `0x9D` + bytes 1..4) & `0xFF`
+- **AND** a frame failing its check SHALL be counted and discarded
+
+#### Scenario: Decoded fields
+- **WHEN** a valid `0x39D` arrives
+- **THEN** status (byte 1 bits 4–6), counter (byte 1 low nibble), driver_brake_apply (byte 2 bits
+  0–1), internal state (byte 2 bits 2–4) and rod position (12 bits from byte 2 bit 5, mm = raw / 64 −
+  5) SHALL be stored with the arrival time
+- **WHEN** a valid `0x38E` arrives
+- **THEN** the external-request status (byte 1 high nibble) and the two 12-bit rod fields (bytes 2–3
+  and 4–5, mm = raw / 64 − 5) SHALL be stored
+- **WHEN** a valid `0x38F` arrives
+- **THEN** the available pressure (byte 3, bar) and the partner flag (byte 4: `0x40` sees us, `0x80`
+  does not) SHALL be stored
+- **AND** the last raw bytes of each of the three frames SHALL be kept for the journal
+
+#### Scenario: Real bench frames decode
+- **WHEN** the `0x39D` frame `F8 50 E1 27 00` is decoded
+- **THEN** status SHALL be 5, counter 0, driver_brake_apply 1, internal state 0 and the rod raw 319
+
+#### Scenario: Implausible rod
+- **WHEN** a checksum-valid `0x39D` carries a rod outside −1.00 … 40.00 mm (the 12-bit field spans
+  −5 … 59 mm; the unit's mechanical full stroke is ~38 mm)
+- **THEN** the frame SHALL be counted as bad and discarded
+
+#### Scenario: Frame held in the chip through a task stall
+- **WHEN** a unit frame is drained more than `IB_RX_TRUST_MS` (25 ms) after the last slot (a flash
+  erase or another stall held the task while the frame waited in a receive buffer)
+- **THEN** its arrival time is unknown: it SHALL NOT be used as a fresh frame (status, rod, partner
+  and their times stay as they were), only its raw bytes SHALL be kept for the journal, and it SHALL
+  be counted
+
+### Requirement: Brake Command Hand-Off to the CAN Task
+The main loop and the CAN task SHALL exchange brake information only through three bounded,
+non-blocking channels, each with one writer: a command record (loop → task, every loop: time stamp,
+rod target, apply and release flow limits, vehicle-speed byte, ignition-on, cranking), a snapshot
+record (task → loop) and a brake event ring of 8 entries (task → loop, oldest dropped and counted
+when full). The task-side brake code SHALL never journal, log, allocate or touch NVS.
+
+#### Scenario: Command published every loop
+- **WHEN** `IServiceBrake::update()` runs
+- **THEN** a new command record with the current time stamp SHALL be copied for the task under a
+  short critical section
+
+#### Scenario: Stale command
+- **WHEN** the newest command is older than `IB_CMD_STALE_MS` (500 ms)
+- **THEN** the task SHALL keep using it, flag it stale and record the episode length for the journal
+
+#### Scenario: Events reach the journal
+- **WHEN** the task changes the unit state, sees a unit drop, a slot gap above 50 ms or the end of a
+  stale-command episode
+- **THEN** it SHALL put an event with the state, the unit fields, the target, the request bit, the
+  flow and the last raw frames into the event ring, and the main loop SHALL journal it
+
+### Requirement: CAN Maintenance During a Brake Request
+While a brake request is active (`BRAKING` or `RELEASING`) the CAN controller SHALL NOT start work
+that interrupts the periodic brake frames when it can be postponed.
+
+#### Scenario: Watchdog re-initializations postponed
+- **WHEN** the LWS silence watchdog or the OBD-II no-data watchdog would trigger a re-initialization
+  during a brake request
+- **THEN** the main loop SHALL NOT post the re-initialization during the request
+- **AND** the watchdog condition SHALL be evaluated again on the first `update()` after the request
+  ends and, if it still holds, the re-initialization SHALL be posted then, with the existing
+  spacing, retry budget and journal lines (a condition that cleared during the request posts
+  nothing)
+- **AND** further attempts of a re-initialization sequence already in flight when the request
+  started SHALL continue
+
+#### Scenario: Bus-off still recovered
+- **WHEN** bus-off is detected during a brake request
+- **THEN** the recovery SHALL start at once, as before, because no frame leaves the chip anyway
+
+#### Scenario: Sniff already open
+- **WHEN** a brake request starts while a sniff window is open
+- **THEN** the window SHALL run to its end and its closing filter switch SHALL NOT be postponed
+
+#### Scenario: Sniffer refused
+- **WHEN** the CAN sniffer is requested during a brake request
+- **THEN** it SHALL be refused with the reason "brake" and the filters SHALL stay unchanged
 

@@ -66,7 +66,7 @@
   practical. Record; the owner decides on any time limit.
 
 ## 5. Archive
-- [ ] 5.1 Archive after `replace-aztec-brake-with-ibooster` (and everything it must follow). After
+- [x] 5.1 Archive after `replace-aztec-brake-with-ibooster` (and everything it must follow). After
   archiving, edit `openspec/specs/vehicle-systems/spec.md` "iBooster Rod Control" scenario "Vehicle
   speed to the unit" (drop "and 0 while it is invalid", point to "iBooster Vehicle Speed Floor") and
   `openspec/specs/event-journal/spec.md` "Service Brake Journal Events" (normal-braking sentence: the

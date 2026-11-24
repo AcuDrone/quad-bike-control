@@ -27,13 +27,18 @@ a web filesystem OTA, and this SHALL be documented in `WEB_PORTAL_SETUP.md`.
 Each event SHALL be one ASCII line of at most `JOURNAL_LINE_MAX` (120) bytes in the form
 `<boot> <uptime_s.mmm> <SRC> <LVL> <event> k=v k=v ...`, where `<boot>` is the boot counter, the
 uptime is seconds with millisecond resolution, `<SRC>` is one of `SYS SRC STEER VESC CAN I2C RELAY
-SNAP RTC` and `<LVL>` is `I`, `W` or `E`. Values SHALL contain no spaces. Each boot SHALL begin with
-a comment header line `# boot=<N> fw=<version> reset=<reason>`.
+SNAP RTC BRAKE` and `<LVL>` is `I`, `W` or `E`. Values SHALL contain no spaces. Each boot SHALL begin
+with a comment header line `# boot=<N> fw=<version> reset=<reason>`.
 
 #### Scenario: Line is formatted
 - **WHEN** the VESC parser resynchronizes 612.447 s after boot 47
 - **THEN** a line of the form `47 612.447 VESC W resync state=PAYLOAD idle=287 bytes_since_good=1412 drop=1`
   SHALL be journaled
+
+#### Scenario: Brake source
+- **WHEN** the service brake becomes `READY` 3.2 s after boot 47
+- **THEN** a line of the form `47 3.200 BRAKE I state from=STARTING to=READY st=5 is=0 drv=1
+  rod=0.02 ign=1 crank=0` SHALL be journaled
 
 #### Scenario: Over-long line is truncated
 - **WHEN** a formatted line would exceed `JOURNAL_LINE_MAX` bytes
@@ -79,9 +84,10 @@ Lines SHALL be appended to a RAM buffer (`JOURNAL_RAM_BUF_BYTES`, 4 KB) by a non
 never accesses flash. While flash writes are switched on (see Journal Flash-Write Switch) the buffer
 SHALL be written to flash from the main loop at most once per `JOURNAL_FLUSH_MS` (1 s) and only when it holds data (earlier when ≥ 75 % full), and immediately
 before a controlled reboot. While the steering motor is actively driven (closed-loop move, jog,
-nudge, rate drive, park pulse) a due flush SHALL be deferred, for at most
-`JOURNAL_FLUSH_DEFER_MAX_MS` (10 s), because a flash sector erase stalls both cores for tens of
-milliseconds. A flash write failure SHALL never affect vehicle control.
+nudge, rate drive, park pulse), or a service-brake request is active (`BRAKING` or `RELEASING`), a due
+flush SHALL be deferred, for at most `JOURNAL_FLUSH_DEFER_MAX_MS` (10 s), because a flash sector erase
+stalls both cores, and with them the CAN task, for tens of milliseconds. A flash write failure SHALL
+never affect vehicle control.
 
 #### Scenario: Idle flush cadence
 - **WHEN** no line was logged since the last flush
@@ -106,6 +112,11 @@ milliseconds. A flash write failure SHALL never affect vehicle control.
 - **AND** if the drive lasts longer than 10 s from the moment the flush became due, the flush SHALL
   run anyway
 - **AND** a flush before a controlled reboot SHALL never be deferred
+
+#### Scenario: Flush deferred while the service brake is requested
+- **WHEN** a flush is due while a service-brake request is active
+- **THEN** no flash write SHALL occur until the request ends, for at most 10 s from the moment the
+  flush became due
 
 #### Scenario: Loop never waits for the journal
 - **WHEN** an HTTP handler holds the journal lock at the moment a flush is due
@@ -245,4 +256,103 @@ the flash history are explainable.
 - **WHEN** `POST /api/events/clear` is sent while flash writes are off
 - **THEN** both journal files SHALL still be deleted (an explicit operator action) and the RAM tail
   emptied
+
+### Requirement: Service Brake Journal Events
+The journal SHALL record the service brake's availability and its troubles under the source `BRAKE`.
+Normal braking (the `BRAKING` / `RELEASING` transitions) SHALL NOT be journaled; the one exception is the
+`episode` line written once per request (see "Service Brake Episode Line").
+
+#### Scenario: Availability transitions
+- **WHEN** the brake state changes between `ASLEEP`, `STARTING`, `READY`, `LOST` and `FAULT`
+- **THEN** `BRAKE I state from=<s> to=<s> st=<n> is=<n> drv=<n> rod=<mm> ign=<0|1> crank=<0|1>`
+  SHALL be journaled
+- **AND** these lines SHALL NOT be suppressed by the 2 s dedupe (transitions come in quick pairs,
+  e.g. `STARTING` then `READY` within 0.3 s); instead at most 8 are written in a burst and then one
+  per second, and the number held back is appended to the next one as `sup=<n>`
+
+#### Scenario: Fault entry
+- **WHEN** the state becomes `FAULT`
+- **THEN** `BRAKE E fault st= is= drv= rod= tgt= req= flow= vbat= crank=0` SHALL be journaled, at
+  level `W` with `crank=1` inside the crank window, `vbat` being the X10 battery voltage or `-`
+- **AND** it SHALL be followed by `BRAKE I fault_raw r39d=<hex> r38e=<hex> r38f=<hex>` with the last
+  raw bytes of the three unit frames
+
+#### Scenario: Unit lost
+- **WHEN** the state becomes `LOST`
+- **THEN** `BRAKE E lost age=<ms> tgt= req= vbat= crank=` (level `W` with `crank=1`) and a
+  `fault_raw` line SHALL be journaled
+- **AND** on the next `READY`, `BRAKE I recovered after_s=<s>` SHALL be journaled
+
+#### Scenario: Long-lasting trouble
+- **WHEN** `FAULT` lasts 20 s, `STARTING` lasts 20 s, or `LOST` lasts 20 s
+- **THEN** `BRAKE E fault_latched`, `BRAKE E start_timeout` or `BRAKE E no_unit` SHALL be journaled
+  once per episode
+
+#### Scenario: Request troubles
+- **WHEN** the unit drops an active request, a slot gap above 50 ms occurs, a stale-command episode
+  ends, a release times out, or the rod does not move under an accepted request
+- **THEN** `BRAKE W unit_drop`, `BRAKE W tx_gap ms=`, `BRAKE W cmd_stale ms=`,
+  `BRAKE W release_slow` or `BRAKE W no_move` SHALL be journaled with the target and the rod (and
+  the request bit / flow where they apply)
+- **AND** a park-brake hand-over cancelled for "no move" SHALL be journaled as
+  `BRAKE W pbrake_handover_cancel why=no_move`
+
+#### Scenario: Statistics
+- **WHEN** `JOURNAL_SNAP_MS` (60 s) elapses while the ignition is on
+- **THEN** `BRAKE I stats tx=<n> miss=<n> gap_max=<ms> bad=<n> drops=<n> cmd_max=<ms>` SHALL be
+  journaled with the window's values
+
+### Requirement: Service Brake Episode Line
+On aztec, the journal SHALL record one line per service-brake request episode under the source
+`BRAKE`:
+`BRAKE I episode ms=<n> rod_max=<mm|-> spd_min=<n> runout=<min>..<max> stop=<0|1>`
+(`runout=-` when no non-zero sample was taken). This line is the only journal line for normal
+braking; the `BRAKING` / `RELEASING` state transitions themselves SHALL stay unjournaled.
+
+- An episode SHALL start in the slot whose brake state enters `BRAKING` from `READY` and SHALL end in
+  the first slot whose state is neither `BRAKING` nor `RELEASING`; `RELEASING` back to `BRAKING`
+  SHALL continue the same episode. The line SHALL be written once, when the episode ends, whatever
+  state ends it.
+- A sample SHALL be the byte 3 (pRunout, bar) of each checksum-valid, trusted `0x38F` frame newly
+  decoded since the previous slot, taken only in a slot in which the request is sent and a fresh
+  `0x39D` reports internal state 3. No other `0x38F` frame SHALL be sampled.
+- `runout` SHALL be the lowest and highest non-zero sample; `stop` SHALL be 1 if any sample was 0
+  (stroke stop), else 0; `spd_min` SHALL be the lowest `0x38B` byte 2 sent in the episode; `rod_max`
+  SHALL be the highest fresh rod position in mm (`-` if none); `ms` SHALL be the episode duration.
+- The line SHALL NOT be exempt from the 2 s (source, event) dedupe: at most one `episode` line per
+  2 s, the held-back ones counted and appended as `sup=<n>` to the next written one.
+- The tracker SHALL be pure logic in `include/IboosterLaw.h`, native-tested.
+
+#### Scenario: Commanded brake at standstill
+- **WHEN** the brake is commanded at standstill, the unit accepts the request and reports 103 bar
+  throughout, and the brake is then released to `READY`
+- **THEN** exactly one line `BRAKE I episode ms=<n> rod_max=<mm> spd_min=5 runout=103..103 stop=0`
+  SHALL be journaled when the state returns to `READY`
+
+#### Scenario: Before acceptance and after release
+- **WHEN** the unit reports 50 or 51 before it has accepted the request (internal state not 3), or
+  reports the decay from 103 to 50 after the request is cleared
+- **THEN** those values SHALL NOT appear in `runout`
+
+#### Scenario: Stroke stop
+- **WHEN** the unit reports 0 in some samples and 103 in others within one episode
+- **THEN** the line SHALL show `runout=103..103 stop=1`
+- **AND** when it reports only 0, the line SHALL show `runout=- stop=1`
+
+#### Scenario: Ceiling changes during a hold
+- **WHEN** the unit reports 103 and later 51 within one episode
+- **THEN** the line SHALL show `runout=51..103`
+
+#### Scenario: Re-press during release
+- **WHEN** the state goes `BRAKING` → `RELEASING` → `BRAKING` → `RELEASING` → `READY`
+- **THEN** one line SHALL be journaled, covering the whole sequence
+
+#### Scenario: Episode ended by trouble
+- **WHEN** an episode ends because the state becomes `LOST`, `FAULT`, `STARTING` or `ASLEEP`
+- **THEN** the `episode` line SHALL still be journaled, after the `state` line of that slot
+
+#### Scenario: Pumping the brake
+- **WHEN** episodes end less than 2 s apart
+- **THEN** at most one `episode` line SHALL be written per 2 s, and the next written one SHALL carry
+  `sup=<n>` with the number held back
 
