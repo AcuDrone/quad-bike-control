@@ -1283,8 +1283,7 @@ table (masks shown for the PCA9557 / XL9535 board):
   `0b00110000`);
 - Relay_7 / Relay_8 spare (`RELAY_SET_RESERVED`; `0b00000011` / `0b11000000`).
 
-The front-wheel lock SHALL be fitted (`RELAY_WHEEL_LOCK_FITTED` = 1). It replaces, for this build
-only, the aztec buggy's "Front-Wheel Lock Not Fitted" behaviour. It SHALL be driven by the web
+The front-wheel lock SHALL be fitted (`RELAY_WHEEL_LOCK_FITTED` = 1). It SHALL be driven by the web
 `set_wheel_lock` command and the GCS lock command only, never by an RC / MAVLink servo channel (see
 "Lock Not Driven by an RC Channel").
 
@@ -1864,7 +1863,7 @@ The park brake SHALL be independent of the X7 service brake: separate driver, st
 
 #### Scenario: Service brake independent
 - **WHEN** the park brake is commanded, running or settled
-- **THEN** the X7 service brake target, estimate, hold drive and telemetry SHALL be unaffected
+- **THEN** the iBooster service brake target, rod control, unit state and telemetry SHALL be unaffected
 - **AND** a service brake command SHALL NOT change the park-brake state, except through the
   requirement Parking Brake Release by Service-Brake Press
 
@@ -2492,10 +2491,8 @@ invalid, NaN or non-positive wheel speed SHALL give the floor (5 counts), never 
 applied in `ibSpeedByte()` (`include/IboosterLaw.h`), the single place the byte is computed, and SHALL
 apply to every `0x38B` frame the firmware sends, with or without a brake request. The floored value
 SHALL NOT be used anywhere else: the speed limiter, the speed governor, telemetry, MAVLink and the web
-page SHALL keep the true speed. This requirement supersedes the "0 while it is invalid" clause of the
-scenario "Vehicle speed to the unit" in "iBooster Rod Control". `0x38B` byte 1 (the request /
-speed-qualifier bits, `0x40` only with a request), byte 3 (`0x05`), `0x38C` and `0x38D` SHALL stay
-unchanged.
+page SHALL keep the true speed. `0x38B` byte 1 (the request / speed-qualifier bits, `0x40` only with
+a request), byte 3 (`0x05`), `0x38C` and `0x38D` SHALL stay unchanged.
 
 #### Scenario: Standing still
 - **WHEN** the wheel speed is valid and 0, or valid and below 2 km/h (e.g. 1 km/h)
