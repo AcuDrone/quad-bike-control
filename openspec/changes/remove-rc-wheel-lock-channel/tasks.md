@@ -1,6 +1,6 @@
 ## 0. Preconditions
 - [x] 0.1 Proposal approved by the owner, including assumptions A1–A4 in proposal.md.
-- [ ] 0.2 Archive order with `add-precrank-dwell-setting` (implemented in 1.5.33, not archived): both changes MODIFY "GCS Vehicle Command Interlocks" (`specs/vehicle-systems`). The copy here is taken from the current main spec and changes only the "Diff lock" bullet, its "RC and web paths" wording in the first sentence and the scenario "Diff lock holds against channel 7". Whichever change is archived second re-copies the requirement from the main spec and re-applies only its own edit.
+- [x] 0.2 Archive order with `add-precrank-dwell-setting` (implemented in 1.5.33, not archived): both changes MODIFY "GCS Vehicle Command Interlocks" (`specs/vehicle-systems`). The copy here is taken from the current main spec and changes only the "Diff lock" bullet, its "RC and web paths" wording in the first sentence and the scenario "Diff lock holds against channel 7". Whichever change is archived second re-copies the requirement from the main spec and re-applies only its own edit.
 - [x] 0.3 Work starts on `master` (tasks 1–4); `aztec` and `old-board` get it only by merging `master` (task 6).
 
 ## 1. Firmware (`master`)
