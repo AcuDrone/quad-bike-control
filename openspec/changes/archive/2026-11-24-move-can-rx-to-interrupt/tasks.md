@@ -88,4 +88,4 @@ Common pass criteria: no reset or watchdog reboot; `CAN I stats` every 60 s; `bm
 - [ ] 10.14 Chip down after a failed re-init (`old-board` or a `Control_v0` bench rig: unplug the MCP2515 supply with the ignition ON so three re-init attempts fail → `CAN E reinit result=fail`): no further journal lines while it stays down; plug it back → within ≈ 5 s `CAN I reinit reason=task_retry result=ok attempt=<n> after_s=<s>`, `first_frame`, LWS healthy without a reboot.
 
 ## 11. Archive
-- [ ] 11.1 Archive after `add-can-bus-sniffer`, `add-event-journal-and-link-recovery` and `gate-obd-watchdog-and-pull-up-vesc-rx`, once the bench checks on both vehicles pass; `openspec validate --strict` after archiving.
+- [x] 11.1 Archive after `add-can-bus-sniffer`, `add-event-journal-and-link-recovery` and `gate-obd-watchdog-and-pull-up-vesc-rx`, once the bench checks on both vehicles pass; `openspec validate --strict` after archiving.

@@ -873,3 +873,67 @@ show the stored setting.
 - **THEN** it SHALL include `throttle_open_slew`, the opening rate in whole %/s
 - **AND** 0 SHALL mean the opening rate limit is off
 
+### Requirement: CAN Sniffer Results Telemetry
+The telemetry broadcast SHALL carry the CAN sniffer results while the sniffer runs or its results
+are fresh, and omit them otherwise.
+
+#### Scenario: Include while fresh
+- **WHEN** the sniffer is running or completed less than `SNIFF_RESULT_TTL` ago
+- **THEN** the telemetry JSON SHALL include a `sniff` object with running/complete flags, window
+  and elapsed time, total frames, overflow events, IDs beyond 32 (with a saturation flag), and an
+  `ids` array of rows `{id, x, n, d, c}` (ID, extended flag, count, data hex, changed mask)
+
+#### Scenario: Omit when stale
+- **WHEN** no sniff is running and the last results are older than the TTL
+- **THEN** the `sniff` object SHALL be omitted
+
+#### Scenario: Capacity
+- **WHEN** a full 32-row `sniff` object and a `probe` object are present at the same time
+- **THEN** the static telemetry document SHALL not overflow
+
+### Requirement: Link Recovery Counters Telemetry
+The WebSocket telemetry SHALL include session totals of the link recovery actions and the journal
+size: `vesc_resync` (VESC parser resyncs), `can_reinit` (completed MCP2515 re-initializations of any
+cause), `i2c_unlock` (I2C2 bus recoveries), `journal_bytes` (with flash writes on: size of both
+journal files plus unflushed bytes, −1 when the journal cannot write to flash; with flash writes off:
+the bytes of the RAM tail) and `journal_fs` (boolean, the journal flash-write switch). The counters
+SHALL start at 0 at boot.
+MAVLink output SHALL NOT change.
+
+#### Scenario: Counters in each telemetry frame
+- **WHEN** a telemetry frame is broadcast
+- **THEN** it SHALL contain the five keys with their current values
+
+#### Scenario: Counter increments
+- **WHEN** the VESC parser resynchronizes once
+- **THEN** `vesc_resync` SHALL be one higher in the next frame
+
+#### Scenario: Journal unavailable
+- **WHEN** flash writes are switched on and file output of the journal has been disabled after
+  write failures
+- **THEN** `journal_bytes` SHALL be −1
+
+#### Scenario: Journal flash writes off
+- **WHEN** the journal flash-write switch is off (the default)
+- **THEN** `journal_fs` SHALL be `false` and `journal_bytes` SHALL be the RAM-tail size in bytes
+
+### Requirement: CAN Driver Telemetry
+The telemetry broadcast SHALL report how the CAN task receives (interrupt or polling) and its loss and load counters, and the web interface SHALL show them on the CAN status tile in Diagnostics.
+
+#### Scenario: Include CAN driver keys
+- **WHEN** telemetry data is formatted as JSON and the CAN task exists
+- **THEN** it SHALL include `can_int` (`"ok"`, `"dead"` or `"none"`), `can_rx_drop` (frames dropped from the full receive queue), `can_rx_ovr` (MCP2515 RX overflow flags counted), `can_rx_hwm` (receive-queue high-water mark), `can_tx_fail` (transmit failures) and `can_busy_max_us` (longest CAN task receive / transmit service pass, µs, initialization and filter-change time excluded), all as session values
+- **AND** these keys SHALL be emitted independently of `can_status`
+
+#### Scenario: Show the receive mode on the CAN status tile
+- **WHEN** the web UI renders a telemetry frame with these keys
+- **THEN** the "Стан CAN" / "CAN Status" tile SHALL show one muted line: "RX: переривання" / "RX: interrupt" for `ok`, "RX: опитування (без INT)" / "RX: polling (no INT wire)" for `none`, and "RX: опитування (INT не працює)" / "RX: polling (INT dead)" in the warning colour for `dead`
+- **AND** it SHALL append "втрачено N" / "dropped N" when `can_rx_drop` is greater than zero and "переповнення N" / "overflow N" when `can_rx_ovr` is greater than zero
+- **AND** it SHALL show nothing extra when the keys are missing, without a JavaScript error
+- **AND** the new labels SHALL have i18n keys in both the `en` and `uk` dictionaries
+
+#### Scenario: Not an attention item and not a setting
+- **WHEN** `can_int` is `dead` or a counter is non-zero
+- **THEN** the diagnostics attention summary SHALL NOT change, because reception continues on the polling fallback and real harm already surfaces as a steering-sensor fault
+- **AND** no control for these values SHALL be added to the Calibration section
+
