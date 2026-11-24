@@ -446,23 +446,38 @@ The system SHALL enforce safety interlocks for ignition state changes to prevent
 
 #### Scenario: Prevent cranking if engine already running
 - **WHEN** START ignition state is requested
-- **AND** current engine RPM >= 1100 (ENGINE_RUNNING_RPM_THRESHOLD)
+- **AND** the EFFECTIVE engine RPM (tacho when fitted, CAN otherwise) is valid and >=
+  `ENGINE_RUNNING_RPM_THRESHOLD` (800 RPM on aztec)
 - **THEN** START command is rejected
 - **AND** error message is logged: "Engine already running"
 - **AND** ignition remains in current state
 
 #### Scenario: Allow cranking when engine not running
 - **WHEN** START ignition state is requested
-- **AND** current engine RPM < 1100
+- **AND** the effective engine RPM is below `ENGINE_RUNNING_RPM_THRESHOLD` (800 RPM), or no RPM
+  source is valid
 - **AND** brake is applied (>= 20%)
 - **THEN** ignition state changes to CRANKING (same relay config as IGNITION)
 - **AND** cranking timer starts (5-second timeout)
-- **AND** cranking monitors RPM for engine start detection
+- **AND** cranking monitors the effective RPM for engine start detection
 
 #### Scenario: Allow ignition transitions between ACC and IGNITION freely
 - **WHEN** ignition state change is requested between ACC and IGNITION
 - **THEN** change is allowed without brake or RPM checks
 - **AND** only initial power-on from OFF requires safety checks
+
+#### Scenario: Stop the starter when the engine catches
+- **WHEN** the starter is engaged (CRANKING) and the effective engine RPM reaches
+  `ENGINE_RUNNING_RPM_THRESHOLD` (800 RPM)
+- **THEN** the relay controller SHALL release the starter and settle into IGNITION
+- **AND** the threshold SHALL sit above the starter's cranking speed (≈250–400 RPM) and below the
+  engine's warm idle (≈1500 RPM), so that a started engine is recognised before it reaches idle and
+  a cranking-only engine is never mistaken for a running one
+
+#### Scenario: Suppress an armed crank on a running engine
+- **WHEN** a crank is armed and waiting for the pre-crank dwell
+- **AND** the effective engine RPM is at or above `ENGINE_RUNNING_RPM_THRESHOLD`
+- **THEN** the crank SHALL be suppressed and the ignition SHALL settle into IGNITION
 
 ### Requirement: Ignition and Light System Diagnostics
 The system SHALL provide diagnostic information about ignition and lighting systems.
@@ -519,7 +534,8 @@ The system SHALL persist the last confirmed transmission state (gear, servo posi
   position SHALL be written to NVS
 
 ### Requirement: Throttle Boost During Gear Changes
-The system SHALL use a PID controller to regulate engine RPM to a configurable target value (`TRANS_GEAR_BOOST_TARGET_RPM`, overridden by NVS namespace `"boost"` key `target_rpm`) for the duration of a gear change, overriding SBUS/web throttle commands while active. Whether a gear change runs the PID or only holds the throttle at idle SHALL be governed by a persisted per-vehicle switch, NVS namespace `"boost"` key `enabled` (bool), default true, loaded at start-up and written immediately when changed. The manual boost test (`test_boost`) SHALL NOT be governed by the switch.
+The system SHALL use a PID controller to regulate the EFFECTIVE engine RPM (tacho when fitted, CAN
+otherwise) to a configurable target value (`TRANS_GEAR_BOOST_TARGET_RPM`, overridden by NVS namespace `"boost"` key `target_rpm`) for the duration of a gear change, overriding SBUS/web throttle commands while active. Whether a gear change runs the PID or only holds the throttle at idle SHALL be governed by a persisted per-vehicle switch, NVS namespace `"boost"` key `enabled` (bool), default true, loaded at start-up and written immediately when changed. The manual boost test (`test_boost`) SHALL NOT be governed by the switch.
 
 #### Scenario: Activate PID boost when gear change starts
 **Given** a gear change is initiated (transmission actuator starts moving toward a non-NEUTRAL gear)
@@ -531,9 +547,12 @@ The system SHALL use a PID controller to regulate engine RPM to a configurable t
 
 #### Scenario: PID holds target RPM during gear change
 **Given** the gear boost PID is active
-**And** CAN engine RPM data is valid
+**And** the effective engine RPM is valid
 **When** `updateGearBoostPID()` is called each loop iteration
-**Then** the PID error SHALL be `TRANS_GEAR_BOOST_TARGET_RPM - currentRPM`
+**Then** the PID error SHALL be `TRANS_GEAR_BOOST_TARGET_RPM - currentRPM`, where `currentRPM` is the
+effective engine RPM
+**And** a new PID step SHALL be computed only when the effective RPM carries a new sample timestamp
+(a new CAN reply, or a new accepted tacho edge)
 **And** PID output SHALL be mapped to a throttle servo angle
 **And** the throttle servo SHALL be set to the PID-computed angle, overriding SBUS/web commands
 **And** the integral term SHALL be clamped to prevent wind-up
@@ -546,7 +565,7 @@ The system SHALL use a PID controller to regulate engine RPM to a configurable t
 
 #### Scenario: Freeze throttle output when CAN data is stale
 **Given** the gear boost PID is active
-**And** CAN data is invalid or stale
+**And** no effective RPM source is valid (CAN invalid or stale and no live tacho)
 **When** `updateGearBoostPID()` is called
 **Then** the throttle SHALL hold its last computed angle
 **And** the integral term SHALL NOT accumulate
@@ -568,7 +587,7 @@ The system SHALL use a PID controller to regulate engine RPM to a configurable t
 
 #### Scenario: PID deactivated if engine is not running
 **Given** a gear change is initiated
-**And** CAN engine RPM is below `ENGINE_RUNNING_RPM_THRESHOLD`
+**And** the effective engine RPM is invalid or below `ENGINE_RUNNING_RPM_THRESHOLD`
 **When** `updateGearBoostPID()` is called
 **Then** the PID SHALL NOT activate (engine not running — boosting throttle is unsafe)
 **And** the throttle SHALL remain at idle
@@ -819,8 +838,8 @@ so that a stalled main loop, a long blocking operation or a `millis()` wrap cann
 engine did not run.
 
 #### Scenario: Count only while the engine is turning
-- **WHEN** the vehicle layer updates the meter and CAN `VehicleData` is valid AND the reported
-  engine RPM is at or above `ENGINE_HOURS_MIN_RPM`
+- **WHEN** the vehicle layer updates the meter and the EFFECTIVE engine RPM is valid (a live tacho
+  when fitted, or valid CAN `VehicleData`) AND it is at or above `ENGINE_HOURS_MIN_RPM`
 - **THEN** the elapsed milliseconds since the previous update SHALL be added to the meter
 - **AND** the threshold SHALL be low enough to count a NORMAL IDLE — an hour meter that only counts
   above a driving RPM would under-report the wear that idling causes — and SHALL be a constant
@@ -830,10 +849,11 @@ engine did not run.
   retained, so that a sequence of short updates accumulates exactly as one long one would
 
 #### Scenario: Do not count while the engine is stopped or the CAN data is invalid
-- **WHEN** CAN `VehicleData` is invalid or stale, or the reported engine RPM is below
-  `ENGINE_HOURS_MIN_RPM`
+- **WHEN** no effective RPM source is valid (CAN `VehicleData` invalid or stale and no fitted
+  tacho), or the effective engine RPM is below `ENGINE_HOURS_MIN_RPM` (a fitted tacho that has
+  timed out reads a valid 0 RPM)
 - **THEN** NO time SHALL be added to the meter for that interval
-- **AND** the elapsed time SHALL be discarded rather than banked, so that resuming valid CAN data
+- **AND** the elapsed time SHALL be discarded rather than banked, so that resuming valid RPM data
   does not credit the meter with the silent interval
 - **AND** the meter SHALL NOT fall back to any assumed or inferred engine state: an unknown engine
   state SHALL NOT invent running time, on the same principle by which the odometer ignores the
@@ -3075,4 +3095,60 @@ attempt and SHALL stay fixed and separate.
 - **WHEN** the starter relay is energized from the web relay test
 - **THEN** it SHALL still be released after `RELAY_TEST_STARTER_MAX_MS` (2000 ms), whatever the
   starter time limit
+
+### Requirement: Effective Engine RPM Source Selection
+The vehicle layer SHALL compose one EFFECTIVE engine RPM from the tacho input and the CAN
+`VehicleData`, together with a source `rpm_source` ∈ {TACHO, CAN, NONE}, a validity flag and the
+timestamp of the sample it came from. Every engine-RPM consumer — `isEngineRunning()` (MAVLink gear
+gate, transmission init, throttle-calibration and gear-code refusals), the relay controller's starter
+cut-off and crank interlock, the web START interlock, the gear-change boost PID, the engine hour
+meter, web telemetry and MAVLink `EFI_STATUS` — SHALL read the effective RPM and SHALL NOT read
+`VehicleData.engineRPM` directly. The selection SHALL be a pure function in `include/TachoLaw.h`.
+
+#### Scenario: Live tacho wins
+- **WHEN** the tacho is fitted and an accepted edge arrived within `TACHO_TIMEOUT_MS`
+- **THEN** the effective RPM SHALL be the tacho RPM, source TACHO, valid
+- **AND** this SHALL hold whether or not CAN `VehicleData` is valid, and whatever RPM CAN reports
+
+#### Scenario: Silent tacho with a CAN RPM reading falls back to CAN
+- **WHEN** the tacho is fitted but timed out
+- **AND** CAN `VehicleData` is valid with `engineRPM` > 0
+- **THEN** the effective RPM SHALL be the CAN RPM, source CAN, so that a broken tacho wire on an
+  ECU that does report RPM can never make a running engine look stopped
+
+#### Scenario: Silent fitted tacho reads a stopped engine
+- **WHEN** the tacho is fitted and timed out
+- **AND** CAN is invalid or reports 0 RPM
+- **THEN** the effective RPM SHALL be 0, source TACHO, valid
+
+#### Scenario: Tacho not fitted
+- **WHEN** the tacho is not fitted
+- **THEN** the effective RPM SHALL be the CAN RPM with source CAN while CAN `VehicleData` is valid
+- **AND** SHALL be invalid with source NONE while CAN `VehicleData` is invalid, exactly as the
+  behaviour before this change
+
+#### Scenario: Engine-running predicate
+- **WHEN** `isEngineRunning()` is evaluated
+- **THEN** it SHALL return true only when the effective RPM is valid and at or above
+  `ENGINE_RUNNING_RPM_THRESHOLD`
+
+### Requirement: Engine-Running RPM Threshold
+`ENGINE_RUNNING_RPM_THRESHOLD` SHALL be 800 RPM on the aztec buggy, whose warm idle is ≈1500 RPM:
+above the starter cranking speed and safely below idle, so that every engine-running decision
+recognises an idling engine.
+
+#### Scenario: Idle counts as running
+- **WHEN** the engine idles at ≈1500 RPM, or a cold or loaded idle sags to 1000 RPM
+- **THEN** `isEngineRunning()` SHALL return true, so MAVLink gear changes are accepted and the
+  crank interlock refuses the starter
+
+#### Scenario: Cranking does not count as running
+- **WHEN** the starter turns the engine at cranking speed (≈250–400 RPM) without it firing
+- **THEN** the effective RPM SHALL stay below the threshold and the starter SHALL keep cranking until
+  the engine fires or `CRANKING_TIMEOUT` elapses
+
+#### Scenario: Engine stop is seen promptly
+- **WHEN** the engine stops with the tacho as source
+- **THEN** the effective RPM SHALL read 0 within `TACHO_TIMEOUT_MS` (0.5 s) of the last pulse, and
+  `isEngineRunning()` SHALL become false
 

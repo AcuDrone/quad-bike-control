@@ -32,7 +32,8 @@ The system SHALL broadcast vehicle telemetry data to connected web clients at 5 
 ### Requirement: Telemetry Display on Web Interface
 The system SHALL display real-time telemetry on the web interface. Vehicle speed SHALL be displayed
 from the hall-effect speed sensor independently of CAN bus status (it is no longer part of the
-CAN-gated vehicle-data display).
+CAN-gated vehicle-data display). Engine RPM SHALL likewise be displayed outside the CAN gate,
+because on aztec it is sourced from the ECU tachometer output rather than from CAN.
 
 #### Scenario: Display decoded command values
 - **WHEN** a telemetry message with MAVLink command data is received
@@ -53,11 +54,18 @@ CAN-gated vehicle-data display).
   unavailable/unhealthy rather than showing a misleading 0
 - **AND** the value updates in real-time as new telemetry arrives
 
+#### Scenario: Display effective engine RPM with its source
+- **WHEN** a telemetry message is received
+- **THEN** the EXISTING engine RPM tile SHALL show `engine_rpm` (the effective RPM, 0-16383 rpm)
+  regardless of `can_status`
+- **AND** a small badge next to the value SHALL show `rpm_source`: "TACHO" or "CAN"; when
+  `rpm_source` is "NONE" the tile SHALL show "—" instead of a misleading 0
+- **AND** no second RPM tile SHALL be added
+
 #### Scenario: Display CAN bus vehicle data
 - **WHEN** telemetry message with CAN data is received
 - **AND** CAN status is "connected"
-- **THEN** engine RPM is displayed (0-16383 rpm)
-- **AND** coolant temperature is displayed with color coding:
+- **THEN** coolant temperature is displayed with color coding:
   - Green: <90°C (normal)
   - Yellow: 90-105°C (warm)
   - Red: >105°C (hot/overheating)
@@ -1174,4 +1182,35 @@ show the stored setting.
 - **THEN** the worst-case telemetry document SHALL still fit its `StaticJsonDocument` with headroom
   on every branch (9216 on `master` and `old-board`; grown to 10240 on `aztec`, whose headroom at
   9216 would drop to ≈ 0.15 KB), and the capacity comment SHALL be updated
+
+### Requirement: Tacho and RPM Source Telemetry
+The telemetry JSON SHALL carry the tacho state and the effective RPM source, outside the CAN-gated
+block, so that the web console can show and calibrate the tacho whatever the CAN health.
+
+#### Scenario: Emit tacho fields
+- **WHEN** a telemetry update is broadcast
+- **THEN** the JSON SHALL include `tacho_hz` (float, averaged edge frequency, 0 when timed out),
+  `tacho_ppr` (float, the ppr in effect), `tacho_rpm` (integer, the tacho's own RPM, 0 when timed out)
+  and `rpm_source` ("TACHO", "CAN" or "NONE")
+- **AND** these fields SHALL be present whether or not `can_status` is "connected"
+
+#### Scenario: Emit tacho signal diagnostics
+- **WHEN** a telemetry update is broadcast
+- **THEN** the JSON SHALL include `tacho_periods` (string: the last 8 accepted periods in ms with one
+  decimal, space separated, oldest first, e.g. "42.9 43.1 21.4 21.6 42.8"; "" before the first
+  period), `tacho_min_ms` and `tacho_max_ms` (float, shortest / longest accepted period in the last
+  1 s window, 0 when none), `tacho_acc` and `tacho_rej` (integer, accepted / rejected edges per
+  second over that window) and `tacho_rej_total` (integer, rejected edges since boot)
+- **AND** since field revision 1.5.11 the JSON SHALL include `tacho_hi_ms` (float, the last high
+  span), `tacho_lo_ms` (float, the last validated low time), `tacho_hi_min_ms` and `tacho_hi_max_ms`
+  (float, shortest / longest high span in the last 1 s window), all in ms with one decimal, 0 when none
+- **AND** these fields SHALL be present whether or not `can_status` is "connected"
+- **AND** the tacho card SHALL show them in a monospace "Діагностика" / "Diagnostics" block under its
+  tiles (uk / en), the pulse widths as one line "high / low, ms: 10.7 / 10.9 (high min/max 10.2 / 11.1)"
+
+#### Scenario: engine_rpm carries the effective RPM
+- **WHEN** a telemetry update is broadcast
+- **THEN** `engine_rpm` SHALL be the effective engine RPM and SHALL be emitted outside the
+  `can_status == "connected"` block
+- **AND** it SHALL be 0 when `rpm_source` is "NONE"
 

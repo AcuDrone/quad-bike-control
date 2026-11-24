@@ -119,6 +119,8 @@ supported; there SHALL be exactly one pin map and no board-selection build flag.
     relay board `0x1F` on header X15)
   - `PIN_BOOST_EN` = GPIO46, `PIN_ADC_24V` = GPIO9 (X10; aztec has no boost board — GPIO9 is the
     12 V battery sense on X10 pin 3 and GPIO46 is driven HIGH with nothing attached)
+  - `PIN_TACHO` = GPIO14 (X3 pin 2, Hall_1 channel A — engine RPM from the ECU TACHO wire through
+    the external PC817; see `tacho-sensor` "Tachometer Input Hardware Interface")
   - `PIN_I2C1_SDA` = GPIO1, `PIN_I2C1_SCL` = GPIO2 (I2C1 — external header X14, no device fitted) and
     `PIN_ADC_IS_MUX` = GPIO3 SHALL be defined but unused (the X6 IS lines on the CD4051 mux are not
     sampled)
