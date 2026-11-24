@@ -7,6 +7,10 @@ functions are specified in a later change", and left the firmware's wheel-lock f
 (`RELAY_WHEEL_LOCK_FITTED = 0`). The buggy needs its lock ("блокування") now: the operator wants
 relays 4, 5 and 6 to carry it, from the web UI and from the autopilot.
 
+2026-11-24: the spec deltas were re-based onto the specs after `remove-rc-wheel-lock-channel`
+(1.5.34): the lock is commanded from the web (`set_wheel_lock`) and the GCS lock command, not from
+RC channel 7. The channel 7 statements below describe 1.5.25 as shipped then.
+
 ## What Changes
 - **Relay map (aztec):** the existing single lock function drives Relay_4, Relay_5 and Relay_6
   **together** as one set: `RELAY_SET_WHEEL_LOCK = RELAY_N(4) | RELAY_N(5) | RELAY_N(6)` (PCA9557
