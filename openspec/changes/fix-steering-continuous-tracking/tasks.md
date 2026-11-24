@@ -1,6 +1,6 @@
 ## 0. Preconditions
 - [x] 0.1 The proposal is approved. Rate mode stays out of scope; no motor-driver change (the self-locking worm holds the shaft).
-- [x] 0.2 Version slot: `master` is at 1.5.4. Take **1.5.5** (patch per `openspec/project.md`: behaviour fix, no recalibration or wiring change). Do not take 1.6.0 or 1.7.0, which `move-can-rx-to-interrupt` and `move-aztec-vesc-to-can` claim. If either has landed first, take the next free patch on top of it.
+- [x] 0.2 Version slot: `master` is at 1.5.4. Take **1.5.5** (patch per `openspec/project.md`: behaviour fix, no recalibration or wiring change).
 - [ ] 0.3 Branch: implement on `master` (quad), then merge `master` into `aztec`.
 
 ## 1. Pure law (host-testable)
