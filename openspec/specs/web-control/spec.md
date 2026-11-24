@@ -214,7 +214,8 @@ The system SHALL allow the user to view and update the default transmission serv
 - **AND** four large buttons "Зберегти як R/N/H/L" / "Save as R/N/H/L" in a 2×2 grid (order R, N,
   H, L), each with the saved position from telemetry on a second line (`--` when unknown)
 - **AND** a compact row of "▶ R", "▶ N", "▶ H", "▶ L" buttons
-- **AND** the boost RPM target input with its Save button
+- **AND** the boost RPM target input with its Save button, and beside it the "Перегазовка при
+  перемиканні" / "Gear-change RPM boost" on/off toggle
 - **AND** there SHALL be no per-gear number inputs, no 📍 capture button and no per-row Move/Save
   buttons
 
@@ -468,12 +469,17 @@ relay-test gate (ignition `OFF`, no function relay energized).
 The web portal SHALL provide steering calibration controls for the Bosch LWS sensor: jog and nudge that are always available, a "Set sensor zero" action, and Left/Right limit capture. These commands SHALL be accepted regardless of the active input source (same privilege level as the other calibration commands). The calibration card SHALL hold the actions and a compact readout only; the full sensor diagnostics SHALL be shown in the Diagnostics section ("Кермо: стан").
 
 #### Scenario: Set sensor zero
-- **WHEN** the operator presses "Set sensor zero" and confirms the dialog explaining that the current position becomes the steering center and that the stored limits will be erased
+- **WHEN** the operator presses "Set sensor zero" and confirms it with a second press of the same button, as defined by "Two-Press Confirmation for Destructive Web Actions", after the status line has warned that the current position becomes the steering center and that the stored limits will be erased
 - **THEN** a `steer_lws_zero` WebSocket command SHALL be sent
 - **AND** the firmware SHALL start the zero-set sequence with no ignition, engine-RPM or standstill precondition
 - **AND** the firmware SHALL report success only after an accepted sensor frame shows sensor OK, no fault code, the calibrated bit set and an angle within `STEER_LWS_ZERO_TOLERANCE` of zero, within `STEER_LWS_ZERO_CONFIRM_MS` of the second frame
 - **AND** otherwise it SHALL report failure with a reason: `busy`, `can_unavailable`, `tx_failed`, `range_latched` (restart the vehicle and retry), `no_frames` or `not_confirmed`
 - **AND** the "Кермо: стан" card SHALL show the progress (`steer_zero_state`) and the reason (`steer_zero_error`), and the calibration card's status line SHALL show the command response
+
+#### Scenario: No connection to the board
+- **WHEN** the operator presses "Set Left", "Set Right" or "Set sensor zero" while the WebSocket to the board is not open
+- **THEN** no command SHALL be sent and "Set sensor zero" SHALL NOT be armed
+- **AND** the calibration card's status line SHALL show «Немає з'єднання з платою» / "No connection to the board" in the danger colour instead of silently doing nothing
 
 #### Scenario: Capture limits only
 - **WHEN** the operator presses "Set Left" or "Set Right"
@@ -1143,4 +1149,381 @@ active input source, and SHALL persist before applying.
   iBooster's power)
 - **AND** every new label, hint, message and help text SHALL be present in both the English and the
   Ukrainian dictionary, the Ukrainian text calling the vehicle "багі"
+
+### Requirement: Exact Steering Angle via Web Interface
+The web portal SHALL provide, in the steering calibration card next to Jog / Nudge, a numeric "Target angle, °" input (step 0.1°, bounded by the captured Left / Right limits) with a "Go" button and a "0°" button. They SHALL send the WebSocket command `steer_angle` with `value` = the target angle in degrees (float, + = right); the browser SHALL NOT convert it to percent. The firmware SHALL convert the angle to 0.1° units, clamp it to the captured limits and the ±550° safe range, and move through the same closed-loop command path as `set_steering`. The steering jog speed slider SHALL span the firmware's jog duty range (80–255, default 120 = `STEER_JOG_DUTY`).
+
+#### Scenario: Angle command accepted
+- **WHEN** web control is active, `steer_mode` is `position`, the limits are captured, the VESC link is up and the USB diagnostics lock is off
+- **AND** the operator enters 12.3 and presses Go
+- **THEN** the firmware SHALL drive the wheels to 12.3° (clamped to the captured limits) and reply with a success response
+- **AND** the `steering_pct` telemetry SHALL keep reporting the measured position as before
+
+#### Scenario: Angle command refused
+- **WHEN** `steer_angle` arrives while MAVLink has control, the USB diagnostics console holds the steering, the sensor is unhealthy, the steering is not calibrated or the value is not a finite number
+- **THEN** the firmware SHALL NOT move the steering and SHALL reply with an error response in the same style as `set_steering` ("MAVLink control active", "held by the USB diagnostics console", "no steering sensor — use Jog/Nudge", "not calibrated or sensor fault", "Invalid steering angle")
+
+#### Scenario: Angle controls locked like the percent slider
+- **WHEN** web control is not active, or `steer_mode` is not `position`
+- **THEN** the angle input, Go and 0° SHALL be disabled
+- **AND** while `steer_mode` is not `position` the same lock hint as the percent slider SHALL be shown under them
+
+### Requirement: Steering Park Correction Configuration via Web Interface
+The web portal SHALL provide a card "Доводка центру керма" / "Steering park correction", placed right after the "Steering Calibration" card, to switch the park correction on or off, set the three ladder rungs, the done tolerance and the maximum pulses, and show the last parking result. The commands SHALL be routed through `WebPortal::WebCommand` → `VehicleController::processWebCommand`, SHALL be accepted regardless of the active input source, and SHALL persist before applying.
+
+#### Scenario: Toggle the correction
+- **WHEN** the operator presses the enable toggle
+- **THEN** a `set_steer_park_enabled` command with a boolean value SHALL be sent
+- **AND** the reply SHALL be "Park correction enabled" or "Park correction disabled", and the button state SHALL follow telemetry (no optimistic update)
+
+#### Scenario: Set a rung
+- **WHEN** the operator saves rung N with duty D and length T ms
+- **THEN** a `set_steer_park_rung` command with `value` N (1–3) and `strValue` "D,T" SHALL be sent
+- **AND** a valid rung SHALL be answered "Park rung N set to D×T"
+- **AND** a duty outside 40–150 or a length outside 40–200 ms SHALL be refused with "Park rung out of range (duty 40-150, 40-200 ms)"
+- **AND** a rung that would make the ladder decrease SHALL be refused with "Park ladder must not decrease (rung N)"
+
+#### Scenario: Set the done tolerance and the maximum pulses
+- **WHEN** the operator saves a done tolerance in degrees or a maximum pulse count
+- **THEN** `set_steer_park_tol` (rounded to 0.1°) or `set_steer_park_max` (whole number) SHALL be sent
+- **AND** the replies SHALL be "Park tolerance set to X°" / "Park max pulses set to N", or "Park tolerance out of range (0.1-0.5°)" / "Park max pulses out of range (1-10)"
+- **AND** an NVS failure on any park command SHALL be answered "Failed to save the park correction setting"
+
+#### Scenario: Card fills from telemetry and validates locally
+- **WHEN** telemetry arrives and an input is not being edited
+- **THEN** the card SHALL show the stored values from telemetry
+- **AND** it SHALL refuse out-of-range or decreasing values locally before sending
+
+#### Scenario: Last-result line
+- **WHEN** telemetry reports the last parking result
+- **THEN** the card SHALL show, in uk / en, "Останнє паркування: 3 імпульси, залишок 0.15°, останній 85×90" / "Last parking: 3 pulses, residual 0.15°, last 85×90" for done, "Здалось на 0.6° після 5 імпульсів" / "Gave up at 0.6° after 5 pulses" for gave up, "Скасовано рухом стіка" / "Cancelled by stick movement" for cancelled and "ще не було" / "none yet" for none
+- **AND** the card help SHALL explain that the first rung should be lowered if a pulse overshoots and the rungs raised if the correction gives up
+
+### Requirement: Web Gear Selection Initialises the Transmission
+The web `set_gear` command SHALL be accepted whether or not the engine is running (it is needed
+for gear calibration with the engine off), and SHALL never start a shift from an uninitialised
+transmission.
+
+#### Scenario: Gear request before the transmission is initialised
+- **WHEN** a `set_gear` command with `"R"`, `"N"`, `"H"` or `"L"` is received and the transmission
+  is not initialised
+- **THEN** the system SHALL first run the transmission initialisation (physical sensor, else valid
+  NVS state, else the initialisation step into NEUTRAL)
+- **AND** after an initialisation from the sensor or NVS the gear change SHALL start from the
+  initialised gear and servo position, with the usual "Moving to <gear> gear" reply
+
+#### Scenario: Gear unknown
+- **WHEN** a `set_gear` command is received, the transmission is not initialised, the physical gear
+  reads `GEAR_UNKNOWN` and NVS holds no valid state
+- **THEN** the initialisation step into NEUTRAL SHALL start, and the requested gear SHALL be queued
+  as during any active step, with the usual "Moving to <gear> gear" reply
+- **AND** the requested gear SHALL be shifted to after the initialisation step completes
+- **AND** no "gear unknown" refusal SHALL be sent
+
+#### Scenario: Engine running is not required on the web
+- **WHEN** a `set_gear` command is received with the engine stopped
+- **THEN** it SHALL be processed as above; only the MAVLink gear path SHALL require the engine to
+  be running
+
+### Requirement: Gear-Change Boost Enable via Web Interface
+The web portal SHALL let the operator switch the gear-change RPM boost on or off per vehicle
+without a reflash, from a toggle in the "Gear Position Defaults" card next to the "RPM Boost
+Target" row, using the `set_boost_enabled` WebSocket command.
+
+#### Scenario: Switch the boost off or on
+- **WHEN** the operator toggles "Перегазовка при перемиканні" / "Gear-change RPM boost"
+- **THEN** a `set_boost_enabled` WebSocket command carrying a boolean value SHALL be sent
+- **AND** the system SHALL persist the value to NVS `boost/enabled` first and apply it only after
+  the write succeeded
+- **AND** it SHALL respond with an English acknowledgement naming the new state ("Gear boost
+  enabled" / "Gear boost disabled"), shown in the card's status line
+- **AND** the command SHALL be accepted regardless of the active input source, like `set_boost_rpm`
+
+#### Scenario: Persisting fails
+- **WHEN** a `set_boost_enabled` command is received and the NVS write fails
+- **THEN** the system SHALL respond with an English error and the switch state in use SHALL be
+  left unchanged
+
+#### Scenario: The toggle follows the stored value
+- **WHEN** the portal renders a telemetry frame carrying `boost_enabled`
+- **THEN** the toggle SHALL show that state rather than the last click
+
+#### Scenario: Target RPM stays editable while disabled
+- **WHEN** the boost is switched off
+- **THEN** the "RPM Boost Target" input and its Save button SHALL remain enabled
+
+#### Scenario: Labels and help
+- **WHEN** the card is shown
+- **THEN** the card help (ⓘ) SHALL include one sentence explaining that the switch turns the
+  RPM blip on gear changes on or off, that with it off the throttle is still held at idle during
+  the shift, and that the manual boost test is not affected
+- **AND** the toggle label and help sentence SHALL be present in both the English and the
+  Ukrainian dictionary
+
+### Requirement: Speed-Limiter Ceiling Rate Configuration via Web Interface
+The web portal SHALL allow the operator to set the speed-limiter throttle rate (ceiling slew)
+without a reflash, from a number input in the "Обмеження швидкості та кермо" / "Speed limit and
+steering" card, following the same command pattern as `set_speed_limit_floor`.
+
+#### Scenario: Set the rate from the portal
+- **WHEN** the operator enters a rate in %/s and saves it
+- **THEN** a `set_speed_limit_slew` WebSocket command carrying that value SHALL be sent
+- **AND** on success the system SHALL persist the value and respond with an acknowledgement naming
+  the stored value in %/s, shown in the card's status line
+- **AND** the command SHALL be accepted regardless of the active input source, like
+  `set_speed_limit_floor`
+
+#### Scenario: Reject an out-of-range rate
+- **WHEN** a `set_speed_limit_slew` command carries a value that is not-a-number, below
+  `SPEED_LIMIT_SLEW_MIN_PCT_S` or above `SPEED_LIMIT_SLEW_MAX_PCT_S`
+- **THEN** the system SHALL respond with an error naming the accepted range (10–200 %/s)
+- **AND** the stored rate SHALL be left unchanged
+- **AND** the portal SHALL also refuse the value locally, before sending, with a translated message
+
+#### Scenario: The input follows the stored value
+- **WHEN** the portal renders a telemetry frame and the rate input is not being edited
+- **THEN** the input SHALL show `speed_limit_slew`
+
+#### Scenario: Hint and help explain the rate
+- **WHEN** the card is shown
+- **THEN** a one-line hint under the input SHALL say that a lower value closes and returns the
+  throttle more gently and that 80 is the previous behaviour
+- **AND** the card help (ⓘ) SHALL describe the setting and its range
+- **AND** every new label, hint, message and help text SHALL be present in both the English and
+  the Ukrainian dictionary
+
+### Requirement: Speed Governor Configuration via Web Interface
+The Calibration section SHALL contain a card "🎯 Регулятор швидкості" / "🎯 Speed governor",
+placed right after the "Обмеження швидкості та кермо" / "Speed limit and steering" card, holding the
+governor switch and its settings (see "Speed Governor Settings"). The settings SHALL NOT be placed
+in any Tests-section card. Every command SHALL be accepted regardless of the active input source,
+like `set_speed_limit_slew`.
+
+#### Scenario: Toggle the governor
+- **WHEN** the operator presses the "Регулятор швидкості" / "Speed governor" button
+- **THEN** a `set_gov_enabled` command carrying the opposite of the reported `gov_en` SHALL be sent
+- **AND** on success the system SHALL persist the value and reply "Speed governor ON" or "Speed
+  governor OFF"; the button SHALL show the state from telemetry only (no optimistic update), and
+  `--` while unknown
+
+#### Scenario: Set a tuning value with a slider
+- **WHEN** the operator releases the Kp, Ki, acceleration, deceleration or start throttle limit
+  slider, or taps its "−" / "+" step button
+- **THEN** the page SHALL send ONE `set_gov_kp`, `set_gov_ki`, `set_gov_acc`, `set_gov_dec` or
+  `set_gov_launch` with the value in firmware units (% per m/s, %/s per m/s, m/s², m/s², %); nothing
+  SHALL be sent while the slider is being dragged
+- **AND** each row SHALL show its label, the current value (with its unit for acceleration,
+  deceleration and the start throttle limit; decimal comma in Ukrainian), a slider with the range
+  ends written under its two ends, and a "−" and a "+" button that move the value one step
+- **AND** the sliders SHALL span Kp 0.2–10 step 0.1, Ki 0–5 step 0.1, acceleration 0.3–3.0 m/s²
+  step 0.1, deceleration 0.5–5.0 m/s² step 0.1 and the start throttle limit 1–40 % step 0.5, so the
+  page cannot produce a value outside the range
+- **AND** on success the reply SHALL name the stored value ("Governor Kp set to 1.50", …), Kp and Ki
+  with two decimals, the others with one
+- **AND** a NaN or out-of-range value SHALL be answered with an error naming the range and SHALL
+  leave the stored value unchanged
+
+#### Scenario: Sliders follow the stored values
+- **WHEN** a telemetry frame is rendered
+- **THEN** each slider and its value SHALL show its `gov_*` value, except a slider that is being
+  dragged or whose sent value telemetry has not yet confirmed (at most 3 s); a stored value off the
+  slider's step grid SHALL be shown as stored in the value text
+- **AND** before telemetry carries the `gov_*` values the sliders and step buttons SHALL be disabled
+  and show `--`
+
+#### Scenario: Refused or unsent value
+- **WHEN** the firmware refuses a governor value, or the page has no connection when a slider is
+  released or a step button tapped, or the connection drops before the value is confirmed
+- **THEN** the slider and its value SHALL return at once to the value in use from telemetry, and
+  the card's status line SHALL show the error (or "not sent: no connection")
+
+#### Scenario: Hints and help
+- **WHEN** the card is shown
+- **THEN** the acceleration and deceleration rows SHALL show their km/h-per-second equivalent,
+  updated live while the slider is dragged, the
+  card SHALL say that the throttle input becomes a speed from 0 to the speed limit, that the
+  governor never brakes, and that without a speed signal the throttle is direct (full stick = full
+  throttle)
+- **AND** the card SHALL recommend, as advice and not as an interlock, tuning at the 10 km/h limit
+  first and driving the low limits (10 and 20 km/h) in L on the buggy
+- **AND** the help (ⓘ) SHALL describe each setting, its range, the field tuning order (what to
+  lower when the speed hunts, what to raise when it is sluggish), the throttle-resolution limit
+  and the autopilot-mode limitation
+- **AND** the switch and each of the five setting rows SHALL carry its own small help (ⓘ) icon beside
+  its label, with a finger-sized tap area, opening a help for that one setting in the same shape:
+  what it is in one plain sentence, what the vehicle does when the value goes up ("Більше →" /
+  "More →") and down ("Менше →" / "Less →"), the symptom that calls for changing it with the
+  direction and step, and for Kp and Ki the rule Ki = Kp / 3
+- **AND** the card and the help SHALL NOT state a default value as a number, because the defaults
+  differ per vehicle while the page is shared; the sliders show the values in use
+- **AND** every new label, hint, message and help text SHALL exist in the English and the Ukrainian
+  dictionary (the buggy is "багі" in Ukrainian)
+
+#### Scenario: Throttle rate label covers both
+- **WHEN** the "Speed limit and steering" card is shown
+- **THEN** the `thr_slew` row SHALL be labelled "Плавність газу (обмежувач і регулятор)" /
+  "Throttle rate (limiter and governor)", with the command `set_speed_limit_slew` and key `thr_slew`
+  unchanged
+
+#### Scenario: Web throttle shows the commanded speed
+- **WHEN** the governor is ACTIVE and the web throttle slider is shown
+- **THEN** the slider value SHALL be followed by the setpoint in km/h from `gov_sp`
+
+### Requirement: Pre-Crank Delay Configuration via Web Interface
+The web portal SHALL allow the operator to set the pre-crank dwell without a reflash, from a slider
+"Затримка стартера" / "Pre-crank delay" (1–8 s, step 0.5 s) in its own card "🚀 Запуск двигуна" / "🚀 Engine
+start" in the Calibration section ("Калібрування"), next to the other persisted settings, and not
+in the Tests section. The command SHALL be
+routed through `WebPortal::WebCommand` → `VehicleController::processWebCommand`, SHALL be accepted
+regardless of the active input source, and SHALL persist before applying.
+
+#### Scenario: The setting lives in the Calibration section
+- **WHEN** the operator opens the Calibration section
+- **THEN** the "Engine start" card SHALL show the delay row (label, slider with its value on the right,
+  hint and its own reply line; no Save button) with its own help button (ⓘ)
+- **AND** the "Vehicle Ignition & Lighting" card in the Tests section SHALL hold only the ignition,
+  light, wheel-lock and boost-rail controls, without the delay row
+
+#### Scenario: Set the delay from the portal
+- **WHEN** the operator moves the slider (seconds, min 1, max 8, step 0.5) and releases it
+- **THEN** exactly one `set_crank_dwell_ms` WebSocket command carrying the value × 1000, rounded to
+  a whole ms, SHALL be sent on release, and none while dragging (each command is an NVS write)
+- **AND** while dragging, the value label SHALL follow the thumb
+- **AND** the firmware SHALL round it to a whole ms, validate 1000–8000, persist it, apply it, and
+  respond "Pre-crank delay set to N ms", shown in the row's status line
+
+#### Scenario: Reject an out-of-range delay
+- **WHEN** a `set_crank_dwell_ms` command carries a value that is not-a-number, below 1000 or above
+  8000
+- **THEN** the system SHALL respond "Pre-crank delay out of range (1000-8000 ms)"
+- **AND** the stored delay SHALL be left unchanged
+- **AND** the portal cannot produce such a value: the slider is bounded to 1–8 s
+
+#### Scenario: Save failure
+- **WHEN** the NVS write fails
+- **THEN** the system SHALL respond "Failed to save the pre-crank delay" and keep the delay in use
+  unchanged
+
+#### Scenario: The slider follows the stored value
+- **WHEN** the portal renders a telemetry frame and the operator is not holding the slider
+- **THEN** the slider SHALL move to `crank_dwell_ms` / 1000 (the nearest 0.5 s step for a value off
+  the grid) and the value label SHALL show the stored value itself in seconds with one decimal
+  ("3,0 с" / "3.0 s" on a unit without a stored value; "1,3 с" for 1300 ms)
+- **AND** while the operator holds the slider, telemetry SHALL NOT move the thumb
+
+#### Scenario: Hint, help and translations
+- **WHEN** the row is shown
+- **THEN** a one-line hint SHALL say that the ignition is on for the set time before the starter
+  turns on an RC or GCS auto-start, and that the START button in the Tests section has no delay
+- **AND** the "Engine start" card help (ⓘ) SHALL explain that the delay lets the ECU and the fuel pump get ready
+  and that a longer value is the first thing to try when the engine does not start from the
+  switch
+- **AND** every new label, hint, message and help text SHALL be present in both the English and the
+  Ukrainian dictionary
+
+### Requirement: Starter Time Limit Configuration via Web Interface
+The web portal SHALL allow the operator to set the starter time limit without a reflash, from a
+slider "Макс. час роботи стартера" / "Max starter time" (2–10 s, step 0.5 s) in the "🚀 Запуск
+двигуна" / "🚀 Engine start" card of the Calibration section, under the pre-crank delay, and not in
+the Tests section. The command SHALL be routed through `WebPortal::WebCommand` →
+`VehicleController::processWebCommand`, SHALL be accepted regardless of the active input source,
+and SHALL persist before applying.
+
+#### Scenario: The setting lives in the Engine start card
+- **WHEN** the operator opens the Calibration section
+- **THEN** the "Engine start" card SHALL show, under the pre-crank delay row, the starter time row
+  (label, slider with its value on the right, hint and its own reply line; no Save button and no
+  caution line — owner decision 2026-11-17)
+- **AND** the card's help button (ⓘ) SHALL show the pre-crank delay help and the starter time help
+
+#### Scenario: Set the limit from the portal
+- **WHEN** the operator moves the slider (seconds, min 2, max 10, step 0.5) and releases it
+- **THEN** exactly one `set_crank_max_ms` WebSocket command carrying the value × 1000, rounded to a
+  whole ms, SHALL be sent on release, and none while dragging (each command is an NVS write)
+- **AND** while dragging, the value label SHALL follow the thumb
+- **AND** the firmware SHALL round it to a whole ms, validate 2000–10000, persist it, apply it from
+  the next start attempt, and respond "Starter time limit set to N ms", shown in the row's status
+  line
+
+#### Scenario: Reject an out-of-range limit
+- **WHEN** a `set_crank_max_ms` command carries a value that is not-a-number, below 2000 or above
+  10000
+- **THEN** the system SHALL respond "Starter time limit out of range (2000-10000 ms)"
+- **AND** the stored limit SHALL be left unchanged
+- **AND** the portal cannot produce such a value: the slider is bounded to 2–10 s
+
+#### Scenario: Save failure
+- **WHEN** the NVS write fails
+- **THEN** the system SHALL respond "Failed to save the starter time limit" and keep the limit in
+  use unchanged
+
+#### Scenario: The slider follows the stored value
+- **WHEN** the portal renders a telemetry frame and the operator is not holding the slider
+- **THEN** the slider SHALL move to `crank_max_ms` / 1000 (the nearest 0.5 s step for a value off
+  the grid) and the value label SHALL show the stored value in seconds with one decimal ("5,0 с" /
+  "5.0 s" on a unit without a stored value)
+- **AND** while the operator holds the slider, telemetry SHALL NOT move the thumb
+
+#### Scenario: No caution line at any value
+- **WHEN** the value shown by the slider is above 5 s
+- **THEN** no caution or warning line SHALL be shown in the row (owner decision 2026-11-17); the
+  risk of long cranking is explained in the help only
+
+#### Scenario: Hint, help and translations
+- **WHEN** the row is shown
+- **THEN** a one-line hint SHALL say that the starter runs at most the set time per attempt, stops
+  earlier once the engine runs, and that a change applies from the next attempt
+- **AND** the help SHALL explain that the limit applies to the RC switch, the ground station and
+  the START button, that the engine-running RPM releases the starter earlier, and that a too-long
+  value risks starter heat, battery drain and cranking a running engine for the whole limit when
+  the RPM reads low; 2–10 s, default 5 s
+- **AND** every new label, hint, message and help text SHALL be present in both the English and the
+  Ukrainian dictionary
+
+### Requirement: Two-Press Confirmation for Destructive Web Actions
+The web interface SHALL NOT use native browser dialogs (`alert()`, `confirm()`, `prompt()`): they
+are suppressed in the phone's captive-portal sign-in webview and in Chrome after "prevent this
+page from creating additional dialogs", where `confirm()` returns false and the action silently
+does nothing. The actions "Set sensor zero" (steering calibration card), "Reset to defaults" (gear
+codes card), "Clear" (event journal card) and "Upload Firmware" (firmware update card) SHALL
+instead be confirmed by a second press of the same button, through one shared helper.
+
+| Action | Armed button label (uk / en) | Status-line warning (uk / en) |
+|---|---|---|
+| Set sensor zero | Підтвердити нуль / Confirm zero | Це положення стане центром. Межі буде стерто. / This position becomes the center. The limits will be erased. |
+| Gear codes reset | Підтвердити скидання / Confirm reset | Відновити типові коди передач? / Restore the default gear codes? |
+| Journal clear | Підтвердити видалення / Confirm delete | Журнал буде видалено, лічильник запусків лишиться. / The journal will be deleted; the boot counter is kept. |
+| Firmware upload | Підтвердити завантаження / Confirm upload | Авто перейде в безпечний стан і перезавантажиться. / The vehicle will enter safe state and reboot. |
+
+#### Scenario: First press arms the button
+- **WHEN** the operator presses one of these buttons and its existing pre-checks pass (WebSocket
+  open for "Set sensor zero", a file selected for "Upload Firmware")
+- **THEN** nothing SHALL be sent to the firmware
+- **AND** the button label SHALL change to the armed label and the button SHALL be highlighted with
+  the theme's warning colour
+- **AND** the card's status line SHALL show the warning in the warning colour
+
+#### Scenario: Second press within 5 s runs the action
+- **WHEN** the operator presses the same armed button again within 5 s
+- **THEN** the original label SHALL be restored, the warning cleared, and the action SHALL run
+  exactly as before (the same command or request is sent)
+
+#### Scenario: Arming expires after 5 s
+- **WHEN** 5 s pass without a second press
+- **THEN** the original label SHALL be restored and the highlight removed
+- **AND** the warning SHALL be cleared only if the status line still shows it; a newer message SHALL
+  be left in place
+
+#### Scenario: Buttons arm independently
+- **WHEN** one button is armed and the operator presses another of these buttons
+- **THEN** the second press SHALL arm that other button and SHALL NOT run either action
+
+#### Scenario: Language switch while armed
+- **WHEN** the UI language is switched while a button is armed
+- **THEN** the armed label and a warning still on screen SHALL be shown in the new language
+- **AND** on the second press or on expiry the original label SHALL be restored in the new language
+
+#### Scenario: No native dialogs remain
+- **WHEN** the served page is searched for `alert(`, `confirm(` and `prompt(` calls
+- **THEN** none SHALL be found
 

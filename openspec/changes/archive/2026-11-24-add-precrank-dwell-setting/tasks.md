@@ -56,4 +56,4 @@
 ## 7. Bench — buggy and old board, archive
 - [ ] 7.1 Buggy (`aztec` 1.5.33): LittleFS upload; 5.1, 5.2 (threshold 800, tacho fitted: confirm the effective RPM source after OFF is TACHO 0, not a stale CAN value), 5.3; record the buggy's delay.
 - [ ] 7.2 Old board (`old-board` 1.5.33): LittleFS upload; 5.1 and 5.2 on the bench harness.
-- [ ] 7.3 Archive this change (the dependency `add-gcs-vehicle-commands` was archived 2026-11-15, task 0.2).
+- [x] 7.3 Archive this change (the dependency `add-gcs-vehicle-commands` was archived 2026-11-15, task 0.2).

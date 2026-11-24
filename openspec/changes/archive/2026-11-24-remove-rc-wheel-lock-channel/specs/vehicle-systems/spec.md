@@ -139,9 +139,11 @@ SHALL NOT change.
     distance and engine-hour counters on a transition into OFF;
   - ACC or ON not under MAVLink control → reason 3;
   - ACC → relay state ACC, cancelling a pending or active crank;
-  - ON with the engine running → `ACCEPTED` without a crank;
-  - ON otherwise → `requestCrank()` exactly like a fresh RC transition into IGNITION (pre-crank
-    dwell `ACC_PRECRANK_DWELL_MS`, starter at most `CRANKING_TIMEOUT`).
+  - ON with the engine running (`isEngineRunning()`, which reads the engine RPM cleared at
+    ignition OFF — see "Validated Engine RPM for Crank Control") → `ACCEPTED` without a crank;
+  - ON otherwise → `requestCrank()` exactly like a fresh RC transition into IGNITION (the
+    configured pre-crank dwell — see "Configurable Pre-Crank Dwell", default 3000 ms — starter at
+    most `CRANKING_TIMEOUT`).
 - **Headlight**: always accepted, in every input source.
 - **Diff lock**: not under MAVLink control → reason 3; otherwise the same `setWheelLock()` path the
   web `set_wheel_lock` command uses (quad bike: Relay_5 + Relay_6; buggy: Relay_4 + Relay_5 +
@@ -186,8 +188,14 @@ SHALL NOT change.
 - **WHEN** a GCS ignition ON command arrives under MAVLink control with the ignition OFF and the
   engine stopped
 - **THEN** the ACK SHALL be `ACCEPTED`
-- **AND** the ignition line SHALL come up, the starter SHALL engage after the pre-crank dwell and
-  SHALL stop on engine start or after `CRANKING_TIMEOUT`
+- **AND** the ignition line SHALL come up, the starter SHALL engage after the configured pre-crank
+  dwell and SHALL stop on engine start or after `CRANKING_TIMEOUT`
+
+#### Scenario: Ignition ON right after an engine kill
+- **WHEN** the engine was running at or above `ENGINE_RUNNING_RPM_THRESHOLD`, a GCS ignition OFF
+  stopped it, and a GCS ignition ON arrives less than `CAN_DATA_STALE_TIMEOUT` later
+- **THEN** the command SHALL NOT be treated as "ON with the engine running"
+- **AND** the auto-crank SHALL start as in "Auto-crank from the GCS"
 
 #### Scenario: Diff lock holds against channel 7
 - **WHEN** a GCS diff-lock ON command is accepted under MAVLink control and servo channel 7 then

@@ -251,8 +251,10 @@ and `RELAY_WHEEL_LOCK_FITTED` SHALL be `0`.
 - **WHEN** existing callers use `setIgnitionState()`, `requestCrank()`, `setFrontLight()`,
   `setWheelLock()`, `update()`, `allOff()` or the state getters
 - **THEN** their signatures and observable behavior SHALL be identical to the GPIO implementation
-- **AND** the `ACC_PRECRANK_DWELL_MS` pre-crank dwell, `CRANKING_TIMEOUT`, and RPM-based crank exit
-  SHALL be unchanged
+- **AND** `CRANKING_TIMEOUT` and the RPM-based crank exit SHALL be unchanged, and the pre-crank dwell
+  SHALL be the configured value (see `vehicle-systems` "Configurable Pre-Crank Dwell"; default
+  `ACC_PRECRANK_DWELL_MS`, 3000 ms), set through the additional RAM-only
+  `setPrecrankDwellMs()`
 - **AND** `setWheelLock()` SHALL remain callable, but SHALL reject a lock request because the
   front-wheel lock is not fitted (see the "Front-Wheel Lock Not Fitted" requirement in
   `vehicle-systems`)

@@ -193,12 +193,13 @@ The transmission servo SHALL use an overshoot-dwell-return motion profile and SH
 #### Scenario: Overshoot-and-dwell motion profile
 - **WHEN** `setGear(target)` is called
 - **THEN** the servo SHALL first move to the overshoot position (`targetPct ± overshootPct`)
-- **AND** once servo movement time has elapsed, the controller SHALL enter an overshoot dwell of exactly `TRANS_OVERSHOOT_DWELL_MS` milliseconds
-- **AND** after `TRANS_OVERSHOOT_DWELL_MS` elapses, the gear SHALL be assumed engaged regardless of physical sensor state
-- **AND** the controller SHALL transition directly to the RETURN phase
+- **AND** once servo movement time has elapsed, the controller SHALL enter the overshoot dwell
+- **AND** the dwell SHALL end as soon as the physical gear has read the step's target gear continuously for `TRANS_DWELL_CONFIRM_MS` (200 ms), measured from the first confirming read
+- **AND** if that does not happen, the dwell SHALL end after `TRANS_OVERSHOOT_DWELL_MS` (2000 ms, the timeout) and the gear SHALL be assumed engaged regardless of physical sensor state
+- **AND** in both cases the controller SHALL transition directly to the RETURN phase
 
 #### Scenario: Return phase after assumed gear engagement
-- **WHEN** the overshoot dwell period elapses
+- **WHEN** the overshoot dwell ends (sensor-confirmed or timed out)
 - **THEN** the servo SHALL move from the overshoot position back to `finalGearPositionPct_`
 - **AND** once return movement time has elapsed, the gear change SHALL be marked complete
 - **AND** `saveState()` SHALL be called with `state_valid=true`
@@ -214,7 +215,8 @@ The transmission servo SHALL use an overshoot-dwell-return motion profile and SH
 - **WHEN** a gear change RETURN phase completes
 - **AND** `queuedGear_ != GEAR_UNKNOWN`
 - **AND** `targetGear_ != queuedGear_`
-- **THEN** the controller SHALL automatically start the next step toward `queuedGear_` using `targetGear_` as the current position
+- **THEN** the controller SHALL pause, then automatically start the next step toward `queuedGear_` using `targetGear_` as the current position
+- **AND** the pause SHALL end as soon as the physical gear has read `targetGear_` continuously for `TRANS_DWELL_CONFIRM_MS`, or after `TRANS_SEQUENCE_STEP_DWELL_MS` (1000 ms, the timeout)
 - **AND** steps SHALL continue until `targetGear_ == queuedGear_`
 - **AND** `queuedGear_` SHALL be cleared to `GEAR_UNKNOWN` when the final gear is reached
 
@@ -226,10 +228,10 @@ The transmission servo SHALL use an overshoot-dwell-return motion profile and SH
 
 #### Scenario: Sequential shifting — unknown current gear
 - **WHEN** `setGear(finalGear)` is called
-- **AND** `targetGear_` is `GEAR_UNKNOWN` or no prior change has completed
-- **THEN** the controller SHALL route through `GEAR_NEUTRAL` first (safe intermediate)
-- **AND** `queuedGear_` SHALL be set to `finalGear`
-- **AND** once NEUTRAL step completes, normal sequencing toward `finalGear` resumes
+- **AND** `targetGear_` is `GEAR_UNKNOWN` (the transmission has not been initialised from the sensor or NVS)
+- **THEN** `setGear()` SHALL return false
+- **AND** the servo SHALL NOT be commanded, NVS SHALL NOT be written and `queuedGear_` SHALL be unchanged
+- **AND** there SHALL be no routing through `GEAR_NEUTRAL` from an unknown gear
 
 ### Requirement: Steering Motor Driver Abstraction
 The steering controller SHALL command its motor through an `IMotorDriver` abstraction exposing `setSpeed(int16_t -255..+255)` and `stop()`, so that the position control loop is independent of the concrete driver.
@@ -267,31 +269,6 @@ The steering `IMotorDriver` SHALL be implemented by a VESC driver that commands 
 - **WHEN** the driver frames or parses a VESC packet
 - **THEN** it SHALL use an in-repo packet layer implementing VESC short/long framing with a CRC16 check
 - **AND** it SHALL implement only `COMM_SET_DUTY` and `COMM_GET_VALUES`
-
-### Requirement: Steering Re-command Guard and Stall Latch
-The steering controller SHALL NOT restart its move and stall timers when re-commanded to the current target, and SHALL latch out further motion in a stalled direction for a cooldown of `STEER_STALL_COOLDOWN_MS` (700 ms), so that stall detection and move timeout function under the continuous MAVLink command stream. Target and tolerance values SHALL be in 0.1° of steering angle.
-
-#### Scenario: Re-command within tolerance is a no-op
-- **WHEN** `setSteeringPercent()` is called while a move is in progress
-- **AND** the new target is within `STEER_RETARGET_TOLERANCE` (0.1° units) of the current target
-- **THEN** `moveStartTime_`, the stall-check timers, and `dutyBoost_` SHALL NOT be reset
-- **AND** the in-flight move SHALL continue so the stall window and move timeout can elapse
-
-#### Scenario: Target change beyond tolerance resets the move
-- **WHEN** `setSteeringPercent()` is called with a target differing from the current target by more than `STEER_RETARGET_TOLERANCE` (0.1° units)
-- **THEN** a fresh move SHALL start with the move/stall timers reset
-
-#### Scenario: Stall latches out the stalled direction
-- **WHEN** a stall-stop occurs (position loop stall with a healthy sensor, or a nonzero VESC fault code)
-- **THEN** the controller SHALL record the stalled direction and latch time and stop the motor
-- **AND** a subsequent move, jog or nudge that would push further in the stalled direction SHALL be refused while less than `STEER_STALL_COOLDOWN_MS` (700 ms) has elapsed
-
-#### Scenario: Opposite-direction escape and post-cooldown retry
-- **WHEN** the controller is stall-latched
-- **AND** a new move commands the opposite direction (away from or across the jam)
-- **THEN** the move SHALL be accepted immediately and the latch cleared
-- **WHEN** the controller is stall-latched and a same-direction move is commanded after `STEER_STALL_COOLDOWN_MS` (700 ms) has elapsed
-- **THEN** the move SHALL be accepted and the latch cleared
 
 ### Requirement: VESC Fault Monitoring and Communication Failsafe
 The steering controller SHALL poll VESC telemetry to enforce a firmware-level fault backstop, and SHALL fail safe when the VESC is unresponsive. Over-current protection SHALL be left to the VESC itself (its *Motor Current Max* clamp, its *Absolute Max Current* fault, and its MOSFET temperature limiting), and mechanical jams SHALL be left to the steering-angle stall detector while the angle sensor is healthy, and to the VESC current clamp and fault stop while steering is driven sensorless; the firmware SHALL NOT run its own sustained-over-current timer.
@@ -517,4 +494,233 @@ bus) SHALL NOT be connected. No new relay SHALL be added; Relay_7/8 stay reserve
 - **WHEN** the bus is assembled with the board, the engine ECU, the LWS and the iBooster
 - **THEN** the resistance between CAN-H and CAN-L with the power off SHALL be about 60 Ω (exactly two
   terminators), measured before the first power-up and recorded in `GPIO_PINOUT_CUSTOM_BOARD_S3.md`
+
+### Requirement: Steering Continuous Target Tracking and Stall Latch
+The steering controller SHALL track a continuously changing target: while a closed-loop move is driving or parked, every accepted `setSteeringPercent()` call SHALL update the target, whatever the difference from the previous target, and SHALL NOT restart the move timer, the stall-check window, the progress baseline, the anti-stall boost or the break-away state. These SHALL be reset only when a drive starts from rest, so that stall detection and the move timeout function under the continuous MAVLink command stream. The controller SHALL latch out further motion in a stalled direction for a cooldown of `STEER_STALL_COOLDOWN_MS` (700 ms). Target and tolerance values SHALL be in 0.1° of steering angle. The sensorless rate drive is not governed by this requirement.
+
+#### Scenario: Target update while tracking
+- **WHEN** `setSteeringPercent()` is accepted while the closed loop is driving or parked
+- **THEN** the target SHALL be replaced by the new target, for any difference including less than `STEER_POSITION_TOLERANCE`
+- **AND** `moveStartTime_`, the stall-check position and time, the progress baseline, `dutyBoost_` and the break-away state SHALL NOT be reset
+- **AND** the stall latch SHALL NOT be evaluated for the update
+
+#### Scenario: Timers reset only on a start from rest
+- **WHEN** the closed loop starts driving from rest (from idle on an accepted command, or from parked because the error exceeded `STEER_RESTART_TOLERANCE`)
+- **THEN** the move timer, the stall-check window and the progress baseline SHALL restart at the current position and time
+- **AND** `dutyBoost_` SHALL be reset to 0
+
+#### Scenario: Stall detection under a moving target
+- **WHEN** the closed loop is driving and the position changes by less than `STEER_STALL_THRESHOLD` over `STEER_STALL_TIMEOUT`
+- **AND** target updates keep arriving with the error in the same direction
+- **THEN** a stall-stop SHALL occur after `STEER_STALL_TIMEOUT`, as for a single command, whichever duty floor is active
+- **AND** the stall-check window SHALL restart, and `dutyBoost_` SHALL be reset to 0, only when the drive direction (sign of the error) flips while driving
+- **AND** the stall check SHALL NOT run while the loop is parked
+
+#### Scenario: Move timeout measures time behind the target
+- **WHEN** the closed loop is driving
+- **THEN** the move timer SHALL be re-armed on every iteration where the absolute error is at most `STEER_RESTART_TOLERANCE`
+- **AND** the move SHALL be stopped (coast, no stall latch) once the error has stayed above `STEER_RESTART_TOLERANCE` for `STEER_MOVE_TIMEOUT` without re-arming
+- **AND** a continuously moving target that the wheel follows within `STEER_RESTART_TOLERANCE` SHALL NOT time out
+
+#### Scenario: Stall latches out the stalled direction
+- **WHEN** a stall-stop occurs (position loop stall with a healthy sensor, or a nonzero VESC fault code)
+- **THEN** the controller SHALL record the stalled direction and latch time and stop the motor (coast)
+- **AND** a subsequent move, jog or nudge that would push further in the stalled direction SHALL be refused while less than `STEER_STALL_COOLDOWN_MS` (700 ms) has elapsed
+
+#### Scenario: Opposite-direction escape and post-cooldown retry
+- **WHEN** the controller is stall-latched
+- **AND** a new move commands the opposite direction (away from or across the jam)
+- **THEN** the move SHALL be accepted immediately and the latch cleared
+- **WHEN** the controller is stall-latched and a same-direction move is commanded after `STEER_STALL_COOLDOWN_MS` (700 ms) has elapsed
+- **THEN** the move SHALL be accepted and the latch cleared
+
+### Requirement: Steering Stop Hysteresis
+The closed-loop steering controller SHALL have three states: idle, driving and parked. It SHALL stop driving and park when the absolute position error is at most `STEER_POSITION_TOLERANCE` (2 = 0.2° on the quad) and SHALL NOT drive the closed loop again until the absolute error exceeds `STEER_RESTART_TOLERANCE` (10 = 1.0°). Parking SHALL be a coast through `IMotorDriver::stop()` (zero duty); the self-locking steering worm gear holds the shaft, and the controller SHALL send no further closed-loop motor commands while parked; the only exception SHALL be the bounded park correction, whose trigger SHALL be the larger of `STEER_PARK_TRIGGER_TOL` (4 = 0.4°) and its done tolerance, independent of `STEER_POSITION_TOLERANCE`. Every stop path SHALL be a coast.
+
+#### Scenario: Park at the target
+- **WHEN** the closed loop is driving and the absolute error becomes at most `STEER_POSITION_TOLERANCE`
+- **THEN** the controller SHALL call `IMotorDriver::stop()` (coast) and enter the parked state
+- **AND** it SHALL NOT send closed-loop motor commands while it stays parked
+
+#### Scenario: Parks within 0.2°
+- **WHEN** the closed loop is driving toward a target from either side
+- **AND** the absolute error becomes 0.2°
+- **THEN** the controller SHALL park
+- **WHEN** the absolute error is 0.3°
+- **THEN** the controller SHALL keep driving toward the target
+
+#### Scenario: No restart inside the hysteresis band
+- **WHEN** the controller is parked
+- **AND** the absolute error grows above `STEER_POSITION_TOLERANCE` but stays at most `STEER_RESTART_TOLERANCE` (1.0°)
+- **THEN** the controller SHALL stay parked and the closed loop SHALL NOT issue a drive command
+
+#### Scenario: Restart beyond the hysteresis band
+- **WHEN** the controller is parked and the absolute error exceeds `STEER_RESTART_TOLERANCE` (1.0°)
+- **THEN** it SHALL start driving toward the current target as a start from rest
+
+#### Scenario: Park correction trigger unchanged
+- **WHEN** the controller is parked with an absolute error of 0.3°
+- **AND** the park correction is enabled with its default done tolerance (0.2°)
+- **THEN** the park correction SHALL NOT start, because 0.3° does not exceed `STEER_PARK_TRIGGER_TOL` (0.4°)
+- **AND** an error above 0.4° SHALL start it as before
+
+#### Scenario: Command from idle
+- **WHEN** a percent command is accepted while the closed loop is idle
+- **THEN** the controller SHALL start driving if the absolute error exceeds `STEER_POSITION_TOLERANCE`
+- **AND** otherwise it SHALL enter the parked state without driving
+
+#### Scenario: Leaving parked to idle
+- **WHEN** the controller is parked or driving
+- **AND** the steering VESC reports a fault or its link is lost, or the angle sensor becomes unhealthy, or a web jog, nudge or rate drive takes the motor, or a limit capture or sensor zero-set starts, or the steering stops being calibrated, or `stop()` is called (failsafe, emergency stop)
+- **THEN** the controller SHALL command `IMotorDriver::stop()` (coast) and enter the idle state
+- **AND** a stall-stop, a move timeout or a range-guard stop SHALL also end in a coast and the idle state
+
+#### Scenario: Web slider path unchanged
+- **WHEN** the web `set_steering` command sets a target
+- **THEN** it SHALL reach `setSteeringPercent()` through the same path and debounce as before
+- **AND** it SHALL be driven and parked by the same rules as a MAVLink target, so a target within `STEER_RESTART_TOLERANCE` of a parked wheel SHALL NOT drive the closed loop
+
+### Requirement: Steering Break-away and Tracking Duty Floors
+While driving, the closed-loop steering duty SHALL be `clamp(max(|error| × STEER_KP, floor) + dutyBoost_, floor, STEER_PWM_MAX_DUTY)`, signed toward the target, so that the anti-stall boost always adds on top of the floor in force and is never hidden under it. The floor SHALL be the break-away floor `STEER_PWM_MIN_DUTY` (85 on the quad) from a start from rest or a drive direction flip until the wheel has moved at least `STEER_BOOST_MIN_PROGRESS` (0.3°) from the position where that drive or reversal started, and the tracking floor `STEER_PWM_TRACK_MIN_DUTY` (85 on the quad, bench-tune) after that; `STEER_PWM_MIN_DUTY` SHALL NOT be below `STEER_PWM_TRACK_MIN_DUTY`. Every `STEER_BOOST_CHECK_MS` (100 ms) the boost SHALL rise by `STEER_BOOST_STEP` (30) when the wheel progressed less than `STEER_BOOST_MIN_PROGRESS` since the previous check, and, when it progressed at least that much, SHALL be held unchanged while `|error|` exceeds the hold band `STEER_BOOST_HOLD_ERR` (2.0°) and SHALL fall by `STEER_BOOST_DECAY` (30 on the quad), never below 0, inside the hold band. The boost SHALL be reset to 0 on a start from rest and on a drive direction flip. The duty law SHALL be a pure, host-tested function (`include/SteerPositionLaw.h`). The sensorless rate drive SHALL keep `STEER_PWM_MIN_DUTY` as its floor.
+
+#### Scenario: Break-away floor from rest
+- **WHEN** the closed loop starts driving from idle or from parked
+- **THEN** the duty SHALL be at least `STEER_PWM_MIN_DUTY` until the position differs from the start position by at least `STEER_BOOST_MIN_PROGRESS`
+
+#### Scenario: Tracking floor after first progress
+- **WHEN** the closed loop is driving and the wheel has moved at least `STEER_BOOST_MIN_PROGRESS` since the drive started or last reversed
+- **THEN** the duty floor SHALL be `STEER_PWM_TRACK_MIN_DUTY`
+- **AND** a target update SHALL NOT switch the floor back to `STEER_PWM_MIN_DUTY`
+
+#### Scenario: Reversal re-arms break-away
+- **WHEN** the drive direction (sign of the error) flips while driving
+- **THEN** the floor SHALL return to `STEER_PWM_MIN_DUTY` until the wheel has moved at least `STEER_BOOST_MIN_PROGRESS` from the reversal position
+- **AND** the boost SHALL be reset to 0
+
+#### Scenario: Stalled wheel gets more duty on the first check
+- **WHEN** the closed loop is driving with `|error| × STEER_KP` below the floor in force and the boost at 0
+- **AND** a boost check finds less than `STEER_BOOST_MIN_PROGRESS` of progress
+- **THEN** the boost SHALL become `STEER_BOOST_STEP` (30)
+- **AND** the duty SHALL be the floor plus 30 (115 at a floor of 85), not the floor
+
+#### Scenario: Boost decays gently
+- **WHEN** the boost is 30, `|error|` is within `STEER_BOOST_HOLD_ERR` (2.0°) and the following boost checks each find at least `STEER_BOOST_MIN_PROGRESS` of progress
+- **THEN** each check SHALL lower the boost by `STEER_BOOST_DECAY`, never below 0 (30 → 0 after one check at the quad's 30; 30 → 20 → 10 → 0 at a decay of 10)
+- **AND** it SHALL stay at 0 on further moving checks
+- **AND** a check that finds the wheel stalled again SHALL add `STEER_BOOST_STEP` to the current boost
+
+#### Scenario: Boost is held while far from the target
+- **WHEN** the closed loop is driving with a non-zero boost and `|error|` greater than `STEER_BOOST_HOLD_ERR` (2.0°)
+- **AND** a boost check finds at least `STEER_BOOST_MIN_PROGRESS` of progress
+- **THEN** the boost SHALL stay unchanged (no decay)
+- **AND** once `|error|` is within `STEER_BOOST_HOLD_ERR` the boost SHALL fall by `STEER_BOOST_DECAY` per moving check
+- **AND** a check that finds the wheel stalled SHALL add `STEER_BOOST_STEP` both outside and inside the hold band
+
+#### Scenario: Far from the target the P term rules
+- **WHEN** the closed loop is driving and `|error| × STEER_KP` exceeds the floor in force
+- **THEN** the duty SHALL be `|error| × STEER_KP + dutyBoost_`, clamped to `STEER_PWM_MAX_DUTY`
+
+#### Scenario: Stall at the tracking floor
+- **WHEN** the closed loop is driving at the tracking floor and the wheel stops making progress
+- **THEN** the anti-stall boost SHALL raise the duty above the floor by `STEER_BOOST_STEP` per `STEER_BOOST_CHECK_MS`
+- **AND** if the position still changes by less than `STEER_STALL_THRESHOLD` over `STEER_STALL_TIMEOUT`, a stall-stop SHALL occur
+
+### Requirement: Steering Diagnostics Ownership Lock
+The steering controller SHALL provide a diagnostics lock for the USB steering diagnostics console. While the lock is set, `setSteeringPercent()` (MAVLink, web slider, failsafe centre, boot centring), `setRateCommand()`, `jog()`, `nudge()`, the limit captures and the sensor zero-set SHALL be refused, and only the diagnostics console SHALL drive the motor: open loop through `diagDrive()` (no duty floor, no stall latch, no refresh timeout) or one closed-loop move through `diagGoto()`, which SHALL use the same target clamping, gates and position law as `setSteeringPercent()`. Stop paths and the sensor / VESC monitors SHALL NOT be gated. Setting or clearing the lock SHALL stop the motor (coast) and cancel any move, jog or pending boot centring.
+
+#### Scenario: External steering refused while locked
+- **WHEN** the diagnostics lock is set
+- **AND** a MAVLink steering command, a web steering / jog / nudge / capture / zero command or the failsafe centre arrives
+- **THEN** the controller SHALL NOT move the motor for it
+- **AND** a web command SHALL be answered with a failure naming the USB diagnostics console
+
+#### Scenario: Lock changes stop the motor
+- **WHEN** the lock is set or cleared
+- **THEN** the motor SHALL be coasted and the closed loop and any jog SHALL be idle
+
+#### Scenario: Monitors still stop the motor
+- **WHEN** the lock is set and the VESC link drops or reports a fault
+- **THEN** the controller SHALL stop the motor as without the lock
+
+#### Scenario: Normal behaviour without the lock
+- **WHEN** the lock is not set
+- **THEN** every steering command path SHALL behave as before this change
+
+### Requirement: VESC Telemetry Poll Period
+The VESC steering driver SHALL poll COMM_GET_VALUES every `STEER_VESC_TELEM_MS` (300 ms) and SHALL allow the period to be changed at run time; the USB diagnostics console SHALL set it to `STEER_DIAG_VESC_TELEM_MS` (50 ms) while it owns the steering and restore it afterwards. The driver SHALL report the last commanded effort.
+
+#### Scenario: Fast telemetry in diagnostics
+- **WHEN** `diag on` is accepted
+- **THEN** GET_VALUES SHALL be requested every 50 ms until `diag off`, then every 300 ms again
+
+### Requirement: Steering Park Correction
+While the closed-loop steering is PARKED in position mode, the steering controller SHALL finish a parking that ended outside the park window with a bounded series of short open-loop pulses toward the current target. The correction SHALL be the only motor command a parked loop sends, and SHALL be limited to the configured maximum number of pulses per parking. It SHALL start only when the correction is enabled, the USB diagnostics lock is not set, the loop has been parked and the target has stayed within `STEER_PARK_TARGET_STABLE` (3 = 0.3°) of its reference for at least `STEER_PARK_SETTLE_MS` (1000 ms), and the absolute error exceeds the larger of `STEER_POSITION_TOLERANCE` (0.4°) and the done tolerance. Positions and tolerances SHALL be in 0.1° units. The decision logic SHALL be a pure, host-tested law (`include/SteerParkLaw.h`). With the correction disabled the steering SHALL behave exactly as without this requirement.
+
+#### Scenario: Correction starts after the settle time
+- **WHEN** the loop is PARKED with the target unchanged (within 0.3°) and parked for at least 1000 ms
+- **AND** the absolute error exceeds the larger of 0.4° and the done tolerance
+- **THEN** the controller SHALL send one pulse at rung 1 (duty × ms) toward the target with `IMotorDriver::setSpeed()`, without the `STEER_PWM_MIN_DUTY` floor, and SHALL coast with `IMotorDriver::stop()` after the rung's length
+- **AND** it SHALL work relative to the current target, whatever its value, including the exact 0° that a centred RC stick produces
+
+#### Scenario: No correction before settling or inside the window
+- **WHEN** the target moved by more than 0.3° or the loop entered PARKED less than 1000 ms ago, or the absolute error is within the trigger
+- **THEN** no pulse SHALL be sent
+
+#### Scenario: Pulse evaluation and ladder
+- **WHEN** a pulse has ended and `STEER_PARK_PULSE_GAP_MS` (500 ms) has passed since its end
+- **THEN** the controller SHALL compare the position with the position before the pulse and, in this order:
+- **AND** if the absolute error is at most the done tolerance, it SHALL finish (done)
+- **AND** else if the error changed sign (overshoot beyond the done tolerance), it SHALL log the overshoot and send the next pulse at rung 1 in the new direction of the error
+- **AND** else if the wheel moved away from the target by at least `STEER_PARK_MOVE_MIN` (0.1°), it SHALL log it and send the next pulse at rung 1 toward the target
+- **AND** else if the wheel moved toward the target by at least 0.1°, the next pulse SHALL use the same rung
+- **AND** otherwise the next pulse SHALL use the next rung, staying at rung 3 once there
+- **AND** every pulse, including one after an overshoot, SHALL count toward the maximum
+- **AND** once started, the correction SHALL continue until the done tolerance, not the 0.4° trigger
+
+#### Scenario: Give up after the maximum pulses
+- **WHEN** the maximum number of pulses has been sent and the evaluation after the last one is not done
+- **THEN** the controller SHALL stop correcting and log `park correction gave up at X°`
+- **AND** it SHALL NOT pulse again until the settle clock is reset by a target move beyond 0.3° or a new entry into PARKED (a main-loop restart beyond `STEER_RESTART_TOLERANCE` or a command from idle)
+
+#### Scenario: Budget per parking
+- **WHEN** a correction finished done and the error later exceeds the trigger again without a target move or a new park entry
+- **THEN** the controller SHALL resume from rung 1 with only the remaining pulses of the same budget
+
+#### Scenario: Cancel at once
+- **WHEN** a correction is armed or running
+- **AND** the target moves by more than 0.3°, or the loop leaves PARKED for any reason (main-loop restart beyond `STEER_RESTART_TOLERANCE`, `stop()`, sensor fault, VESC fault or link loss, stall-stop), or a jog, nudge, rate drive, limit capture or sensor zero-set starts, or the USB diagnostics lock is set, or the correction is disabled or a park setting is changed
+- **THEN** a running pulse SHALL be ended with a coast at once and the correction state SHALL reset
+- **AND** the normal position loop SHALL keep priority: an error beyond `STEER_RESTART_TOLERANCE` restarts the drive as a start from rest
+
+#### Scenario: Stall latch respected
+- **WHEN** a pulse would push in a direction blocked by the stall latch within `STEER_STALL_COOLDOWN_MS`
+- **THEN** the pulse SHALL NOT be sent and SHALL NOT count, and the correction SHALL wait for the cooldown
+
+#### Scenario: Debug log lines
+- **WHEN** a pulse is evaluated, an overshoot or wrong-way move is seen, or the correction finishes or gives up
+- **THEN** the SERVO debug feature SHALL print lines of the form `[STEER] park nudge 85x90 -> moved 0.15 deg (err 0.35)`, `[STEER] park overshoot -> rung 1, reversing (err -0.30)`, `[STEER] park nudge moved the wrong way -> rung 1 (err 0.70)`, `[STEER] park correction done at 0.10 deg (3 pulses)` and `[STEER] park correction gave up at 0.60 deg (5 pulses)`
+
+#### Scenario: Closed-loop state unchanged
+- **WHEN** a correction runs
+- **THEN** the closed-loop state SHALL stay PARKED (token `park`), and no jog SHALL be active
+
+### Requirement: Steering Park Correction Settings
+The park correction SHALL be configured per vehicle by persisted settings in the existing NVS namespace `"steering"`, owned by the steering controller: enabled (`park_en`, default true), three ladder rungs of duty (`park_d1`..`park_d3`, 40–150, defaults 70 / 85 / 100) and length (`park_t1`..`park_t3`, 40–200 ms, defaults 80 / 90 / 100), the done tolerance (`park_tol`, 1–5 in 0.1°, default 2 = 0.2°) and the maximum pulses per parking (`park_max`, 1–10, default 5). The ladder SHALL be non-decreasing in both duty and length. The settle time (1000 ms), the target-stable band (0.3°), the pulse gap (500 ms) and the move threshold (0.1°) SHALL be compile-time constants only. The namespace SHALL never be cleared; the calibration migration and the sensor zero-set SHALL NOT remove the park keys.
+
+#### Scenario: Defaults on a unit without the keys
+- **WHEN** the firmware boots and a park key is absent
+- **THEN** that setting SHALL use its default, and NVS SHALL NOT be written
+
+#### Scenario: Invalid stored value
+- **WHEN** a stored park value is out of range, or the stored ladder is not non-decreasing
+- **THEN** the value (for the ladder: the whole ladder) SHALL be logged and replaced by the default in RAM, and NVS SHALL NOT be rewritten
+
+#### Scenario: Change persisted first
+- **WHEN** a valid setting change is requested
+- **THEN** it SHALL be written to NVS first and applied only after the write succeeds, and any running correction SHALL be cancelled
+- **AND** on a write failure the RAM value SHALL stay unchanged
+
+#### Scenario: Decreasing rung refused
+- **WHEN** a rung change would make its duty or length lower than the previous rung's or higher than the next rung's
+- **THEN** it SHALL be refused and nothing SHALL be stored
 
