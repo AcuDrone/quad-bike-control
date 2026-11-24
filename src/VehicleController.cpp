@@ -314,6 +314,29 @@ bool VehicleController::initCAN() {
     Debug::printfFeature(DebugFeature::VEHICLE, "[VEHICLE] Pre-crank delay: %u ms, starter time limit: %u ms\n",
                          (unsigned)crankDwellMs_, (unsigned)crankMaxMs_);
 
+    // Headlight washer, NVS "washer" (VehicleController owns it; RelayController gets it RAM-only).
+    // fitted: missing = false (off after the update). pulse_ms: missing = the default; an
+    // out-of-range stored value is logged and ignored (default used, never rewritten).
+    {
+        bool washerFitted = false;
+        uint32_t washerPulse = WASHER_PULSE_MS_DEFAULT;
+        if (prefs.begin(WASHER_NVS_NAMESPACE, true)) {
+            washerFitted = prefs.getBool(WASHER_FITTED_NVS_KEY, false);
+            washerPulse = prefs.getUShort(WASHER_PULSE_NVS_KEY, WASHER_PULSE_MS_DEFAULT);
+            prefs.end();
+        }
+        if (!washerPulseMsValid(washerPulse)) {
+            Debug::printfFeature(DebugFeature::VEHICLE,
+                "[VEHICLE] Stored washer pulse %lu ms out of range (%d-%d ms) — ignored\n",
+                (unsigned long)washerPulse, WASHER_PULSE_MS_MIN, WASHER_PULSE_MS_MAX);
+        }
+        relayController_.setWasherPulseMs(washerPulseMsOrDefault(washerPulse));
+        relayController_.setWasherFitted(washerFitted);
+        Debug::printfFeature(DebugFeature::VEHICLE, "[VEHICLE] Headlight washer: %s, pulse %u ms\n",
+                             washerFitted ? "fitted" : "not fitted",
+                             (unsigned)relayController_.getWasherPulseMs());
+    }
+
     bool result = canController_.begin();
     canController_.setRPMPollInterval(CAN_POLL_INTERVAL_RPM);
     // The Bosch LWS steering-angle sensor shares this bus: every 0x305 frame goes to the
@@ -570,6 +593,17 @@ void VehicleController::processWebCommand(const WebPortal::WebCommand& cmd, WebP
     } else if (cmd.cmd == "set_wheel_lock") {
         // Front-wheel lock: not restricted by input source; rejected on aztec (not fitted)
         processWheelLockCommand(cmd.boolValue, webPortal);
+        return;
+    } else if (cmd.cmd == "wash_headlights") {
+        // Headlight washer pulse: not restricted by input source (like set_light / set_wheel_lock);
+        // RelayController accepts it only with the washer fitted and the ignition on
+        processWashCommand(webPortal);
+        return;
+    } else if (cmd.cmd == "set_washer_fitted") {
+        processSetWasherFittedCommand(cmd.boolValue, webPortal);
+        return;
+    } else if (cmd.cmd == "set_washer_pulse_ms") {
+        processSetWasherPulseCommand(cmd.floatValue, webPortal);
         return;
     } else if (cmd.cmd == "set_relay_test") {
         // Relay wiring test: not restricted by input source; RelayController only
@@ -945,11 +979,13 @@ void VehicleController::ignitionOffAndPersist() {
 }
 
 uint16_t VehicleController::getVehicleCapsMask() const {
-    // Fixed at boot. Both transmissions know R/N/H/L; ignition and headlight are relay functions
-    // on every build; the lock only where RELAY_WHEEL_LOCK_FITTED. No handbrake on this build
-    // (master: X6 is the steering VESC) — bit5 is never set. Relay availability is runtime and
-    // recoverable: it gives FAILED, it does not clear bits.
-    return vehicleCapsMask(true, true, true, true, isWheelLockFitted(), false);
+    // Bits 0-5 fixed at boot. Both transmissions know R/N/H/L; ignition and headlight are relay
+    // functions on every build; the lock only where RELAY_WHEEL_LOCK_FITTED. No handbrake on this
+    // build (master: X6 is the steering VESC) — bit5 is never set. Bit6 (headlight washer) is NOT
+    // fixed at boot: it follows the persisted washer fitted switch (0x1F not fitted, the default /
+    // 0x5F fitted). Relay availability is runtime and recoverable: it gives FAILED, it does not
+    // clear bits.
+    return vehicleCapsMask(true, true, true, true, isWheelLockFitted(), false, isWasherFitted());
 }
 
 VehicleCmdOutcome VehicleController::executeVehicleCommand(VehicleCmdFunction fn, int32_t value) {
@@ -1026,6 +1062,32 @@ VehicleCmdOutcome VehicleController::executeVehicleCommand(VehicleCmdFunction fn
             Debug::printfFeature(DebugFeature::VEHICLE, "[GCS] Lock %s: result %u reason %u\n",
                                  value == 1 ? "ON" : "OFF", (unsigned)o.result, (unsigned)o.reason);
             break;
+        case VehicleCmdFunction::WASHER: {
+            // Ignition on = ACC or IGNITION with no crank armed / running (the RelayController
+            // interlock refuses the same states; this only picks reason 5 for the ACK).
+            const RelayController::IgnitionState ign = relayController_.getIgnitionState();
+            const bool ignitionOk = (ign == RelayController::IgnitionState::ACC ||
+                                     ign == RelayController::IgnitionState::IGNITION) &&
+                                    !relayController_.isCrankPending();
+            o = vcmdWasherDecide(value, underMavlink, relaysOk, ignitionOk);
+            if (o.result == VehicleCmdResult::ACCEPTED) {
+                if (value == 1) {
+                    const char* reason = nullptr;
+                    bool restarted = false;
+                    if (relayController_.requestWasher(reason, restarted)) {
+                        EventJournal::log(JSrc::RELAY, JLvl::I, "washer_on", "src=gcs ms=%u restart=%u",
+                                          (unsigned)relayController_.getWasherPulseMs(), restarted ? 1u : 0u);
+                    } else {
+                        o = vcmdFailed();   // defensive: refused for a reason not checked above
+                    }
+                } else {
+                    relayController_.stopWasher("gcs_stop");
+                }
+            }
+            Debug::printfFeature(DebugFeature::VEHICLE, "[GCS] Washer %s: result %u reason %u\n",
+                                 value == 1 ? "WASH" : "STOP", (unsigned)o.result, (unsigned)o.reason);
+            break;
+        }
         case VehicleCmdFunction::HANDBRAKE:   // no parking brake on this build (bit5 never set)
         case VehicleCmdFunction::QUERY:       // answered by the transport
         default:
@@ -1840,6 +1902,75 @@ void VehicleController::processSetCrankMaxCommand(float value, WebPortal& webPor
         return;
     }
     webPortal.sendResponse(true, "Starter time limit set to " + String(ms) + " ms");
+}
+
+bool VehicleController::setWasherFitted(bool fitted) {
+    // Persist first: RAM only changes once NVS holds the new value.
+    Preferences prefs;
+    bool ok = false;
+    if (prefs.begin(WASHER_NVS_NAMESPACE, false)) {
+        ok = prefs.putBool(WASHER_FITTED_NVS_KEY, fitted) == sizeof(uint8_t);
+        prefs.end();
+    }
+    if (!ok) return false;
+    relayController_.setWasherFitted(fitted);   // off ends a running pulse (washer_abort why=not_fitted)
+    Debug::printfFeature(DebugFeature::VEHICLE, "[VEHICLE] Headlight washer fitted: %s (caps 0x%02X)\n",
+                         fitted ? "ON" : "OFF", (unsigned)getVehicleCapsMask());
+    return true;
+}
+
+bool VehicleController::setWasherPulseMs(uint16_t ms) {
+    if (!washerPulseMsValid(ms)) return false;
+    // Persist first: RAM only changes once NVS holds the new value.
+    Preferences prefs;
+    bool ok = false;
+    if (prefs.begin(WASHER_NVS_NAMESPACE, false)) {
+        ok = prefs.putUShort(WASHER_PULSE_NVS_KEY, ms) == sizeof(uint16_t);
+        prefs.end();
+    }
+    if (!ok) return false;
+    relayController_.setWasherPulseMs(ms);   // latched at the start of a pulse → the next wash
+    Debug::printfFeature(DebugFeature::VEHICLE,
+                         "[VEHICLE] Washer pulse set to %u ms (from the next wash)\n", (unsigned)ms);
+    return true;
+}
+
+void VehicleController::processWashCommand(WebPortal& webPortal) {
+    const char* reason = nullptr;
+    bool restarted = false;
+    if (!relayController_.requestWasher(reason, restarted)) {
+        webPortal.sendResponse(false, String("Headlight washer refused - ") + (reason ? reason : "rejected"));
+        return;
+    }
+    const uint16_t ms = relayController_.getWasherPulseMs();
+    EventJournal::log(JSrc::RELAY, JLvl::I, "washer_on", "src=web ms=%u restart=%u",
+                      (unsigned)ms, restarted ? 1u : 0u);
+    webPortal.sendResponse(true, String("Headlight washer ") + (restarted ? "restarted" : "ON") +
+                                 " for " + String(ms / 1000.0f, 1) + " s");
+}
+
+void VehicleController::processSetWasherFittedCommand(bool fitted, WebPortal& webPortal) {
+    if (!setWasherFitted(fitted)) {
+        webPortal.sendResponse(false, "Failed to save the washer fitted setting");
+        return;
+    }
+    webPortal.sendResponse(true, String("Headlight washer fitted: ") + (fitted ? "ON" : "OFF"));
+}
+
+void VehicleController::processSetWasherPulseCommand(float value, WebPortal& webPortal) {
+    if (!isnan(value)) value = roundf(value);   // whole ms
+    if (isnan(value) || value < (float)WASHER_PULSE_MS_MIN || value > (float)WASHER_PULSE_MS_MAX) {
+        webPortal.sendResponse(false, "Washer pulse out of range (" +
+                                      String(WASHER_PULSE_MS_MIN) + "-" +
+                                      String(WASHER_PULSE_MS_MAX) + " ms)");
+        return;
+    }
+    const uint16_t ms = (uint16_t)value;
+    if (!setWasherPulseMs(ms)) {
+        webPortal.sendResponse(false, "Failed to save the washer pulse");
+        return;
+    }
+    webPortal.sendResponse(true, "Washer pulse set to " + String(ms) + " ms");
 }
 
 void VehicleController::processSetSteerScaBaseCommand(float value, WebPortal& webPortal) {

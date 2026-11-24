@@ -217,6 +217,35 @@ public:
      */
     bool setCrankMaxMs(uint16_t ms);
 
+    // ---- Headlight washer (Relay_8, change add-headlight-washer-relay) ----
+
+    /** @brief Washer fitted switch (NVS "washer"/fitted, missing = false) */
+    bool isWasherFitted() const { return relayController_.isWasherFitted(); }
+
+    /**
+     * @brief Set the washer fitted switch: persisted to NVS "washer" FIRST, then applied at once
+     * (RelayController::setWasherFitted(); off ends a running pulse). The capability bit6 follows
+     * through getVehicleCapsMask() (main.cpp hands it to MavlinkInterface every loop).
+     * @return false (switch unchanged) on a failed NVS write
+     */
+    bool setWasherFitted(bool fitted);
+
+    /** @brief Washer pulse length for the next wash, ms (NVS "washer"/pulse_ms, default 3000) */
+    uint16_t getWasherPulseMs() const { return relayController_.getWasherPulseMs(); }
+
+    /**
+     * @brief Set the washer pulse length. Validated (WasherLaw.h, 2000–20000 ms), persisted to
+     * NVS "washer" FIRST, then handed to RelayController::setWasherPulseMs(); applies from the
+     * next wash. false (value in use unchanged) on an invalid value or a failed NVS write.
+     */
+    bool setWasherPulseMs(uint16_t ms);
+
+    /** @brief True while a washer pulse runs */
+    bool isWasherOn() const { return relayController_.isWasherOn(); }
+
+    /** @brief Remaining time of the running washer pulse, ms (0 when none) */
+    uint32_t getWasherRemainingMs() const { return relayController_.getWasherRemainingMs(); }
+
     /** @brief Latest averaged 24V rail voltage (V) */
     float getRail24V() const { return rail24V_; }
 
@@ -462,13 +491,13 @@ public:
     // ---- GCS vehicle commands (MAV_CMD_USER_2, change add-gcs-vehicle-commands) -------------
 
     /**
-     * @brief Execute one validated GCS function command (param1 1-5) and report the outcome.
+     * @brief Execute one validated GCS function command (param1 1-6) and report the outcome.
      * Called by MavlinkInterface inside its update(), i.e. before this loop's setInputSource();
      * "under MAVLink control" therefore also requires a valid command stream (design D4).
      */
     VehicleCmdOutcome executeVehicleCommand(VehicleCmdFunction fn, int32_t value) override;
 
-    /** @brief Capability bitmask (VCMD_CAP_*), fixed at boot. */
+    /** @brief Capability bitmask (VCMD_CAP_*): bits 0-5 fixed at boot, bit6 = washer fitted switch. */
     uint16_t getVehicleCapsMask() const;
 
     /** @brief IGN_STATE code of the applied relay state: 0 OFF, 1 ACC, 2 ON, 3 CRANKING. */
@@ -901,6 +930,23 @@ private:
      * start attempt. Accepted from any input source (a setting, not an ignition command).
      */
     void processSetCrankMaxCommand(float value, WebPortal& webPortal);
+
+    /**
+     * @brief Headlight washer pulse (`wash_headlights`, no value): RelayController wash request;
+     * replies "Headlight washer ON for N.N s" / "... restarted for N.N s" / "Headlight washer
+     * refused - <reason>", journal `RELAY washer_on src=web`. Not gated by the input source.
+     */
+    void processWashCommand(WebPortal& webPortal);
+
+    /** @brief Washer fitted switch (`set_washer_fitted` bool); any input source, persisted first. */
+    void processSetWasherFittedCommand(bool fitted, WebPortal& webPortal);
+
+    /**
+     * @brief Washer pulse length (`set_washer_pulse_ms` ms). Rounded to a whole ms, validated
+     * 2000–20000 (NaN refused), persisted to NVS "washer" first, then applied from the next wash.
+     * Accepted from any input source.
+     */
+    void processSetWasherPulseCommand(float value, WebPortal& webPortal);
 
     /**
      * @brief Speed-scale the AUTOPILOT steering command. ArduPilot's own formula,

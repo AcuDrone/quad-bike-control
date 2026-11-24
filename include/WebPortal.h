@@ -176,6 +176,10 @@ public:
         bool wheel_lock_on;       // True if front-wheel lock is engaged (always false when not fitted)
         bool wheel_lock_fitted;   // False on aztec: no relay behind the wheel-lock function
         uint8_t relay_test;       // Web relay test bits, bit0 = Relay_1 … bit7 = Relay_8
+        bool washer_fitted;       // Headlight washer fitted switch (NVS "washer"/fitted, default off)
+        bool washer_on;           // A headlight-washer pulse is running (Relay_8)
+        uint32_t washer_left_ms;  // Remaining pulse time, ms (0 when none runs)
+        uint16_t washer_pulse_ms; // Pulse length for the next wash (ms, 2000-20000; NVS "washer"/pulse_ms)
 
         // 24V boost rail (Control_v0)
         float rail_24v;           // Measured rail voltage (V, 200K/24K divider)

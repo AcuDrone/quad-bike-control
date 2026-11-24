@@ -301,8 +301,9 @@ void setup() {
         Debug::printlnFeature(DebugFeature::CAN, "WARNING: CAN controller failed (will continue without vehicle data)");
     }
 
-    // GCS vehicle commands (MAV_CMD_USER_2): the vehicle layer executes them. Capabilities and the
-    // hardware version are fixed at boot (the relay board is detected once, above).
+    // GCS vehicle commands (MAV_CMD_USER_2): the vehicle layer executes them. The hardware version
+    // and capability bits 0-5 are fixed at boot (the relay board is detected once, above); bit6
+    // follows the headlight-washer fitted switch at runtime (handed over in loop(), below).
     mavlinkInterface.setVehicleCommandSink(
         &vehicleController, vehicleController.getVehicleCapsMask(),
         hardwareVersionCode(BOARD_REVISION_CODE, VEHICLE_TYPE_CODE,
@@ -385,6 +386,10 @@ void loop() {
     steerDiag.update();
     loopTimer.mark(PH_DIAG);
 
+    // Capability bit6 (headlight washer) follows the persisted fitted switch: a toggle reaches the
+    // GCS link here (no-op while unchanged; QB_CAPS then goes out on the next report).
+    mavlinkInterface.setVehicleCapsMask(vehicleController.getVehicleCapsMask());
+
     // Report vehicle state back to the MAVLink network (rate-limited internally)
     CANController::VehicleData vd = vehicleController.getVehicleData();
     String gearToStr   = vehicleController.getTargetGearString();  // current step / assumed gear
@@ -402,7 +407,8 @@ void loop() {
     report.ignition     = getRelayIgnitionStateName(vehicleController.getIgnitionState());
     report.failsafe     = (vehicleController.getInputSource() == InputSource::FAILSAFE);
     report.digitalFlags = (vehicleController.getWheelLock()  ? EFI_DIGITAL_FLAG_WHEEL_LOCK  : 0)
-                        | (vehicleController.getFrontLight() ? EFI_DIGITAL_FLAG_FRONT_LIGHT : 0);
+                        | (vehicleController.getFrontLight() ? EFI_DIGITAL_FLAG_FRONT_LIGHT : 0)
+                        | (vehicleController.isWasherOn()    ? EFI_DIGITAL_FLAG_WASHER      : 0);
     report.speedValid   = vehicleController.isVehicleSpeedValid();
     report.speedMs      = vehicleController.getVehicleSpeedMs();
     report.intakeTemp   = vd.intakeTemp;

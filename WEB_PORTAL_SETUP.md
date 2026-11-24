@@ -133,6 +133,19 @@ it. Cards are shown in one column.
   starter turns in one start attempt from the RC switch, the GCS or the START button (it stops
   earlier once the engine RPM shows it running); `set_crank_max_ms`, saved to NVS, applies from
   the next attempt; telemetry `crank_max_ms`. No caution line; the ⓘ explains the risk.
+- **Headlight washer** ("💦 Омивач фар" / "💦 Headlight washer", since 1.6.3, right after Engine
+  start; Relay_8 on both vehicles): at the top the switch "Омивач встановлено" / "Washer fitted"
+  (`set_washer_fitted` true/false, any input source, saved to NVS `washer`/`fitted` first and applied
+  at once; replies "Headlight washer fitted: ON|OFF" / "Failed to save the washer fitted setting"; its
+  state is the telemetry `washer_fitted`, not the click). **It is OFF after the update** — turn it
+  on only on the vehicle with the pump; while it is off the Tests button is greyed, every wash is
+  refused and the ground station sees no washer (capability bit6 clear). Under it the slider
+  "Тривалість омивання" / "Wash duration" (2–20 s, step 0.5, value on the right, default 3 s; saved
+  on release, no Save button): `set_washer_pulse_ms` (whole ms, 2000–20000, NaN refused), saved to
+  NVS `washer`/`pulse_ms`, applies from the next wash; replies "Washer pulse set to N ms" / "Washer
+  pulse out of range (2000-20000 ms)" / "Failed to save the washer pulse"; telemetry
+  `washer_pulse_ms`. The slider stays editable while the washer is off, with the muted note
+  "Омивач вимкнено — тривалість не діє" / "Washer off — duration not in use". The ⓘ explains both.
 - **Gear position defaults**: one servo slider (0–100 %). Press **Start** to unlock it; dragging
   moves the transmission servo (at most 10 commands per second). **Save as R/N/H/L** stores the
   slider value for that gear (always available, it does not move the servo); the button of the
@@ -159,9 +172,23 @@ it. Cards are shown in one column.
 - **Ignition & lighting**: ignition OFF / ACC / START, front light, wheel lock (if fitted), 24 V
   boost rail, and their telemetry. Since 1.5.34 the wheel lock is set only here or from the ground
   station, not from the RC transmitter; it stays as set until changed here or from the GCS and is
-  released after a reboot.
+  released after a reboot. Under the wheel lock, since 1.6.3, the button "💦 Омити фари" / "💦 Wash
+  headlights" (`wash_headlights`, no value, any input source): one pulse of the washer pump on
+  Relay_8 for the duration set in Calibration → Headlight washer; while it runs the button is
+  highlighted and counts down (`washer_on`, `washer_left_ms`); a new press restarts it. No stop
+  button: the pulse ends by itself, and ignition OFF or a start stops it at once. The reply is shown
+  under the button: "Headlight washer ON for N.N s" / "Headlight washer restarted for N.N s", or in
+  the error colour "Headlight washer refused - ignition is OFF" / "- engine start in progress" / "-
+  relay board unavailable" / "- washer not fitted - enable it in Calibration". With the ignition OFF
+  a muted hint "Works only with the ignition on" is shown and the button stays clickable; while the
+  washer is not fitted (`washer_fitted` false or absent) the button is disabled and greyed with the
+  hint "Омивач не ввімкнено — Калібрування → «Омивач фар»" / "Washer not enabled — Calibration →
+  Headlight washer". Telemetry keys: `washer_fitted`, `washer_on`, `washer_left_ms`,
+  `washer_pulse_ms`.
 - **Relay test**: eight buttons "Relay 1…8" with the relay function (quad bike labels when the
-  wheel lock is fitted, aztec labels otherwise); an energised relay is highlighted. Switching a
+  wheel lock is fitted, aztec labels otherwise; since 1.6.3 Relay 8 is "омивач фар" / "headlight
+  washer" on both, Relay 7 stays "spare" — testable whatever the washer switch says); an energised
+  relay is highlighted. Switching a
   relay on needs ignition OFF, light off, the wheel lock released (if fitted) and a healthy relay
   board. The subtitle shows the active relay board ("Board: XL9535 @0x20 (auto)"); relay numbers
   mean the same relays on either board.

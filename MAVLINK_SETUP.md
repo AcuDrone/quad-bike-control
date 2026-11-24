@@ -323,9 +323,12 @@ which switches on the first character of the gear name):
 |-----|------|---------|
 | 0 | `0x01` | `EFI_DIGITAL_FLAG_WHEEL_LOCK` — front-wheel lock engaged (fitted on the quad (master); not fitted on aztec: always 0) |
 | 1 | `0x02` | `EFI_DIGITAL_FLAG_FRONT_LIGHT` — front light on |
-| 2–7 | — | unassigned, always 0 |
+| 2–3 | — | the buggy's parking brake (`aztec` only); always 0 on the quad, never reused |
+| 4 | `0x10` | `EFI_DIGITAL_FLAG_WASHER` — headlight washer pulse running (both vehicles, since 1.6.3); 0 after the normal end, after every abort and while the washer is not fitted |
+| 5–7 | — | unassigned, always 0 |
 
-A `float` holding a small integer, so `0`, `1`, `2`, `3` are the only values on the wire today.
+A `float` holding a small integer: on the quad `0`–`3` and, during a washer pulse, `16`–`19`.
+Clients decode the word bit by bit, so a client that does not know bit4 ignores it.
 
 #### Odometer and trip distance
 
@@ -761,7 +764,7 @@ and the ESP32 can never answer for the Pixhawk. The ACK goes back to the **reque
 |---------|----------|--------|
 | `MAV_CMD_USER_1` (31010), `param1` within `MAVLINK_CMD_PARAM_EPSILON` (0.01) of `MAVLINK_CMD_TRIP_RESET_MAGIC` (1.0) | `MAV_RESULT_ACCEPTED` (0) | **TRIP km *and* TRIP engine hours** both zeroed and persisted by the vehicle layer on its next iteration (< 40 ms at ≥ 25 Hz); **ODO and total engine hours unchanged**. On the wire: `fuel_pressure` **and** `injection_time` both fall to zero in the next `EFI_STATUS`, while `barometric_pressure` and `spark_dwell_time` are unchanged |
 | `MAV_CMD_USER_1`, any other `param1` — **`NaN` included**, since `fabsf(NaN - 1.0) <= eps` is false | `MAV_RESULT_DENIED` (2) | nothing changes; `param1` and the requester are logged |
-| `MAV_CMD_USER_2` (31011) | see "Vehicle commands (`MAV_CMD_USER_2`)" below | gear / ignition / headlight / diff lock / handbrake / queries |
+| `MAV_CMD_USER_2` (31011) | see "Vehicle commands (`MAV_CMD_USER_2`)" below | gear / ignition / headlight / diff lock / handbrake / headlight washer / queries |
 | Any other command | `MAV_RESULT_UNSUPPORTED` (3) | nothing changes; the command id and the requester are logged |
 
 The transport only **latches** the request (`tripResetPending_`); the vehicle layer consumes it via
@@ -773,8 +776,8 @@ cannot be reset by any means.**
 ## Vehicle commands (`MAV_CMD_USER_2`)
 
 Since firmware 1.5.30 (change `add-gcs-vehicle-commands`) the ground station (Mission Planner
-plugin, QGC fork, steering-wheel buttons) commands gear, ignition, headlight, diff lock and — on the
-buggy — the handbrake directly on the ESP32. ARM/DISARM goes to the autopilot (comp 1), not here.
+plugin, QGC fork, steering-wheel buttons) commands gear, ignition, headlight, diff lock, — on the
+buggy — the handbrake and, since 1.6.3, the headlight washer directly on the ESP32. ARM/DISARM goes to the autopilot (comp 1), not here.
 The ESP32 is the arbiter of every interlock and answers each command with one `COMMAND_ACK`.
 
 `COMMAND_LONG` `MAV_CMD_USER_2` (31011), addressed **exactly** to 1/25 (strict addressing as above;
@@ -790,16 +793,17 @@ integer; `NaN` never matches.
 | 3 | Headlight | OFF 0, ON 1 | bit3 |
 | 4 | Diff lock | OFF 0, ON 1 | bit4 |
 | 5 | Handbrake | OFF 0 (release), ON 1 (apply) — **buggy (`aztec`) only** | bit5 |
+| 6 | Headlight washer (since 1.6.3, both vehicles) | 0 stop, 1 wash — a timed pulse of the length set in the web (2–20 s, default 3 s); a wash while running restarts it | bit6 — **only while the washer fitted switch is on** (web, default off) |
 
 ### Results
 
 | `result` | When | `result_param2` |
 |---|---|---|
 | `ACCEPTED` (0) | accepted for execution, also when already in the requested state | 0 (query: the answer) |
-| `TEMPORARILY_REJECTED` (1) | an interlock refused it | reason: **1** engine not running, **2** speed > 1.4 m/s, **3** fail-safe / not under MAVLink control, **4** speed > 3 km/h (handbrake apply) |
+| `TEMPORARILY_REJECTED` (1) | an interlock refused it | reason: **1** engine not running, **2** speed > 1.4 m/s, **3** fail-safe / not under MAVLink control, **4** speed > 3 km/h (handbrake apply), **5** ignition not on or engine start in progress (headlight washer) |
 | `DENIED` (2) | `param2` not an integer, `NaN`, or not in the table (query: not 0/1/2) | 0 |
-| `UNSUPPORTED` (3) | unknown `param1` (not 0…5, non-integer, `NaN`), or a function / gear H whose capability bit is clear | 0 |
-| `FAILED` (4) | the vehicle could not execute it: relay board unavailable (ignition / headlight / diff lock); handbrake driver or NVS failure | 0 |
+| `UNSUPPORTED` (3) | unknown `param1` (not 0…6, non-integer, `NaN`), or a function / gear H whose capability bit is clear (e.g. `param1` 6 while the washer is not fitted) | 0 |
+| `FAILED` (4) | the vehicle could not execute it: relay board unavailable (ignition / headlight / diff lock / headlight washer); handbrake driver or NVS failure | 0 |
 
 ### Interlocks
 
@@ -821,6 +825,14 @@ web control latched while RC is valid) or the `SERVO_OUTPUT_RAW` stream is stale
 - **Handbrake** (buggy): the existing parking-brake controller (`ParkBrakeSource::GCS`), no
   extra interlock, accepted in every source / ignition state / fail-safe; apply above 3 km/h →
   reason 4; `pt_compensation` bits 2 / 3 report it.
+- **Headlight washer** (Relay_8, both vehicles, since 1.6.3): while the washer fitted switch
+  (web, Calibration → Headlight washer, default off) is off, bit6 is clear and `param1` 6 is
+  `UNSUPPORTED` (stop and wash). Wash (`param2` 1): reason 3 when not under MAVLink control;
+  `FAILED` with the relay board unavailable; reason 5 with the ignition OFF, during the pre-crank
+  delay or while cranking; otherwise the same pulse as the web button (`ACCEPTED`, also when a
+  pulse was running — it restarts). Stop (`param2` 0): accepted in every source (safe direction),
+  also when no pulse runs. Ignition OFF, a crank, the fail-safe all-off, a relay fault and the
+  fitted switch turned off end a pulse; `pt_compensation` bit4 reports it.
 
 ### RC and GCS: last change wins
 
@@ -839,7 +851,7 @@ the engine stopped stays pending until the engine runs; a later accepted GCS gea
 
 | `param2` | `result_param2` | `progress` |
 |---|---|---|
-| 0 | capability bitmask (bits as in the table; bits 6–15 = 0). Quad bike `0x1F` (bit5 never); buggy `0x3F`, or `0x1F` when the X6 parking-brake driver did not initialise at boot | 1 (protocol version) |
+| 0 | capability bitmask (bits as in the table; bits 7–15 = 0). Quad bike `0x1F` (bit5 never); buggy `0x3F`, or `0x1F` when the X6 parking-brake driver did not initialise at boot. Bit6 (headlight washer) is set only while the washer fitted switch is on (default off): quad `0x5F`, buggy `0x7F` (`0x5F` without X6). Bits 0–5 are fixed at boot; bit6 follows the switch at runtime and the query always answers the current mask | 1 (protocol version) |
 | 1 | firmware version `major*10000 + minor*100 + patch` (1.5.30 → 10530) | 0 |
 | 2 | hardware version: bits 0–7 board revision (0 = `Control_v0`), bits 8–15 vehicle type (1 quad, 2 buggy), bits 16–23 relay board **detected at boot** (0 none, 1 PCA9557, 2 XL9535) | 0 |
 
@@ -847,7 +859,7 @@ the engine stopped stays pending until the engine runs; a later accepted GCS gea
 
 | Name | Rate | Value |
 |---|---|---|
-| `QB_CAPS` | every 10 s, first on the first report | capability bitmask (bits 0–15) \| protocol version << 24 — quad 16777247, buggy 16777279 |
+| `QB_CAPS` | every 10 s, first on the first report; after a washer-switch toggle on the next report, then every 10 s from there | capability bitmask (bits 0–15) \| protocol version << 24 — quad 16777247 (washer fitted: 16777311), buggy 16777279 (washer fitted: 16777343) |
 | `IGN_STATE` | 1 Hz and immediately on change | applied relay state: 0 OFF, 1 ACC, 2 ON, 3 CRANKING (pre-crank dwell + starter; the dwell is the pre-crank delay set in the web, 1–8 s, default 3 s since 1.5.33; the starter phase lasts at most the max starter time set in the web, 2–10 s, default 5 s since 1.5.36) |
 
 A firmware without this feature answers `MAV_CMD_USER_2` with `UNSUPPORTED` and sends no `QB_CAPS`;
@@ -858,6 +870,8 @@ clients then show nothing new.
 A new function takes the next `param1` and the next capability bit (plus the next
 `pt_compensation` bit if it is on/off); a new query takes the next `param2` under `param1` 0. The
 protocol version changes only on a breaking change; unknown functions keep answering `UNSUPPORTED`.
+The headlight washer (1.6.3) took `param1` 6, capability bit6 and `pt_compensation` bit4 (a timed
+pulse, reported as "running"); the next function takes `param1` 7 and bit7.
 
 ## Requests toward the autopilot
 

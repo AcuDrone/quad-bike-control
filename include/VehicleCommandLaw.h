@@ -24,6 +24,7 @@ static const uint16_t VCMD_LAW_CAP_IGNITION  = 0x04;
 static const uint16_t VCMD_LAW_CAP_LIGHT     = 0x08;
 static const uint16_t VCMD_LAW_CAP_LOCK      = 0x10;
 static const uint16_t VCMD_LAW_CAP_HANDBRAKE = 0x20;
+static const uint16_t VCMD_LAW_CAP_WASHER    = 0x40;   // runtime: the washer fitted switch
 
 // TEMPORARILY_REJECTED reasons (result_param2)
 static const uint8_t VCMD_REASON_NONE         = 0;
@@ -31,10 +32,11 @@ static const uint8_t VCMD_REASON_ENGINE_OFF   = 1;   // engine not running
 static const uint8_t VCMD_REASON_SPEED        = 2;   // speed > 1.4 m/s (transmission interlock)
 static const uint8_t VCMD_REASON_FAILSAFE     = 3;   // fail-safe / not under MAVLink control
 static const uint8_t VCMD_REASON_PBRAKE_SPEED = 4;   // speed > 3 km/h (handbrake apply)
+static const uint8_t VCMD_REASON_IGNITION_OFF = 5;   // ignition not on / engine start in progress (washer)
 
 // param1
 enum class VehicleCmdFunction : uint8_t {
-  QUERY = 0, GEAR = 1, IGNITION = 2, LIGHT = 3, LOCK = 4, HANDBRAKE = 5
+  QUERY = 0, GEAR = 1, IGNITION = 2, LIGHT = 3, LOCK = 4, HANDBRAKE = 5, WASHER = 6
 };
 
 // Numeric values equal MAV_RESULT_* (static_assert'ed in MavlinkInterface.cpp).
@@ -80,7 +82,7 @@ inline bool vcmdNearInt(float x, int32_t& out) {
 inline VehicleCmdDecoded vehicleCmdDecode(float param1, float param2, uint16_t capsMask) {
   VehicleCmdDecoded d{VehicleCmdDecodeKind::UNSUPPORTED, VehicleCmdFunction::QUERY, 0};
   int32_t fn = 0;
-  if (!vcmdNearInt(param1, fn) || fn < 0 || fn > 5) return d;
+  if (!vcmdNearInt(param1, fn) || fn < 0 || fn > 6) return d;
   d.fn = (VehicleCmdFunction)fn;
 
   uint16_t needBit = 0;
@@ -91,6 +93,7 @@ inline VehicleCmdDecoded vehicleCmdDecode(float param1, float param2, uint16_t c
     case VehicleCmdFunction::LIGHT:     needBit = VCMD_LAW_CAP_LIGHT; break;
     case VehicleCmdFunction::LOCK:      needBit = VCMD_LAW_CAP_LOCK; break;
     case VehicleCmdFunction::HANDBRAKE: needBit = VCMD_LAW_CAP_HANDBRAKE; break;
+    case VehicleCmdFunction::WASHER:    needBit = VCMD_LAW_CAP_WASHER; break;
   }
   if (needBit != 0 && (capsMask & needBit) == 0) return d;   // UNSUPPORTED
 
@@ -161,6 +164,18 @@ inline VehicleCmdOutcome vcmdLightDecide(bool relaysOk) {
 inline VehicleCmdOutcome vcmdLockDecide(bool underMavlink, bool relaysOk) {
   if (!underMavlink) return vcmdRejected(VCMD_REASON_FAILSAFE);
   return relaysOk ? vcmdAccepted() : vcmdFailed();
+}
+
+// Headlight washer (param1 6): value 0 = stop, 1 = wash. Stop is the safe direction, accepted in
+// every source (FAILED only with the relay board down). Wash: not under MAVLink control → reason 3;
+// relays down → FAILED; ignition not on (OFF) or an engine start in progress (crank armed /
+// CRANKING) → reason 5; otherwise ACCEPTED (a running pulse restarts).
+inline VehicleCmdOutcome vcmdWasherDecide(int32_t value, bool underMavlink, bool relaysOk, bool ignitionOk) {
+  if (value == 0) return relaysOk ? vcmdAccepted() : vcmdFailed();
+  if (!underMavlink) return vcmdRejected(VCMD_REASON_FAILSAFE);
+  if (!relaysOk) return vcmdFailed();
+  if (!ignitionOk) return vcmdRejected(VCMD_REASON_IGNITION_OFF);
+  return vcmdAccepted();
 }
 
 // ---- RC channels: absent-aware decode and "last change wins" (design D6) --------------------
@@ -237,11 +252,13 @@ struct VcmdRcState {
 };
 
 // ---- Capabilities, versions, broadcasts ------------------------------------------------------
+// `washer` = the persisted washer fitted switch (runtime; bits 0-5 are fixed at boot).
 inline uint16_t vehicleCapsMask(bool gearsRnl, bool gearH, bool ignition, bool light, bool lock,
-                                bool handbrake) {
+                                bool handbrake, bool washer) {
   return (uint16_t)((gearsRnl ? VCMD_LAW_CAP_GEARS_RNL : 0) | (gearH ? VCMD_LAW_CAP_GEAR_H : 0) |
                     (ignition ? VCMD_LAW_CAP_IGNITION : 0) | (light ? VCMD_LAW_CAP_LIGHT : 0) |
-                    (lock ? VCMD_LAW_CAP_LOCK : 0) | (handbrake ? VCMD_LAW_CAP_HANDBRAKE : 0));
+                    (lock ? VCMD_LAW_CAP_LOCK : 0) | (handbrake ? VCMD_LAW_CAP_HANDBRAKE : 0) |
+                    (washer ? VCMD_LAW_CAP_WASHER : 0));
 }
 
 // QB_CAPS value: mask in bits 0-15, bits 16-23 zero, protocol version in bits 24-31.
@@ -286,6 +303,6 @@ inline uint8_t ignStateCode(uint8_t relayState, bool crankPending) {
 class VehicleCommandSink {
 public:
   virtual ~VehicleCommandSink() {}
-  // Execute one decoded, validated function command (param1 1-5) and report the outcome.
+  // Execute one decoded, validated function command (param1 1-6) and report the outcome.
   virtual VehicleCmdOutcome executeVehicleCommand(VehicleCmdFunction fn, int32_t value) = 0;
 };

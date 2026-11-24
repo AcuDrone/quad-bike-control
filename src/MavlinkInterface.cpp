@@ -49,7 +49,8 @@ static_assert((uint8_t)VehicleCmdResult::FAILED               == MAV_RESULT_FAIL
 static_assert(VCMD_LAW_PROTOCOL_VERSION == VCMD_PROTOCOL_VERSION, "VehicleCommandLaw.h mirror");
 static_assert(VCMD_LAW_CAP_GEARS_RNL == VCMD_CAP_GEARS_RNL && VCMD_LAW_CAP_GEAR_H == VCMD_CAP_GEAR_H &&
               VCMD_LAW_CAP_IGNITION == VCMD_CAP_IGNITION && VCMD_LAW_CAP_LIGHT == VCMD_CAP_LIGHT &&
-              VCMD_LAW_CAP_LOCK == VCMD_CAP_LOCK && VCMD_LAW_CAP_HANDBRAKE == VCMD_CAP_HANDBRAKE,
+              VCMD_LAW_CAP_LOCK == VCMD_CAP_LOCK && VCMD_LAW_CAP_HANDBRAKE == VCMD_CAP_HANDBRAKE &&
+              VCMD_LAW_CAP_WASHER == VCMD_CAP_WASHER,
               "VehicleCommandLaw.h mirror");
 static_assert(VCMD_RC_VALID_MIN_US == RC_CHANNEL_VALID_MIN_US && VCMD_RC_VALID_MAX_US == RC_CHANNEL_VALID_MAX_US &&
               RC_GEAR_LOW_MIN == RC_CHANNEL_VALID_MIN_US && RC_GEAR_REVERSE_MAX == RC_CHANNEL_VALID_MAX_US &&
@@ -587,7 +588,8 @@ void MavlinkInterface::handleVehicleCommand(uint8_t sysid, uint8_t compid, float
                 result = MAV_RESULT_DENIED;
                 break;
             case VehicleCmdDecodeKind::QUERY:
-                // Answered here from values fixed at boot; no vehicle state changes.
+                // Answered here; no vehicle state changes. The caps mask is the current one
+                // (bit6 follows the washer fitted switch, setVehicleCapsMask()).
                 result = MAV_RESULT_ACCEPTED;
                 if (d.value == VCMD_QUERY_CAPS) {
                     resultParam2 = (int32_t)vcmdCaps_;
@@ -637,6 +639,16 @@ void MavlinkInterface::sendCommandAck(uint16_t command, uint8_t result, uint8_t 
         targetComp);    // target_component <- the requester
     uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
     serial_->write(buf, len);
+}
+
+void MavlinkInterface::setVehicleCapsMask(uint16_t capsMask) {
+    if (capsMask == vcmdCaps_) {
+        return;
+    }
+    Debug::printfFeature(DebugFeature::MAVLINK, "[MAV] Vehicle command caps 0x%02X -> 0x%02X (QB_CAPS on the next report)\n",
+                         (unsigned)vcmdCaps_, (unsigned)capsMask);
+    vcmdCaps_ = capsMask;
+    capsSentOnce_ = false;   // QB_CAPS goes out on the next report(); the 10 s period restarts there
 }
 
 void MavlinkInterface::setVehicleCommandSink(VehicleCommandSink* sink, uint16_t capsMask, int32_t hwVersion) {
@@ -765,7 +777,8 @@ void MavlinkInterface::report(const StateReport& state) {
         float tpsVal = state.canValid ? (float)state.throttlePosition : NAN;
         float thrOutVal = (float)state.throttleCmdPct;
         // Digital output states packed as a bitmask (see EFI_DIGITAL_FLAG_* in Constants.h):
-        // bit0 = wheel lock, bit1 = front light. Always valid (relay ground-truth), never NaN.
+        // bit0 = wheel lock, bit1 = front light, bits 2-3 = buggy parking brake (0 on the quad),
+        // bit4 = headlight washer pulse running. Always valid (relay ground-truth), never NaN.
         // On aztec the wheel lock is not fitted, so bit0 is always 0 (the layout is unchanged).
         float flagsVal = (float)state.digitalFlags;
 

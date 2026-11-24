@@ -3,22 +3,28 @@
 // Run: pio test -e native
 #include <unity.h>
 #include "RelayBoardLaw.h"
+#include "WasherLaw.h"
 
 void setUp() {}
 void tearDown() {}
 
 // Mirror of the per-vehicle relay-number sets (include/Constants.h needs Arduino.h).
-// aztec buggy: ignition Relay_1, starter Relay_2, light Relay_3, reserved Relay_4..8.
-static const uint8_t AZ_IGN   = RELAY_N(1);
-static const uint8_t AZ_START = RELAY_N(2);
-static const uint8_t AZ_LIGHT = RELAY_N(3);
-static const uint8_t AZ_RES   = RELAY_N(4) | RELAY_N(5) | RELAY_N(6) | RELAY_N(7) | RELAY_N(8);
-// quad bike (master): ignition {1,2}, starter {3}, light {4}, wheel lock {5,6}, reserved {7,8}.
-static const uint8_t Q_IGN   = RELAY_N(1) | RELAY_N(2);
-static const uint8_t Q_START = RELAY_N(3);
-static const uint8_t Q_LIGHT = RELAY_N(4);
-static const uint8_t Q_LOCK  = RELAY_N(5) | RELAY_N(6);
-static const uint8_t Q_RES   = RELAY_N(7) | RELAY_N(8);
+// aztec buggy: ignition Relay_1, starter Relay_2, light Relay_3, lock Relay_4..6 (fitted on
+// aztec), headlight washer Relay_8, reserved Relay_7.
+static const uint8_t AZ_IGN    = RELAY_N(1);
+static const uint8_t AZ_START  = RELAY_N(2);
+static const uint8_t AZ_LIGHT  = RELAY_N(3);
+static const uint8_t AZ_LOCK   = RELAY_N(4) | RELAY_N(5) | RELAY_N(6);
+static const uint8_t AZ_WASHER = RELAY_N(8);
+static const uint8_t AZ_RES    = RELAY_N(7);
+// quad bike (master): ignition {1,2}, starter {3}, light {4}, wheel lock {5,6}, washer {8},
+// reserved {7}.
+static const uint8_t Q_IGN    = RELAY_N(1) | RELAY_N(2);
+static const uint8_t Q_START  = RELAY_N(3);
+static const uint8_t Q_LIGHT  = RELAY_N(4);
+static const uint8_t Q_LOCK   = RELAY_N(5) | RELAY_N(6);
+static const uint8_t Q_WASHER = RELAY_N(8);
+static const uint8_t Q_RES    = RELAY_N(7);
 
 static void test_relay_n_encoding() {
     TEST_ASSERT_EQUAL_HEX8(0x01, RELAY_N(1));
@@ -50,55 +56,168 @@ static void test_pca9557_routing() {
 }
 
 static void test_aztec_masks_pca9557() {
-    RelayPortMasks m = relayBuildMasks(RELAY_TABLE_PCA9557, AZ_IGN, AZ_START, AZ_LIGHT, 0, AZ_RES);
+    RelayPortMasks m = relayBuildMasks(RELAY_TABLE_PCA9557, AZ_IGN, AZ_START, AZ_LIGHT, AZ_LOCK,
+                                       AZ_WASHER, AZ_RES);
     TEST_ASSERT_EQUAL_HEX8(0x10, m.ignition);
     TEST_ASSERT_EQUAL_HEX8(0x20, m.starter);
     TEST_ASSERT_EQUAL_HEX8(0x40, m.frontLight);
-    TEST_ASSERT_EQUAL_HEX8(0x00, m.wheelLock);
-    TEST_ASSERT_EQUAL_HEX8(0x8F, m.reserved);
+    TEST_ASSERT_EQUAL_HEX8(0x8C, m.wheelLock);
+    TEST_ASSERT_EQUAL_HEX8(0x02, m.washer);
+    TEST_ASSERT_EQUAL_HEX8(0x01, m.reserved);
     TEST_ASSERT_TRUE(relayMasksValid(m));
     // CRANKING pins: ignition + starter
     TEST_ASSERT_EQUAL_HEX8(0x30, (uint8_t)(m.ignition | m.starter));
 }
 
 static void test_aztec_masks_xl9535() {
-    RelayPortMasks m = relayBuildMasks(RELAY_TABLE_XL9535, AZ_IGN, AZ_START, AZ_LIGHT, 0, AZ_RES);
+    RelayPortMasks m = relayBuildMasks(RELAY_TABLE_XL9535, AZ_IGN, AZ_START, AZ_LIGHT, AZ_LOCK,
+                                       AZ_WASHER, AZ_RES);
     TEST_ASSERT_EQUAL_HEX8(0x01, m.ignition);
     TEST_ASSERT_EQUAL_HEX8(0x02, m.starter);
     TEST_ASSERT_EQUAL_HEX8(0x04, m.frontLight);
-    TEST_ASSERT_EQUAL_HEX8(0xF8, m.reserved);
+    TEST_ASSERT_EQUAL_HEX8(0x38, m.wheelLock);
+    TEST_ASSERT_EQUAL_HEX8(0x80, m.washer);
+    TEST_ASSERT_EQUAL_HEX8(0x40, m.reserved);
     TEST_ASSERT_TRUE(relayMasksValid(m));
     TEST_ASSERT_EQUAL_HEX8(0x03, (uint8_t)(m.ignition | m.starter));
 }
 
 static void test_quad_masks_both_tables() {
-    RelayPortMasks p = relayBuildMasks(RELAY_TABLE_PCA9557, Q_IGN, Q_START, Q_LIGHT, Q_LOCK, Q_RES);
+    RelayPortMasks p = relayBuildMasks(RELAY_TABLE_PCA9557, Q_IGN, Q_START, Q_LIGHT, Q_LOCK, Q_WASHER, Q_RES);
     TEST_ASSERT_EQUAL_HEX8(0x30, p.ignition);
     TEST_ASSERT_EQUAL_HEX8(0x40, p.starter);
     TEST_ASSERT_EQUAL_HEX8(0x80, p.frontLight);
     TEST_ASSERT_EQUAL_HEX8(0x0C, p.wheelLock);
-    TEST_ASSERT_EQUAL_HEX8(0x03, p.reserved);
+    TEST_ASSERT_EQUAL_HEX8(0x02, p.washer);
+    TEST_ASSERT_EQUAL_HEX8(0x01, p.reserved);
     TEST_ASSERT_TRUE(relayMasksValid(p));
 
-    RelayPortMasks x = relayBuildMasks(RELAY_TABLE_XL9535, Q_IGN, Q_START, Q_LIGHT, Q_LOCK, Q_RES);
+    RelayPortMasks x = relayBuildMasks(RELAY_TABLE_XL9535, Q_IGN, Q_START, Q_LIGHT, Q_LOCK, Q_WASHER, Q_RES);
     TEST_ASSERT_EQUAL_HEX8(0x03, x.ignition);
     TEST_ASSERT_EQUAL_HEX8(0x04, x.starter);
     TEST_ASSERT_EQUAL_HEX8(0x08, x.frontLight);
     TEST_ASSERT_EQUAL_HEX8(0x30, x.wheelLock);
-    TEST_ASSERT_EQUAL_HEX8(0xC0, x.reserved);
+    TEST_ASSERT_EQUAL_HEX8(0x80, x.washer);
+    TEST_ASSERT_EQUAL_HEX8(0x40, x.reserved);
     TEST_ASSERT_TRUE(relayMasksValid(x));
 }
 
 static void test_set_invariants() {
-    TEST_ASSERT_TRUE(relaySetsValid(AZ_IGN, AZ_START, AZ_LIGHT, 0, AZ_RES));
-    TEST_ASSERT_TRUE(relaySetsValid(Q_IGN, Q_START, Q_LIGHT, Q_LOCK, Q_RES));
+    TEST_ASSERT_TRUE(relaySetsValid(AZ_IGN, AZ_START, AZ_LIGHT, AZ_LOCK, AZ_WASHER, AZ_RES));
+    TEST_ASSERT_TRUE(relaySetsValid(Q_IGN, Q_START, Q_LIGHT, Q_LOCK, Q_WASHER, Q_RES));
+    // lock not fitted (wheelLock 0): still valid with the lock relays reserved
+    TEST_ASSERT_TRUE(relaySetsValid(AZ_IGN, AZ_START, AZ_LIGHT, 0, AZ_WASHER, (uint8_t)(AZ_RES | AZ_LOCK)));
     // overlap
-    TEST_ASSERT_FALSE(relaySetsValid(AZ_IGN | AZ_START, AZ_START, AZ_LIGHT, 0, AZ_RES));
-    TEST_ASSERT_FALSE(relaySetsValid(AZ_IGN, AZ_START, AZ_LIGHT, RELAY_N(4), AZ_RES));
+    TEST_ASSERT_FALSE(relaySetsValid(AZ_IGN | AZ_START, AZ_START, AZ_LIGHT, AZ_LOCK, AZ_WASHER, AZ_RES));
+    TEST_ASSERT_FALSE(relaySetsValid(AZ_IGN, AZ_START, AZ_LIGHT, AZ_LOCK | RELAY_N(7), AZ_WASHER, AZ_RES));
     // gap (Relay_8 uncovered)
-    TEST_ASSERT_FALSE(relaySetsValid(AZ_IGN, AZ_START, AZ_LIGHT, 0, (uint8_t)(AZ_RES & ~RELAY_N(8))));
+    TEST_ASSERT_FALSE(relaySetsValid(AZ_IGN, AZ_START, AZ_LIGHT, AZ_LOCK, 0, AZ_RES));
     // empty function
-    TEST_ASSERT_FALSE(relaySetsValid(0, AZ_START, AZ_LIGHT, AZ_IGN, AZ_RES));
+    TEST_ASSERT_FALSE(relaySetsValid(0, AZ_START, AZ_LIGHT, AZ_IGN | AZ_LOCK, AZ_WASHER, AZ_RES));
+}
+
+// Washer set (change add-headlight-washer-relay): disjoint from every other set, never empty.
+static void test_washer_set_invariants() {
+    // overlaps reserved / lock / light
+    TEST_ASSERT_FALSE(relaySetsValid(Q_IGN, Q_START, Q_LIGHT, Q_LOCK, (uint8_t)(Q_WASHER | Q_RES), Q_RES));
+    TEST_ASSERT_FALSE(relaySetsValid(Q_IGN, Q_START, Q_LIGHT, Q_LOCK, (uint8_t)(Q_WASHER | RELAY_N(5)), Q_RES));
+    TEST_ASSERT_FALSE(relaySetsValid(Q_IGN, Q_START, Q_LIGHT, Q_LOCK, (uint8_t)(Q_WASHER | Q_LIGHT), Q_RES));
+    TEST_ASSERT_FALSE(relaySetsValid(AZ_IGN, AZ_START, AZ_LIGHT, AZ_LOCK, (uint8_t)(AZ_WASHER | RELAY_N(4)), AZ_RES));
+    // empty washer: refused even when its relay is reserved instead — the pre-1.6.3 layout
+    // (Relay_7 + Relay_8 reserved, no washer) is no longer a valid assignment
+    TEST_ASSERT_FALSE(relaySetsValid(Q_IGN, Q_START, Q_LIGHT, Q_LOCK, 0, (uint8_t)(Q_RES | Q_WASHER)));
+    TEST_ASSERT_FALSE(relaySetsValid(AZ_IGN, AZ_START, AZ_LIGHT, AZ_LOCK, 0, (uint8_t)(AZ_RES | AZ_WASHER)));
+    // coverage: every set OR = 0xFF on both vehicles and both boards
+    TEST_ASSERT_EQUAL_HEX8(0xFF, (uint8_t)(Q_IGN | Q_START | Q_LIGHT | Q_LOCK | Q_WASHER | Q_RES));
+    TEST_ASSERT_EQUAL_HEX8(0xFF, (uint8_t)(AZ_IGN | AZ_START | AZ_LIGHT | AZ_LOCK | AZ_WASHER | AZ_RES));
+    const RelayPortMasks p = relayBuildMasks(RELAY_TABLE_PCA9557, Q_IGN, Q_START, Q_LIGHT, Q_LOCK, Q_WASHER, Q_RES);
+    TEST_ASSERT_EQUAL_HEX8(0xFF, (uint8_t)(p.ignition | p.starter | p.frontLight | p.wheelLock | p.washer | p.reserved));
+    // Relay_8 alone, Relay_7 reserved: PCA9557 IO1 / IO0, XL9535 P0.7 / P0.6
+    TEST_ASSERT_EQUAL_HEX8(0x80, Q_WASHER);
+    TEST_ASSERT_EQUAL_HEX8(0x02, relayPortMask(RELAY_TABLE_PCA9557, Q_WASHER));
+    TEST_ASSERT_EQUAL_HEX8(0x01, relayPortMask(RELAY_TABLE_PCA9557, Q_RES));
+    TEST_ASSERT_EQUAL_HEX8(0x80, relayPortMask(RELAY_TABLE_XL9535, Q_WASHER));
+    TEST_ASSERT_EQUAL_HEX8(0x40, relayPortMask(RELAY_TABLE_XL9535, Q_RES));
+}
+
+// ---- WasherLaw.h ------------------------------------------------------------
+
+static void test_washer_pulse_bounds() {
+    TEST_ASSERT_FALSE(washerPulseMsValid(1999));
+    TEST_ASSERT_FALSE(washerPulseMsValid(20001));
+    TEST_ASSERT_FALSE(washerPulseMsValid(0));
+    TEST_ASSERT_TRUE(washerPulseMsValid(2000));
+    TEST_ASSERT_TRUE(washerPulseMsValid(3000));
+    TEST_ASSERT_TRUE(washerPulseMsValid(20000));
+}
+
+static void test_washer_pulse_or_default() {
+    TEST_ASSERT_EQUAL_UINT16(3000, washerPulseMsOrDefault(0));
+    TEST_ASSERT_EQUAL_UINT16(3000, washerPulseMsOrDefault(1999));
+    TEST_ASSERT_EQUAL_UINT16(3000, washerPulseMsOrDefault(20001));
+    TEST_ASSERT_EQUAL_UINT16(3000, washerPulseMsOrDefault(65535));
+    TEST_ASSERT_EQUAL_UINT16(7500, washerPulseMsOrDefault(7500));
+    TEST_ASSERT_EQUAL_UINT16(2000, washerPulseMsOrDefault(2000));
+    TEST_ASSERT_EQUAL_UINT16(20000, washerPulseMsOrDefault(20000));
+}
+
+static void assertVerdict(WasherVerdict expect, WasherVerdict got) {
+    TEST_ASSERT_EQUAL_UINT8((uint8_t)expect, (uint8_t)got);
+}
+
+static void test_washer_start_decide() {
+    // ignState: 0 OFF, 1 ACC, 2 IGNITION, 3 CRANKING (RelayController::IgnitionState order)
+    // Not fitted wins over everything, including an unavailable board
+    for (uint8_t ign = 0; ign <= 3; ign++) {
+        for (int avail = 0; avail <= 1; avail++) {
+            for (int armed = 0; armed <= 1; armed++) {
+                assertVerdict(WasherVerdict::REFUSED_NOT_FITTED,
+                              washerStartDecide(false, avail != 0, ign, armed != 0, ign == 3));
+            }
+        }
+    }
+    // Unavailable wins over every ignition / crank state
+    for (uint8_t ign = 0; ign <= 3; ign++) {
+        for (int armed = 0; armed <= 1; armed++) {
+            assertVerdict(WasherVerdict::REFUSED_UNAVAILABLE,
+                          washerStartDecide(true, false, ign, armed != 0, ign == 3));
+        }
+    }
+    assertVerdict(WasherVerdict::REFUSED_IGNITION_OFF, washerStartDecide(true, true, 0, false, false));
+    assertVerdict(WasherVerdict::START, washerStartDecide(true, true, 1, false, false));   // ACC
+    assertVerdict(WasherVerdict::START, washerStartDecide(true, true, 2, false, false));   // IGNITION
+    assertVerdict(WasherVerdict::REFUSED_STARTING, washerStartDecide(true, true, 1, true, false));   // dwell
+    assertVerdict(WasherVerdict::REFUSED_STARTING, washerStartDecide(true, true, 3, false, true));   // CRANKING
+    assertVerdict(WasherVerdict::REFUSED_STARTING, washerStartDecide(true, true, 3, false, false));
+    assertVerdict(WasherVerdict::REFUSED_STARTING, washerStartDecide(true, true, 2, false, true));
+}
+
+static void test_washer_expired_boundary() {
+    TEST_ASSERT_FALSE(washerExpired(1000, 1000 + 2999, 3000));
+    TEST_ASSERT_TRUE(washerExpired(1000, 1000 + 3000, 3000));
+    TEST_ASSERT_FALSE(washerExpired(1000, 1000 + 19999, 20000));
+    TEST_ASSERT_TRUE(washerExpired(1000, 1000 + 20000, 20000));
+    TEST_ASSERT_FALSE(washerExpired(5000, 5000, 3000));
+}
+
+static void test_washer_wraparound() {
+    const uint32_t since = 0xFFFFF000u;
+    const uint32_t now = 0x00000400u;   // 5120 ms later, millis() wrapped
+    TEST_ASSERT_TRUE(washerExpired(since, now, 3000));
+    TEST_ASSERT_FALSE(washerExpired(since, now, 20000));
+    TEST_ASSERT_EQUAL_UINT32(14880, washerRemainingMs(since, now, 20000));
+    TEST_ASSERT_EQUAL_UINT32(0, washerRemainingMs(since, now, 3000));
+    // a 3000 ms pulse started just before the wrap ends exactly 3000 ms later
+    TEST_ASSERT_FALSE(washerExpired(since, since + 2999u, 3000));
+    TEST_ASSERT_TRUE(washerExpired(since, since + 3000u, 3000));
+}
+
+static void test_washer_remaining() {
+    TEST_ASSERT_EQUAL_UINT32(3000, washerRemainingMs(100, 100, 3000));
+    TEST_ASSERT_EQUAL_UINT32(2100, washerRemainingMs(100, 1000, 3000));
+    TEST_ASSERT_EQUAL_UINT32(1, washerRemainingMs(100, 3099, 3000));
+    TEST_ASSERT_EQUAL_UINT32(0, washerRemainingMs(100, 3100, 3000));
+    TEST_ASSERT_EQUAL_UINT32(0, washerRemainingMs(100, 100000, 3000));   // long after: never underflows
 }
 
 static void test_port_to_set_roundtrip() {
@@ -229,6 +348,13 @@ int main(int, char**) {
     RUN_TEST(test_aztec_masks_xl9535);
     RUN_TEST(test_quad_masks_both_tables);
     RUN_TEST(test_set_invariants);
+    RUN_TEST(test_washer_set_invariants);
+    RUN_TEST(test_washer_pulse_bounds);
+    RUN_TEST(test_washer_pulse_or_default);
+    RUN_TEST(test_washer_start_decide);
+    RUN_TEST(test_washer_expired_boundary);
+    RUN_TEST(test_washer_wraparound);
+    RUN_TEST(test_washer_remaining);
     RUN_TEST(test_port_to_set_roundtrip);
     RUN_TEST(test_ack_bits);
     RUN_TEST(test_decide_auto);

@@ -722,6 +722,9 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     // can_busy_max_us, 6 scalar slots (keys by pointer, can_int a static token by pointer, nothing
     // copied; ≈ 96 B of memory, ≈ 110 B of JSON) — worst case ≈ 8.60 + 0.10 ≈ 8.70 KB, ≈ 0.52 KB
     // under 9216 (size unchanged).
+    // Headlight washer since 1.6.3: washer_fitted / washer_on / washer_left_ms / washer_pulse_ms,
+    // 4 scalar slots (keys by pointer, nothing copied; ≈ 64 B of memory, ≈ 80 B of JSON) — worst
+    // case ≈ 8.70 + 0.06 ≈ 8.77 KB, ≈ 0.45 KB under 9216 (size unchanged).
     // Static (single caller: the main-loop broadcast) so the larger document is off the stack.
     static StaticJsonDocument<9216> doc;
     doc.clear();
@@ -894,6 +897,10 @@ String WebPortal::createTelemetryJSON(const Telemetry& telemetry) {
     doc["wheel_lock_on"] = telemetry.wheel_lock_on;
     doc["wheel_lock_fitted"] = telemetry.wheel_lock_fitted;   // false on aztec → UI shows "not fitted"
     doc["relay_test"] = telemetry.relay_test;   // web relay test, bit0 = Relay_1 … bit7 = Relay_8
+    doc["washer_fitted"] = telemetry.washer_fitted;     // headlight washer fitted switch
+    doc["washer_on"] = telemetry.washer_on;             // pulse running (Relay_8)
+    doc["washer_left_ms"] = telemetry.washer_left_ms;   // remaining pulse time, ms
+    doc["washer_pulse_ms"] = telemetry.washer_pulse_ms; // length of the next wash, ms
 
     // 24V boost rail + board I/O health — emitted unconditionally (independent of
     // CAN / MAVLink status) so a failing expander is always visible.

@@ -317,11 +317,19 @@ public:
      *
      * Call once after the vehicle layer is up. Without a sink every MAV_CMD_USER_2 is answered
      * UNSUPPORTED (the pre-1.5.30 behaviour) and no QB_CAPS is sent.
-     * @param sink        executes validated function commands (param1 1-5)
-     * @param capsMask    capability bitmask, fixed at boot (VCMD_CAP_*)
+     * @param sink        executes validated function commands (param1 1-6)
+     * @param capsMask    capability bitmask at boot (VCMD_CAP_*; bit6 may change later,
+     *                    setVehicleCapsMask())
      * @param hwVersion   hardware version code (hardwareVersionCode())
      */
     void setVehicleCommandSink(VehicleCommandSink* sink, uint16_t capsMask, int32_t hwVersion);
+
+    /**
+     * @brief Hand over a capability mask that changed at runtime (bit6, the washer fitted
+     * switch). On a change the caps query answers it at once and QB_CAPS is sent on the next
+     * report(), the VCMD_CAPS_TX_MS period restarting from there. No-op when unchanged.
+     */
+    void setVehicleCapsMask(uint16_t capsMask);
 
 private:
     HardwareSerial* serial_;
@@ -397,7 +405,7 @@ private:
 
     // GCS vehicle commands (MAV_CMD_USER_2) + QB_CAPS / IGN_STATE broadcasts
     VehicleCommandSink* vcmdSink_;     // nullptr = not registered → USER_2 answered UNSUPPORTED
-    uint16_t vcmdCaps_;                // capability bitmask, fixed at boot
+    uint16_t vcmdCaps_;                // capability bitmask: bits 0-5 fixed at boot, bit6 runtime (washer fitted)
     int32_t  vcmdHwVersion_;           // hardware version code, fixed at boot
     uint32_t lastCapsTx_;              // millis() of the last QB_CAPS
     bool     capsSentOnce_;            // the first QB_CAPS goes out on the first report()
