@@ -14,6 +14,13 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.6.2","date":"2026-11-25","uk":[
+"Веб-сторінка завантажується приблизно вп'ятеро швидше: плата надсилає її стиснутою.",
+"Телефон на слабкому Wi-Fi більше не з'їдає пам'ять плати: показання на ньому відстають не більше ніж на секунду, а при поганому зв'язку оновлення лише призупиняються. Сторінка більше не від'єднується після команди на слабкому зв'язку. Перекалібрування не потрібне. Потрібно залити оновлений образ LittleFS (спершу завантажте журнал подій — заливка образу його стирає)"
+],"en":[
+"The web page loads about five times faster: the board sends it compressed.",
+"A phone on a weak Wi-Fi link no longer eats the board's memory: its readings are no more than a second old, and on a bad link updates only pause. The page is no longer disconnected after a command on a weak link. No recalibration needed. Upload the updated LittleFS image (download the event journal first — uploading the image erases it)"
+]},
 {"version":"1.6.1","date":"2026-11-23","uk":[
 "Багі: iBooster тепер завжди отримує швидкість щонайменше 2 км/год — і коли багі стоїть, і коли датчик швидкості не працює (1.6.0 передавала 0). На стенді iBooster тоді повідомляє вищу межу тиску (103 бар замість 51), тож гальмо на місці, можливо, триматиме сильніше; що реальний тиск зростає, НЕ перевірено. Довге утримання на місці може сильніше гріти iBooster — для довгої стоянки затягуйте стоянкове гальмо. Решта плати (обмежувач, регулятор, телеметрія, наземна станція, веб) бачить справжню швидкість",
 "Журнал подій: після кожного гальмування один рядок «BRAKE I episode … runout=…» — тривалість, найбільший хід штока, найменша передана швидкість і межа тиску, яку повідомив iBooster (103..103 — висока, 51 — низька, stop=1 — шток дійшов до упору). Потрібна лише нова прошивка, образ LittleFS заливати НЕ потрібно"
