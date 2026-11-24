@@ -36,6 +36,16 @@ pio run -t uploadfs
 
 **Important:** You must upload the filesystem after any changes to `data/index.html`.
 
+The image is packed gzip-compressed: when a filesystem image is built (`buildfs`, `uploadfs`,
+`uploadfsota`), the pre-script `tools/fs_gzip.py` stages `data/` into
+`.pio/build/esp32-s3-devkitc-1/fsdata/` and writes `index.html` as `index.html.gz` (≈ 5× smaller;
+the build prints `fs_gzip: index.html <orig> B -> <gz> B`). The board sends it with
+`Content-Encoding: gzip`. Edit only `data/index.html`; never commit a `.gz` — nothing generated
+lives in `data/`.
+
+For the web LittleFS update (System → firmware update, file type LittleFS), build the image with
+`pio run -t buildfs` and upload `.pio/build/esp32-s3-devkitc-1/littlefs.bin`.
+
 > ⚠ **`uploadfs` erases the event journal.** The journal files (`/events.log`, `/events.1`) live in
 > the same LittleFS partition, so `pio run -t uploadfs` — and a web LittleFS update
 > (`/update?type=littlefs`) — wipe them. **Download the journal first** (System → Event journal →
@@ -435,8 +445,10 @@ All settings are in [include/Constants.h](include/Constants.h):
 ### Cannot access web interface (http://192.168.10.1)
 - Ensure you're connected to the `QuadBike-Control` WiFi network
 - Check that filesystem was uploaded: `pio run -t uploadfs`
-- Check serial monitor for "SPIFFS mounted" and "index.html" found messages
-- Try accessing by IP: `http://192.168.10.1/index.html`
+- Check serial monitor for "LittleFS mounted" and "Web page: /index.html.gz (… B, gzip)" (an older
+  plain image shows "Web page: /index.html"); "Web page not found" means the image has no page —
+  run `pio run -t uploadfs`
+- Try accessing by IP: `http://192.168.10.1/index.html` (still works, served from `index.html.gz`)
 
 ### Telemetry not updating
 - Check WebSocket connection indicator (should show "Connected")

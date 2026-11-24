@@ -5,6 +5,23 @@
 #include "EventJournal.h"
 #include <esp_mac.h>
 
+// Telemetry gate (change reduce-web-heap-usage, design D3): telemetry fills at most
+// WS_MAX_QUEUED_MESSAGES - 1 slots per client, so one slot stays free for command replies.
+static_assert(WS_MAX_QUEUED_MESSAGES >= 2,
+              "WS_MAX_QUEUED_MESSAGES must leave one slot for command replies");
+
+// True when every connected client has fewer than WS_MAX_QUEUED_MESSAGES - 1 messages
+// queued (not yet acknowledged). Walks the same list from the same loop() context as the
+// library's own availableForWriteAll().
+static bool wsTelemetrySlotFree(AsyncWebSocket& ws) {
+    for (const auto& c : ws.getClients()) {
+        if (c.status() == WS_CONNECTED && c.queueLen() >= WS_MAX_QUEUED_MESSAGES - 1) {
+            return false;
+        }
+    }
+    return true;
+}
+
 char WebPortal::apSsid_[33] = "";
 char WebPortal::otaHostname_[33] = "";
 
@@ -110,9 +127,9 @@ void WebPortal::broadcastTelemetry(const Telemetry& telemetry) {
         return;
     }
 
-    // Check if WebSocket queue has space (prevent overflow)
-    // AsyncWebSocket has internal queue limit, skip broadcast if clients are lagging
-    if (ws.availableForWriteAll()) {
+    // Skip this frame for all clients while any client lags (>= WS_MAX_QUEUED_MESSAGES - 1
+    // queued): bounds the queue heap and keeps one slot for command replies (design D3)
+    if (wsTelemetrySlotFree(ws)) {
         String json = createTelemetryJSON(telemetry);
         ws.textAll(json);
     }
@@ -553,9 +570,20 @@ bool WebPortal::mountFilesystem() {
 
     Debug::printlnFeature(DebugFeature::WEB,"  ✓ LittleFS mounted");
 
-    // Check if index.html exists
-    if (!FILESYSTEM.exists("/index.html")) {
-        Debug::printlnFeature(DebugFeature::WEB,"  ⚠ Warning: /index.html not found in filesystem");
+    // Web page: the build packs /index.html.gz (tools/fs_gzip.py); an older image may hold
+    // the plain /index.html. Both are served by the library (design D5/D6).
+    if (FILESYSTEM.exists("/index.html.gz")) {
+        File f = FILESYSTEM.open("/index.html.gz", "r");
+        Debug::printfFeature(DebugFeature::WEB,"  ✓ Web page: /index.html.gz (%u B, gzip)\n",
+                             f ? (unsigned)f.size() : 0u);
+        if (f) f.close();
+    } else if (FILESYSTEM.exists("/index.html")) {
+        File f = FILESYSTEM.open("/index.html", "r");
+        Debug::printfFeature(DebugFeature::WEB,"  ✓ Web page: /index.html (%u B)\n",
+                             f ? (unsigned)f.size() : 0u);
+        if (f) f.close();
+    } else {
+        Debug::printlnFeature(DebugFeature::WEB,"  ⚠ Web page not found (/index.html.gz or /index.html) — run 'pio run -t uploadfs'");
     }
 
     return true;
@@ -571,6 +599,8 @@ void WebPortal::onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* c
         case WS_EVT_CONNECT:
             Debug::printfFeature(DebugFeature::WEB,"[WebSocket] Client #%     connected from %s\n",
                          client->id(), client->remoteIP().toString().c_str());
+            // Full queue drops the message for this client instead of closing it (design D2)
+            client->setCloseClientOnQueueFull(false);
             lastActivityTime = millis();
             break;
 

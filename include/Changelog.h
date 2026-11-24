@@ -14,6 +14,15 @@
  * When bumping FIRMWARE_VERSION in Constants.h, add an entry here.
  */
 static const char CHANGELOG_JSON[] = R"JSON({"releases":[
+{"version":"1.6.2","date":"2026-11-25","uk":[
+"Веб-сторінка завантажується приблизно вп'ятеро швидше: плата надсилає її стиснутою.",
+"Телефон на слабкому Wi-Fi більше не з'їдає пам'ять плати: показання на ньому відстають не більше ніж на секунду, а при поганому зв'язку оновлення лише призупиняються. Сторінка більше не від'єднується після команди на слабкому зв'язку. Перекалібрування не потрібне. Потрібно залити оновлений образ LittleFS (спершу завантажте журнал подій — заливка образу його стирає)",
+"Версії 1.6.0 і 1.6.1 були лише для багі, тому на квадроциклі після 1.5.38 одразу йде 1.6.2"
+],"en":[
+"The web page loads about five times faster: the board sends it compressed.",
+"A phone on a weak Wi-Fi link no longer eats the board's memory: its readings are no more than a second old, and on a bad link updates only pause. The page is no longer disconnected after a command on a weak link. No recalibration needed. Upload the updated LittleFS image (download the event journal first — uploading the image erases it)",
+"Versions 1.6.0 and 1.6.1 were buggy-only releases, so on the quad 1.6.2 follows 1.5.38"
+]},
 {"version":"1.5.38","date":"2026-11-23","uk":[
 "CAN тепер обслуговує окрема задача плати, яку будить лінія INT контролера CAN: кадри датчика кута керма більше не губляться, коли веб-сторінка, журнал подій чи оновлення прошивки займають плату. Якщо контролер CAN не був готовий при ввімкненні живлення, плата пробує знову кожні 5 с і CAN запрацьовує сам, без перезавантаження. Перезапуск контролера більше не пригальмовує роботу плати. У журналі щохвилини рядок «CAN I stats» (прийнято, втрачено, переповнення, пробуджень від INT)",
 "Розділ «Діагностика», плитка «Стан CAN»: новий рядок «RX: переривання» (норма), «RX: опитування (INT не працює)» (жовтим — лінія INT не спрацьовує, CAN працює на опитуванні кожні 2 мс) або «RX: опитування (без INT)»; якщо кадри втрачались — «втрачено N», «переповнення N». Сніфер CAN показує ще й «втрачено в черзі». Перекалібрування не потрібне. Потрібно залити оновлений образ LittleFS"
