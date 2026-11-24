@@ -1,6 +1,6 @@
 ## 0. Preconditions
 - [x] 0.1 Proposal approved by the owner (2026-11-17, "роби"): no caution line, no pause / attempt limit, step 0.5 s confirmed (see proposal "Owner decisions").
-- [ ] 0.2 Archive order: `add-precrank-dwell-setting` is archived before this change (its versions of "Ignition State Control Integration" and "Ignition State Broadcast" are the base of the MODIFIED copies here). After that archive, compare both requirements in `specs/vehicle-systems` and `specs/mavlink-interface` with the copies here; if anything else changed, re-copy and re-apply only this change's timeout wording.
+- [x] 0.2 Archive order: `add-precrank-dwell-setting` is archived before this change (its versions of "Ignition State Control Integration" and "Ignition State Broadcast" are the base of the MODIFIED copies here). After that archive, compare both requirements in `specs/vehicle-systems` and `specs/mavlink-interface` with the copies here; if anything else changed, re-copy and re-apply only this change's timeout wording.
 - [x] 0.3 Work starts on `master` (tasks 1–5); `aztec` and `old-board` get it only by merging `master` (task 6).
 
 ## 1. Firmware (`master`)
@@ -45,4 +45,4 @@
 ## 7. Bench — buggy and old board, archive
 - [ ] 7.1 Buggy (`aztec` 1.5.36): LittleFS upload; before storing any value above 5 s, start the engine and confirm the idle RPM reads ≥ 800 from TACHO (ppr settled); 5.1–5.4; record the buggy's value.
 - [ ] 7.2 Old board (`old-board` 1.5.36): LittleFS upload; 5.1 and 5.2 on the bench harness.
-- [ ] 7.3 Archive this change (after `add-precrank-dwell-setting`, task 0.2).
+- [x] 7.3 Archive this change (after `add-precrank-dwell-setting`, task 0.2).

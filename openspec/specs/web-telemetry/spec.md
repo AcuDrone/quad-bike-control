@@ -681,22 +681,25 @@ the limiter and steering-scaling state without any input or command.
   disagree
 
 ### Requirement: Network Identity Telemetry
-The telemetry broadcast SHALL include the WiFi access point identity from the firmware constants,
-delivered the same way as `firmware_version`, and the System section's "Мережа" / "Network" card
-SHALL display it read-only. The web page SHALL NOT hard-code these values or derive them from the
-browser location.
+The telemetry broadcast SHALL include the WiFi access point identity actually in use, delivered the
+same way as `firmware_version`, and the System section's "Мережа" / "Network" card SHALL display it
+read-only. The web page SHALL NOT hard-code these values or derive them from the browser location.
 
 #### Scenario: Include the network identity in telemetry JSON
 - **WHEN** telemetry data is formatted as JSON
-- **THEN** it SHALL include `wifi_ssid` equal to the compiled `WIFI_AP_SSID`
+- **THEN** it SHALL include `wifi_ssid` equal to the broadcast SSID including the chip suffix
+  (`<WIFI_AP_SSID>-XXXX`, e.g. `"QuadBike-Control-5ECC"`), not the bare compiled `WIFI_AP_SSID`
 - **AND** `wifi_ip` equal to the compiled `WIFI_AP_IP` as a dotted-quad string (e.g. `"192.168.10.1"`)
 - **AND** both SHALL be emitted unconditionally, independent of CAN or MAVLink status, and SHALL
   keep the telemetry document within its configured capacity
+- **AND** the SSID string SHALL live in static storage computed once at boot (no per-frame
+  allocation)
 
 #### Scenario: Network card shows the values read-only
 - **WHEN** a telemetry message containing `wifi_ssid` and `wifi_ip` is received
 - **THEN** the Network card SHALL show the SSID and the IP address as read-only text, with a note
   that the settings will come later
+- **AND** the SSID shown SHALL match the network name the phone sees
 - **AND** the card SHALL offer no input or command
 
 #### Scenario: Values not yet received
@@ -936,4 +939,155 @@ The telemetry broadcast SHALL report how the CAN task receives (interrupt or pol
 - **WHEN** `can_int` is `dead` or a counter is non-zero
 - **THEN** the diagnostics attention summary SHALL NOT change, because reception continues on the polling fallback and real harm already surfaces as a steering-sensor fault
 - **AND** no control for these values SHALL be added to the Calibration section
+
+### Requirement: Steering Park Correction Telemetry
+The telemetry stream SHALL report the park correction settings and the result of the last correction, so that the web card fills from telemetry and the correction can be tuned without a serial console. The result SHALL be held in RAM only.
+
+#### Scenario: Report the settings
+- **WHEN** a telemetry frame is produced
+- **THEN** it SHALL include `steer_park_enabled` (bool), `steer_park_d1`, `steer_park_d2`, `steer_park_d3` (duty), `steer_park_t1`, `steer_park_t2`, `steer_park_t3` (ms), `steer_park_tol` (degrees, 1 decimal) and `steer_park_max` (count)
+
+#### Scenario: Report the last result
+- **WHEN** a telemetry frame is produced
+- **THEN** it SHALL include an object `steer_park_last` with `outcome` ("none", "done", "gave_up" or "cancelled"), `pulses`, `residual` (degrees, 2 decimals, null for "none"), `duty` and `ms` of the last pulse
+- **AND** "done" and "gave_up" SHALL be recorded when a correction ends that way, "cancelled" only when a correction that had sent at least one pulse is cancelled by a target move or a main-loop restart, and other cancels SHALL leave the last result unchanged
+- **AND** after boot the outcome SHALL be "none"
+
+#### Scenario: Document capacity
+- **WHEN** the new fields are added
+- **THEN** the telemetry document SHALL keep its headroom without overflowing, and the capacity note in `createTelemetryJSON` SHALL account for them
+
+### Requirement: Gear-Change Boost Enable Telemetry
+The telemetry stream SHALL report whether the gear-change RPM boost is switched on, so the web
+portal can show the stored setting.
+
+#### Scenario: Report the switch state
+- **WHEN** a telemetry frame is produced
+- **THEN** it SHALL include `boost_enabled` (bool), the switch state in use, beside
+  `boost_target_rpm`
+- **AND** the key SHALL be present whether or not a gear change or boost test is active
+
+### Requirement: Speed-Limiter Ceiling Rate Telemetry
+The telemetry stream SHALL report the speed-limiter ceiling rate currently in use, so the web
+portal can show the stored setting.
+
+#### Scenario: Report the rate
+- **WHEN** a telemetry frame is produced
+- **THEN** it SHALL include `speed_limit_slew`, the rate in %/s to one decimal
+- **AND** the key SHALL be present whether or not a limit is in force
+
+### Requirement: Speed Governor Telemetry
+The telemetry stream SHALL report the governor's switch, state, setpoint, output, saturation and
+settings in ten scalar keys, within the telemetry document's configured capacity (the capacity
+comment SHALL be updated).
+
+#### Scenario: State keys
+- **WHEN** a telemetry frame is produced
+- **THEN** it SHALL include `gov_en` (bool), `gov_state` (one of `off`, `nolimit`, `bypass`,
+  `nospeed`, `active`, the mode selected in the latest evaluation), `gov_sp` (the ramped setpoint in
+  km/h, one decimal, 0 when not ACTIVE), `gov_out` (the governor output in whole %, 0 when not
+  ACTIVE) and `gov_sat` (bool)
+- **AND** the keys SHALL be present whether or not a limit is in force
+
+#### Scenario: Saturation flag
+- **WHEN** the governor output has been at idle while the speed stayed more than
+  `SPEED_LIMIT_SAT_MARGIN_MS` above the setpoint for `SPEED_LIMIT_SAT_HOLD_MS`
+- **THEN** `gov_sat` SHALL be true, and SHALL stay true for `SPEED_LIMIT_SAT_UI_HOLD_MS` after the
+  condition clears
+- **AND** no serial log line and no MAVLink message SHALL be produced for it
+
+#### Scenario: Settings keys
+- **WHEN** a telemetry frame is produced
+- **THEN** it SHALL include `gov_kp`, `gov_ki`, `gov_acc`, `gov_dec` and `gov_launch`, in firmware
+  units, `gov_kp` and `gov_ki` with two decimals (the defaults, 1.0 / 0.35 on the buggy and 3.0 / 1.0
+  on the quad bike, sit in the low range) and the others with one decimal
+
+### Requirement: Speed Governor State Display
+The Diagnostics "Швидкість" / "Speed" card and the Calibration "Speed limit and steering" card SHALL
+show the governor state read-only, rendered by one path from the same telemetry frame.
+
+#### Scenario: Governor row
+- **WHEN** a telemetry frame with `gov_state` is rendered
+- **THEN** a "Регулятор" / "Governor" row SHALL show "вимкнено" / "off", "немає ліміту — газ
+  напряму" / "no limit — direct throttle", "обхід (N / перемикання)" / "bypassed (N / shift)" or
+  "активний: NN км/год, газ NN %" / "active: NN km/h, throttle NN %"
+- **AND** an unknown or missing value SHALL show `--` without a JavaScript error
+
+#### Scenario: No-speed warning banner
+- **WHEN** `gov_en` is true and `gov_state` is `nospeed`
+- **THEN** both cards SHALL show a banner in the danger colour "Регулятор не діє: немає сигналу
+  швидкості — газ напряму (повний газ = повний газ)" / "Governor not acting: no speed signal —
+  direct throttle (full stick = full throttle)"
+
+#### Scenario: At-idle badge
+- **WHEN** `gov_sat` is true
+- **THEN** the governor row SHALL show "Регулятор на холостому, швидкість вища за задану —
+  гальмуйте" / "Governor at idle, speed above setpoint — brake" in the warning colour
+- **AND** while the governor is ACTIVE the limiter's "Limiting" row SHALL be hidden, since the
+  limiter stands down
+
+### Requirement: Pre-Crank Delay Telemetry
+The telemetry stream SHALL report the pre-crank dwell currently in use, so the web portal can show
+the stored setting.
+
+#### Scenario: Report the delay
+- **WHEN** a telemetry frame is produced
+- **THEN** it SHALL include `crank_dwell_ms`, the pre-crank dwell in use in whole ms (1000–8000)
+
+#### Scenario: Telemetry document capacity
+- **WHEN** the new key is added
+- **THEN** the worst-case telemetry document SHALL still fit `StaticJsonDocument<9216>` with
+  headroom, and the capacity comment SHALL be updated
+
+### Requirement: Unassigned Servo Channel Labels
+The web page's raw MAVLink channel rows (Ch1–Ch8, values from telemetry `mav_channels`) SHALL name
+a function only for a channel the firmware maps to one. Servo channel 7 drives nothing (see
+`mavlink-interface` "Servo Channel to Vehicle Command Mapping"), so its row SHALL keep showing the
+raw value under the plain label "Ch7" / "Кан7", like the unused channels 5 and 8, and SHALL NOT
+mention the lock.
+
+#### Scenario: Channel 7 row without a function
+- **WHEN** the web page shows the MAVLink channel rows in English or in Ukrainian
+- **THEN** the channel 7 row SHALL be labelled "Ch7" / "Кан7" and SHALL show `mav_channels[6]`
+- **AND** no channel row SHALL be labelled with the lock
+
+### Requirement: Starter Time Limit Telemetry
+The telemetry stream SHALL report the starter time limit currently in use, so the web portal can
+show the stored setting.
+
+#### Scenario: Report the limit
+- **WHEN** a telemetry frame is produced
+- **THEN** it SHALL include `crank_max_ms`, the starter time limit in use in whole ms (2000–10000)
+
+#### Scenario: Telemetry document capacity
+- **WHEN** the new key is added
+- **THEN** the worst-case telemetry document SHALL still fit its `StaticJsonDocument` with headroom
+  on every branch (9216 on `master` and `old-board`; grown to 10240 on `aztec`, whose headroom at
+  9216 would drop to ≈ 0.15 KB), and the capacity comment SHALL be updated
+
+### Requirement: Brake Position and Tuning Telemetry
+The telemetry stream SHALL report the brake position estimate, the brake tuning values in use and
+the released endstop state, so the operator can tune the brake from the web portal.
+
+#### Scenario: Report the position estimate
+- **WHEN** a telemetry frame is produced
+- **THEN** `brake_pct` SHALL be the firmware's current brake position estimate, 0–100, instead of
+  a constant 0
+- **AND** the panel's "Гальмо" / "Brake" tile SHALL show it as a whole percentage
+
+#### Scenario: Report the tuning values
+- **WHEN** a telemetry frame is produced
+- **THEN** it SHALL include `brake_travel_ms` (whole ms) and `brake_hold_pwm` (0–100, 0 = no hold
+  push), the values in use
+
+#### Scenario: Report the endstop
+- **WHEN** a telemetry frame is produced
+- **THEN** it SHALL include `brake_released`, true when the released endstop (In5) is asserted in a
+  valid input-expander snapshot
+- **AND** it SHALL be false when the endstop is not asserted or the snapshot is invalid
+
+#### Scenario: Telemetry document capacity
+- **WHEN** the new keys are added
+- **THEN** the worst-case telemetry document SHALL still fit `StaticJsonDocument<9216>` with
+  headroom, and the capacity comment SHALL be updated
 

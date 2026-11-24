@@ -155,8 +155,8 @@ The transmission control system SHALL enforce the physical gear sequence `[R, N,
 - **AND** the telemetry SHALL report the current physical gear at each step
 
 #### Scenario: Constants govern dwell timing
-- **WHEN** `TRANS_OVERSHOOT_DWELL_MS` or `TRANS_ROLLBACK_DWELL_MS` are modified in `Constants.h`
-- **THEN** the corresponding dwell durations in the transmission state machine SHALL reflect the updated values without additional code changes
+- **WHEN** `TRANS_OVERSHOOT_DWELL_MS`, `TRANS_SEQUENCE_STEP_DWELL_MS` or `TRANS_DWELL_CONFIRM_MS` are modified in `Constants.h`
+- **THEN** the overshoot-dwell timeout, the inter-step pause timeout and the sensor confirmation window SHALL reflect the updated values without additional code changes
 
 #### Scenario: Physical gear is decoded from the 3-bit gear code
 - **WHEN** `TransmissionController::getPhysicalGear()` reads a valid opto-input snapshot
@@ -210,10 +210,12 @@ The transmission control system SHALL enforce the physical gear sequence `[R, N,
 - **THEN** the physical gear SHALL be unchanged
 
 #### Scenario: UNKNOWN code while idle is re-read from later snapshots
-- **WHEN** the gear code decodes to `GEAR_UNKNOWN` and no gear change is in progress
+- **WHEN** the gear code decodes to `GEAR_UNKNOWN`, no gear change is in progress and no sequence step is queued
 - **THEN** `getPhysicalGear()` SHALL keep the previous cached gear and consume the next expander
   poll instead, at most `TRANS_GEAR_READ_RETRY_COUNT` times, without issuing I2C reads of its own
 - **AND** once the retries are spent it SHALL report `GEAR_UNKNOWN`
+- **AND** while a gear change or a queued sequence pause is in progress the reading SHALL be decoded
+  immediately (no deferral), so a stale cached gear can never count as a confirmation
 
 #### Scenario: Gear code changes are logged
 - **WHEN** the gear code differs from the last logged code
@@ -222,7 +224,10 @@ The transmission control system SHALL enforce the physical gear sequence `[R, N,
 ### Requirement: Brake Control System
 The system SHALL control braking force through a linear actuator-driven brake mechanism. The
 "fully released" endstop SHALL be read from the opto-isolated brake limit sensor (In5) through the
-input expander rather than from a dedicated GPIO.
+input expander rather than from a dedicated GPIO. The brake position SHALL be an open-loop
+estimate advanced by time while the actuator is driven, at a rate derived from the configured full
+travel time (see "Configurable Brake Travel Time and Hold Drive"), and a held non-zero position
+SHALL be maintained with the configured hold drive.
 
 #### Scenario: Set brake position by percentage
 - **WHEN** BrakeSystem.setPosition() is called with value from 0 to 100
@@ -253,6 +258,24 @@ input expander rather than from a dedicated GPIO.
 - **WHEN** system powers on or resets
 - **THEN** brakes are automatically applied to 30% (parking brake)
 - **AND** brakes remain engaged until explicitly released by user command
+
+#### Scenario: Position estimate follows the configured travel time
+- **WHEN** the actuator is driven at full drive (±255) toward the target
+- **THEN** the position estimate SHALL move toward the target by
+  `brakeRatePctPerMs(travel_ms) × |speed| / 255 × dt` per control-loop iteration, `dt` capped at
+  100 ms, and SHALL be clamped to 0–100 %
+- **AND** with the default travel time of 1500 ms the estimate SHALL go from 0 to 100 % in 1.5 s
+
+#### Scenario: Held position uses the configured hold drive
+- **WHEN** the target is non-zero and the estimate is within `BRAKE_TOLERANCE` of it
+- **THEN** the actuator SHALL be driven in the apply direction with the configured hold drive
+  (`hold_pwm`, default 30 on the 0–255 scale)
+- **AND** a hold drive of 0 SHALL stop the actuator (coast) instead of pushing
+
+#### Scenario: Endstop logic unchanged
+- **WHEN** the target is 0 and the released endstop is reached
+- **THEN** the actuator SHALL keep retracting for `BRAKE_SENSOR_OVERRUN_TIME`, then stop and sync
+  the estimate to 0 %, exactly as before this change
 
 ### Requirement: Vehicle State Coordination
 The system SHALL coordinate vehicle systems to ensure safe operation.
@@ -438,9 +461,13 @@ The system SHALL integrate ignition state control with vehicle systems coordinat
 
 #### Scenario: Monitor engine cranking completion
 - **WHEN** VehicleController.update() is called each control loop
-- **THEN** RelayController.update() is called with current engine RPM from CAN
-- **AND** cranking automatically stops when engine starts (RPM > threshold)
-- **AND** cranking automatically stops after 5-second timeout
+- **THEN** RelayController.update() SHALL be called with the validated engine RPM (see "Validated
+  Engine RPM for Crank Control"): the CAN engine RPM when the CAN data is valid and 0 otherwise on
+  the quad bike, the effective RPM (tacho first, 0 when no source is valid) on the aztec buggy
+- **AND** cranking automatically stops when the engine starts (validated RPM ≥
+  `ENGINE_RUNNING_RPM_THRESHOLD`)
+- **AND** cranking automatically stops once the starter has run for the starter time limit of the
+  attempt (see "Configurable Starter Time Limit"; 2–10 s, default 5 s = `CRANKING_TIMEOUT`)
 - **AND** ignition state transitions from CRANKING to IGNITION after cranking completes
 
 ### Requirement: Front Light Control Integration
@@ -512,36 +539,47 @@ The system SHALL provide diagnostic information about ignition and lighting syst
   - Relay3 output state
 
 ### Requirement: Transmission State Persistence
-The system SHALL persist the last confirmed transmission state (gear, servo position as float percent, validity flag) to NVS so that the servo can be restored to its last known position after a clean power cycle.
+The system SHALL persist the last confirmed transmission state (gear, servo position as float percent, validity flag) to NVS so that, when the physical gear sensor cannot tell the gear at initialisation, the servo can be restored to its last known position after a clean power cycle. The saved state SHALL be a fallback behind the sensor, never a reason to override it.
 
 #### Scenario: Mark state invalid at start of gear change
-- **WHEN** `TransmissionController::setGear()` is called
+- **WHEN** `TransmissionController::setGear()` starts a gear change
 - **THEN** `state_valid=false` SHALL be written to NVS before the servo moves
 - **AND** a mid-move power loss will therefore result in `state_valid=false` on next boot
 
 #### Scenario: Save confirmed state on gear arrival
-- **WHEN** the physical gear switch confirms the target gear is reached (RETURN phase complete)
+- **WHEN** a gear change RETURN phase completes
 - **THEN** `state_valid=true`, `state_gear`, and `state_pct` (float percent) SHALL be written to NVS
 - **AND** the saved state reflects the servo position at that moment
 
 #### Scenario: Restore servo position and skip autohome on valid state
-- **WHEN** the system starts
-- **AND** NVS `state_valid=true`
-- **THEN** the servo SHALL be commanded to `state_pct` immediately
-- **AND** the normal autohome path SHALL be skipped
-- **AND** the system SHALL log "Restored transmission state, skipping autohome"
+- **WHEN** the transmission is initialised, the physical gear reads `GEAR_UNKNOWN`
+- **AND** NVS `state_valid=true`, `state_gear` is R, N, H or L and `state_pct` is within 0.0–100.0
+- **THEN** the servo SHALL be commanded to `state_pct` directly (no overshoot)
+- **AND** the expected gear SHALL become `state_gear`
+- **AND** the system SHALL log `[TRANS] Initialised from NVS: <gear> at <pct>%`
+- **AND** when the physical gear reads exactly one gear, NVS SHALL NOT be used (the sensor wins)
 
 #### Scenario: Fall back to neutral default on invalid or missing state
-- **WHEN** the system starts
-- **AND** NVS `state_valid=false`, or no state is saved
-- **THEN** the servo SHALL be commanded to the neutral default position (`TRANS_GEAR_DEFAULT_NEUTRAL_PCT`)
-- **AND** the system SHALL log the reason (invalid flag / no data)
+- **WHEN** the transmission is initialised, the physical gear reads `GEAR_UNKNOWN`
+- **AND** NVS `state_valid=false`, no state is saved, or the saved gear / position is implausible
+- **THEN** the servo SHALL NOT jump directly to the neutral default position
+- **AND** the transmission SHALL instead perform the initialisation step into NEUTRAL (see
+  Transmission Gear Sync With the Physical Sensor), using the invalid record only as an
+  overshoot-direction hint
+- **AND** the initialisation step SHALL mark the state invalid without overwriting the stored
+  `state_pct`, so a power loss during it leaves the same hint
+
+#### Scenario: Resync and sensor initialisation save a valid state
+- **WHEN** the expected gear is set from the sensor (initialisation or resync)
+- **THEN** `state_valid=true`, `state_gear` = the sensor gear and `state_pct` = the current servo
+  position SHALL be written to NVS
 
 ### Requirement: Throttle Boost During Gear Changes
-The system SHALL use a PID controller to regulate engine RPM to a configurable target value (`TRANS_GEAR_BOOST_TARGET_RPM`) for the duration of a gear change, overriding SBUS/web throttle commands while active.
+The system SHALL use a PID controller to regulate engine RPM to a configurable target value (`TRANS_GEAR_BOOST_TARGET_RPM`, overridden by NVS namespace `"boost"` key `target_rpm`) for the duration of a gear change, overriding SBUS/web throttle commands while active. Whether a gear change runs the PID or only holds the throttle at idle SHALL be governed by a persisted per-vehicle switch, NVS namespace `"boost"` key `enabled` (bool), default true, loaded at start-up and written immediately when changed. The manual boost test (`test_boost`) SHALL NOT be governed by the switch.
 
 #### Scenario: Activate PID boost when gear change starts
 **Given** a gear change is initiated (transmission actuator starts moving toward a non-NEUTRAL gear)
+**And** the gear-change boost switch is enabled
 **When** `transmission_.needsThrottleBoost()` returns true
 **Then** the gear boost PID SHALL be activated
 **And** CAN RPM polling SHALL switch to fast mode (`CAN_POLL_INTERVAL_RPM_BOOST`)
@@ -590,6 +628,46 @@ The system SHALL use a PID controller to regulate engine RPM to a configurable t
 **When** `updateGearBoostPID()` is called
 **Then** the PID SHALL NOT activate (engine not running — boosting throttle is unsafe)
 **And** the throttle SHALL remain at idle
+
+#### Scenario: Default switch state on a unit without a stored value
+- **WHEN** the system starts and `boost/enabled` has never been written
+- **THEN** the gear-change boost SHALL be enabled, exactly as before this switch existed
+
+#### Scenario: Stored switch state is restored
+- **WHEN** the system starts and `boost/enabled` holds false
+- **THEN** the gear-change boost SHALL be disabled until it is switched on again
+
+#### Scenario: Idle hold instead of boost on a gear change while disabled
+- **WHEN** the gear-change boost switch is disabled
+- **AND** `transmission_.needsThrottleBoost()` returns true
+- **THEN** the gear boost PID SHALL NOT be activated and the CAN RPM poll rate SHALL NOT change
+- **AND** the throttle SHALL be held at idle for as long as `needsThrottleBoost()` stays true,
+  whether or not CAN data is valid and whatever the engine RPM
+- **AND** MAVLink throttle SHALL NOT be applied, the web throttle demand SHALL NOT re-open the
+  throttle, and a web `throttle` command SHALL be rejected with "Gear change active", exactly as
+  while the PID is active (one shared shift lock: PID active or idle hold)
+- **AND** the gear-change sequence, its interlocks and the overshoot dwell SHALL be unchanged
+
+#### Scenario: Idle hold released when the gear change completes
+- **WHEN** the idle hold is active and `transmission_.needsThrottleBoost()` returns false
+- **THEN** the hold SHALL end with the throttle set to idle and the stored web throttle demand zeroed
+- **AND** MAVLink throttle SHALL be applied again from the next update cycle
+
+#### Scenario: Disabling during an active gear-change boost
+- **WHEN** the switch is turned off while the gear boost PID is active for a gear change
+- **THEN** the PID SHALL be released as on gear-change completion: CAN RPM polling SHALL revert to
+  `CAN_POLL_INTERVAL_RPM`, the throttle SHALL be set to idle, `gearBoostActive_` SHALL become false
+  and the stored web throttle demand SHALL be zeroed
+- **AND** if `needsThrottleBoost()` is still true, the idle hold SHALL continue until it goes false
+
+#### Scenario: Enabling during a gear change
+- **WHEN** the switch is turned on while the idle hold is active
+- **THEN** the idle hold SHALL continue until `needsThrottleBoost()` goes false
+- **AND** the gear boost PID SHALL NOT be started mid-dwell; it SHALL run from the next gear change
+
+#### Scenario: Manual boost test ignores the switch
+- **WHEN** the switch is disabled and the manual boost test (`test_boost` true) is started
+- **THEN** the gear boost PID SHALL run toward the target RPM exactly as when the switch is enabled
 
 ### Requirement: 24V Boost Rail Control and Monitoring
 The system SHALL enable the external 12V→24V boost converter at boot and SHALL monitor the resulting
@@ -1112,18 +1190,19 @@ The override SHALL be volatile, SHALL expire on its own, and SHALL be visible wh
 
 ### Requirement: Front-Wheel Lock Not Fitted
 The aztec buggy SHALL have no relay behind the front-wheel lock function (`RELAY_WHEEL_LOCK_FITTED =
-0`). The wheel-lock plumbing (MAVLink servo channel 7, web `set_wheel_lock` command, telemetry fields)
+0`). The wheel-lock plumbing (web `set_wheel_lock` command, GCS lock command, telemetry fields)
 SHALL be kept so a later change can replace it with the buggy's three locks, but a lock request SHALL
-never be reported as applied.
+never be reported as applied. No RC / MAVLink servo channel drives the lock (see "Lock Not Driven by
+an RC Channel").
 
 #### Scenario: Lock request is rejected
-- **WHEN** `VehicleController::setWheelLock(true)` is called from the MAVLink or the web path
+- **WHEN** `VehicleController::setWheelLock(true)` is called from the web or the GCS path
 - **THEN** `RelayController::setWheelLock()` SHALL return `false` without writing the relay port
 - **AND** the first rejection after boot SHALL be logged; later ones SHALL NOT flood the log
 - **AND** `getWheelLock()` SHALL return `false`
 
 #### Scenario: Release request is a no-op
-- **WHEN** `setWheelLock(false)` is called (every control loop while MAVLink channel 7 is low)
+- **WHEN** `setWheelLock(false)` is called
 - **THEN** it SHALL return `true` without writing the relay port and without logging
 
 #### Scenario: Fitted state is queryable
@@ -1293,14 +1372,23 @@ table (masks shown for the PCA9557 / XL9535 board):
 - Relay_7 / Relay_8 spare (`RELAY_SET_RESERVED`; `0b00000011` / `0b11000000`).
 
 The front-wheel lock SHALL be fitted (`RELAY_WHEEL_LOCK_FITTED` = 1). It replaces, for this build
-only, the aztec buggy's "Front-Wheel Lock Not Fitted" behaviour.
+only, the aztec buggy's "Front-Wheel Lock Not Fitted" behaviour. It SHALL be driven by the web
+`set_wheel_lock` command and the GCS lock command only, never by an RC / MAVLink servo channel (see
+"Lock Not Driven by an RC Channel").
 
-#### Scenario: Wheel lock from MAVLink channel 7
-- **WHEN** MAVLink servo channel 7 is above 1520 µs (e.g. 2000)
+#### Scenario: Wheel lock from the web or the GCS
+- **WHEN** a web `set_wheel_lock` true command, or a GCS lock ON command accepted under MAVLink
+  control, arrives
 - **THEN** Relay_5 and Relay_6 SHALL both be energized, `getWheelLock()` SHALL return `true`,
   telemetry `wheel_lock_on` SHALL be `true` and `EFI_DIGITAL_FLAG_WHEEL_LOCK` SHALL be set
-- **AND WHEN** channel 7 returns to 1000 µs
+- **AND WHEN** a web `set_wheel_lock` false command or an accepted GCS lock OFF command arrives
 - **THEN** both relays SHALL be released and the lock SHALL report unlocked
+
+#### Scenario: Wheel lock from MAVLink channel 7
+- **WHEN** MAVLink servo channel 7 is above 1520 µs (e.g. 2000), or returns to 1000 µs
+- **THEN** Relay_5 and Relay_6 SHALL keep their commanded state, `getWheelLock()`,
+  `wheel_lock_on` and `EFI_DIGITAL_FLAG_WHEEL_LOCK` SHALL NOT change (channel 7 no longer drives
+  the lock)
 
 #### Scenario: Same relays on either board
 - **WHEN** the quad build runs with the PCA9557 board or with the XL9535 board
@@ -1501,8 +1589,8 @@ throttle SHALL never be rate-limited.
 
 ### Requirement: GCS Vehicle Command Interlocks
 The vehicle layer SHALL execute the GCS vehicle commands (gear, ignition, headlight, diff lock)
-through the same controllers the RC path uses and SHALL be the arbiter of every interlock. "Not
-under MAVLink control" SHALL mean `currentInputSource_ != InputSource::MAVLINK` OR
+through the same controllers the RC and web paths use and SHALL be the arbiter of every interlock.
+"Not under MAVLink control" SHALL mean `currentInputSource_ != InputSource::MAVLINK` OR
 `!isSignalValid()`; it therefore covers the fail-safe source, the web portal as the source after
 an RC stream loss with a browser connected, and the web portal with web control latched (owner
 decision D-B). Reason 3 SHALL be given for exactly this condition, and fail-safe behaviour itself
@@ -1525,13 +1613,17 @@ SHALL NOT change.
     distance and engine-hour counters on a transition into OFF;
   - ACC or ON not under MAVLink control → reason 3;
   - ACC → relay state ACC, cancelling a pending or active crank;
-  - ON with the engine running → `ACCEPTED` without a crank;
-  - ON otherwise → `requestCrank()` exactly like a fresh RC transition into IGNITION (pre-crank
-    dwell `ACC_PRECRANK_DWELL_MS`, starter at most `CRANKING_TIMEOUT`).
+  - ON with the engine running (`isEngineRunning()`, which reads the engine RPM cleared at
+    ignition OFF — see "Validated Engine RPM for Crank Control") → `ACCEPTED` without a crank;
+  - ON otherwise → `requestCrank()` exactly like a fresh RC transition into IGNITION (the
+    configured pre-crank dwell — see "Configurable Pre-Crank Dwell", default 3000 ms — starter at
+    most `CRANKING_TIMEOUT`).
 - **Headlight**: always accepted, in every input source.
-- **Diff lock**: not under MAVLink control → reason 3; otherwise the same `setWheelLock()` path
-  channel 7 uses (quad bike: Relay_5 + Relay_6; buggy: Relay_4 + Relay_5 + Relay_6), reported in
-  `EFI_STATUS.pt_compensation` bit0.
+- **Diff lock**: not under MAVLink control → reason 3; otherwise the same `setWheelLock()` path the
+  web `set_wheel_lock` command uses (quad bike: Relay_5 + Relay_6; buggy: Relay_4 + Relay_5 +
+  Relay_6), reported in `EFI_STATUS.pt_compensation` bit0. No RC channel drives the lock (see "Lock
+  Not Driven by an RC Channel"), so an accepted diff-lock command holds until the next web or GCS
+  lock command.
 - With the relay board unavailable, an ignition, headlight or diff-lock command SHALL be answered
   `MAV_RESULT_FAILED` and SHALL change nothing.
 
@@ -1570,18 +1662,30 @@ SHALL NOT change.
 - **WHEN** a GCS ignition ON command arrives under MAVLink control with the ignition OFF and the
   engine stopped
 - **THEN** the ACK SHALL be `ACCEPTED`
-- **AND** the ignition line SHALL come up, the starter SHALL engage after the pre-crank dwell and
-  SHALL stop on engine start or after `CRANKING_TIMEOUT`
+- **AND** the ignition line SHALL come up, the starter SHALL engage after the configured pre-crank
+  dwell and SHALL stop on engine start or after `CRANKING_TIMEOUT`
+
+#### Scenario: Ignition ON right after an engine kill
+- **WHEN** the engine was running at or above `ENGINE_RUNNING_RPM_THRESHOLD`, a GCS ignition OFF
+  stopped it, and a GCS ignition ON arrives less than `CAN_DATA_STALE_TIMEOUT` later
+- **THEN** the command SHALL NOT be treated as "ON with the engine running"
+- **AND** the auto-crank SHALL start as in "Auto-crank from the GCS"
+
+#### Scenario: Diff lock holds against channel 7
+- **WHEN** a GCS diff-lock ON command is accepted under MAVLink control and servo channel 7 then
+  moves from 1900 µs to 1100 µs
+- **THEN** the lock SHALL stay engaged
 
 #### Scenario: Relay board unavailable
 - **WHEN** a GCS headlight command arrives while the relay expander is faulted
 - **THEN** the ACK SHALL be `MAV_RESULT_FAILED`
 
 ### Requirement: Last-Change-Wins Arbitration of RC Channels and GCS Commands
-RC channels (CH3 gear, CH4 ignition, CH6 headlight, CH7 diff lock) and GCS commands SHALL be equal
-sources, and the most recent change SHALL win. The every-loop re-apply of these four functions from
-the RC channels SHALL be removed; steering, throttle and brake SHALL still follow the RC channels
-every loop.
+RC channels (CH3 gear, CH4 ignition, CH6 headlight) and GCS commands SHALL be equal sources, and
+the most recent change SHALL win. The every-loop re-apply of these three functions from the RC
+channels SHALL be removed; steering, throttle and brake SHALL still follow the RC channels every
+loop. The diff lock is not an RC function: CH7 SHALL NOT be read and the lock SHALL be set only by
+the web and GCS commands (see "Lock Not Driven by an RC Channel").
 
 - Per function the vehicle layer SHALL keep the last in-band decoded RC value. A value outside
   880–2160 µs (including 0) SHALL be treated as absent.
@@ -1592,9 +1696,10 @@ every loop.
   decision D-A) and on every return from the web portal to MAVLink control, whether web control was
   released or the RC stream returned while a browser was connected (owner decision D-H) — the stored
   values and the pending RC gear SHALL have been cleared, so the first valid RC frame sets gear,
-  ignition, headlight and diff lock again. They SHALL be cleared in every loop in which the input
-  source is not MAVLink. RC ignition ON SHALL then call `requestCrank()` (suppressed when the engine
-  runs). A GCS or web command given before RC came back in control SHALL NOT be restored.
+  ignition and headlight again; the lock SHALL NOT be touched. They SHALL be cleared in every loop in
+  which the input source is not MAVLink. RC ignition ON SHALL then call `requestCrank()` (suppressed
+  when the engine runs). A GCS or web command given before RC came back in control SHALL NOT be
+  restored.
 - An RC gear change requested while the engine is not running, or refused by the speed interlock,
   SHALL stay pending and SHALL be applied once the engine runs and the transmission accepts it
   (today's retry, owner decision D-E). A GCS gear command that is accepted later SHALL cancel the
@@ -1606,9 +1711,14 @@ every loop.
 - **THEN** the headlight SHALL stay on in every following loop while CH6 does not change
 
 #### Scenario: RC edge wins over an earlier command
+- **WHEN** a GCS headlight ON was accepted and CH6 then moves from 1100 µs to 1900 µs and back to
+  1100 µs
+- **THEN** the headlight SHALL follow the RC channel: on, then off
+
+#### Scenario: CH7 is not an arbitrated channel
 - **WHEN** a GCS diff-lock ON was accepted and CH7 then moves from 1100 µs to 1900 µs and back to
   1100 µs
-- **THEN** the lock SHALL follow the RC channel: on, then off
+- **THEN** the lock SHALL stay on
 
 #### Scenario: Channel loss is not a change
 - **WHEN** a GCS ignition ON command was accepted and CH4 reads 0 µs in the following frames
@@ -1616,22 +1726,25 @@ every loop.
 - **AND** when CH4 returns to the same in-band OFF value it had before, the ignition SHALL stay ON
 
 #### Scenario: Fail-safe exit re-sync
-- **WHEN** the RC stream is lost with no browser connected (fail-safe, all relays off) and returns
-  with CH4 in the ON band
-- **THEN** the first valid frame SHALL call `requestCrank()` and set gear, headlight and lock from
-  their channels, exactly as at boot
+- **WHEN** the RC stream is lost with no browser connected (fail-safe, all relays off except the
+  lock) and returns with CH4 in the ON band
+- **THEN** the first valid frame SHALL call `requestCrank()` and set gear and headlight from their
+  channels, exactly as at boot
+- **AND** the lock SHALL keep the state it had before the loss
 
 #### Scenario: Return from web control re-sync
 - **WHEN** the web portal was the input source and switched the headlight on and the ignition off,
   and MAVLink control returns (web control released, or the RC stream returns while a browser is
   connected) with CH6 in the OFF band and CH4 in the ON band
 - **THEN** the first valid frame SHALL switch the headlight off and SHALL call `requestCrank()`
-- **AND** gear and diff lock SHALL be set from CH3 and CH7 in the same frame
+- **AND** gear SHALL be set from CH3 in the same frame
+- **AND** the lock SHALL keep the state the web portal left it in, whatever CH7 reads
 
 #### Scenario: RC-only vehicle unchanged
 - **WHEN** the ground station never sends a vehicle command
-- **THEN** gear, ignition (including the auto-crank on a fresh ON), headlight and diff lock SHALL
-  follow the RC channels as before this change, for every in-band value
+- **THEN** gear, ignition (including the auto-crank on a fresh ON) and headlight SHALL follow the RC
+  channels as before this change, for every in-band value
+- **AND** the lock SHALL change only on a web command
 
 #### Scenario: Pending RC gear superseded by the GCS
 - **WHEN** CH3 moves to L with the engine stopped, the engine starts, and before the transmission
@@ -1692,4 +1805,595 @@ journal. The instrumentation SHALL NOT change the order or behavior of the phase
 - **WHEN** free heap falls below `JOURNAL_HEAP_WARN_BYTES` (40 KB)
 - **THEN** `SYS W heap_low free=<bytes> min=<bytes>` SHALL be journaled once
 - **AND** `SYS I heap_ok` SHALL be journaled when free heap rises 8 KB above the threshold
+
+### Requirement: Transmission Gear Sync With the Physical Sensor
+The expected gear (`TransmissionController::targetGear_`) SHALL be initialised from, and kept
+reconciled with, the physical gear sensor. Until it is initialised the expected gear SHALL be
+`GEAR_UNKNOWN`, which SHALL be the only meaning of an UNKNOWN expected gear. Initialisation SHALL
+use, in order: the physical gear when it reads exactly one gear, else a valid NVS state, else a
+real shift step into NEUTRAL; it SHALL never leave the transmission waiting for the sensor. The
+choice of source, the initialisation-step overshoot direction and the resync decision SHALL live
+in the header-only
+`include/TransmissionLaw.h`, covered by the native suite `test_transmission_sync`.
+
+#### Scenario: Not initialised at power-up
+- **WHEN** the system starts
+- **THEN** the expected gear and the outgoing gear SHALL be `GEAR_UNKNOWN`
+- **AND** the transmission servo SHALL keep no pulse until initialisation commands it
+
+#### Scenario: Initialisation on first engine running
+- **WHEN** the transmission is not initialised and the engine is detected running
+- **THEN** `VehicleController::update()` SHALL run the initialisation once
+
+#### Scenario: Initialisation step into NEUTRAL
+- **WHEN** initialisation runs, the physical gear reads `GEAR_UNKNOWN` and NVS holds no valid state
+- **THEN** the system SHALL log `[TRANS] Init: sensor unknown, stepping to NEUTRAL`
+- **AND** it SHALL perform a normal shift step to NEUTRAL (overshoot, overshoot dwell, return)
+  through the gear-change state machine, so the gear-change boost or shift idle hold applies as for
+  any step
+- **AND** the expected gear SHALL be NEUTRAL from the start of the step, the outgoing gear
+  `GEAR_UNKNOWN`
+- **AND** the overshoot move SHALL use the fixed settle time `TRANS_INIT_SETTLE_MS` (1500 ms)
+  instead of a travel time computed from the unknown servo position
+
+#### Scenario: Initialisation step overshoot direction
+- **WHEN** the initialisation step starts
+- **THEN** with an NVS record whose `state_pct` is within 0.0–100.0, the overshoot direction SHALL be
+  the sign of (NEUTRAL position − `state_pct`), so a lever on the R side overshoots toward H and a
+  lever on the H/L side overshoots toward R
+- **AND** when `state_pct` equals the NEUTRAL position, the sign of (NEUTRAL position − position of
+  `state_gear`) SHALL be used
+- **AND** with no record, a `state_pct` outside 0.0–100.0 or not a number, or no usable sign, the
+  direction SHALL be +1 (toward H)
+
+#### Scenario: Initialisation step completes
+- **WHEN** the initialisation step's RETURN phase completes
+- **THEN** with the physical gear reading NEUTRAL it SHALL complete like any step (state saved valid)
+- **AND** with the physical gear still `GEAR_UNKNOWN` NEUTRAL SHALL be accepted as the working
+  assumption, the state saved valid, and the system SHALL log
+  `[TRANS] Init: sensor silent, assuming NEUTRAL`; the idle resync SHALL correct the expected gear
+  if the sensor later reports another gear
+
+#### Scenario: Gear requests during the initialisation step
+- **WHEN** `setGear()` is called while the initialisation step runs
+- **THEN** it SHALL behave as during any active step: the destination is queued and shifted to
+  after the step completes
+
+#### Scenario: Initialise from the sensor
+- **WHEN** initialisation is tried and the physical gear reads exactly one gear
+- **THEN** the expected gear SHALL become that gear, whatever NVS holds
+- **AND** the servo SHALL be commanded directly (no overshoot) to that gear's configured position
+- **AND** the system SHALL log `[TRANS] Initialised from sensor: <gear>`
+
+#### Scenario: Throttle capped while not initialised
+- **WHEN** the expected gear is `GEAR_UNKNOWN`
+- **THEN** throttle from every source SHALL be capped at `TRANS_UNKNOWN_GEAR_THROTTLE_MAX` (8.5 %),
+  as for NEUTRAL or an active gear change
+
+#### Scenario: Gear requests refused while not initialised
+- **WHEN** `setGear()` is called while the expected gear is `GEAR_UNKNOWN`
+- **THEN** it SHALL return false without commanding the servo, writing NVS or changing the queue
+- **AND** a MAVLink gear request SHALL be retried by the existing retry loop until it is accepted
+
+#### Scenario: Assumed gear reported as unknown before initialisation
+- **WHEN** the expected gear is `GEAR_UNKNOWN`
+- **THEN** `getTargetGearString()` and `getFromGearString()` SHALL return `"?"`, never `"N"`
+
+#### Scenario: Resync after a confirmed mismatch
+- **WHEN** the transmission is initialised, no gear change is active and no sequence is queued
+- **AND** the idle check (every `TRANS_GEAR_CHECK_INTERVAL`, 500 ms) sees the physical gear read the
+  same single gear, different from the expected gear, on `TRANS_RESYNC_CONFIRM_CHECKS` (2)
+  consecutive checks
+- **THEN** the expected gear SHALL become the physical gear and the state SHALL be saved valid with
+  the current servo position
+- **AND** the servo SHALL NOT be moved
+- **AND** the system SHALL log `[TRANS] Resynced from sensor: target=<old> -> <new>`
+- **AND** the first detection SHALL still log `[TRANS] MISMATCH: target=<old>, physical=<new>`
+
+#### Scenario: No resync on a transient or unknown reading
+- **WHEN** a check reads `GEAR_UNKNOWN`, the expected gear, or a different single gear than the
+  previous mismatching check
+- **THEN** the consecutive-mismatch count SHALL restart and no resync SHALL happen on that check
+- **AND** starting a gear change SHALL reset the count
+
+### Requirement: Sensor-Confirmed Gear-Change Waits
+Both waits of a gear change — the overshoot dwell and the pause between sequence steps — SHALL
+end as soon as the physical gear sensor confirms the expected gear, and SHALL keep their fixed
+durations only as timeouts, so a shift is never slower than before and is faster whenever the
+sensor works. The confirmation decision SHALL live in the header-only `include/TransmissionLaw.h`,
+covered by the native suite `test_transmission_sync`.
+
+#### Scenario: Continuous confirmation
+- **WHEN** a wait is in progress and the physical gear reads the expected gear
+- **THEN** the confirmation window SHALL start at that first matching read
+- **AND** the wait SHALL end when the gear has read the expected gear on every read for
+  `TRANS_DWELL_CONFIRM_MS` (200 ms)
+- **AND** any other reading (another gear or `GEAR_UNKNOWN`) SHALL restart the window
+
+#### Scenario: Timeout keeps today's behaviour
+- **WHEN** the sensor never confirms (disconnected, stuck or reading another gear)
+- **THEN** the overshoot dwell SHALL end after `TRANS_OVERSHOOT_DWELL_MS` (2000 ms) and the pause
+  after `TRANS_SEQUENCE_STEP_DWELL_MS` (1000 ms), exactly as before this change
+
+#### Scenario: Boost and idle hold follow the shorter dwell
+- **WHEN** the overshoot dwell ends early on confirmation
+- **THEN** `needsThrottleBoost()` SHALL become false at the same moment (it stays true exactly
+  while the phase is `OVERSHOOT_DWELL`), releasing the boost PID or the shift idle hold
+
+#### Scenario: Wait outcome is logged
+- **WHEN** a wait ends
+- **THEN** a TRANSMISSION debug line SHALL say whether it was confirmed (with the elapsed ms) or
+  timed out
+- **AND** when a single step or a whole sequence completes, its total duration SHALL be logged;
+  telemetry and the web UI SHALL be unchanged
+
+### Requirement: Configurable Speed-Limiter Ceiling Rate
+The rate limit on the speed-limiter throttle ceiling SHALL be a persisted, operator-set value in
+percent per second. It SHALL default to `SPEED_LIMIT_SLEW_DEFAULT_PCT_S` (80 %/s) and SHALL be
+accepted in the range `SPEED_LIMIT_SLEW_MIN_PCT_S`–`SPEED_LIMIT_SLEW_MAX_PCT_S` (10–200 %/s). It
+SHALL be stored in NVS namespace `"speed"` under the key `thr_slew` (float, %/s), loaded at
+start-up and written immediately when changed. Wherever the speed-limiter requirements name
+`SPEED_LIMIT_CEILING_SLEW_PCT_S` — the ceiling rate limit in both directions and the cap on the
+trim's fall — the configured rate SHALL be used.
+
+#### Scenario: Default rate on a unit without a stored value
+- **WHEN** the system starts and `thr_slew` has never been written
+- **THEN** the ceiling rate limit SHALL be 80 %/s, exactly as before this setting existed
+
+#### Scenario: Stored rate is restored
+- **WHEN** the system starts and `thr_slew` holds a value within 10–200 %/s
+- **THEN** that value SHALL be the ceiling rate limit
+
+#### Scenario: Invalid stored rate is ignored
+- **WHEN** the system starts and `thr_slew` holds NaN or a value outside 10–200 %/s
+- **THEN** the stored value SHALL be ignored and logged, and the default SHALL be used
+- **AND** the stored value SHALL NOT be repaired or rewritten
+
+#### Scenario: Rate changed at runtime
+- **WHEN** a valid new rate is set
+- **THEN** it SHALL be persisted to `thr_slew` immediately, and the value in use SHALL change
+  only after the write succeeded
+- **AND** it SHALL take effect on the next limiter evaluation, for the ceiling movement in both
+  directions and for the cap on the trim's fall
+
+#### Scenario: A lower rate closes the throttle more gently
+- **WHEN** the speed is far above the limit and the rate is 20 %/s instead of 80 %/s
+- **THEN** over the same 0.5 s the ceiling SHALL fall by 10 % instead of 40 %
+
+### Requirement: Speed Governor
+The system SHALL provide an opt-in speed governor. While the governor switch is ON, an effective
+speed limit `L` > 0 exists (the same limit the maximum-speed limiter enforces: the usable
+`SPEED_MAX`, and on the buggy the lower of it and the fixed gear ceiling), the speed reading is
+valid and no bypass condition holds, the governor SHALL be ACTIVE: the throttle input — the RC
+throttle (channel 2 above centre) or the standing web throttle demand — SHALL be a speed setpoint,
+and the throttle SHALL be computed by a closed loop on the measured wheel speed. The law SHALL live
+in a pure header (`include/SpeedGovernorLaw.h`) without Arduino dependencies. The governor SHALL
+apply regardless of the autopilot's flight mode. It SHALL NOT command the brake: its lowest output
+SHALL be the calibrated idle (0 %).
+
+#### Scenario: Stick maps to a speed up to the limit
+- **WHEN** the governor is ACTIVE with limit `L` and the throttle input is `s` %
+- **THEN** for `s` ≤ `GOV_STICK_DEADBAND_PCT` (5 %) the target speed SHALL be 0
+- **AND** above it the target SHALL be `vMin + (s − 5)/(100 − 5) × (L − vMin)`, with
+  `vMin = min(GOV_MIN_SETPOINT_MS (1.4 m/s), 0.5 × L)`
+- **AND** at `s` = 100 % the target SHALL equal `L`, so no speed above the limit can be commanded
+
+#### Scenario: Setpoint is ramped
+- **WHEN** the target speed changes
+- **THEN** the setpoint used by the loop SHALL move toward it by at most the configured
+  acceleration (m/s²) per second upward and the configured deceleration per second downward
+- **AND** a lowered limit SHALL lower the target and the setpoint SHALL follow at the deceleration
+
+#### Scenario: PI on the speed error with anti-windup
+- **WHEN** the governor is ACTIVE with setpoint `vr` and measured speed `v`
+- **THEN** the output SHALL be `clamp(Kp × (vr − v) + I, 0, uMax)`, where `I` integrates
+  `Ki × (vr − v)` over time and is clamped to 0–`uMax`
+- **AND** `v` SHALL be the speed reading as reported by the speed sensor, without additional
+  filtering and without an error dead-band
+- **AND** `I` SHALL NOT integrate further in the direction of a saturated output (output at `uMax`
+  with a positive error, or at 0 with a negative error)
+- **AND** the output SHALL move toward that value by at most the throttle rate `thr_slew` per second
+- **AND** the elapsed time used SHALL be capped at one second
+
+#### Scenario: Default gains at a 10 km/h limit
+- **WHEN** the governor runs with the build's default settings (see "Speed Governor Settings"),
+  limit 10 km/h, stick at 100 %, integrator 0, and the speed is 0 with the setpoint already ramped
+  to 10 km/h (2.78 m/s)
+- **THEN** the proportional part SHALL ask for `Kp` × 2.78: about 2.8 % on the buggy (`aztec`,
+  Kp 1.0) and about 8.3 % on the quad bike (`master`, `old-board`, Kp 3.0)
+- **AND** the output SHALL be bounded by the build's default start throttle limit (4 % on the
+  buggy, 10 % on the quad bike) until the wheels turn
+
+#### Scenario: Start throttle limit while the wheels do not turn
+- **WHEN** the governor is ACTIVE and the measured speed is below `GOV_STANDSTILL_MS`
+- **THEN** `uMax` SHALL be the configured start throttle limit instead of 100 %
+- **AND** the integrator SHALL therefore not wind up beyond the start throttle limit while the
+  vehicle stands (engine off, clutch not engaged, stuck)
+
+#### Scenario: Stick released means stop
+- **WHEN** the throttle input is at or below the 5 % dead-band
+- **THEN** the throttle SHALL go to idle at once, without the output rate limit
+- **AND** the setpoint and the integrator SHALL be reset to 0
+
+#### Scenario: Downhill, the governor cannot hold the speed
+- **WHEN** the output is at idle and the speed stays above the setpoint
+- **THEN** the governor SHALL leave the throttle at idle and SHALL NOT act on the brake
+- **AND** the web-only saturation indicator (see "Speed Governor Telemetry") SHALL report it
+
+#### Scenario: Autopilot mode is not consulted
+- **WHEN** the autopilot reports any flight mode
+- **THEN** the governor's behaviour SHALL be the same as in MANUAL
+
+### Requirement: Speed Governor Settings
+The governor SHALL be configured by persisted per-vehicle settings in NVS namespace `"speed"`
+(owned by `VehicleController`, shared with the speed sensor and the limiter, never cleared):
+
+| Setting | Key | Type | Range | Default, buggy (`aztec`) | Default, quad bike (`master`, `old-board`) |
+|---|---|---|---|---|---|
+| switch | `gov_en` | bool | — | off | off |
+| proportional gain | `gov_kp` | float, % per m/s | 0.2–10 | 1.0 | 3.0 |
+| integral gain | `gov_ki` | float, %/s per m/s | 0–5 | 0.35 | 1.0 |
+| setpoint acceleration | `gov_acc` | float, m/s² | 0.3–3.0 | 1.0 | 1.0 |
+| setpoint deceleration | `gov_dec` | float, m/s² | 0.5–5.0 | 2.5 | 2.5 |
+| start throttle limit | `gov_launch` | float, % | 1–40 | 4 | 10 |
+
+The ranges SHALL be the same on every build; the defaults SHALL be those of the vehicle the build
+is for (the column matching the build's vehicle type: 2 = buggy on `aztec`, 1 = quad bike on
+`master` and `old-board`), and a build whose compiled governor defaults are tagged for another
+vehicle type SHALL fail to compile. The same values SHALL apply at every effective limit (no
+scheduling by the limit). They SHALL be loaded at start-up; an absent key SHALL read as the
+build's default; a stored NaN or out-of-range value SHALL be logged and ignored (default used, not
+rewritten). A default SHALL apply only while the key is absent or invalid: a valid stored value
+SHALL never be replaced by a default, including after a firmware update that changes the
+defaults. A new value SHALL be
+validated, persisted first and applied only after the write succeeded, and SHALL take effect on the
+next governor evaluation.
+
+#### Scenario: Default on a unit without stored values
+- **WHEN** the system starts and no `gov_*` key has been written
+- **THEN** the governor switch SHALL be off and the throttle path SHALL be exactly as before this
+  change
+- **AND** when the switch is turned on the governor SHALL use acceleration 1.0 m/s² and
+  deceleration 2.5 m/s², and on the buggy Kp 1.0, Ki 0.35 and a start throttle limit of 4 %, on
+  the quad bike Kp 3.0, Ki 1.0 and a start throttle limit of 10 %
+
+#### Scenario: Defaults belong to the build's vehicle
+- **WHEN** the firmware is built for the buggy (vehicle type 2) while the compiled governor
+  defaults are tagged as the quad bike's (vehicle type 1), or the other way round
+- **THEN** the build SHALL fail with a message naming the governor defaults
+
+#### Scenario: Stored values survive a change of defaults
+- **WHEN** valid `gov_*` values are stored and a firmware with different compiled defaults is
+  flashed
+- **THEN** the stored values SHALL stay in use and SHALL NOT be rewritten
+
+#### Scenario: Start throttle limit down to low single digits
+- **WHEN** the operator sets the start throttle limit to 1 %
+- **THEN** the value SHALL be accepted
+- **AND** 0.5 % or 41 % SHALL be rejected
+
+#### Scenario: Stored settings are restored
+- **WHEN** the system starts with valid stored values
+- **THEN** those values SHALL be in use, per vehicle
+
+#### Scenario: Invalid stored value
+- **WHEN** a stored `gov_*` value is NaN or outside its range
+- **THEN** it SHALL be ignored and logged, the default SHALL be used, and the key SHALL NOT be
+  rewritten
+
+#### Scenario: Setting rejected
+- **WHEN** a new value is outside its range or the NVS write fails
+- **THEN** the value in use SHALL stay unchanged
+
+### Requirement: Speed Governor Hand-Over and Speed-Sensor Fail-Open
+Whenever the governor is not ACTIVE the throttle SHALL follow the path that existed before this
+change (direct throttle, with the maximum-speed limiter where a limit exists). A change between
+the two SHALL NOT produce a throttle step, except a closing to idle commanded by the operator or a
+safety clip. An invalid speed reading SHALL make the governor stop governing (fail-open): the
+throttle input SHALL become a direct throttle again without any governor restriction.
+
+#### Scenario: Switch off is today's behaviour
+- **WHEN** the governor switch is off
+- **THEN** the commanded throttle SHALL be identical to the firmware without the governor, including
+  the maximum-speed limiter
+
+#### Scenario: No effective limit means direct throttle
+- **WHEN** the switch is on and the effective limit is zero
+- **THEN** the throttle input SHALL pass through as today
+
+#### Scenario: Speed signal lost while governing
+- **WHEN** the governor is ACTIVE and the speed reading becomes invalid
+- **THEN** the governor SHALL stop governing and the throttle SHALL move from the governor's last
+  output toward the direct (today's) value by at most `thr_slew` per second, in either direction
+- **AND** once it has reached that value the throttle input SHALL be a direct throttle, so a stick
+  at 100 % SHALL mean full throttle
+- **AND** a stick moved into the dead-band or a brake command during the blend SHALL close the
+  throttle to idle at once
+
+#### Scenario: No pulse since boot counts as invalid
+- **WHEN** the system has not seen a speed pulse since boot
+- **THEN** the speed reading SHALL count as invalid for the governor and the throttle SHALL be direct
+  until the first pulse, with the same no-speed warnings as any invalid speed
+- **AND** with the first pulse the governor SHALL engage bumplessly from the throttle then
+  commanded
+
+#### Scenario: Engagement is bumpless
+- **WHEN** the governor becomes ACTIVE — switch turned on, a limit appears, the speed becomes valid,
+  a bypass ends, or the first evaluation after a gap longer than `GOV_MAX_GAP_MS`
+- **THEN** the setpoint SHALL start at the measured speed, the output at the throttle percent `u0`
+  last commanded to the throttle controller, and the integrator at `u0` but not above the start
+  throttle limit
+- **AND** the first governor output SHALL equal `u0`
+
+#### Scenario: Take-over from a high direct throttle
+- **WHEN** the governor becomes ACTIVE while the last commanded throttle is above the start
+  throttle limit (for example 100 % on the first launch after boot, or 40 % when a 10 km/h limit
+  appears at 25 km/h)
+- **THEN** the first output SHALL equal that throttle, the integrator SHALL start at the start
+  throttle limit
+- **AND** the output SHALL then move toward the governor's value by at most `thr_slew` per second
+
+#### Scenario: Turning the switch off while driving
+- **WHEN** the switch is turned off while the governor is ACTIVE
+- **THEN** the throttle SHALL blend to today's value at `thr_slew` as in the speed-loss case
+
+### Requirement: Speed Governor Yields to Brake, Gear Change and Fail-Safe
+The governor SHALL never fight the operator's brake, the gear-change throttle handling or the
+fail-safe. The brake command path SHALL be unchanged by this change.
+
+#### Scenario: RC brake on the combined channel
+- **WHEN** RC channel 2 is below centre (brake)
+- **THEN** the throttle input SHALL be 0 and the governor SHALL stop: idle at once, setpoint and
+  integrator reset
+- **AND** the brake SHALL be applied exactly as before this change
+
+#### Scenario: Web brake while the governor is on
+- **WHEN** the governor is ACTIVE and a brake target of 5 % or more is commanded from the web
+- **THEN** the governor SHALL hold the throttle at idle and keep the setpoint and integrator reset
+  while the brake target stays at 5 % or more
+- **AND** with the governor switch off a web brake SHALL NOT change the web throttle, as before
+
+#### Scenario: Neutral, unknown gear and gear change bypass the governor
+- **WHEN** the expected gear is N or UNKNOWN, a gear change is active, the gear-change boost PID or
+  idle hold owns the throttle, or the throttle is being calibrated
+- **THEN** the governor SHALL NOT be evaluated and SHALL be reset
+- **AND** the throttle SHALL be produced exactly as before this change, including the clip to
+  `TRANS_UNKNOWN_GEAR_THROTTLE_MAX`, applied without a blend
+- **AND** when the bypass ends the governor SHALL engage bumplessly
+
+#### Scenario: Fail-safe
+- **WHEN** fail-safe is entered
+- **THEN** the throttle SHALL go to idle as before and the governor SHALL re-engage bumplessly from
+  idle after the fail-safe ends
+
+#### Scenario: Opening rate limit stays at the servo input
+- **WHEN** the governor output rises and the throttle opening rate limit is configured
+- **THEN** the output SHALL still pass through the opening rate limit before the servo
+
+### Requirement: Ceiling Limiter Stands Down While the Speed Governor Is Active
+While the governor is ACTIVE the maximum-speed ceiling limiter SHALL NOT be evaluated on the
+throttle. This takes precedence over the statement in "Proportional Speed-Limiter Throttle Taper"
+that the limiter is evaluated on every control-loop iteration for the autopilot and web throttle
+paths (and, on the buggy, over "Fixed Per-Gear Maximum-Speed Ceiling" enforcing the gear ceiling
+through the limiter law: the governor enforces it instead). In every other governor state the
+limiter SHALL behave as specified in the limiter requirements ("Proportional Speed-Limiter Throttle
+Taper", "Speed-Limiter Integral Trim", "Configurable Speed-Limiter Throttle Floor"), unchanged.
+
+#### Scenario: No double limiting
+- **WHEN** the governor is ACTIVE
+- **THEN** the limiter state SHALL be reset on every evaluation (ceiling 100 %, trim 0, first-call
+  sentinel) and its saturation indicator SHALL be cleared
+- **AND** `speed_limit_ceil` SHALL report 100
+
+#### Scenario: Limiter resumes when the governor stops
+- **WHEN** the governor leaves the ACTIVE state while a limit is in force and the speed is valid
+- **THEN** the limiter SHALL resume with its first-evaluation rule (taper adopted directly, zero
+  trim), and the hand-over blend SHALL smooth the difference to the governor's last output
+
+### Requirement: Configurable Pre-Crank Dwell
+The pre-crank dwell — the time the ignition / ECU line SHALL have been powered before the starter
+engages on an auto-crank — SHALL be a persisted, operator-set, per-vehicle value in whole
+milliseconds, range `CRANK_DWELL_MS_MIN` (1000) to `CRANK_DWELL_MS_MAX` (8000), default
+`ACC_PRECRANK_DWELL_MS` (3000). It SHALL be stored in the NVS namespace `"crank"`, key `dwell_ms`
+(uint16), owned by `VehicleController`, loaded at boot and handed to `RelayController` through a
+RAM-only setter. It SHALL apply to every crank armed through `requestCrank()`: a fresh RC ignition
+ON, the re-crank when RC control returns after fail-safe or web control, and the GCS
+`MAV_CMD_USER_2` ignition ON. The dwell SHALL be counted from the moment the ignition line last
+went from OFF to powered. The web START command SHALL NOT use the dwell (it sets CRANKING
+directly, unchanged). The armed-crank decision SHALL be the pure function `crankArmedDecide()` in
+`include/CrankLaw.h`, covered by native tests.
+
+#### Scenario: Default on a unit without a stored value
+- **WHEN** the unit boots with no `crank`/`dwell_ms` key
+- **THEN** the pre-crank dwell SHALL be 3000 ms
+
+#### Scenario: Auto-crank waits for the configured dwell
+- **WHEN** the dwell is 4500 ms and a fresh RC ignition ON arrives with the ignition OFF and the
+  engine stopped
+- **THEN** the ignition line SHALL come up at once and the reported state SHALL be ACC
+- **AND** the starter SHALL engage on the first control loop at or after 4500 ms
+- **AND** the cranking SHALL then end on engine start or after `CRANKING_TIMEOUT`, as before
+
+#### Scenario: Ignition line already powered long enough
+- **WHEN** the ignition has been in ACC for longer than the dwell and a crank is requested
+- **THEN** the starter SHALL engage on the next control loop
+
+#### Scenario: Stored value out of range
+- **WHEN** the stored `dwell_ms` is outside 1000–8000
+- **THEN** it SHALL be logged and ignored, the default SHALL be used, and the stored value SHALL NOT
+  be rewritten
+
+#### Scenario: New value applies at once
+- **WHEN** a new dwell is saved while a crank is armed
+- **THEN** the armed crank SHALL use the new value from the next control loop, without restarting
+  the dwell clock
+
+#### Scenario: Engine already running
+- **WHEN** a crank is armed and the validated engine RPM is at or above
+  `ENGINE_RUNNING_RPM_THRESHOLD`
+- **THEN** the crank SHALL be suppressed and the state SHALL settle in IGNITION, whatever the dwell
+
+### Requirement: Validated Engine RPM for Crank Control
+The crank logic SHALL act only on an engine RPM the ECU (or, on the aztec buggy, the tacho) has
+actually reported. `RelayController::update()` SHALL receive `crankRpm(dataValid, engineRPM)` —
+the CAN engine RPM when the CAN data is valid, 0 otherwise — on the quad bike and the old board,
+and the effective RPM `getEngineRpm()` on the aztec buggy. When the applied relay ignition state
+goes from any other state to OFF, by any path (RC, GCS, web, fail-safe `allOff()`, starter
+escalation), `VehicleController` SHALL clear the stored CAN engine RPM to 0
+(`CANController::clearEngineRpm()`), leaving the CAN validity flag, its timestamp and every other
+ECU field unchanged; the next ECU reply SHALL overwrite it.
+
+#### Scenario: Crank right after switching the engine off at high RPM
+- **WHEN** the engine runs at 1800 RPM, the RC ignition switch goes OFF and back to ON 1 s later
+- **THEN** the stored engine RPM SHALL be 0 from the OFF transition
+- **AND** the crank SHALL NOT be suppressed as "engine already running"
+- **AND** the starter SHALL engage after the configured dwell
+
+#### Scenario: CAN data invalid with a stale value
+- **WHEN** the CAN data is invalid and the stored engine RPM is 1600
+- **THEN** RelayController.update() SHALL receive 0
+- **AND** an armed crank SHALL proceed to the starter after the dwell, and a running crank SHALL end
+  only on a fresh reply at or above the threshold or on `CRANKING_TIMEOUT`
+
+#### Scenario: Web START after an engine kill
+- **WHEN** the engine was switched off at 1800 RPM and the web START is pressed within 5 s
+- **THEN** it SHALL NOT be refused with "Engine already running"
+- **AND** the starter SHALL NOT be released in the same loop as "Engine started!"
+
+#### Scenario: Other ECU fields are untouched by the clear
+- **WHEN** the ignition goes OFF
+- **THEN** coolant temperature, MAP, module voltage, intake temperature and engine load SHALL keep
+  their values and validity exactly as before this change
+
+#### Scenario: Aztec effective RPM after OFF
+- **WHEN** on the aztec buggy the ignition goes OFF with the engine running and the tacho times out
+- **THEN** the effective RPM SHALL NOT fall back to a stale CAN value above 0
+
+### Requirement: Lock Not Driven by an RC Channel
+The lock function (`setWheelLock()`, "wheel lock" / "diff lock" in the API) SHALL NOT be driven by
+any RC / MAVLink servo channel. MAVLink servo channel 7 SHALL NOT be read by the vehicle layer, and
+its value — in band or out of band, changing or constant, on any frame including the first valid
+frame after a re-sync — SHALL have no effect on the lock or on any other vehicle function. The
+lock SHALL be changed only by the web `set_wheel_lock` command and by the GCS `MAV_CMD_USER_2` lock
+function (`param1` 4), each with its existing checks. A lock state set by either SHALL be held until
+the next web or GCS lock command; the fail-safe all-off SHALL keep it, as before. At boot the lock
+SHALL be released (`RelayController::begin()` writes the port all-off with the lock state false; the
+lock state is not persisted), and it SHALL stay released until a web or GCS lock command.
+
+#### Scenario: Channel 7 switch moved
+- **WHEN** MAVLink is in control with the lock released and servo channel 7 moves from 1100 µs to
+  1900 µs and back
+- **THEN** the lock SHALL stay released in every loop, `wheel_lock_on` SHALL stay `false` and
+  `EFI_DIGITAL_FLAG_WHEEL_LOCK` SHALL stay clear
+- **AND** no lock relay write SHALL be made
+
+#### Scenario: Engaged lock survives channel 7 at the opposite position
+- **WHEN** the lock was engaged from the web or by an accepted GCS lock ON, and servo channel 7
+  reads 1100 µs, then 1900 µs, then 1100 µs
+- **THEN** the lock SHALL stay engaged
+
+#### Scenario: Gaining MAVLink control does not touch the lock
+- **WHEN** the lock was engaged from the web while the web portal was in control, and MAVLink
+  control returns (web control released, fail-safe exit, or the RC stream returns while a browser
+  is connected) with servo channel 7 at 1100 µs
+- **THEN** the first valid frame SHALL set gear, ignition and headlight from CH3, CH4 and CH6 as
+  before
+- **AND** the lock SHALL stay engaged
+
+#### Scenario: Boot with channel 7 high
+- **WHEN** the board boots and the first valid frames carry servo channel 7 at 1900 µs
+- **THEN** the lock SHALL be released and SHALL stay released until a web or GCS lock command
+
+#### Scenario: Web and GCS still drive the lock
+- **WHEN** a web `set_wheel_lock` command, or a GCS lock command accepted under MAVLink control,
+  arrives on a build where the lock is fitted
+- **THEN** the lock SHALL be set as commanded and reported in `wheel_lock_on` and
+  `EFI_STATUS.pt_compensation` bit0, as before this change
+
+### Requirement: Configurable Starter Time Limit
+The starter time limit — the longest the starter SHALL run in one start attempt when the engine is
+not detected as running — SHALL be a persisted, operator-set, per-vehicle value in whole
+milliseconds, range `CRANK_MAX_MS_MIN` (2000) to `CRANK_MAX_MS_MAX` (10000), default
+`CRANKING_TIMEOUT` (5000). It SHALL be stored in the NVS namespace `"crank"`, key `max_ms`
+(uint16), owned by `VehicleController`, loaded at boot and handed to `RelayController` through a
+RAM-only setter. It SHALL bound every start attempt, whatever started it: the RC ignition ON
+auto-crank (including the re-crank when RC control returns), the GCS `MAV_CMD_USER_2` ignition ON
+and the web START command. `RelayController` SHALL latch the value in use when it enters CRANKING;
+that attempt SHALL end on engine start (validated RPM ≥ `ENGINE_RUNNING_RPM_THRESHOLD`, checked
+first, unchanged) or once the latched limit has elapsed, whichever comes first. Wherever another
+requirement names `CRANKING_TIMEOUT` as the bound of a start attempt, the bound SHALL be the limit
+in use; `CRANKING_TIMEOUT` is its default. The timeout decision SHALL be the pure function
+`crankTimedOut()` in `include/CrankLaw.h` (wrap-safe), covered by native tests. The web relay-test
+cap of the starter relay (`RELAY_TEST_STARTER_MAX_MS`, 2000 ms, ignition OFF only) is not a start
+attempt and SHALL stay fixed and separate.
+
+#### Scenario: Default on a unit without a stored value
+- **WHEN** the unit boots with no `crank`/`max_ms` key
+- **THEN** the starter time limit SHALL be 5000 ms, as before this change
+
+#### Scenario: Attempt ends at the configured limit
+- **WHEN** the limit is 7000 ms and a start attempt (RC ON, GCS ignition ON or web START) engages
+  the starter and the validated RPM stays below `ENGINE_RUNNING_RPM_THRESHOLD`
+- **THEN** the starter SHALL be released on the first control loop at or after 7000 ms of cranking
+- **AND** the state SHALL settle in IGNITION and "Cranking timeout" SHALL be logged
+- **AND** no new attempt SHALL start without a new request (no automatic retry)
+
+#### Scenario: Engine start still ends the attempt early
+- **WHEN** the validated RPM reaches `ENGINE_RUNNING_RPM_THRESHOLD` before the limit
+- **THEN** the starter SHALL be released at once, whatever the limit
+
+#### Scenario: A change during cranking applies to the next attempt
+- **WHEN** a new limit is saved while the starter is cranking
+- **THEN** it SHALL be persisted and become the value in use at once
+- **AND** the running attempt SHALL keep the limit it latched when it entered CRANKING
+- **AND** the next attempt SHALL use the new value
+
+#### Scenario: Stored value out of range
+- **WHEN** the stored `max_ms` is outside 2000–10000
+- **THEN** it SHALL be logged and ignored, the default SHALL be used, and the stored value SHALL NOT
+  be rewritten
+
+#### Scenario: Relay test cap unchanged
+- **WHEN** the starter relay is energized from the web relay test
+- **THEN** it SHALL still be released after `RELAY_TEST_STARTER_MAX_MS` (2000 ms), whatever the
+  starter time limit
+
+### Requirement: Configurable Brake Travel Time and Hold Drive
+The brake full travel time and the hold drive SHALL be persisted, operator-set, per-vehicle values
+owned by `VehicleController`, stored in the NVS namespace `"brake"` under the keys `travel_ms`
+(whole ms, accepted range `BRAKE_TRAVEL_MS_MIN`–`BRAKE_TRAVEL_MS_MAX`, 1000–3000, default
+`BRAKE_FULL_TRAVEL_TIME`, 1500) and `hold_pwm` (0–255 PWM scale, accepted range
+`BRAKE_HOLD_PWM_MIN`–`BRAKE_HOLD_PWM_MAX`, 0–100, default `BRAKE_HOLD_SPEED`, 30). The rate and the
+range checks SHALL be implemented by the pure header `include/BrakeLaw.h`, covered by the native
+test suite `test_brake_law`.
+
+#### Scenario: Rate from travel time
+- **WHEN** `brakeRatePctPerMs(travelMs)` is called
+- **THEN** it SHALL return `100 / travelMs` %/ms (0.0667 %/ms at 1500 ms, 0.1 at 1000 ms, 0.0333 at
+  3000 ms)
+
+#### Scenario: Defaults on a unit without stored values
+- **WHEN** the system starts and the `"brake"` namespace or a key is missing
+- **THEN** the travel time SHALL be 1500 ms and the hold drive 30, the brake behaving exactly as
+  before this change
+
+#### Scenario: Stored values are restored
+- **WHEN** the system starts and `travel_ms` / `hold_pwm` hold values within their ranges
+- **THEN** those values SHALL be used
+
+#### Scenario: Invalid stored value is ignored
+- **WHEN** the system starts and a stored value lies outside its range
+- **THEN** that value SHALL be ignored and logged, and the default SHALL be used
+- **AND** the stored value SHALL NOT be rewritten
+
+#### Scenario: Change applied immediately
+- **WHEN** a valid new travel time is set
+- **THEN** it SHALL be persisted first and, once the write succeeded, used for the estimate's rate
+  from the next control-loop iteration, without resetting or rescaling the current estimate
+- **AND** a valid new hold drive SHALL be persisted first and used at the next hold cycle
+- **AND** if the NVS write fails, the value in use SHALL stay unchanged
+
+#### Scenario: Out-of-range value refused
+- **WHEN** a travel time outside 1000–3000 ms or a hold drive outside 0–100 is requested
+- **THEN** it SHALL be refused, and neither the stored nor the in-use value SHALL change
 

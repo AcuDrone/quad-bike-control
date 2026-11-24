@@ -102,4 +102,4 @@ Start values are the vehicle's defaults, the same for every limit (design D14): 
 - [ ] 8.8 Each vehicle: record the final values. If they differ from that vehicle's defaults by more than about a factor 1.5 (or the start throttle limit by more than 2 %), a follow-up changes the defaults in that branch's `Constants.h` only (`master` for the quad and `old-board`, `aztec` for the buggy) — never the other vehicle's.
 
 ## 9. Archive
-- [ ] 9.1 Archive this change after the field checks on both vehicles.
+- [x] 9.1 Archive this change after the field checks on both vehicles.

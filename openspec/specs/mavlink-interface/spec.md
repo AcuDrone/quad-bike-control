@@ -54,7 +54,9 @@ The system SHALL receive vehicle actuator commands by decoding the MAVLink
 ### Requirement: Servo Channel to Vehicle Command Mapping
 The system SHALL map decoded servo-output channels to typed vehicle commands using a
 compile-time `ServoChannelConfig` and the transport-neutral range constants in `Constants.h`,
-preserving the function assignments previously used for SBUS.
+preserving the function assignments previously used for SBUS. Servo channel 7 (the former
+front-wheel lock channel) SHALL NOT be mapped to any vehicle command: `ServoChannelConfig` SHALL
+have no entry for it, and there SHALL be no wheel-lock threshold or `getWheelLock()` decoder.
 
 #### Scenario: Define servo channel assignments
 - **WHEN** `ServoChannelConfig` is defined
@@ -64,6 +66,13 @@ preserving the function assignments previously used for SBUS.
   - TRANSMISSION = 3
   - IGNITION = 4
   - FRONT_LIGHT = 6 (channel 5 is intentionally unused)
+- **AND** channels 5, 7 and 8 SHALL be intentionally unused; their raw values SHALL still be decoded
+  and reported (web telemetry `mav_channels`) but SHALL drive nothing
+
+#### Scenario: Channel 7 drives nothing
+- **WHEN** servo channel 7 carries any value, in band or out of band
+- **THEN** no vehicle command SHALL be derived from it and no relay or actuator SHALL change because
+  of it
 
 #### Scenario: Map steering channel to percentage
 - **WHEN** `getSteering()` is called
@@ -443,9 +452,10 @@ XL9535 board):
 | Front light | `RELAY_SET_FRONT_LIGHT` | `0b01000000` | `0b00000100` | Relay_3 |
 | Reserved | `RELAY_SET_RESERVED` | `0b10001111` | `0b11111000` | Relay_4..Relay_6 — three locks specified in a later change; Relay_7, Relay_8 — spare; off except in the web relay test |
 
-The front-wheel lock is not fitted on the aztec buggy. The MAVLink servo channel
-`ServoChannelConfig::WHEEL_LOCK` (7) SHALL still be decoded and the `EFI_STATUS` digital-output
-bitmask layout SHALL be unchanged, but no relay SHALL be driven by that channel.
+The front-wheel lock is not fitted on the aztec buggy. The `EFI_STATUS` digital-output bitmask
+layout SHALL be unchanged. MAVLink servo channel 7 SHALL NOT drive the lock on any build (see
+`vehicle-systems` "Lock Not Driven by an RC Channel"); the lock is requested only by the web
+`set_wheel_lock` command and the GCS lock command.
 
 #### Scenario: Initialize relay controller
 - **WHEN** `RelayController.begin()` is called with the I2C bus the relay board is wired to
@@ -475,8 +485,7 @@ bitmask layout SHALL be unchanged, but no relay SHALL be driven by that channel.
 - **WHEN** `setFrontLight(false)` is called, the front-light mask is set LOW and state is updated
 
 #### Scenario: Control front-wheel lock
-- **WHEN** servo channel 7 (`WHEEL_LOCK`) is above `RC_WHEEL_LOCK_THRESHOLD` and `setWheelLock(true)`
-  is called
+- **WHEN** a web or GCS lock request calls `setWheelLock(true)`
 - **THEN** `setWheelLock()` SHALL return `false` and no port write SHALL be made
 - **AND** the rejection SHALL be logged once per boot, not on every control loop
 - **AND** `getWheelLock()` SHALL return `false`
@@ -1243,14 +1252,19 @@ safety net for a lost query answer.
 ### Requirement: Ignition State Broadcast
 The system SHALL send a `NAMED_VALUE_INT` named `IGN_STATE` from this component with the APPLIED
 relay ignition state: 0 OFF, 1 ACC, 2 ON, 3 CRANKING. CRANKING SHALL cover both the pre-crank dwell
-(state ACC with a crank armed) and the starter phase; after the engine catches or the starter times
-out the value SHALL be 2. With the relay board unavailable the value SHALL be 0. It SHALL be sent on
-the 1 Hz slow telemetry tick and once immediately on every change, whatever the input source.
+(state ACC with a crank armed; its length is the configured pre-crank dwell, 1–8 s, default 3 s —
+see `vehicle-systems` "Configurable Pre-Crank Dwell") and the starter phase (at most the configured
+starter time limit, 2–10 s, default 5 s — see `vehicle-systems` "Configurable Starter Time
+Limit"); after the engine catches or the starter time limit ends the attempt the value SHALL be 2.
+With the relay board unavailable the value SHALL be 0. It SHALL be sent on the 1 Hz slow telemetry
+tick and once immediately on every change, whatever the input source.
 
 #### Scenario: Auto-crank sequence
 - **WHEN** an ignition ON command starts the auto-crank from OFF
-- **THEN** `IGN_STATE` SHALL be 3 during the 2 s pre-crank dwell and while the starter runs
-- **AND** it SHALL become 2 when the engine starts or the 5 s cranking timeout ends the attempt
+- **THEN** `IGN_STATE` SHALL be 3 during the configured pre-crank dwell (3 s by default) and while
+  the starter runs
+- **AND** it SHALL become 2 when the engine starts or the configured starter time limit (5 s by
+  default) ends the attempt
 
 #### Scenario: On-change send
 - **WHEN** the applied ignition state changes from 2 to 0
@@ -1269,4 +1283,30 @@ unknown functions SHALL keep answering `UNSUPPORTED`.
 - **WHEN** a seventh function is added in a later firmware
 - **THEN** it SHALL use `param1` 6 and capability bit6
 - **AND** the protocol version SHALL stay 1
+
+### Requirement: Speed Governor Status Text
+The MAVLink interface SHALL tell the ground station when the speed governor should be governing
+but cannot because the speed reading is invalid, using `STATUSTEXT` through the shared
+`MAVLINK_STATUSTEXT_MIN_MS` limiter. No other MAVLink message, parameter or field SHALL change.
+
+#### Scenario: Warning when the governor falls back to direct throttle
+- **WHEN** the governor switch is on, an effective limit exists, the speed reading is invalid and
+  the throttle input has been above the 5 % dead-band continuously for `GOV_NOSPEED_WARN_DELAY_MS`
+  (2000 ms)
+- **THEN** a `STATUSTEXT` with `MAV_SEVERITY_WARNING` and the text "Gov: NO SPEED - direct throttle"
+  SHALL be sent
+- **AND** it SHALL be repeated every `GOV_NOSPEED_WARN_REPEAT_MS` (10 s) while the condition holds
+- **AND** a message held back by the shared limiter SHALL stay pending and be sent on the next
+  report past the window, not lost
+
+#### Scenario: Recovery notice
+- **WHEN** the warning condition ends because the governor became ACTIVE again
+- **THEN** a `STATUSTEXT` with `MAV_SEVERITY_INFO` and the text "Gov: speed OK - governing" SHALL
+  be sent once
+- **AND** when the condition ends for any other reason (stick released, switch off, limit gone) no
+  text SHALL be sent
+
+#### Scenario: Nothing while standing with the stick released
+- **WHEN** the speed reading is invalid but the throttle input stays in the dead-band
+- **THEN** no governor `STATUSTEXT` SHALL be sent
 

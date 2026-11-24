@@ -42,4 +42,4 @@
 ## 7. Bench — buggy and old board, archive
 - [ ] 7.1 Buggy (`aztec` 1.5.34): LittleFS upload; 5.2–5.6 with Relay_4..6 as the lock relays.
 - [ ] 7.2 Old board (`old-board` 1.5.34): LittleFS upload; 5.2, 5.3 and 5.5 on the bench harness.
-- [ ] 7.3 Archive this change (after the order in 0.2 is settled).
+- [x] 7.3 Archive this change (after the order in 0.2 is settled).
