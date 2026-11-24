@@ -12,7 +12,8 @@ supported; there SHALL be exactly one pin map and no board-selection build flag.
 - **AND** GPIO19/20 SHALL NOT be assigned any firmware function — they are the native USB data lines
 - **AND** GPIO43/44 (UART0, Prog header X1) SHALL NOT be assigned any firmware function — the
   steering VESC is on the CAN bus; the aztec board keeps R63/R64 to the CH9121T removed and the
-  CH9121T is not used; GPIO4/5 (X6) SHALL be left free for a fourth BTS7960
+  CH9121T is not used; GPIO4/5 (X6) SHALL be assigned to the aztec parking-brake BTS7960
+  (L_PWM / R_PWM)
 - **AND** pin conflicts are checked and reported
 
 #### Scenario: Control_v0 pin assignments
@@ -21,25 +22,33 @@ supported; there SHALL be exactly one pin map and no board-selection build flag.
   - `PIN_THROTTLE_PWM` = GPIO15 (LEDC channel 1, 50 Hz, X8 pin 2)
   - `PIN_TRANS_SERVO` = GPIO16 (LEDC channel 2, 50 Hz, X8 pin 3)
   - `PIN_MAVLINK_TX` = GPIO17, `PIN_MAVLINK_RX` = GPIO18 (UART1, X9)
-  - `PIN_BRAKE_LPWM` = GPIO6, `PIN_BRAKE_RPWM` = GPIO7 (LEDC channels 5/4, X7) — unchanged
-  - `PIN_CAN_CS` = GPIO39, `PIN_CAN_SCK` = GPIO40, `PIN_CAN_MISO` = GPIO41, `PIN_CAN_MOSI` = GPIO42
-    (MCP2515 — engine ECU, the Bosch LWS steering-angle sensor and the steering VESC on the same
-    bus)
+  - `PIN_PARK_BRAKE_LPWM` = GPIO4, `PIN_PARK_BRAKE_RPWM` = GPIO5 (LEDC channels 7/6, 10 kHz, X6 pins
+    2/3 — aztec parking brake)
+  - `PIN_CAN_CS` = GPIO39, `PIN_CAN_SCK` = GPIO40, `PIN_CAN_MISO` = GPIO41, `PIN_CAN_MOSI` = GPIO42,
+    `PIN_CAN_INT` = GPIO38 (MCP2515 — engine ECU, Bosch LWS steering-angle sensor, Bosch iBooster
+    and the steering VESC on the same bus; INT wakes the CAN task)
   - `PIN_RELAY_SDA` = GPIO48, `PIN_RELAY_SCL` = GPIO47 (I2C2 — on-board expanders U10/U2 and the
     relay board `0x1F` on header X15)
-  - `PIN_BOOST_EN` = GPIO46, `PIN_ADC_24V` = GPIO9 (X10)
-  - `PIN_I2C1_SDA` = GPIO1, `PIN_I2C1_SCL` = GPIO2 (I2C1 — external header X14, no device fitted),
-    `PIN_CAN_INT` = GPIO38 and `PIN_ADC_IS_MUX` = GPIO3 SHALL be defined but unused
+  - `PIN_BOOST_EN` = GPIO46, `PIN_ADC_24V` = GPIO9 (X10; aztec has no boost board — GPIO9 is the
+    12 V battery sense on X10 pin 3 and GPIO46 is driven HIGH with nothing attached)
+  - `PIN_I2C1_SDA` = GPIO1, `PIN_I2C1_SCL` = GPIO2 (I2C1 — external header X14, no device fitted) and
+    `PIN_ADC_IS_MUX` = GPIO3 SHALL be defined but unused (the X6 IS lines on the CD4051 mux are not
+    sampled)
+- **AND** GPIO6 and GPIO7 (X7, the former service-brake BTS7960) SHALL have no firmware function and
+  SHALL be left unconfigured
 
 #### Scenario: Functions with no GPIO
 - **WHEN** `Constants.h` is read
 - **THEN** `PIN_GEAR_REVERSE`, `PIN_GEAR_NEUTRAL`, `PIN_GEAR_LOW`, `PIN_GEAR_HIGH` and
-  `PIN_BRAKE_SENSOR` SHALL NOT be defined — those inputs are read from the opto-input expander
+  `PIN_BRAKE_SENSOR` SHALL NOT be defined — the gear inputs are read from the opto-input expander and
+  there is no brake endstop
 - **AND** `PIN_RELAY1`, `PIN_RELAY2`, `PIN_RELAY3` and `PIN_WHEEL_LOCK` SHALL NOT be defined — those
   outputs are driven by the relay-board expander
 - **AND** `PIN_STEER_RPWM`, `PIN_STEER_LPWM`, `LEDC_CH_STEER_RPWM` and `LEDC_CH_STEER_LPWM` SHALL NOT
   be defined — GPIO17/18 are now the MAVLink UART
 - **AND** `PIN_STEER_SDA` and `PIN_STEER_SCL` SHALL NOT be defined — the steering sensor is on CAN
+- **AND** `PIN_BRAKE_RPWM`, `PIN_BRAKE_LPWM`, `LEDC_CH_BRAKE_RPWM`, `LEDC_CH_BRAKE_LPWM` and
+  `BOARD_IN_BIT_BRAKE_LIMIT` SHALL NOT be defined — the service brake is on CAN
 - **AND** `PIN_VESC_TX`, `PIN_VESC_RX`, `VESC_UART_NUM` and `VESC_UART_BAUD` SHALL NOT be defined — the
   steering VESC is on CAN
 - **AND** no reference to any of these symbols SHALL remain in `src/` or `include/`
@@ -49,8 +58,8 @@ supported; there SHALL be exactly one pin map and no board-selection build flag.
 - **THEN** servo PWM frequency is set to 50Hz (20ms period)
 - **AND** motor PWM frequency is set to 1-20kHz (configurable)
 - **AND** PWM resolution is set to 12-16 bits based on frequency
-- **AND** LEDC channels 1 (throttle), 2 (transmission), 4 (brake RPWM) and 5 (brake LPWM) SHALL be
-  the only channels allocated; channels 3, 6 and 7 SHALL be free
+- **AND** LEDC channels 1 (throttle), 2 (transmission), 6 (parking brake RPWM) and 7 (parking brake
+  LPWM) SHALL be the only channels allocated; channels 0, 3, 4 and 5 SHALL be free
 
 #### Scenario: Steering sensor needs no GPIO
 - **WHEN** the steering controller is initialized
@@ -62,10 +71,15 @@ supported; there SHALL be exactly one pin map and no board-selection build flag.
 #### Scenario: Steering sensors share the pins of their buses
 - **WHEN** the steering controller is initialized
 - **THEN** the Bosch LWS steering-angle sensor and the steering VESC SHALL share the CAN bus (MCP2515
-  on SPI, `PIN_CAN_*`) with the ECU OBD-II traffic
+  on SPI, `PIN_CAN_*`) with the ECU OBD-II traffic and the iBooster
 - **AND** no dedicated steering GPIO SHALL be allocated
 - **AND** the former steering I2C pins (`Wire` / `Wire1`) and the former VESC UART pins (GPIO43/44)
   SHALL NOT be used for steering
+
+#### Scenario: Service brake needs no GPIO
+- **WHEN** the service brake is initialized
+- **THEN** it SHALL use only the MCP2515 CAN controller and the ignition relay that wakes it
+- **AND** no GPIO, LEDC channel or opto input SHALL be allocated to it
 
 #### Scenario: Wiring document is authoritative
 - **WHEN** `Constants.h` and `GPIO_PINOUT_CUSTOM_BOARD_S3.md` disagree about a pin
