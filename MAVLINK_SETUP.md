@@ -880,10 +880,20 @@ itself:
   a change from one non-zero value to another is not a press; nothing counts under the firmware's
   own fail-safe (no `SERVO_OUTPUT_RAW` for 500 ms, no browser), and the frozen value is not a
   press when the link returns; an input-source change is never a press by itself.
-- **Hand-over.** The release run starts when the service-brake position estimate has reached the
-  commanded value (within 1 %): about (brake % − 1) / 100 × brake `travel_ms` after the press
-  (≈ 0.36 s for 25 %, ≈ 1.5 s for 100 % at the default 1500 ms). A command back to 0 first → no
-  release. No gear, ignition, flight-mode or heartbeat condition.
+- **Hand-over (since 1.6.0: the Bosch iBooster Gen2 on CAN).** While the iBooster is available
+  (`READY` / `BRAKING` / `RELEASING`) the release run starts on the first control loop in which it
+  reports `reached` — it holds the commanded rod target (within 0.2 mm, or the rod has stalled
+  against the brake or the stroke stop), i.e. the iBooster has actually pressed. While it is **not**
+  available (ignition OFF / asleep, starting, `LOST`, `FAULT`) the release starts at once, on the
+  loop of the press — and then **neither brake holds the buggy** (owner decision 2026-11-23). The
+  wait is cancelled with no release when the command goes back to 0, the input source changes, the
+  parking brake leaves `APPLIED` / `UNKNOWN`, or the iBooster is available but its rod does not move
+  ("no move": accepted and pushing, rod not advanced 0.3 mm in 3 s; journal `BRAKE W no_move` and
+  `BRAKE W pbrake_handover_cancel why=no_move`); a further release needs a new press. No gear,
+  ignition, flight-mode or heartbeat condition.
+- *1.5.37 (old X7 brake actuator, removed in 1.6.0):* the release started when the actuator's
+  open-loop position estimate reached the commanded value (within 1 %), about
+  (brake % − 1) / 100 × `travel_ms` after the press.
 - **Release** = the same run as the throttle drive-away release (throttle held at idle in L/H/R up
   to the release point; the run completes even if the brake is let go; nothing re-applies).
   `pt_compensation` bits 2 / 3 show it; no STATUSTEXT.
