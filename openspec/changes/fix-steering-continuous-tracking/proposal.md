@@ -84,8 +84,7 @@ kick. No spring-back is involved.
 - **Out of scope:** the sensorless rate mode (`SteerRate.h`, `JogOwner::RATE`). It never uses the
   position loop and keeps `STEER_PWM_MIN_DUTY` as its floor.
 - **Version.** `FIRMWARE_VERSION` 1.5.4 → **1.5.5** (patch per `openspec/project.md`: behaviour fix,
-  no recalibration, no wiring change), with a `Changelog.h` entry (uk/en). 1.6.0 and 1.7.0 stay
-  reserved for `move-can-rx-to-interrupt` and `move-aztec-vesc-to-can` (task 0.2).
+  no recalibration, no wiring change), with a `Changelog.h` entry (uk/en).
 - **Branch.** Implemented on `master`, then `master` is merged into `aztec`. Both vehicles run the
   same `SteeringController`.
 
@@ -111,9 +110,9 @@ kick. No spring-back is involved.
   - `include/SteeringController.h`, `src/SteeringController.cpp`;
   - new `include/SteerPositionLaw.h`, new `test/test_steer_position/`, `platformio.ini`
     (`test_filter`).
-- Pending changes: neither `move-aztec-vesc-to-can` (1.7.0) nor `move-can-rx-to-interrupt` (1.6.0)
-  touches "Steering Re-command Guard and Stall Latch"; this change no longer touches the driver
-  requirements. No archive-order dependency.
+- Other changes: `move-can-rx-to-interrupt` (firmware 1.5.38, archived) does not touch "Steering
+  Re-command Guard and Stall Latch"; this change no longer touches the driver requirements. No
+  archive-order dependency.
 - Safety:
   - every stop path is a coast, exactly as today, and the worm locks the shaft after it;
   - stall detection and the move timeout keep working under the continuous stream (design D3, D4);
