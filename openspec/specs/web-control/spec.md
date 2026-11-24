@@ -158,7 +158,8 @@ The system SHALL accept front light control commands from the web interface.
 - **AND** toggle shows visual feedback during command transmission
 
 ### Requirement: Ignition and Light Telemetry Broadcasting
-The system SHALL broadcast current ignition state and front light status in telemetry updates.
+The system SHALL broadcast current ignition state, front light status and lock status in telemetry
+updates.
 
 #### Scenario: Include ignition state in WebSocket telemetry
 - **WHEN** telemetry update is broadcast via WebSocket
@@ -178,14 +179,23 @@ The system SHALL broadcast current ignition state and front light status in tele
 
 #### Scenario: Report the front-wheel lock as not fitted
 - **WHEN** telemetry update is broadcast via WebSocket
-- **THEN** telemetry includes `wheel_lock_fitted` boolean field, `false` on the aztec buggy
-- **AND** `wheel_lock_on` SHALL be `false`
+- **THEN** telemetry includes `wheel_lock_fitted` boolean field, `true` on the aztec buggy (the lock
+  on Relay_4 + Relay_5 + Relay_6) and `false` only on a build with `RELAY_WHEEL_LOCK_FITTED = 0`
+- **AND** `wheel_lock_on` SHALL report the commanded lock state (`true` while Relay_4..Relay_6 are
+  energized); it SHALL be `false` whenever the lock is not fitted
 
 #### Scenario: Wheel-lock control disabled when not fitted
 - **WHEN** web page receives telemetry with `wheel_lock_fitted` equal to `false`
-- **THEN** the wheel-lock button SHALL be disabled and its status SHALL read "not fitted" (localized)
+- **THEN** the lock button SHALL be disabled and its status SHALL read "not fitted" (localized)
 - **AND** clicking it SHALL NOT send a `set_wheel_lock` command
 - **AND** telemetry without the `wheel_lock_fitted` field SHALL be treated as fitted
+
+#### Scenario: Lock control enabled on the aztec buggy
+- **WHEN** web page receives telemetry with `wheel_lock_fitted` equal to `true`
+- **THEN** the lock card ("Lock" / "Блокування") SHALL offer an enabled toggle whose status follows
+  `wheel_lock_on` (LOCKED / UNLOCKED, localized)
+- **AND** clicking it SHALL send `set_wheel_lock` with the inverted state
+- **AND** a `set_wheel_lock` command SHALL be answered "Lock LOCKED" / "Lock UNLOCKED" on success
 
 #### Scenario: Wheel-lock command rejected when not fitted
 - **WHEN** a `set_wheel_lock` command is received via WebSocket and the lock is not fitted
@@ -428,10 +438,11 @@ The web portal SHALL provide a relay test for wiring checks: one on/off button p
 `{"cmd":"set_relay_test","relay":<1..8>,"value":<true|false>}` and handled in
 `VehicleController::processWebCommand()` through the queued web-command path into
 `RelayController::setRelayTest()`. The command SHALL NOT be gated by input source; its gate is the
-relay-test gate (ignition `OFF`, no function relay energized).
+relay-test gate (ignition `OFF`, no function relay energized — the lock included).
 
 #### Scenario: Toggle a relay on from the web UI
-- **WHEN** the operator clicks a relay's button while it is off and the ignition is OFF
+- **WHEN** the operator clicks a relay's button while it is off, the ignition is OFF and the lock is
+  released
 - **THEN** a `set_relay_test` command with that relay number and `value: true` SHALL be sent
 - **AND** the response SHALL be success ("Relay test: Relay_N ON") and the relay SHALL energize
 
@@ -446,7 +457,8 @@ relay-test gate (ignition `OFF`, no function relay energized).
 - **AND** no relay SHALL change state
 
 #### Scenario: Relay test rejected while the ignition is on
-- **WHEN** a `set_relay_test` ON command arrives while the ignition is not OFF or the front light is on
+- **WHEN** a `set_relay_test` ON command arrives while the ignition is not OFF, the front light is on
+  or the lock is engaged
 - **THEN** an error response starting with "Relay test:" SHALL be sent and no relay SHALL change
 
 #### Scenario: Relay test card in the UI
@@ -454,15 +466,19 @@ relay-test gate (ignition `OFF`, no function relay energized).
 - **THEN** a "Relay Test" card SHALL show eight equal-size buttons in a 2-column grid (1 column at
   768 px or less), styled like the gear buttons
 - **AND** each button SHALL show "Реле N" / "Relay N" on its first line and the relay's function on
-  a smaller second line — 1 ignition, 2 starter (max 2 s), 3 light, 4–6 lock (unassigned), 7–8
-  spare — in English and Ukrainian
+  a smaller second line — on the aztec buggy 1 ignition, 2 starter (max 2 s), 3 light, 4 lock (with
+  5+6), 5 lock (with 4+6), 6 lock (with 4+5), 7–8 spare — in English and Ukrainian ("блокування (з
+  5+6)" …)
+- **AND** the aztec label set SHALL be chosen when the telemetry carries the aztec-only `gear_codes`
+  object, and the quad bike's set otherwise (`wheel_lock_fitted` is `true` on both vehicles and no
+  longer tells them apart)
 - **AND** an energized relay SHALL be shown with the same highlight as the active gear button and
   `aria-pressed="true"`; the button SHALL NOT carry ON/OFF text, and its tooltip SHALL name the
   relay, its function and its ON/OFF state
 - **AND** each button's state SHALL follow the telemetry `relay_test` bitfield, not the last click
 - **AND** a button that is off SHALL be disabled while the ignition is not OFF, the front light is
-  on, the relay board is faulted or the WebSocket is disconnected; a button that is on SHALL stay
-  clickable while connected so it can be switched off
+  on, the lock is engaged, the relay board is faulted or the WebSocket is disconnected; a button that
+  is on SHALL stay clickable while connected so it can be switched off
 - **AND** the response to a relay test command SHALL be shown in the card
 
 ### Requirement: Steering Calibration and Sensor Zero via Web Interface

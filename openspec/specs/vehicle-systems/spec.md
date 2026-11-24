@@ -1121,27 +1121,6 @@ The override SHALL be volatile, SHALL expire on its own, and SHALL be visible wh
 - **THEN** the steering scale log line SHALL mark the speed as `TEST`
 - **AND** the telemetry stream SHALL report that an override is in force and what its value is
 
-### Requirement: Front-Wheel Lock Not Fitted
-The aztec buggy SHALL have no relay behind the front-wheel lock function (`RELAY_WHEEL_LOCK_FITTED =
-0`). The wheel-lock plumbing (web `set_wheel_lock` command, GCS lock command, telemetry fields)
-SHALL be kept so a later change can replace it with the buggy's three locks, but a lock request SHALL
-never be reported as applied. No RC / MAVLink servo channel drives the lock (see "Lock Not Driven by
-an RC Channel").
-
-#### Scenario: Lock request is rejected
-- **WHEN** `VehicleController::setWheelLock(true)` is called from the web or the GCS path
-- **THEN** `RelayController::setWheelLock()` SHALL return `false` without writing the relay port
-- **AND** the first rejection after boot SHALL be logged; later ones SHALL NOT flood the log
-- **AND** `getWheelLock()` SHALL return `false`
-
-#### Scenario: Release request is a no-op
-- **WHEN** `setWheelLock(false)` is called
-- **THEN** it SHALL return `true` without writing the relay port and without logging
-
-#### Scenario: Fitted state is queryable
-- **WHEN** `VehicleController::isWheelLockFitted()` or `RelayController::isWheelLockFitted()` is called
-- **THEN** it SHALL return `false`
-
 ### Requirement: Steering Limit Calibration Around the Sensor Zero
 The steering controller SHALL use the Bosch LWS sensor's stored zero as the steering center and SHALL persist only the left and right limits, in 0.1° with positive = right, together with the sensor-direction flag, in NVS namespace `"steering"` under layout version 4, migrating away from every earlier steering layout.
 
@@ -3151,4 +3130,48 @@ recognises an idling engine.
 - **WHEN** the engine stops with the tacho as source
 - **THEN** the effective RPM SHALL read 0 within `TACHO_TIMEOUT_MS` (0.5 s) of the last pulse, and
   `isEngineRunning()` SHALL become false
+
+### Requirement: Aztec Lock on Relay_4 + Relay_5 + Relay_6
+The aztec buggy SHALL drive its lock ("блокування") through the existing wheel-lock function with
+Relay_4, Relay_5 and Relay_6 switched together as one relay-number set
+(`RELAY_SET_WHEEL_LOCK = RELAY_N(4) | RELAY_N(5) | RELAY_N(6)`, `RELAY_WHEEL_LOCK_FITTED = 1`;
+PCA9557 mask `0x8C` = IO7|IO3|IO2 on relay-board connectors X7/X8/X9, XL9535 mask `0x38` =
+P0.3..P0.5). The lock SHALL be changed only by the web `set_wheel_lock` command, which is not restricted by the
+input source, and by the GCS `MAV_CMD_USER_2` lock function (`param1` 4), which is accepted only
+under MAVLink control (see "GCS Vehicle Command Interlocks"); no RC / MAVLink servo channel SHALL
+drive it (see "Lock Not Driven by an RC Channel"). Neither path has an ignition interlock.
+`setWheelLock()` SHALL keep a "not fitted" branch (reject a LOCK, log once per boot, report released)
+selected only when `RELAY_WHEEL_LOCK_FITTED` is `0`.
+
+#### Scenario: Lock from the web
+- **WHEN** `VehicleController::processWheelLockCommand(true)` runs for a web `set_wheel_lock` command
+- **THEN** `RelayController::setWheelLock(true)` SHALL energize Relay_4, Relay_5 and Relay_6 in one
+  verified whole-port write and return `true`
+- **AND** the web response SHALL be success ("Lock LOCKED")
+- **AND** `getWheelLock()` SHALL return `true`
+
+#### Scenario: Unlock
+- **WHEN** `setWheelLock(false)` is called while the lock is engaged
+- **THEN** all three lock relays SHALL be released in one verified write and `getWheelLock()` SHALL
+  return `false`
+- **AND** a `RelayController::setWheelLock(false)` while already released SHALL return `true`
+  without a port write and without logging
+
+#### Scenario: Lock refused while the relay board is unavailable
+- **WHEN** a LOCK is requested while the relay expander failed to initialize or is faulted
+- **THEN** `setWheelLock()` SHALL return `false`, log the refusal and leave the lock state unchanged
+- **AND** the web response SHALL be an error ("Wheel lock command rejected")
+
+#### Scenario: Lock independent of the ignition
+- **WHEN** a LOCK or UNLOCK command arrives with the ignition in any state, including `CRANKING`
+- **THEN** it SHALL be applied without changing the ignition, starter or light relays
+
+#### Scenario: Fail-safe all-off keeps the lock
+- **WHEN** `RelayController::allOff()` runs
+- **THEN** ignition, starter and light SHALL be switched off
+- **AND** the lock SHALL hold its last commanded state
+
+#### Scenario: Fitted state is queryable
+- **WHEN** `VehicleController::isWheelLockFitted()` or `RelayController::isWheelLockFitted()` is called
+- **THEN** it SHALL return `true`
 
