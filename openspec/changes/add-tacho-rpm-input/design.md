@@ -105,7 +105,7 @@ and the plausibility cap. The `Constants.h` comment that calls 1500 "above idle"
   timeout, as today.
 
 ## Overlaps with active changes
-- `repurpose-x10-battery-sense` (implemented, not archived) MODIFIES mavlink-interface "Vehicle State
+- `repurpose-x10-battery-sense` (archived 2026-11-24) MODIFIES mavlink-interface "Vehicle State
   Reporting via Standard MAVLink Messages"; this change does not touch that requirement and ADDS
   "Effective Engine RPM in MAVLink Reports" instead (its "rpm … CAN" wording is superseded at archive).
   Same pattern for the `cal_bat_v` command plumbing and the "Battery" reply routing that this change
